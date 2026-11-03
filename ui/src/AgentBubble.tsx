@@ -26,10 +26,14 @@ const loadPlace = (): Place => {
 }
 const savePlace = (place: Place) => { try { localStorage.setItem(KEY, JSON.stringify(place)) } catch { /* storage blocked */ } }
 
-// Free area: inside the safe area, and above the phone tab bar when it shows.
+// Free area: inside the safe area, and above the phone tab bar.
+// A focused text box hides the tab bar (display: none, top 0). Keep its last height, so the keyboard
+// does not throw the bubble to the top and leave it there.
+let tabbarHeight = 0
 function bounds() {
   const tabs = document.querySelector<HTMLElement>('.phone-tabbar')
-  const bottom = tabs ? tabs.getBoundingClientRect().top : window.innerHeight
+  if (tabs && tabs.offsetHeight) tabbarHeight = tabs.offsetHeight
+  const bottom = window.innerHeight - (tabs ? tabbarHeight : 0)
   return { left: EDGE, right: window.innerWidth - SIZE - EDGE, top: EDGE + 48, bottom: Math.max(EDGE + 48, bottom - SIZE - EDGE) }
 }
 const toPoint = (place: Place) => { const b = bounds(); return { x: place.side === 'left' ? b.left : b.right, y: b.top + place.y * (b.bottom - b.top) } }
@@ -132,8 +136,8 @@ export function AgentBubble({ sessions, seen, selected, onOpen, onHide, onMarkRe
       onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onClick={click}>
       <span className="agent-bubble-ring" aria-hidden="true" />
       {running.length || unread
-        ? <span className="agent-bubble-counts" aria-hidden="true"><span className="agent-bubble-count">{running.length}</span>{unread > 0 && <><span className="agent-bubble-sep" /><span className="agent-bubble-count unread">{unread}</span></>}</span>
-        : <Activity size={docked ? 14 : 20} aria-hidden="true" />}
+        ? <span key={docked ? 'tab' : 'bubble'} className="agent-bubble-counts" aria-hidden="true"><span className="agent-bubble-count">{running.length}</span>{unread > 0 && <><span className="agent-bubble-sep" /><span className="agent-bubble-count unread">{unread}</span></>}</span>
+        : <Activity key={docked ? 'tab' : 'bubble'} size={docked ? 14 : 20} aria-hidden="true" />}
     </button>
     {open && <div ref={pop} className={`agent-pop ${closing ? 'closing' : ''}`} style={popStyle} role="dialog" aria-label="Agents" tabIndex={-1}>
       <header className="agent-pop-head">

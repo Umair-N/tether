@@ -70,7 +70,7 @@
 .agent-bubble.attention .agent-bubble-ring { border-color: var(--attention); animation: bubble-call 1.8s ease-out infinite; }
 @keyframes bubble-call { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--attention) 45%, transparent); } 100% { box-shadow: 0 0 0 12px transparent; } }
 .agent-pop { position: fixed; z-index: 41; display: flex; flex-direction: column; overflow: hidden; border-radius: 14px; background: var(--surface); border: 1px solid var(--line);
-  box-shadow: 0 2px 6px rgb(0 0 0 / .08), 0 18px 48px rgb(0 0 0 / .22); animation: pop-in .22s cubic-bezier(.32, .72, 0, 1); outline: none; }
+  box-shadow: 0 2px 6px rgb(0 0 0 / .08), 0 18px 48px rgb(0 0 0 / .22); animation: pop-in .22s cubic-bezier(.32, .72, 0, 1) .06s backwards; outline: none; }
 .agent-pop.closing { animation: pop-out .14s ease-in forwards; }
 @keyframes pop-in { from { opacity: 0; transform: scale(.88); } to { opacity: 1; transform: scale(1); } }
 @keyframes pop-out { to { opacity: 0; transform: scale(.94); } }
@@ -82,6 +82,10 @@
 .agent-pop-list .group-empty { padding: 6px 10px 10px; }
 .agent-pop-foot { display: flex; align-items: center; gap: 8px; padding: 6px 14px 10px 8px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
 .agent-bubble-counts { display: flex; align-items: center; gap: 5px; line-height: 1; }
+/* Tab <-> bubble: the numbers change from a column to a row. The new layout mounts fresh (a React key) and
+   fades in once the shape has grown, so the row never sticks out of the narrow tab. */
+.agent-bubble-counts, .agent-bubble > svg { animation: bubble-content .2s ease-out .12s backwards; }
+@keyframes bubble-content { from { opacity: 0; scale: .7; } }
 .agent-bubble-sep { width: 1px; height: 14px; background: currentColor; opacity: .3; }
 .agent-bubble-count.unread { color: var(--accent); }
 .agent-bubble:not(.docked) .agent-bubble-counts:has(.unread) .agent-bubble-count { font-size: 15px; }
@@ -144,6 +148,7 @@ label.broadcast-row:hover { background: var(--hover); }
 .agent-pop-hide:hover { background: var(--hover); }
 @media (prefers-reduced-motion: reduce) {
   .agent-bubble { transition: none; }
+  .agent-bubble-counts, .agent-bubble > svg { animation: none; }
   .agent-bubble.working .agent-bubble-ring, .agent-bubble.attention .agent-bubble-ring, .agent-bubble.docked.attention { animation: none; }
   .agent-pop { animation-name: fade-in; }
   .agent-pop.closing { animation-name: fade-out; }
