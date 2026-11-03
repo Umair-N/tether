@@ -5,7 +5,11 @@ On each change this view redraws the pane from capture-pane. Typed bytes go to t
 The pane's size goes to the page in the terminal title ("tether-pane 80x24"), so the page can fit its font to it.
 The mouse wheel scrolls back through the pane's tmux history, like copy mode in the whole-window view. A key goes back to the bottom.
 With zoom (attach.py "z%7"), the pane fills this view: the window takes this view's size and the pane is zoomed as with prefix+z.
-On exit the zoom ends and the window's active pane comes back. The window keeps the new size until another client resizes it."""
+The last zoom view restores the window's size, sizing option and active pane. A later zoom repairs a killed view."""
+from contextlib import contextmanager
+import fcntl
+import hashlib
+import json
 import os
 import re
 import select
@@ -15,6 +19,7 @@ import sys
 import termios
 import time
 import tty
+import uuid
 import paths
 
 FRAME = 0.05     # seconds between redraws while the pane prints
@@ -107,6 +112,123 @@ def unzoom(pane, active):
         tmux('select-pane', '-t', active)
 
 
+@contextmanager
+def zoom_lock(folder):
+    # Never unlink this lock: every process must lock the same inode.
+    with (folder / 'lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def zoom_save(folder, state):
+    temporary = folder / 'state.tmp'
+    with temporary.open('w') as file:
+        json.dump(state, file)
+        file.flush()
+        os.fsync(file.fileno())
+    temporary.replace(folder / 'state.json')
+    descriptor = os.open(folder, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def zoom_owners(folder, state):
+    """Keep only views whose lease is still locked. Locks also handle SIGKILL and PID reuse."""
+    live = []
+    for owner in state['owners']:
+        file = folder / owner
+        with file.open('a') as lease:
+            try:
+                fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                live.append(owner)
+            else:
+                file.unlink()
+    return live
+
+
+def zoom_restore(window, state):
+    if state['zooming']:
+        unzoom(state['pane'], state['active'])
+    # resize-window sets a local manual option. Restore local scope (including inheritance) afterwards.
+    tmux('resize-window', '-t', window, '-x', str(state['width']), '-y', str(state['height'])).check_returncode()
+    option = state['window_size']
+    args = ['set-option', '-w', '-t', window, 'window-size', option] if option else [
+        'set-option', '-wu', '-t', window, 'window-size']
+    tmux(*args).check_returncode()
+    # Setting the option recalculates from attached clients for automatic policies. The global option
+    # is recorded, but never changed: other windows and desktop configuration must not be overwritten.
+
+
+def zoom_enter(pane):
+    """Save before any resize, or join an existing view. Repair abandoned state before taking a new snapshot."""
+    shown = tmux('display-message', '-p', '-t', pane, '#{socket_path}\n#{pid}\n#{window_id}').stdout.splitlines()
+    if len(shown) != 3:
+        raise RuntimeError('That pane has ended.')
+    window = shown[2]
+    # Window IDs repeat across servers. Include the socket and server PID in the cache key.
+    folder = paths.CACHE / 'zoom' / hashlib.sha256('\n'.join(shown).encode()).hexdigest()
+    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+    owner = uuid.uuid4().hex
+    lease = (folder / owner).open('a')
+    fcntl.flock(lease, fcntl.LOCK_EX)
+    registered = False
+    try:
+        with zoom_lock(folder):
+            file = folder / 'state.json'
+            state = json.loads(file.read_text()) if file.exists() else None
+            if state:
+                state['owners'] = zoom_owners(folder, state)
+                if not state['owners']:
+                    zoom_restore(window, state)
+                    file.unlink()
+                    state = None
+            if state is None:
+                dimensions = tmux('display-message', '-p', '-t', window, '#{window_width} #{window_height}').stdout.split()
+                width, height = map(int, dimensions)
+                zooming, active = zoom_plan(pane)
+                local = tmux('show-options', '-wqv', '-t', window, 'window-size')
+                global_size = tmux('show-options', '-gwv', 'window-size')
+                local.check_returncode()
+                global_size.check_returncode()
+                state = dict(width=width, height=height, pane=pane, zooming=zooming, active=active,
+                             window_size=local.stdout.strip(), global_size=global_size.stdout.strip(), owners=[])
+            first = not state['owners']
+            state['owners'].append(owner)
+            registered = True
+            zoom_save(folder, state)
+            if first and state['zooming']:
+                tmux('resize-pane', '-Z', '-t', pane).check_returncode()
+        return folder, window, lease
+    except BaseException:
+        try:
+            if registered and (folder / 'state.json').exists():
+                zoom_leave((folder, window, lease))
+        except Exception:
+            pass  # if cleanup also fails, keep the durable record for repair
+        finally:
+            lease.close()
+        raise
+
+
+def zoom_leave(view):
+    folder, window, lease = view
+    try:
+        with zoom_lock(folder):
+            state = json.loads((folder / 'state.json').read_text())
+            lease.close()
+            state['owners'] = zoom_owners(folder, state)
+            if state['owners']:
+                zoom_save(folder, state)
+            else:
+                zoom_restore(window, state)
+                (folder / 'state.json').unlink()
+    finally:
+        lease.close()
+
+
 def run(pane, zoom=False):
     result = subprocess.run([paths.TMUX, 'display-message', '-p', '-t', pane, '#{session_id}'], capture_output=True, text=True)
     session = result.stdout.strip()
@@ -114,13 +236,13 @@ def run(pane, zoom=False):
         raise SystemExit('That pane has ended. Refresh the session tabs.')
     # Attach to the session, not the pane: a pane target would make it the active pane on every screen.
     # ignore-size until this view knows its own size; with zoom, that flag goes once the size is set.
-    zooming, active = zoom_plan(pane) if zoom else (False, None)
-    control = subprocess.Popen([paths.TMUX, '-C', 'attach-session', '-f', 'ignore-size', '-t', session],
-                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    saved = termios.tcgetattr(0) if os.isatty(0) else None
+    control = saved = view = None
     signal.signal(signal.SIGHUP, lambda *_: sys.exit(0))
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     try:
+        control = subprocess.Popen([paths.TMUX, '-C', 'attach-session', '-f', 'ignore-size', '-t', session],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        saved = termios.tcgetattr(0) if os.isatty(0) else None
         if saved:
             tty.setraw(0)
         os.write(1, b'\x1b[?1049h\x1b[?7l\x1b[H\x1b[2J' + MOUSE_ON)  # own screen, no line wrap: a wide line is cut, not folded
@@ -131,14 +253,14 @@ def run(pane, zoom=False):
         while True:
             now = time.monotonic()
             if os.get_terminal_size(1) != size:
-                first = size is None
                 size, dirty = os.get_terminal_size(1), True
                 if zoom and size.columns and size.lines:
+                    first = view is None
+                    if first:
+                        view = zoom_enter(pane)
                     control.stdin.write(b'refresh-client -C %dx%d\n' % (size.columns, size.lines))
                     if first:
                         control.stdin.write(b"refresh-client -f '!ignore-size'\n")
-                        if zooming:
-                            control.stdin.write(b'resize-pane -Z -t %s\n' % pane.encode())
                     control.stdin.flush()
             if dirty and now - drawn >= FRAME or now - drawn >= HEARTBEAT:
                 shot = snapshot(pane, back)
@@ -179,10 +301,20 @@ def run(pane, zoom=False):
                         os.write(1, MOUSE_OFF + b'\x1b[?1049l\r\nThe tmux session has ended.\r\n')
                         return
     finally:
-        os.write(1, MOUSE_OFF)
-        if zooming:
-            unzoom(pane, active)
-        if saved:
-            termios.tcsetattr(0, termios.TCSADRAIN, saved)
-        control.kill()
-        control.wait(timeout=5)
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        try:
+            # Detach the sizing client first, or it can shrink the restored window again.
+            if control:
+                control.kill()
+                control.wait(timeout=5)
+        finally:
+            try:
+                if view:
+                    zoom_leave(view)
+            finally:
+                try:
+                    os.write(1, MOUSE_OFF)
+                finally:
+                    if saved:
+                        termios.tcsetattr(0, termios.TCSADRAIN, saved)
