@@ -296,15 +296,19 @@ UP_MORE = re.compile(r'^\s*↑ (\d+) more\b')
 def clipped_card(lines):
     """An explained ✦ card taller than the screen: Claude Code scrolls it, so the ✦ headline is gone and a
     "↑ N more" line sits under the keys. Keep the visible part; card_note adds the full text from the store."""
-    rows = [line for line in lines if line.strip()]
+    # Right-aligned notices ("2% until auto-compact") can sit between the card and the input box.
+    rows = [line for line in lines if line.strip() and not line.startswith(' ' * 12)]
     if not rows:
         return None
     last = len(rows) - 1
     above = UP_MORE.match(rows[last])
     keys = rows[last - 1] if above else rows[last]
     choices = CHOICE.findall(keys.strip()) if re.match(r'\s*\d:\s', keys) else []
-    if [label.strip() for _, label in choices] != [label for _, label in CARD_KEYS['explained']]:
+    # A narrow pane drops the keys that do not fit ("0: Dismiss"), so the visible keys need only start the list.
+    expected = CARD_KEYS['explained']
+    if len(choices) < 2 or [label.strip() for _, label in choices] != [label for _, label in expected[:len(choices)]]:
         return None
+    choices = expected
     end = lines.index(keys)
     start = end
     while start and not (lines[start - 1].strip() and not lines[start - 1].startswith('  ')):

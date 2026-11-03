@@ -162,6 +162,20 @@ class FooterTests(unittest.TestCase):
             self.assertEqual((full['text'], full['full']), ('Heads up · Switching can stop jobs.', '* a'))
         self.assertIsNone(footer.parse(screen('❯ ', '\n'.join(['● Reply.', '  1: Yes   2: No', '↑ 5 more'])))['heads_up'])
 
+    def test_scrolled_card_in_a_narrow_pane_drops_dismiss(self):
+        # A 50-column pane has no room for "0: Dismiss"; the card scrolls both ways.
+        rows = ['✻ Brewed for 1m 0s · done 2:36 PM', '    a Monitor or /loop).                      [-]', '',
+                '  1: Understood   2: Chat in main session', '↑ 23 more · ↓ 1 more']
+        card = footer.parse(screen('❯ ', '\n'.join(rows)))['heads_up']
+        self.assertEqual((card['more'], [o['key'] for o in card['options']]), (23, ['1', '2', '0']))
+
+    def test_scrolled_card_with_a_notice_under_it(self):
+        rows = ['  - Check one build.', '', '  1: Understood   2: Chat in main session   0: Dismiss', '↑ 17 more',
+                ' ' * 57 + '2% until auto-compact']
+        r = footer.parse(screen('❯ ', '\n'.join(rows)))
+        self.assertEqual((r['heads_up']['more'], r['heads_up']['detail']), (17, ['- Check one build.']))
+        self.assertIn('2% until auto-compact', r['notices'])
+
     def test_an_old_card_above_newer_output_is_not_shown(self):
         r = footer.parse(screen('❯ ', '\n'.join(['✦ Making your page (a minute or two) · Claude keeps working…', '', '● Later reply.'])))
         self.assertIsNone(r['heads_up'])
