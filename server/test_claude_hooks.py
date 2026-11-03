@@ -96,6 +96,82 @@ class HookTests(unittest.TestCase):
         self.feed('PostToolUseFailure', 103, tool_use_id='two')
         self.assertIsNone(self.read()['running'])
 
+    def test_stop_captures_tasks_and_crons_with_short_labels(self):
+        tasks = [
+            {'id': 's1', 'type': 'shell', 'status': 'running', 'description': 'Watch logs', 'command': 'tail -f logs'},
+            {'id': 's2', 'type': 'shell', 'status': 'running', 'command': 'npm test'},
+            {'id': 'm1', 'type': 'monitor', 'status': 'running', 'server': 'build', 'tool': 'watch'},
+            {'id': 'a1', 'type': 'subagent', 'status': 'running', 'agent_type': 'Explore'},
+            {'id': 'w1', 'type': 'workflow', 'name': 'Build'},
+        ]
+        crons = [{'id': 'c1', 'schedule': '* * * * *', 'recurring': False, 'prompt': 'Check build'}]
+        self.feed('Stop', background_tasks=tasks, session_crons=crons)
+        stored = json.loads((self.cache / 'hooks/abc123.json').read_text())
+        self.assertEqual(stored['session_crons'], crons)
+        for task in tasks:
+            self.assertEqual(stored['background_tasks'][task['id']], dict(task, started=100))
+        result = self.read()
+        self.assertEqual(result['tasks'], ['2 shells', '1 monitor', '1 agent', '1 workflow'])
+        self.assertEqual(result['task_details'][0], dict(tasks[0], started=100))
+        self.assertEqual(result['task_details'][2], {'id': 'm1', 'type': 'monitor', 'status': 'running', 'started': 100})
+        self.assertEqual(self.screen['tasks'], [])
+
+    def test_stop_empty_list_clears_tasks_and_missing_list_preserves_them(self):
+        self.screen['tasks'] = ['2 shells']
+        self.feed('Stop', background_tasks=[{'id': 'one', 'type': 'shell'}], session_crons=[{'id': 'cron'}])
+        self.feed('StopFailure', 101)
+        self.assertEqual(self.read()['tasks'], ['1 shell'])
+        self.feed('Stop', 102, background_tasks=[], session_crons=[])
+        self.assertEqual(self.read()['tasks'], [])
+        self.assertEqual(self.read()['task_details'], [])
+        self.assertEqual(json.loads((self.cache / 'hooks/abc123.json').read_text())['session_crons'], [])
+        self.feed('SessionStart', 103)
+        self.assertEqual(self.read()['tasks'], self.screen['tasks'])
+        self.assertNotIn('task_details', self.read())
+
+    def test_background_shell_start_is_replaced_and_keeps_elapsed_origin(self):
+        command = 'printf "line one\\nline two" ' + 'x' * 300
+        self.feed('PreToolUse', tool_name='Bash', tool_use_id='one',
+                  tool_input={'run_in_background': True, 'command': command, 'description': 'Watch build'})
+        self.feed('PostToolUse', 101, tool_use_id='one')
+        detail = self.read()['task_details'][0]
+        self.assertEqual(detail, {'id': 'pending:one', 'type': 'shell', 'status': 'running',
+                                  'command': command, 'description': 'Watch build', 'started': 100})
+        self.feed('Stop', 102, background_tasks=[{'id': 'real-one', 'type': 'shell', 'command': command, 'status': 'running'}])
+        self.assertEqual(self.read()['task_details'], [{'id': 'real-one', 'type': 'shell', 'command': command,
+                                                       'status': 'running', 'started': 100}])
+        self.feed('Stop', 103, background_tasks=[])
+        self.assertEqual(self.read()['task_details'], [])
+
+    def test_only_explicit_background_bash_is_captured(self):
+        for tool, background in [('Bash', False), ('Bash', 'true'), ('Read', True)]:
+            self.feed('PreToolUse', tool_name=tool, tool_input={'run_in_background': background})
+            self.assertNotIn('task_details', self.read())
+
+    def test_subagent_snapshot_is_parent_scoped_and_ordered(self):
+        self.feed('UserPromptSubmit')
+        self.feed('PreToolUse', 101, agent_id='one', tool_name='Bash', tool_use_id='bg',
+                  tool_input={'run_in_background': True, 'command': 'npm test'})
+        self.assertEqual(self.read()['tasks'], ['1 shell'])
+        self.feed('SubagentStop', 102, agent_id='one', background_tasks=[{'id': 'm', 'type': 'monitor'}], session_crons=[])
+        self.assertEqual(self.read()['tasks'], ['1 monitor'])
+        self.assertIsNotNone(self.read()['spinner'])
+        self.feed('StopFailure', 103, background_tasks=[], session_crons=[])
+        self.feed('SubagentStop', 102, agent_id='two', background_tasks=[{'id': 'old', 'type': 'shell'}])
+        self.assertEqual(self.read()['task_details'], [])
+
+    def test_old_task_data_falls_back_but_next_prompt_keeps_it(self):
+        self.screen['tasks'] = ['2 shells']
+        self.feed('Stop', background_tasks=[{'id': 'one', 'type': 'monitor'}])
+        self.assertEqual(self.read()['tasks'], ['1 monitor'])
+        self.feed('PostModelSwitch', 1900, effort={'level': 'max'})
+        self.assertEqual(self.read(1901)['tasks'], self.screen['tasks'])
+        self.assertNotIn('task_details', self.read(1901))
+        self.transcript.write_text(json.dumps({'type': 'user', 'timestamp': '1970-01-01T00:01:45Z',
+                                               'message': {'content': 'Next prompt'}}) + '\n')
+        # The Stop list stays true during the next turn, until the next Stop.
+        self.assertEqual(self.read()['tasks'], ['1 monitor'])
+
     def test_freshness_and_non_claude_fallback(self):
         self.assertEqual(self.read(), self.screen)
         self.feed('UserPromptSubmit')

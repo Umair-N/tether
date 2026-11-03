@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Search, Clock3, Check, Terminal, X, RefreshCw, Gauge, SquareTerminal } from 'lucide-react'
+import { Search, Clock3, Check, Terminal, X, RefreshCw, Gauge, SquareTerminal, Layers } from 'lucide-react'
 import { TextMessagePartProvider } from '@assistant-ui/react'
 import { errorText } from './api'
-import type { Api, Approval, Attention, ChatData, Choice, Footer, LiveState, Pane } from './api'
+import type { Api, Approval, Attention, ChatData, Choice, Footer, FooterTask, LiveState, Pane } from './api'
 import { useModal, usePolling } from './hooks'
 import { agentNames } from './Sidebar'
 import { Linked, PanelText, PanelPre, CopyButton, Markdown } from './Messages'
+import { Elapsed } from './Notices'
 
 
 
@@ -118,7 +119,7 @@ const since = (time?: number | null) => {
 }
 
 // The goal's last check, or the conversation's background tasks and their latest output.
-export function LiveSheet({ api, pane, show, onClose, onTerminal }: { api: Api; pane: Pane; show: 'goal' | 'tasks'; onClose: () => void; onTerminal: () => void }) {
+export function LiveSheet({ api, pane, show, taskDetails, onClose, onTerminal }: { api: Api; pane: Pane; show: 'goal' | 'tasks'; taskDetails?: FooterTask[]; onClose: () => void; onTerminal: () => void }) {
   const modal = useModal(true, onClose)
   const [stopping, setStopping] = useState<string | null>(null)
   const [stopError, setStopError] = useState('')
@@ -132,11 +133,12 @@ export function LiveSheet({ api, pane, show, onClose, onTerminal }: { api: Api; 
     finally { setStopping(null) }
   }
   const goal = state?.goal
+  const hookTasks = show === 'tasks' && taskDetails !== undefined
   return <dialog {...modal} className="sheet live-sheet" aria-labelledby="live-title">
     <div className="sheet-heading"><h2 id="live-title">{show === 'goal' ? 'Goal' : 'Background tasks'}</h2><button type="button" className="icon-button" aria-label="Close" onClick={onClose}><X /></button></div>
-    {error && <p className="live-empty" role="alert">Could not load: {error}</p>}
+    {!hookTasks && error && <p className="live-empty" role="alert">Could not load: {error}</p>}
     {stopError && <p className="live-empty" role="alert">{stopError}</p>}
-    {!state && !error && <p className="live-empty">Loading…</p>}
+    {!hookTasks && !state && !error && <p className="live-empty">Loading…</p>}
     {state && show === 'goal' && (goal ? <div className="live-goal">
       <p className="live-label">Condition</p>
       <p className="live-condition">{goal.condition}</p>
@@ -144,7 +146,12 @@ export function LiveSheet({ api, pane, show, onClose, onTerminal }: { api: Api; 
       {goal.reason && <><p className="live-label">Last check</p><p className="live-reason">{goal.reason}</p></>}
       {goal.set_at && <p className="live-meta">Set {since(goal.set_at)}</p>}
     </div> : <p className="live-empty">No goal found in this conversation.</p>)}
-    {state && show === 'tasks' && (state.tasks.length ? <ul className="live-tasks">{[...state.tasks.filter(task => task.state === 'running').reverse(), ...state.tasks.filter(task => task.state !== 'running').reverse().slice(0, 5)].map(task => <li key={task.id}>
+    {hookTasks && (taskDetails.length ? <ul className="live-tasks hook-tasks">{taskDetails.map(task => <li key={task.id}>
+      <p className="live-task-title">{task.type === 'monitor' ? <Gauge size={15} /> : task.type === 'shell' ? <Terminal size={15} /> : <Layers size={15} />}<strong>{task.description || task.type || 'Task'}</strong></p>
+      <p className="live-meta">{task.type || 'Task'}{task.status ? ` · ${task.status}` : ''}{task.started != null && <> · <Elapsed since={task.started * 1000} /></>}</p>
+      {task.command && <code className="live-command">{task.command}</code>}
+    </li>)}</ul> : <p className="live-empty">No background tasks in this conversation.</p>)}
+    {!hookTasks && state && show === 'tasks' && (state.tasks.length ? <ul className="live-tasks">{[...state.tasks.filter(task => task.state === 'running').reverse(), ...state.tasks.filter(task => task.state !== 'running').reverse().slice(0, 5)].map(task => <li key={task.id}>
       <p className="live-task-title">{task.kind === 'monitor' ? <Gauge size={15} /> : <Terminal size={15} />}<strong>{task.title || task.command}</strong></p>
       <p className="live-meta">{task.kind === 'monitor' ? 'Monitor' : 'Shell'} · {task.state === 'running' ? 'Running' : 'Ended'} · {task.id}{task.started ? ` · started ${new Date(task.started * 1000).toLocaleString()}` : ''}</p>
       {task.title && <code className="live-command">{task.command}</code>}

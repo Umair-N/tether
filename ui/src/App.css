@@ -615,6 +615,9 @@ button.live-chip:active { background: var(--line); }
 .live-tasks li { padding-bottom: 14px; border-bottom: 1px solid var(--line); }
 .live-task-title { display: flex; gap: 8px; align-items: center; margin: 0; font-size: 14px; }
 .live-task-title svg { flex: none; color: var(--accent); }
+.hook-tasks, .hook-tasks li, .hook-tasks .live-task-title strong { min-width: 0; }
+.hook-tasks .live-task-title strong, .hook-tasks .live-meta { overflow-wrap: anywhere; }
+.hook-tasks .live-command { max-height: none; }
 .live-command { display: block; margin-top: 8px; padding: 6px 8px; border-radius: 8px; background: var(--hover); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 6.5em; overflow: auto; }
 .live-output { margin: 8px 0 0; padding: 8px; border-radius: 8px; background: var(--hover); font-size: 11.5px; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 14em; overflow: auto; }
 .live-actions { display: flex; justify-content: flex-end; margin-top: 14px; }

@@ -106,13 +106,14 @@ export interface CatalogItem { name: string; description: string; kind: 'builtin
 export interface Catalog { commands: CatalogItem[]; plugins: { name: string; source: string; enabled: boolean }[]; mcp: { name: string; source: string }[]; note: string }
 
 export interface FooterAgent { name: string; task: string; detail: string; main: boolean }
+export interface FooterTask { id: string; type?: string; status?: string; description?: string; command?: string; started?: number }
 export const usageLabel = (label: string) => ({ '5h': '5-hour', '168h': 'Weekly', '7d': 'Weekly' })[label] ?? label
 export const creditsLabel = (credits?: Footer['credits']) => credits?.unlimited ? 'Unlimited' : credits?.balance != null ? String(credits.balance) : ''
 // The strip under Claude's input box: its suggested next prompt, notices, mode, status line and background agents.
 export interface Footer { suggestion?: string; notices?: string[]; effort?: string; mode?: string; status?: string; agents?: FooterAgent[]; update?: string
   model?: string; context?: { percent: number; tokens?: number | null; limit?: number | null }; windows?: UsageWindow[]
   credits?: { balance?: string | number | null; unlimited?: boolean; has_credits?: boolean }
-  goal?: string; tasks?: string[]; ide?: string
+  goal?: string; tasks?: string[]; task_details?: FooterTask[]; ide?: string
   spinner?: { verb: string; detail: string } | null
   running?: { title: string; elapsed: string; command: string } | null
   denied?: { text: string; reason: string } | null

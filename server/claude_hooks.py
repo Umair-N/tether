@@ -26,8 +26,62 @@ def short(value):
     return ' '.join(value.split())[:160] if isinstance(value, str) else ''
 
 
+def update_tasks(state, data, now):
+    """Parent-scoped snapshots replace provisional Bash starts, including []."""
+    if now < max(state.get('tasks_at', 0), state.get('reported_at', 0)):
+        return
+    event = data['hook_event_name']
+    if event in ('Stop', 'StopFailure', 'SubagentStop'):
+        tasks = data.get('background_tasks')
+        if isinstance(tasks, list):
+            previous = list(state.get('background_tasks', {}).values())
+            captured = {}
+            for item in tasks:
+                if not isinstance(item, dict) or not short(item.get('id')):
+                    continue
+                task = {key: item[key][:1000] for key in
+                        ('id', 'type', 'status', 'description', 'command', 'agent_type', 'name', 'server', 'tool')
+                        if isinstance(item.get(key), str) and item[key]}
+                old = next((old for old in previous if old['id'] == task['id']), None)
+                if old is None and task.get('type') == 'shell' and task.get('command'):
+                    old = next((old for old in previous if old['id'].startswith('pending:')
+                                and old.get('command') == task['command']), None)
+                task['started'] = old['started'] if old else now
+                if old:
+                    previous.remove(old)
+                captured[task['id']] = task
+            state['background_tasks'] = captured
+            state['tasks_at'] = now
+        crons = data.get('session_crons')
+        if isinstance(crons, list):
+            state['session_crons'] = [
+                {key: item[key][:1000] for key in ('id', 'schedule', 'prompt')
+                 if isinstance(item.get(key), str) and item[key]}
+                | ({'recurring': item['recurring']} if isinstance(item.get('recurring'), bool) else {})
+                for item in crons if isinstance(item, dict)]
+    elif event == 'PreToolUse' and data.get('tool_name') == 'Bash':
+        tool = data.get('tool_input')
+        if isinstance(tool, dict) and tool.get('run_in_background') is True:
+            identity = short(data.get('tool_use_id')) or str(now)
+            task = {'id': 'pending:' + identity, 'type': 'shell', 'status': 'running', 'started': now}
+            task.update({key: tool[key][:1000] for key in ('command', 'description')
+                         if isinstance(tool.get(key), str) and tool[key]})
+            state.setdefault('background_tasks', {}).setdefault(task['id'], task)
+            state['tasks_at'] = now
+
+
+def task_labels(tasks):
+    counts = {}
+    for task in tasks:
+        kind = {'subagent': 'agent', 'teammate': 'agent'}.get(task.get('type'), task.get('type') or 'task')
+        counts[kind] = counts.get(kind, 0) + 1
+    return [f'{count} {kind if count == 1 else kind + "s"}'
+            for kind, count in counts.items()]
+
+
 def update(state, data, now):
     event, agent = data['hook_event_name'], data.get('agent_id')
+    update_tasks(state, data, now)
     # Subagent tool context must not replace the main session's mode or effort.
     if not agent and now >= state.get('settings_at', 0):
         if data.get('permission_mode') in MODES:
@@ -58,6 +112,8 @@ def update(state, data, now):
         return
     if event == 'SessionStart':
         state.update(ended=False, busy=False, waiting=False, tools={}, agents={})
+        for key in ('background_tasks', 'session_crons', 'tasks_at'):
+            state.pop(key, None)
     elif event == 'SessionEnd':
         state.update(ended=True, busy=False, waiting=False, tools={}, agents={})
     elif event == 'UserPromptSubmit':
@@ -194,6 +250,15 @@ def overlay(config, result, now=None, screen_read_at=None):
                     tool = max(tools.values(), key=lambda item: item['started'])
                     merged['running'] = {key: tool[key] for key in ('title', 'command')}
                     merged['running']['elapsed'] = elapsed(tool['started'], now)
+        tasks_at = state.get('tasks_at', reported)
+        # A Stop list stays true until the next Stop, so a newer transcript does not expire it.
+        tasks_fresh = now >= tasks_at and (bool(tools) or now - tasks_at <= TURN_MAX_AGE)
+        if tasks_fresh and 'background_tasks' in state:
+            tasks = list(state['background_tasks'].values())
+            merged['tasks'] = task_labels(tasks)
+            merged['task_details'] = [{key: task[key] for key in
+                                      ('id', 'type', 'status', 'description', 'command', 'started')
+                                      if task.get(key) is not None and task.get(key) != ''} for task in tasks]
         # Screen rows include the main agent and richer task details. They lack
         # hook IDs, so even fresh empty hooks cannot safely remove those rows.
         merged['agents'] = list(result.get('agents', []))
