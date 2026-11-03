@@ -30,6 +30,7 @@ CARD_KEYS = {
     'ready': [('1', 'Helpful'), ('2', 'Not helpful'), ('3', 'Didn’t read')],
 }
 AGENT = re.compile(r'^\s*([●◯○])\s+(\S+)(?:\s{2,}(.*?))?(?:\s{2,}(\d[\dhms ]*\S.*))?\s*$')
+AGENT_LOOSE = re.compile(r'^\s*([●◯○])\s+(\S+)\s(.*)$')
 CODEX_CONTEXT = re.compile(r'\bContext\s+(\d+(?:\.\d+)?)%\s+(left|used)\b|(\d+(?:\.\d+)?)%\s+context\s+(left|used)\b', re.I)
 CODEX_MODEL = re.compile(r'^\s*([\w.-]+)(?:\s+(minimal|low|medium|high|xhigh|extra high|max))?\s+·', re.I)
 
@@ -110,8 +111,12 @@ def parse(styled):
         if not stripped:
             continue
         agent = AGENT.match(line)
+        # A narrow pane puts one space after the name; the row is still an agent, not a notice.
+        loose = None if agent else AGENT_LOOSE.match(line)
         if agent and agent[2] != '❯':
             result['agents'].append({'name': agent[2], 'task': (agent[3] or '').strip(), 'detail': (agent[4] or '').strip(), 'main': agent[1] == '●'})
+        elif loose and loose[2] != '❯':
+            result['agents'].append({'name': loose[2], 'task': loose[3].strip(), 'detail': '', 'main': loose[1] == '●'})
         elif stripped.startswith(('⏵', '⏸')) or 'shift+tab' in stripped or re.search(r'\bmode on\b', stripped):
             mode, *tasks = re.sub(r'\s*\(shift\+tab to cycle\)', '', stripped).split(' · ')
             # "⧉ …" is the IDE context (open file or selected lines), not background work.

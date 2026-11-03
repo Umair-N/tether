@@ -262,6 +262,11 @@ def overlay(config, result, now=None, screen_read_at=None):
         # Screen rows include the main agent and richer task details. They lack
         # hook IDs, so even fresh empty hooks cannot safely remove those rows.
         merged['agents'] = list(result.get('agents', []))
+        if any(task.get('type') in ('subagent', 'teammate') for task in merged.get('task_details', [])):
+            # The Stop list names each subagent and its task, and the task chip shows it.
+            # Screen rows would show the same agents a second time.
+            merged['agents'] = [row for row in merged['agents'] if row['main']]
+            return merged
         screen_names = [row['name'] for row in merged['agents'] if not row['main']]
         for agent in state.get('agents', {}).values():
             if agent['name'] in screen_names:

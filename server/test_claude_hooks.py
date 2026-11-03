@@ -280,6 +280,14 @@ class HookTests(unittest.TestCase):
         self.assertEqual(result['running'], self.screen['running'])
         self.assertEqual(result['effort'], 'high')
 
+    def test_hook_subagents_replace_screen_agent_rows(self):
+        self.screen = footer.parse('─' * 80 + '\n❯\n' + '─' * 80 +
+                                   '\n  ● main\n  ◯ general-purpose  Find the bug  47m 3s')
+        self.feed('Stop', background_tasks=[{'id': 'a1', 'type': 'subagent', 'status': 'running', 'description': 'Find the bug'}])
+        result = self.read()
+        self.assertEqual(result['tasks'], ['1 agent'])
+        self.assertEqual([row['name'] for row in result['agents']], ['main'])
+
     def test_screen_agents_survive_empty_hooks_at_any_age(self):
         self.screen = footer.parse('─' * 80 + '\n❯\n' + '─' * 80 +
                                    '\n  ● main\n  ◯ general-purpose  Find the bug  47m 3s')

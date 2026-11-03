@@ -55,6 +55,12 @@ class FooterTests(unittest.TestCase):
         self.assertEqual(r['agents'][1]['task'], 'Find the bug')
         self.assertTrue(r['agents'][1]['detail'].startswith('47m'))
 
+    def test_narrow_pane_agent_row_is_not_a_notice(self):
+        r = footer.parse(screen('❯ ', '', '  ⏵⏵ auto mode on (shift+tab to\n  ● main\n  ◯ general-purpose 1m 59s · ↓\n  ◯ general-purpose  1m 59s · ↓'))
+        self.assertEqual(r['notices'], [])
+        self.assertEqual([a['name'] for a in r['agents']], ['main', 'general-purpose', 'general-purpose'])
+        self.assertEqual(r['agents'][1]['task'], '1m 59s · ↓')
+
     def test_goal_is_split_from_update(self):
         r = footer.parse(screen('❯ ', ' ' * 30 + '◎ /goal active (10h) · ✔ Update installed · /restart to apply',
                                 '  Opus 5.5 | ctx 5%\n  ⏵⏵ auto mode on (shift+tab to cycle) · ⧉ 2 · 1 monitor'))
