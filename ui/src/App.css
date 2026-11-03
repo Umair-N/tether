@@ -39,11 +39,27 @@
 .running-list .running-name strong { color: var(--text); }
 
 /* Floating agents bubble. It sits over the chat, under sheets and dialogs (they use the top layer). */
-.agent-bubble { position: fixed; left: 0; top: 0; z-index: 40; width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center;
+.agent-bubble { position: fixed; left: 0; top: 0; z-index: 40; width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center; padding: 0;
   background: var(--surface); color: var(--text); border: 1px solid var(--line);
   box-shadow: 0 1px 2px rgb(0 0 0 / .08), 0 6px 18px rgb(0 0 0 / .14); touch-action: none; user-select: none; -webkit-user-select: none; cursor: grab;
-  transition: transform .32s cubic-bezier(.32, .72, 0, 1), box-shadow .2s ease, scale .15s ease; }
-.agent-bubble.dragging { transition: box-shadow .2s ease, scale .15s ease; cursor: grabbing; scale: 1.08; box-shadow: 0 2px 4px rgb(0 0 0 / .1), 0 14px 32px rgb(0 0 0 / .22); }
+  --spring: cubic-bezier(.32, .72, 0, 1);
+  transition: transform .34s var(--spring), width .34s var(--spring), height .34s var(--spring), border-radius .34s var(--spring),
+    background-color .2s ease, color .2s ease, border-color .2s ease, box-shadow .2s ease, scale .15s ease; }
+/* Docked: a D-shaped tab, flat side on the screen edge. The ::before widens the touch area to 44px. */
+.agent-bubble.docked { box-shadow: 0 1px 2px rgb(0 0 0 / .06), 0 4px 12px rgb(0 0 0 / .12); }
+.agent-bubble.docked::before { content: ''; position: absolute; inset: -2px -18px; }
+.agent-bubble.docked.left { border-left: 0; }
+.agent-bubble.docked.right { border-right: 0; }
+.agent-bubble.docked .agent-bubble-ring { display: none; }
+.agent-bubble.docked .agent-bubble-count { font-size: 13px; }
+.agent-bubble.docked.left .agent-bubble-count, .agent-bubble.docked.left > svg { translate: -2px 0; }
+.agent-bubble.docked.right .agent-bubble-count, .agent-bubble.docked.right > svg { translate: 2px 0; }
+.agent-bubble.docked.working { border-color: var(--accent); color: var(--accent); }
+.agent-bubble.docked.working .agent-bubble-count { color: var(--accent); }
+.agent-bubble.docked.attention { background: var(--attention); border-color: var(--attention); animation: tab-call 2.2s ease-out infinite; }
+.agent-bubble.docked.attention .agent-bubble-count { color: var(--surface); }
+@keyframes tab-call { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--attention) 50%, transparent); } 70%, 100% { box-shadow: 0 0 0 10px transparent; } }
+.agent-bubble.dragging { transition: width .2s var(--spring), height .2s var(--spring), border-radius .2s var(--spring), box-shadow .2s ease, scale .15s ease; cursor: grabbing; scale: 1.08; box-shadow: 0 2px 4px rgb(0 0 0 / .1), 0 14px 32px rgb(0 0 0 / .22); }
 .agent-bubble:active:not(.dragging) { scale: .94; }
 .agent-bubble:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .agent-bubble-count { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -69,7 +85,7 @@
 .agent-pop-hide:hover { background: var(--hover); }
 @media (prefers-reduced-motion: reduce) {
   .agent-bubble { transition: none; }
-  .agent-bubble.working .agent-bubble-ring, .agent-bubble.attention .agent-bubble-ring { animation: none; }
+  .agent-bubble.working .agent-bubble-ring, .agent-bubble.attention .agent-bubble-ring, .agent-bubble.docked.attention { animation: none; }
   .agent-pop { animation-name: fade-in; }
   .agent-pop.closing { animation-name: fade-out; }
 }

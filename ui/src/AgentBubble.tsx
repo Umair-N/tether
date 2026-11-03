@@ -4,9 +4,12 @@ import type { Pane } from './api'
 import { RunningList, runningPanes, runningSummary } from './Sidebar'
 import type { Session } from './Sidebar'
 
-// A floating button that answers "which agents run now?" from any screen. Drag it anywhere; on release it moves to the
-// nearer side edge, and the place is kept on this device. Tap: a popover lists the agents that work or need you.
+// Answers "which agents run now?" from any screen. At rest it is a small D-shaped tab docked flat against a side edge.
+// Tap: it grows into a bubble and a popover lists the agents that work or need you; on close it docks again.
+// Drag: the bubble follows the finger; on release it docks on the nearer edge. The place is kept on this device.
 const SIZE = 52
+const TAB_W = 26
+const TAB_H = 48
 const EDGE = 12
 const KEY = 'tether.agent-bubble.v1'
 type Place = { side: 'left' | 'right'; y: number }  // y: share (0..1) of the free height, so a rotate or resize keeps it on screen
@@ -43,6 +46,7 @@ export function AgentBubble({ sessions, selected, onOpen, onHide }: { sessions: 
   const waiting = running.filter(item => item.pane.state !== 'Working').length
   const working = running.length - waiting
   const tone = waiting ? 'attention' : working ? 'working' : 'idle'
+  const docked = !open && !dragging
 
   useEffect(() => {
     const fit = () => setPoint(toPoint(place))
@@ -71,7 +75,8 @@ export function AgentBubble({ sessions, selected, onOpen, onHide }: { sessions: 
     if (event.button !== 0) return
     try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* pointer already gone */ }
     dragged.current = false
-    drag.current = { id: event.pointerId, x: event.clientX, y: event.clientY, dx: event.clientX - point.x, dy: event.clientY - point.y, moved: false }
+    // From the tab, the bubble centres under the finger; from the open bubble, it keeps its offset.
+    drag.current = { id: event.pointerId, x: event.clientX, y: event.clientY, dx: docked ? SIZE / 2 : event.clientX - point.x, dy: docked ? SIZE / 2 : event.clientY - point.y, moved: false }
   }
   const move = (event: React.PointerEvent<HTMLButtonElement>) => {
     const d = drag.current
@@ -111,12 +116,17 @@ export function AgentBubble({ sessions, selected, onOpen, onHide }: { sessions: 
   const summary = runningSummary(running)
   const label = `Agents: ${summary}`
 
+  const vw = document.documentElement.clientWidth || window.innerWidth
+  const shape: React.CSSProperties = docked
+    ? { transform: `translate3d(${place.side === 'left' ? 0 : vw - TAB_W}px, ${point.y + (SIZE - TAB_H) / 2}px, 0)`, width: TAB_W, height: TAB_H, borderRadius: place.side === 'left' ? `0 ${TAB_H / 2}px ${TAB_H / 2}px 0` : `${TAB_H / 2}px 0 0 ${TAB_H / 2}px` }
+    : { transform: `translate3d(${point.x}px, ${point.y}px, 0)`, width: SIZE, height: SIZE, borderRadius: SIZE / 2 }
+
   return <>
-    <button ref={button} type="button" className={`agent-bubble ${tone} ${dragging ? 'dragging' : ''} ${open ? 'open' : ''}`} style={{ transform: `translate3d(${point.x}px, ${point.y}px, 0)` }}
+    <button ref={button} type="button" className={`agent-bubble ${tone} ${place.side} ${docked ? 'docked' : ''} ${dragging ? 'dragging' : ''} ${open ? 'open' : ''}`} style={shape}
       aria-label={label} title={label} aria-haspopup="dialog" aria-expanded={open}
       onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onClick={click}>
       <span className="agent-bubble-ring" aria-hidden="true" />
-      {running.length ? <span className="agent-bubble-count" aria-hidden="true">{running.length}</span> : <Activity size={20} aria-hidden="true" />}
+      {running.length ? <span className="agent-bubble-count" aria-hidden="true">{running.length}</span> : <Activity size={docked ? 14 : 20} aria-hidden="true" />}
     </button>
     {open && <div ref={pop} className={`agent-pop ${closing ? 'closing' : ''}`} style={popStyle} role="dialog" aria-label="Agents" tabIndex={-1}>
       <header className="agent-pop-head">
