@@ -23,7 +23,7 @@ import { PanelColumn, PanelTools } from './PanelColumn'
 import { PANELS, TOOLBAR_PANELS, extraPanels, togglePanelKind } from './panels'
 import type { PanelKind, SetPanels } from './panels'
 import type { Side } from './workspace'
-import type { DesktopLayout } from './prefs'
+import type { DesktopLayout, SidePin } from './prefs'
 import { CommandMenu } from './CommandMenu'
 import type { Command } from './CommandMenu'
 import { Shortcuts } from './Shortcuts'
@@ -37,6 +37,7 @@ import type { FilesTarget } from './Explorer'
 import { ExplorerPhone } from './ExplorerPhone'
 import { PhoneTabs } from './PhoneTabs'
 import { AgentBubble } from './AgentBubble'
+import { SidePins } from './SidePins'
 import { AgentsPage } from './AgentsView'
 import { choosePhoneScreen } from './phoneScreen'
 import './App.css'
@@ -104,6 +105,8 @@ function App() {
   }, [])
   const panes = useMemo(() => data?.sessions ?? [], [data])
   const sessions = useMemo(() => groupSessions(panes).map(item => ({ ...item, panes: orderPanes(item.panes, prefs.paneOrder[item.id]) })), [panes, prefs.paneOrder])
+  const livePins = useMemo(() => prefs.sidePins.flatMap(pin => { const pane = panes.find(item => item.id === pin.pane && item.agent !== 'shell'); return pane ? [{ pin, pane }] : [] }), [prefs.sidePins, panes])
+  const pinKeys = useRef<(dir: 1 | -1) => boolean>(() => false)
   const pane = panes.find(pane => pane.id === prefs.selected) ?? panes.find(pane => data?.default_thread != null && pane.thread === data.default_thread) ?? sortByPrefs(sessions, prefs.order)[0]?.panes[0]
   // Desktop workspace: on only at desktop width with a mouse or trackpad. The phone keeps one pane.
   const [wide, setWide] = useState(() => typeof matchMedia === 'function' && matchMedia(WORKSPACE_QUERY).matches)
@@ -317,6 +320,9 @@ function App() {
         rail.choose((['chats', 'files', 'terminals'] as const)[Number(screenKey[1]) - 1])
         return
       }
+      if (event.altKey && !event.ctrlKey && !event.metaKey && (event.code === 'BracketRight' || event.code === 'BracketLeft')) {
+        if (pinKeys.current(event.code === 'BracketRight' ? 1 : -1)) { event.preventDefault(); return }
+      }
       // The Files screen handles its own keys; the hidden workspace must not take them.
       if (rail?.files) return
       if (slots && !document.querySelector('dialog[open]')) {
@@ -387,6 +393,34 @@ function App() {
     update(current => ({ selected: target.id, lastPane: { ...current.lastPane, [target.tmux_session]: target.id } }))
     setDrawer(false)
   }
+  const pinPane = (id: string) => {
+    if (prefs.sidePins.some(pin => pin.pane === id)) return
+    // At the cap, pins of closed panes make room; they cannot be unpinned from the tab.
+    const room = (pins: SidePin[]) => pins.length < 40 ? pins : pins.filter(pin => panes.some(item => item.id === pin.pane))
+    if (room(prefs.sidePins).length >= 40) { setNotice('Up to 40 chats can be pinned.'); return }
+    update(current => { const kept = room(current.sidePins); return kept.some(pin => pin.pane === id) || kept.length >= 40 ? {} : { sidePins: [{ pane: id }, ...kept] } })
+    setNotice('Pinned to the side tab')
+  }
+  const unpinPane = (id: string) => {
+    update(current => ({ sidePins: current.sidePins.filter(pin => pin.pane !== id) }))
+    setNotice('Unpinned from the side tab')
+  }
+  const notePin = (id: string, text: string) => update(current => ({ sidePins: current.sidePins.map(pin => pin.pane === id ? { pane: id, ...(text ? { note: text.slice(0, 60) } : {}) } : pin) }))
+  const movePin = (id: string, to: string) => update(current => {
+    const sidePins = [...current.sidePins], from = sidePins.findIndex(pin => pin.pane === id), at = sidePins.findIndex(pin => pin.pane === to)
+    if (from < 0 || at < 0 || from === at) return {}
+    sidePins.splice(at, 0, sidePins.splice(from, 1)[0])
+    return { sidePins }
+  })
+  const stepPin = (dir: 1 | -1, from = pane?.id) => {
+    if (!livePins.length) return false
+    const at = livePins.findIndex(item => item.pane.id === from)
+    openPane(livePins[at < 0 ? 0 : (at + dir + livePins.length) % livePins.length].pane)
+    setAgentsPage(false)
+    chooseScreen('chats')
+    return true
+  }
+  useEffect(() => { pinKeys.current = stepPin })
   const openById = (id: string) => { update(() => ({ selected: id })); setDrawer(false); void refresh() }
   // A new tmux pane. On the desktop workspace it opens in a new slot beside the focused one, on the same side as the tmux split.
   // The list is fetched first so the slot keeps it.
@@ -449,6 +483,7 @@ function App() {
     { label: 'Terminal view of the focused pane', key: '⌥T', run: toggleTerminal },
     ...(pane ? [...TOOLBAR_PANELS.map(({ kind, key }) => ({ label: `${hasPanel(panelCols(desk), kind) ? 'Hide' : 'Show'} the ${PANELS[kind].title.toLowerCase()} panel`, key, run: () => togglePanelKind(setPanels, kind) })),
       ...extraPanels(desk, pane).map(({ kind, key, open }) => ({ label: open ? `Hide the ${PANELS[kind].title.toLowerCase()} panel` : kind === 'chat' ? 'Side chat: fork this chat beside it' : `Show ${PANELS[kind].title.toLowerCase()}`, key, run: () => kind === 'chat' ? void sideChat() : togglePanelKind(setPanels, kind) }))] : []),
+    ...(livePins.length > 1 ? [{ label: 'Next pinned chat', key: '⌥]', run: () => stepPin(1) }, { label: 'Previous pinned chat', key: '⌥[', run: () => stepPin(-1) }] : []),
     { label: 'New session', key: '⌥N', run: () => setNewSession(true) },
     { label: desk.sidebar ? 'Hide the sidebar' : 'Show the sidebar', key: '⌘B', run: () => setDesk({ sidebar: !desk.sidebar }) },
     { label: 'Keyboard shortcuts', key: '?', run: () => setMenu('shortcuts') },
@@ -457,7 +492,9 @@ function App() {
   const running = runningPanes(sessions).length
   const chatFor = (target: Pane, slot?: SlotControls) => {
     const owner = sessions.find(item => item.id === target.tmux_session)
-    return <Chat liveReplyPreview={prefs.liveReplyPreview} key={target.id} pane={target} session={owner} api={api} onMenu={() => setDrawer(true)} onUpdate={() => void refresh()} draft={prefs.drafts[target.id]?.text ?? ''} setDraft={text => setDraft(target.id, text)} onOpenPane={openPane} onSessionActions={at => { if (owner) { setMenuAt(view ? at : undefined); setActionsDelete(false); setActions(owner.id) } }} onPaneActions={(id, at) => { setMenuAt(view ? at : undefined); setPaneActions(id) }} onSplit={direction => void split(direction, target)} onFork={() => void fork(target)} onReorder={ids => { if (owner) update(current => ({ paneOrder: { ...current.paneOrder, [owner.id]: ids } })) }} micOk={!prefs.voiceOff} chime={prefs.voiceSound} readAloud={prefs.readAloud} handsFree={prefs.handsFree} slot={slot} running={running} />
+    const at = livePins.findIndex(item => item.pane.id === target.id)
+    const sidePin = target.agent !== 'shell' ? { pinned: at >= 0, index: at, total: livePins.length, note: at >= 0 ? livePins[at].pin.note ?? '' : '', onToggle: () => at >= 0 ? unpinPane(target.id) : pinPane(target.id), onNote: (text: string) => notePin(target.id, text), onStep: (dir: 1 | -1) => stepPin(dir, target.id) } : undefined
+    return <Chat sidePin={sidePin} liveReplyPreview={prefs.liveReplyPreview} key={target.id} pane={target} session={owner} api={api} onMenu={() => setDrawer(true)} onUpdate={() => void refresh()} draft={prefs.drafts[target.id]?.text ?? ''} setDraft={text => setDraft(target.id, text)} onOpenPane={openPane} onSessionActions={at => { if (owner) { setMenuAt(view ? at : undefined); setActionsDelete(false); setActions(owner.id) } }} onPaneActions={(id, at) => { setMenuAt(view ? at : undefined); setPaneActions(id) }} onSplit={direction => void split(direction, target)} onFork={() => void fork(target)} onReorder={ids => { if (owner) update(current => ({ paneOrder: { ...current.paneOrder, [owner.id]: ids } })) }} micOk={!prefs.voiceOff} chime={prefs.voiceSound} readAloud={prefs.readAloud} handsFree={prefs.handsFree} slot={slot} running={running} />
   }
   if (unauthorized) return <main className="signin"><Terminal size={32} strokeWidth={1.4} /><h1>Sign in</h1><p>Sign in to access your terminal sessions.</p><a className="primary" href="/mobile/login?next=/chat/">Sign in</a></main>
   return <main className={['app-shell', view && !desk.sidebar && 'no-sidebar', wide && 'with-rail', files && 'screen-files', !wide && 'phone-tabs', phoneFiles && 'phone-files'].filter(Boolean).join(' ')}>{wide && <Rail screen={screen} onScreen={chooseScreen} />}<aside className="sidebar"><Sidebar {...sidebarProps} /></aside><dialog {...drawerModal} className="drawer" aria-label="Sessions" onClick={event => { const box = event.currentTarget.getBoundingClientRect(); if (event.target === event.currentTarget && (event.clientX > box.right || event.clientX < box.left || event.clientY < box.top || event.clientY > box.bottom)) setDrawer(false) }} onTouchStart={event => { drawerTouch.current = (event.target as Element).closest('.swipe-row') ? null : { x: event.touches[0].clientX, y: event.touches[0].clientY } }} onTouchEnd={event => { const start = drawerTouch.current; drawerTouch.current = null; if (!start) return; const dx = event.changedTouches[0].clientX - start.x, dy = event.changedTouches[0].clientY - start.y; if (dx < -60 && Math.abs(dy) < Math.abs(dx) * 0.6) setDrawer(false) }}>{drawer && <Sidebar {...sidebarProps} onClose={() => setDrawer(false)} />}</dialog>
@@ -482,6 +519,7 @@ function App() {
         setNotice(paths.length === 1 ? `Added ${paths[0]} to the message.` : `Added ${paths.length} paths to the message.`)
       } : undefined} />}
     {prefs.agentBubble && sessions.some(item => item.panes.some(p => p.agent !== 'shell')) && <AgentBubble sessions={sessions} seen={prefs.seen} selected={pane?.id} onOpen={openPane} onMarkRead={markRead} onPage={() => setAgentsPage(true)} onHide={() => { update(() => ({ agentBubble: false })); setNotice('Agents bubble hidden. Turn it on in Settings › Chat.') }} />}
+    {livePins.length > 0 && <SidePins pins={prefs.sidePins} sessions={sessions} seen={prefs.seen} selected={pane?.id} onOpen={openPane} onPin={pinPane} onUnpin={unpinPane} onNote={notePin} onMove={movePin} />}
     {!wide && <PhoneTabs screen={screen} onScreen={next => choosePhoneScreen(next, setScreen)} setScreen={setScreen} terminals={!!pane} />}
     {view && <Inbox api={api} items={inbox} sessions={sessions} selected={pane?.id} open={desk.inbox} onToggle={() => setDesk({ inbox: !desk.inbox })} onOpen={openPane} onUpdate={() => void refresh()} />}
     {view && picking !== null && picking < view.slots.length && <SlotPicker index={picking} sessions={sortByPrefs(sessions, prefs.order).filter(item => !isArchived(item, prefs.archived))} slots={view.slots} onPane={id => { showInSlot(id, picking); setPicking(null) }} onSession={target => { showSession(target); setPicking(null) }} onClose={() => setPicking(null)} />}

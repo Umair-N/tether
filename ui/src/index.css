@@ -19,6 +19,7 @@
   --accent: #c96442;
   --accent-text: #fffaf5;
   --attention: #8c6b22;
+  --pin: #3f6f8f;
   --error: #a43b31;
   color-scheme: light dark;
 }
@@ -35,6 +36,7 @@
     --line: #48473f;
     --hover: #363630;
     --attention: #d9b761;
+    --pin: #8db8d6;
     --error: #f09888;
   }
 }
@@ -51,6 +53,7 @@
   --line: #48473f;
   --hover: #363630;
   --attention: #d9b761;
+  --pin: #8db8d6;
   --error: #f09888;
 }
 :root[data-theme="light"] { color-scheme: light; }

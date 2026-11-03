@@ -10,6 +10,8 @@ const GROUPS = [
     ['Next pane that needs you', '⌘J'],
     ['Focus slot 1 to 4', '⌥1–4'],
     ['Previous or next session', '⌥↑ ⌥↓'],
+    ['Next pinned chat', '⌥]'],
+    ['Previous pinned chat', '⌥['],
     ['Sidebar', '⌘B'],
     ['Needs you list', '⌘I'],
   ] },

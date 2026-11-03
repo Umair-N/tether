@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDown, ArrowLeftRight, Blocks, GitFork, Check, ChevronDown, ChevronRight, Clock3, Columns2, CornerDownRight, Gauge, Info, Layers, Maximize2, Menu, MessageSquare, Minimize2, MoreHorizontal, PanelTop, Pencil, RefreshCw, RotateCcw, Rows2, Search, Settings2, ShieldAlert, SquareTerminal, Target, Terminal, WifiOff, X } from 'lucide-react'
+import { ArrowDown, ArrowLeftRight, Blocks, GitFork, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3, Columns2, CornerDownRight, Gauge, Info, Layers, Maximize2, Menu, MessageSquare, Minimize2, MoreHorizontal, PanelTop, Pencil, Pin, PinOff, RefreshCw, RotateCcw, Rows2, Search, Settings2, ShieldAlert, SquareTerminal, Target, Terminal, WifiOff, X } from 'lucide-react'
 import { AssistantRuntimeProvider, ThreadPrimitive, useExternalStoreRuntime } from '@assistant-ui/react'
 import { ApiError, canFork, creditsLabel, errorText, usageLabel } from './api'
 import type { Api, Approval, ChatData, ChatMessage, Choice, Footer, Pane } from './api'
@@ -31,9 +31,42 @@ import { WORKSPACE_QUERY } from './workspace'
 import { useHost } from './host'
 
 
-interface ChatProps { liveReplyPreview: boolean; pane: Pane; session: Session | undefined; api: Api; onMenu: () => void; onUpdate: () => void; draft: string; setDraft: (text: string) => void; onOpenPane: (pane: Pane) => void; onSessionActions: (at?: Anchor) => void; onPaneActions: (pane: string, at?: Anchor) => void; onSplit: (direction: 'right' | 'down') => void; onFork: () => void; onReorder: (ids: string[]) => void; micOk: boolean; chime: boolean; readAloud: boolean; handsFree: boolean; slot?: SlotControls; running?: number }
+interface ChatProps { liveReplyPreview: boolean; pane: Pane; session: Session | undefined; api: Api; onMenu: () => void; onUpdate: () => void; draft: string; setDraft: (text: string) => void; onOpenPane: (pane: Pane) => void; onSessionActions: (at?: Anchor) => void; onPaneActions: (pane: string, at?: Anchor) => void; onSplit: (direction: 'right' | 'down') => void; onFork: () => void; onReorder: (ids: string[]) => void; micOk: boolean; chime: boolean; readAloud: boolean; handsFree: boolean; slot?: SlotControls; running?: number; sidePin?: SidePinControls }
 /** Desktop workspace controls for a Chat shown in a slot next to other slots. */
 export interface SlotControls { index: number; zoomed: boolean; onZoom: () => void; onClose?: () => void; onPick?: () => void; onDragStart?: (event: React.DragEvent) => void }
+export interface SidePinControls { pinned: boolean; index: number; total: number; note: string; onToggle(): void; onNote(text: string): void; onStep(dir: 1 | -1): void }
+
+function PinnedStrip({ pin, title }: { pin: SidePinControls; title: string }) {
+  const [editing, setEditing] = useState(false)
+  const [text, setText] = useState('')
+  const active = useRef(false)
+  const note = useRef<HTMLButtonElement>(null)
+  const touch = useRef<{ x: number; y: number } | null>(null)
+  const finish = (save: boolean) => {
+    if (!active.current) return
+    active.current = false
+    if (save) pin.onNote(text.trim())
+    setEditing(false)
+    requestAnimationFrame(() => note.current?.focus())
+  }
+  return <div className="pinned-strip" onTouchStart={event => {
+    touch.current = event.touches.length === 1 && !(event.target as Element).closest('input') ? { x: event.touches[0].clientX, y: event.touches[0].clientY } : null
+  }} onTouchEnd={event => {
+    const start = touch.current
+    touch.current = null
+    if (!start || !event.changedTouches[0] || pin.total < 2) return
+    const dx = event.changedTouches[0].clientX - start.x, dy = event.changedTouches[0].clientY - start.y
+    if (Math.abs(dx) >= 50 && Math.abs(dy) < 0.6 * Math.abs(dx)) pin.onStep(dx < 0 ? 1 : -1)
+  }} onTouchCancel={() => { touch.current = null }}>
+    <span className="pinned-strip-place"><Pin size={13} />{pin.index + 1} of {pin.total}</span>
+    {editing ? <input autoFocus maxLength={60} aria-label={`Note for ${title}`} value={text} onChange={event => setText(event.target.value)} onBlur={() => finish(true)} onKeyDown={event => {
+      if (event.key === 'Enter' || event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); finish(event.key === 'Enter') }
+    }} /> : <button ref={note} type="button" className={`pinned-strip-note ${pin.note ? '' : 'add'}`} title={pin.note || 'Add a note'} onClick={() => { setText(pin.note); active.current = true; setEditing(true) }}>{pin.note || 'Add a note'}</button>}
+    <button type="button" className="icon-button" aria-label="Previous pinned chat" disabled={pin.total < 2} onClick={() => pin.onStep(-1)}><ChevronLeft size={16} /></button>
+    <button type="button" className="icon-button" aria-label="Next pinned chat" disabled={pin.total < 2} onClick={() => pin.onStep(1)}><ChevronRight size={16} /></button>
+  </div>
+}
+
 let swipeDirection: '' | 'next' | 'previous' = ''
 // Where each pane was scrolled, so switching panes and coming back lands at the same place.
 const scrollByPane = new Map<string, { top: number; limit: number; bottom: boolean }>()
@@ -77,7 +110,7 @@ function useSteadyPreview(text: string | undefined) {
   return text && wait <= 0 ? text : undefined
 }
 
-export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, draft, setDraft, onOpenPane, onSessionActions, onPaneActions, onSplit, onFork, onReorder, micOk, chime, readAloud, handsFree, slot, running = 0 }: ChatProps) {
+export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, draft, setDraft, onOpenPane, onSessionActions, onPaneActions, onSplit, onFork, onReorder, micOk, chime, readAloud, handsFree, slot, running = 0, sidePin }: ChatProps) {
   const host = useHost()
   const panelRef = useRef<HTMLElement>(null)
   const [limit, setLimit] = useState(() => scrollByPane.get(pane.id)?.limit ?? 40)
@@ -442,12 +475,14 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
   const hideNotice = (note: string) => setHiddenNotices(current => [...current.filter(item => (footer.notices ?? []).includes(item)), note])
   return <AssistantRuntimeProvider runtime={runtime}><MediaOpener.Provider value={openMedia}><section ref={panelRef} className="chat-panel" aria-label={`Chat with ${pane.label}`}>
     <header className="chat-header" draggable={!!slot?.onDragStart} onDragStart={slot?.onDragStart}><button className="icon-button mobile-menu" onClick={onMenu} aria-label={running ? `Open sessions. ${running} agents running or waiting` : 'Open sessions'}><Menu />{running > 0 && <span className="menu-count" aria-hidden="true">{running}</span>}</button>{slot && <kbd className="slot-badge" title={`Focus this slot: Alt+${slot.index + 1}`}>⌥{slot.index + 1}</kbd>}<button type="button" className="chat-title" aria-label="Session details" onClick={() => setInfo(true)}><h1>{chatTitle(pane, session)}</h1><div><AgentIcon agent={activePane.agent} icon={activePane.pane_icon} /><span className="agent-word">{agentNames[activePane.agent]}</span>{activePane.agent === 'codex' && pane.codex_profile && <span className="provider-badge" title={`Runs on codex -p ${pane.codex_profile}`}>{profileName(pane.codex_profile)}</span>}<span className="header-separator agent-word">·</span><State state={state} />{context && <><span className="header-separator">·</span><span className={Number(context) >= 80 ? 'context-high' : ''}>{context}%<span className="context-word"> context</span></span></>}</div></button>
+      {sidePin && activePane.agent !== 'shell' && <button type="button" className="icon-button side-pin-toggle" aria-pressed={sidePin.pinned} aria-label={sidePin.pinned ? 'Unpin from side tab' : 'Pin to side tab'} title={sidePin.pinned ? 'Unpin from side tab' : 'Pin to side tab'} onClick={sidePin.onToggle}>{sidePin.pinned ? <PinOff size={20} /> : <Pin size={20} />}</button>}
       <button type="button" className="icon-button search-toggle" aria-label="Search this chat" title="Search this chat" disabled={!data} onClick={() => setSearching(true)}><Search size={20} /></button>
-      <button type="button" className={term ? 'icon-button terminal-toggle active' : 'icon-button terminal-toggle'} aria-label={term ? 'Back to chat' : 'Open terminal'} aria-pressed={term} title={term ? 'Back to chat' : 'Open terminal'} onClick={() => setTerm(!term)}>{term ? <MessageSquare size={20} /> : <SquareTerminal size={20} />}</button><div className="keys-container" ref={keysRef} onKeyDown={event => { if (event.key === 'Escape') { setKeysOpen(false); keysRef.current?.querySelector('button')?.focus() } }}><button className="icon-button" aria-label="Session, pane and keys" aria-expanded={keysOpen} disabled={!data} onClick={() => setKeysOpen(!keysOpen)}><MoreHorizontal /></button>{keysOpen && <div className="keys-menu" aria-label="Session and keys"><button onClick={() => { setKeysOpen(false); onSessionActions(menuAnchor()) }}><Settings2 size={16} />Session options</button><button onClick={() => { setKeysOpen(false); onPaneActions(activePane.id, menuAnchor()) }}><PanelTop size={16} />Pane options</button><MuteItem api={api} pane={activePane.id} />{activePane.agent === 'claude' && data && data.claude_name === null && claudeName && <button disabled={!writable || acting} onClick={() => { setKeysOpen(false); void send(`/rename ${claudeName}`) }}><Pencil size={16} />Name Claude “{claudeName}”</button>}{activePane.agent !== 'shell' && <button onClick={() => { setKeysOpen(false); setTools(true) }}><Blocks size={16} />Skills, plugins, MCP</button>}<button onClick={() => { setKeysOpen(false); onSplit('right') }}><Columns2 size={16} />New pane right<kbd>%</kbd></button><button onClick={() => { setKeysOpen(false); onSplit('down') }}><Rows2 size={16} />New pane below<kbd>"</kbd></button>{canFork(activePane) && <button onClick={() => { setKeysOpen(false); onFork() }}><GitFork size={16} />New chat from this</button>}<span>Send a key</span>{['Escape', 'C-c', 'Enter', 'Up', 'Down', 'Tab', 'y', 'n'].map(key => <button key={key} disabled={!writable || acting} onClick={() => void sendKey(key)}>{key === 'Escape' ? 'Esc' : key === 'C-c' ? 'Ctrl+C' : key}<kbd>{key === 'Up' ? '↑' : key === 'Down' ? '↓' : key === 'Enter' ? '↵' : key === 'Tab' ? '⇥' : key === 'C-c' ? '^C' : key === 'Escape' ? 'esc' : key}</kbd></button>)}</div>}</div>
+      <button type="button" className={term ? 'icon-button terminal-toggle active' : 'icon-button terminal-toggle'} aria-label={term ? 'Back to chat' : 'Open terminal'} aria-pressed={term} title={term ? 'Back to chat' : 'Open terminal'} onClick={() => setTerm(!term)}>{term ? <MessageSquare size={20} /> : <SquareTerminal size={20} />}</button><div className="keys-container" ref={keysRef} onKeyDown={event => { if (event.key === 'Escape') { setKeysOpen(false); keysRef.current?.querySelector('button')?.focus() } }}><button className="icon-button" aria-label="Session, pane and keys" aria-expanded={keysOpen} disabled={!data} onClick={() => setKeysOpen(!keysOpen)}><MoreHorizontal /></button>{keysOpen && <div className="keys-menu" aria-label="Session and keys"><button onClick={() => { setKeysOpen(false); onSessionActions(menuAnchor()) }}><Settings2 size={16} />Session options</button><button onClick={() => { setKeysOpen(false); onPaneActions(activePane.id, menuAnchor()) }}><PanelTop size={16} />Pane options</button><MuteItem api={api} pane={activePane.id} />{sidePin && activePane.agent !== 'shell' && <button onClick={() => { setKeysOpen(false); sidePin.onToggle() }}>{sidePin.pinned ? <PinOff size={16} /> : <Pin size={16} />}{sidePin.pinned ? 'Unpin from side tab' : 'Pin to side tab'}</button>}{activePane.agent === 'claude' && data && data.claude_name === null && claudeName && <button disabled={!writable || acting} onClick={() => { setKeysOpen(false); void send(`/rename ${claudeName}`) }}><Pencil size={16} />Name Claude “{claudeName}”</button>}{activePane.agent !== 'shell' && <button onClick={() => { setKeysOpen(false); setTools(true) }}><Blocks size={16} />Skills, plugins, MCP</button>}<button onClick={() => { setKeysOpen(false); onSplit('right') }}><Columns2 size={16} />New pane right<kbd>%</kbd></button><button onClick={() => { setKeysOpen(false); onSplit('down') }}><Rows2 size={16} />New pane below<kbd>"</kbd></button>{canFork(activePane) && <button onClick={() => { setKeysOpen(false); onFork() }}><GitFork size={16} />New chat from this</button>}<span>Send a key</span>{['Escape', 'C-c', 'Enter', 'Up', 'Down', 'Tab', 'y', 'n'].map(key => <button key={key} disabled={!writable || acting} onClick={() => void sendKey(key)}>{key === 'Escape' ? 'Esc' : key === 'C-c' ? 'Ctrl+C' : key}<kbd>{key === 'Up' ? '↑' : key === 'Down' ? '↓' : key === 'Enter' ? '↵' : key === 'Tab' ? '⇥' : key === 'C-c' ? '^C' : key === 'Escape' ? 'esc' : key}</kbd></button>)}</div>}</div>
       {slot?.onPick && <button type="button" className="icon-button slot-button" aria-label={`Change what slot ${slot.index + 1} shows`} title="Show another pane or session here" onClick={slot.onPick}><ArrowLeftRight size={16} /></button>}
       {slot && <button type="button" className="icon-button slot-button" aria-label={slot.zoomed ? 'Show all slots (Alt+Z)' : 'Zoom this slot (Alt+Z)'} title={slot.zoomed ? 'Show all slots (Alt+Z)' : 'Zoom this slot (Alt+Z)'} onClick={slot.onZoom}>{slot.zoomed ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button>}
       {slot?.onClose && <button type="button" className="icon-button slot-button" aria-label="Close this slot (Alt+X)" title="Close this slot (Alt+X)" onClick={slot.onClose}><X size={16} /></button>}
     </header>
+    {sidePin?.pinned && <PinnedStrip pin={sidePin} title={chatTitle(pane, session)} />}
     {session && session.panes.length > 1 && <PaneTabs ref={tabs} session={session} pane={pane} onOpenPane={onOpenPane} onPaneActions={onPaneActions} onSplit={onSplit} onReorder={onReorder} />}
     {term ? <LiveTerminal paneId={activePane.id} onChat={() => setTerm(false)} /> : <>
     {(offline || (error && data)) && <div className="reconnect-banner" role="status"><WifiOff size={15} /><span>{offline ? 'You are offline. Tether reconnects when the network is back.' : `Cannot reach ${host}. Reconnecting…`}</span><button type="button" onClick={() => void refresh()}>Retry now</button></div>}

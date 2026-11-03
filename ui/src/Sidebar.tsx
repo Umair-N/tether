@@ -111,7 +111,7 @@ function ago(time: string) {
   return `${Math.round(minutes / 60 / 24)}d ago`
 }
 // Every row starts with the same status column, so the marks line up from row to row. Idle is a quiet ring.
-const dot = (state: Status) => <span className="state-slot">{state.kind === 'background'
+export const dot = (state: Status) => <span className="state-slot">{state.kind === 'background'
   ? <Layers size={14} className="state-background" role="img" aria-label={`Running: ${state.label}`} />
   : <span className={`state-dot ${state.kind}`} role="img" aria-label={state.label} title={state.label} />}</span>
 

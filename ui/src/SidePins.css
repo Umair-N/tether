@@ -1,0 +1,53 @@
+.agent-bubble.side-pin-bubble { color: var(--pin); }
+.agent-bubble.side-pin-bubble:active:not(.dragging) { scale: 1; }
+.side-pin-bubble.attention { background: var(--attention); border-color: var(--attention); color: var(--surface); }
+.side-pin-bubble.attention:hover { background: var(--attention); }
+.side-pin-count { position: relative; display: flex; align-items: center; gap: 4px; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1; animation: bubble-content .2s ease-out .12s backwards; }
+.side-pin-bubble.docked .side-pin-count { flex-direction: column; gap: 3px; font-size: 12px; }
+.side-pin-bubble.docked.right .side-pin-count { translate: 2px 0; }
+.side-pin-bubble.docked.left .side-pin-count { translate: -2px 0; }
+.side-pin-bubble.unread .side-pin-count::after { content: ''; position: absolute; top: -5px; right: -5px; width: 7px; height: 7px; border-radius: 50%; background: var(--pin); box-shadow: 0 0 0 2px var(--surface); }
+.side-pin-bubble.open.unread .side-pin-count::after { top: -4px; right: -8px; }
+.agent-pop-head.side-pin-head { gap: 4px; flex: none; }
+.side-pin-head .icon-button { width: 36px; height: 36px; min-height: 36px; flex: none; padding: 8px; color: var(--muted); }
+.side-pin-edit { min-height: 32px; padding: 0 10px; border-radius: 8px; color: var(--pin); font-size: 13px; font-weight: 600; }
+.side-pin-pop .side-pin-needs { color: var(--attention); font-weight: 500; }
+.side-pin-list { list-style: none; margin: 0; }
+.side-pin-row { display: flex; align-items: center; border-radius: 10px; }
+.side-pin-row.selected, .side-pin-row:hover { background: var(--hover); }
+.side-pin-open { display: flex; flex: 1; min-width: 0; align-items: center; gap: 10px; padding: 8px 10px; min-height: 54px; text-align: left; border-radius: 10px; }
+.side-pin-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.side-pin-text strong, .side-pin-edit-body strong { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.side-pin-text small { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.side-pin-text .side-pin-note { color: var(--pin); font-weight: 500; }
+.side-pin-line { display: flex; align-items: baseline; gap: 8px; }
+.side-pin-line strong { flex: 1; }
+.side-pin-text .side-pin-time { flex: none; font-size: 11px; font-variant-numeric: tabular-nums; }
+.agent-pop-foot.side-pin-foot { justify-content: space-between; flex: none; padding: 6px 8px 8px; }
+.side-pin-foot button { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 10px; border-radius: 8px; font-size: 13px; font-weight: 500; color: var(--text); }
+.side-pin-search { display: flex; align-items: center; gap: 8px; margin: 0 10px 6px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); }
+.side-pin-search input { flex: 1; min-width: 0; border: 0; background: none; color: var(--text); font-size: 14px; padding: 8px 0; }
+.side-pin-search:focus-within { outline: 2px solid var(--pin); }
+.side-pin-search input:focus-visible { outline: none; }
+.side-pin-picker-row { display: flex; align-items: center; gap: 10px; padding: 4px 4px 4px 10px; min-height: 50px; border-radius: 10px; }
+.side-pin-picker-row:hover { background: var(--hover); }
+.side-pin-picker-row .icon-button { color: var(--pin); flex: none; width: 36px; height: 36px; min-height: 36px; }
+.side-pin-empty { padding: 14px 12px 16px; color: var(--muted); font-size: 13px; }
+.side-pin-edit-row { display: flex; align-items: center; gap: 6px; padding: 6px 2px 6px 0; }
+.side-pin-edit-row.moving { opacity: .5; }
+.side-pin-grip { color: var(--muted); cursor: grab; touch-action: none; width: 28px; height: 40px; min-height: 40px; flex: none; display: grid; place-items: center; border-radius: 6px; }
+.side-pin-grip:active { cursor: grabbing; }
+.side-pin-edit-body { flex: 1; min-width: 0; display: grid; gap: 4px; }
+.side-pin-edit-body input { font-size: 12.5px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px; min-width: 0; }
+.side-pin-edit-body input:focus-visible { outline: 2px solid var(--pin); outline-offset: 0; }
+.side-pin-edit-row .icon-button { color: var(--muted); width: 36px; height: 36px; min-height: 36px; flex: none; }
+.side-pin-toggle { display: none; }
+.with-rail .side-pin-toggle { display: inline-flex; }
+.side-pin-toggle[aria-pressed="true"] { color: var(--pin); }
+.pinned-strip { display: flex; align-items: center; gap: 6px; padding: 0 6px 0 12px; min-height: 38px; flex: none; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--pin) 7%, var(--bg)); color: var(--pin); font-size: 12.5px; touch-action: pan-y; user-select: none; }
+.pinned-strip-place { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pinned-strip-note { flex: 1; min-width: 0; min-height: 32px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; padding: 6px 4px; border-radius: 6px; }
+.pinned-strip-note.add { color: var(--muted); }
+.pinned-strip .icon-button { width: 32px; height: 32px; min-height: 32px; flex: none; padding: 8px; color: var(--pin); }
+.pinned-strip input { flex: 1; min-width: 0; font-size: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--pin); border-radius: 6px; padding: 4px 8px; }
+@media (prefers-reduced-motion: reduce) { .side-pin-count { animation: none; } }

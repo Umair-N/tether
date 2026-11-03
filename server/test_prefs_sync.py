@@ -29,6 +29,28 @@ class PrefsSyncTests(unittest.TestCase):
         # The page syncs 'scheme' with every first save; refusing it failed every prefs save from that device.
         self.assertEqual(prefs_sync.save({'scheme': 'claude', 'theme': 'dark'})['prefs'], {'scheme': 'claude', 'theme': 'dark'})
 
+    def test_side_pins_round_trip(self):
+        pins = [{'pane': '%12', 'note': 'Review the plan'}, {'pane': '%3'}]
+        stored = prefs_sync.save({'sidePins': pins})
+        self.assertEqual(stored['prefs']['sidePins'], pins)
+        self.assertEqual(prefs_sync.load(), stored)
+        limits = [{'pane': str(index).ljust(64, 'x'), 'note': 'n' * 60} for index in range(40)]
+        self.assertEqual(prefs_sync.save({'sidePins': limits})['prefs']['sidePins'], limits)
+        self.assertEqual(prefs_sync.save({'sidePins': []})['prefs']['sidePins'], [])
+
+    def test_rejects_invalid_side_pins(self):
+        bad = [None, {}, '%1', [None], ['%1'], [{}], [{'note': 'Missing pane'}],
+               [{'pane': 1}], [{'pane': ''}], [{'pane': 'p' * 65}],
+               [{'pane': '%1', 'note': None}], [{'pane': '%1', 'note': 1}],
+               [{'pane': '%1', 'note': 'n' * 61}], [{'pane': '%1', 'extra': True}],
+               [{'pane': '%1'}, {'pane': '%1', 'note': 'Duplicate'}],
+               [{'pane': str(index)} for index in range(41)]]
+        for value in bad:
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, r'^Invalid preference: sidePins\.$'):
+                    prefs_sync.save({'sidePins': value})
+        self.assertEqual(prefs_sync.load()['version'], 0)
+
     def test_seen_keeps_the_latest_mark_per_pane(self):
         prefs_sync.save({'seen': {'%1': 200, '%2': 100}})
         stored = prefs_sync.save({'seen': {'%1': 150, '%3': 300}})

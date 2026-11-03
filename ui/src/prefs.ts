@@ -7,6 +7,7 @@ import { request } from './api'
 // Sessions are keyed by their tmux id ("$6"), so a rename keeps pins and order.
 export interface Prefs {
   pinned: string[]
+  sidePins: SidePin[]
   order: string[]
   collapsed: Record<string, boolean>
   expanded: Record<string, boolean>
@@ -49,8 +50,9 @@ export interface PanelItem { id: string; kind: PanelKind; pane?: string; fresh?:
 /** One or two columns of panels, each a vertical stack. rows: the boundaries (0..1) between its panels. width: the column's share of the workspace. split: the boundary between two columns. */
 export interface PanelLayout { cols: { items: PanelItem[]; rows?: number[] }[]; width?: number; split?: number }
 export interface Draft { text: string; at: number }
+export interface SidePin { pane: string; note?: string }
 const KEY = 'tmux-chat.prefs.v1'
-const DEFAULTS: Prefs = { pinned: [], order: [], collapsed: { past: true }, expanded: {}, selected: null, lastPane: {}, voiceOff: false, voiceSound: true, readAloud: false, handsFree: false, agentBubble: true, liveReplyPreview: true, theme: 'system', scheme: 'claude', textSize: 'default', showPaths: false, sort: 'smart', seen: {}, paneOrder: {}, drafts: {}, archived: {}, layout: {} }
+const DEFAULTS: Prefs = { pinned: [], sidePins: [], order: [], collapsed: { past: true }, expanded: {}, selected: null, lastPane: {}, voiceOff: false, voiceSound: true, readAloud: false, handsFree: false, agentBubble: true, liveReplyPreview: true, theme: 'system', scheme: 'claude', textSize: 'default', showPaths: false, sort: 'smart', seen: {}, paneOrder: {}, drafts: {}, archived: {}, layout: {} }
 
 function load(): Prefs {
   let prefs = DEFAULTS
@@ -69,7 +71,7 @@ function load(): Prefs {
   return prefs
 }
 
-const SYNCED = ['pinned', 'order', 'paneOrder', 'sort', 'seen', 'collapsed', 'showPaths', 'liveReplyPreview', 'voiceOff', 'voiceSound', 'theme', 'scheme', 'drafts', 'archived', 'layout'] as const
+const SYNCED = ['pinned', 'sidePins', 'order', 'paneOrder', 'sort', 'seen', 'collapsed', 'showPaths', 'liveReplyPreview', 'voiceOff', 'voiceSound', 'theme', 'scheme', 'drafts', 'archived', 'layout'] as const
 type Shared = Partial<Pick<Prefs, typeof SYNCED[number]>>
 interface Stored { prefs: Shared; version: number }
 const PULL_MS = 20000
@@ -82,7 +84,8 @@ const firstSyncDone = () => { try { return localStorage.getItem(SYNCED_KEY) === 
 const union = (first: string[], second: string[]) => [...first, ...second.filter(item => !first.includes(item))]
 // Shared copy first; this device's pins, order and tab orders are added. Other choices take the shared value.
 function joined(shared: Shared, local: Prefs): Shared {
-  return { pinned: union(shared.pinned ?? [], local.pinned), order: union(shared.order ?? [], local.order),
+  return { sidePins: [...(shared.sidePins ?? []), ...local.sidePins.filter(pin => !shared.sidePins?.some(item => item.pane === pin.pane))],
+    pinned: union(shared.pinned ?? [], local.pinned), order: union(shared.order ?? [], local.order),
     paneOrder: { ...local.paneOrder, ...shared.paneOrder }, seen: local.seen, drafts: local.drafts }
 }
 const pick = (prefs: Prefs) => Object.fromEntries(SYNCED.map(key => [key, prefs[key]])) as Shared

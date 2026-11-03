@@ -13,7 +13,7 @@ import time
 import paths
 
 FILE = paths.CACHE / 'prefs.json'
-KEYS = {'pinned': list, 'order': list, 'paneOrder': dict, 'sort': str, 'seen': dict, 'collapsed': dict,
+KEYS = {'pinned': list, 'sidePins': list, 'order': list, 'paneOrder': dict, 'sort': str, 'seen': dict, 'collapsed': dict,
         'showPaths': bool, 'liveReplyPreview': bool, 'voiceOff': bool, 'voiceSound': bool, 'theme': str, 'scheme': str, 'drafts': dict,
         'archived': dict, 'layout': dict, 'repos': dict, 'files.pinned': list}
 MAX_SEEN = 500
@@ -44,6 +44,12 @@ def save(changes):
             raise ValueError('Invalid preference: %s.' % key)
         if key == 'files.pinned' and not (len(value) <= MAX_PINNED_FILES and all(isinstance(item, str) and 0 < len(item) <= 1024 for item in value)):
             raise ValueError('Invalid preference: %s.' % key)
+        if key == 'sidePins':
+            if not (len(value) <= 40 and all(isinstance(item, dict) and set(item) <= {'pane', 'note'}
+                    and isinstance(item.get('pane'), str) and 0 < len(item['pane']) <= 64
+                    and ('note' not in item or isinstance(item['note'], str) and len(item['note']) <= 60)
+                    for item in value) and len({item['pane'] for item in value}) == len(value)):
+                raise ValueError('Invalid preference: sidePins.')
     with _lock:
         stored = load()
         prefs = stored['prefs']
