@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Activity, X } from 'lucide-react'
+import { Activity, Maximize2, X } from 'lucide-react'
 import type { Pane } from './api'
-import { RunningList, runningPanes, runningSummary } from './Sidebar'
+import { runningSummary } from './Sidebar'
 import type { Session } from './Sidebar'
+import { AgentTabs, agentLists, firstTab } from './AgentsView'
+import type { AgentTab } from './AgentsView'
 
 // Answers "which agents run now?" from any screen. At rest it is a small D-shaped tab docked flat against a side edge.
-// Tap: it grows into a bubble and a popover lists the agents that work or need you; on close it docks again.
+// It shows "active | unread": agents that work or wait on you, then finished turns you have not seen.
+// Tap: it grows into a bubble and a popover shows the two lists as tabs; on close it docks again.
 // Drag: the bubble follows the finger; on release it docks on the nearer edge. The place is kept on this device.
 const SIZE = 52
 const TAB_W = 26
@@ -31,21 +34,23 @@ function bounds() {
 }
 const toPoint = (place: Place) => { const b = bounds(); return { x: place.side === 'left' ? b.left : b.right, y: b.top + place.y * (b.bottom - b.top) } }
 
-export function AgentBubble({ sessions, selected, onOpen, onHide }: { sessions: Session[]; selected?: string; onOpen: (pane: Pane) => void; onHide: () => void }) {
+export function AgentBubble({ sessions, seen, selected, onOpen, onHide, onMarkRead, onPage }: { sessions: Session[]; seen: Record<string, number>; selected?: string; onOpen: (pane: Pane) => void; onHide: () => void; onMarkRead: (panes: string[]) => void; onPage: () => void }) {
   const [place, setPlace] = useState(loadPlace)
   const [point, setPoint] = useState(() => toPoint(place))
   const [dragging, setDragging] = useState(false)
   const [open, setOpen] = useState(false)
   const [closing, setClosing] = useState(false)
+  const [tab, setTab] = useState<AgentTab>('active')
   const drag = useRef<{ id: number; x: number; y: number; dx: number; dy: number; moved: boolean } | null>(null)
   const dragged = useRef(false)  // the click after a drag must not open the popover
   const button = useRef<HTMLButtonElement>(null)
   const pop = useRef<HTMLDivElement>(null)
 
-  const running = runningPanes(sessions)
-  const waiting = running.filter(item => item.pane.state !== 'Working').length
+  const lists = agentLists(sessions, seen, selected)
+  const running = lists.active, unread = lists.unread.length
+  const waiting = lists.waiting
   const working = running.length - waiting
-  const tone = waiting ? 'attention' : working ? 'working' : 'idle'
+  const tone = waiting ? 'attention' : working ? 'working' : unread ? 'unread' : 'idle'
   const docked = !open && !dragging
 
   useEffect(() => {
@@ -100,7 +105,7 @@ export function AgentBubble({ sessions, selected, onOpen, onHide }: { sessions: 
   }
   const click = (event: React.MouseEvent) => {
     if (dragging || dragged.current) { dragged.current = false; event.preventDefault(); return }
-    if (open) close(); else setOpen(true)
+    if (open) close(); else { setTab(firstTab(lists)); setOpen(true) }
   }
 
   // The popover opens on the bubble's side, above it in the lower half of the screen and below it in the upper half.
@@ -114,7 +119,7 @@ export function AgentBubble({ sessions, selected, onOpen, onHide }: { sessions: 
     transformOrigin: `${place.side === 'left' ? 'left' : 'right'} ${above ? 'bottom' : 'top'}`,
   }
   const summary = runningSummary(running)
-  const label = `Agents: ${summary}`
+  const label = `Agents: ${summary}${unread ? `, ${unread} unread` : ''}`
 
   const vw = document.documentElement.clientWidth || window.innerWidth
   const shape: React.CSSProperties = docked
@@ -126,21 +131,21 @@ export function AgentBubble({ sessions, selected, onOpen, onHide }: { sessions: 
       aria-label={label} title={label} aria-haspopup="dialog" aria-expanded={open}
       onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onClick={click}>
       <span className="agent-bubble-ring" aria-hidden="true" />
-      {running.length ? <span className="agent-bubble-count" aria-hidden="true">{running.length}</span> : <Activity size={docked ? 14 : 20} aria-hidden="true" />}
+      {running.length || unread
+        ? <span className="agent-bubble-counts" aria-hidden="true"><span className="agent-bubble-count">{running.length}</span>{unread > 0 && <><span className="agent-bubble-sep" /><span className="agent-bubble-count unread">{unread}</span></>}</span>
+        : <Activity size={docked ? 14 : 20} aria-hidden="true" />}
     </button>
     {open && <div ref={pop} className={`agent-pop ${closing ? 'closing' : ''}`} style={popStyle} role="dialog" aria-label="Agents" tabIndex={-1}>
       <header className="agent-pop-head">
         <span><strong>Agents</strong><small>{summary}</small></span>
+        <button type="button" className="icon-button" aria-label="Open the Agents page" title="Open the Agents page" onClick={() => { close(false); onPage() }}><Maximize2 size={16} /></button>
         <button type="button" className="icon-button" aria-label="Close agents" onClick={() => close()}><X size={18} /></button>
       </header>
       <div className="agent-pop-list">
-        {running.length
-          ? <RunningList running={running} selected={selected} onOpen={pane => { close(false); onOpen(pane) }} />
-          : <p className="group-empty">No agent is working. All are idle.</p>}
+        <AgentTabs sessions={sessions} seen={seen} selected={selected} tab={tab} onTab={setTab} onOpen={pane => { close(false); onOpen(pane) }} onMarkRead={onMarkRead} />
       </div>
       <footer className="agent-pop-foot">
-        <button type="button" className="agent-pop-hide" onClick={() => { close(false); onHide() }}>Hide bubble</button>
-        <small>Turn it back on in Settings › Chat.</small>
+        <button type="button" className="agent-pop-hide" title="Turn it back on in Settings › Chat" onClick={() => { close(false); onHide() }}>Hide bubble</button>
       </footer>
     </div>}
   </>

@@ -37,6 +37,7 @@ import type { FilesTarget } from './Explorer'
 import { ExplorerPhone } from './ExplorerPhone'
 import { PhoneTabs } from './PhoneTabs'
 import { AgentBubble } from './AgentBubble'
+import { AgentsPage } from './AgentsView'
 import { choosePhoneScreen } from './phoneScreen'
 import './App.css'
 
@@ -70,6 +71,12 @@ function App() {
   const [menu, setMenu] = useState<'commands' | 'shortcuts' | null>(null)
   // Home-screen shortcuts open /chat/?go=attention|new|usage (manifest.webmanifest).
   const [go, setGo] = useState(() => new URL(location.href).searchParams.get('go'))
+  // The Agents page (Active and Unread tabs). Tether's summary notification opens it with /chat/?go=agents.
+  const [agentsPage, setAgentsPage] = useState(false)
+  const markRead = useCallback((ids: string[]) => {
+    const now = Date.now() / 1000
+    update(current => ({ seen: { ...current.seen, ...Object.fromEntries(ids.map(id => [id, now])) } }))
+  }, [update])
   useEffect(() => {
     const root = document.documentElement
     if (prefs.theme === 'system') delete root.dataset.theme; else root.dataset.theme = prefs.theme
@@ -255,7 +262,7 @@ function App() {
       history.replaceState(null, '', url)
     }
     open(new URL(location.href).searchParams.get('session'))
-    const message = (event: MessageEvent) => open(event.data?.session)
+    const message = (event: MessageEvent) => { if (event.data?.go) setGo(String(event.data.go)); else open(event.data?.session) }
     if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', message)
     return () => { if ('serviceWorker' in navigator) navigator.serviceWorker.removeEventListener('message', message) }
   }, [update, refresh])
@@ -279,6 +286,10 @@ function App() {
     setGo(null)
     if (go === 'new') setNewSession(true)
     else if (go === 'usage') setPlanSheet(true)
+    else if (go === 'agents') {
+      setDrawer(false); setAgentsPage(true)
+      void navigator.serviceWorker?.getRegistration('/chat/').then(async registration => (await registration?.getNotifications({ tag: 'tether-summary' }))?.forEach(item => item.close())).catch(() => {})
+    }
     else if (go === 'attention') {
       const target = panes.find(item => needsYou(item.state)) ?? panes.find(item => isDone(item, prefs.seen, prefs.selected ?? undefined))
       if (target) update(() => ({ selected: target.id }))
@@ -470,7 +481,7 @@ function App() {
         choosePhoneScreen('chats', setScreen)
         setNotice(paths.length === 1 ? `Added ${paths[0]} to the message.` : `Added ${paths.length} paths to the message.`)
       } : undefined} />}
-    {prefs.agentBubble && sessions.some(item => item.panes.some(p => p.agent !== 'shell')) && <AgentBubble sessions={sessions} selected={pane?.id} onOpen={openPane} onHide={() => { update(() => ({ agentBubble: false })); setNotice('Agents bubble hidden. Turn it on in Settings › Chat.') }} />}
+    {prefs.agentBubble && sessions.some(item => item.panes.some(p => p.agent !== 'shell')) && <AgentBubble sessions={sessions} seen={prefs.seen} selected={pane?.id} onOpen={openPane} onMarkRead={markRead} onPage={() => setAgentsPage(true)} onHide={() => { update(() => ({ agentBubble: false })); setNotice('Agents bubble hidden. Turn it on in Settings › Chat.') }} />}
     {!wide && <PhoneTabs screen={screen} onScreen={next => choosePhoneScreen(next, setScreen)} setScreen={setScreen} terminals={!!pane} />}
     {view && <Inbox api={api} items={inbox} sessions={sessions} selected={pane?.id} open={desk.inbox} onToggle={() => setDesk({ inbox: !desk.inbox })} onOpen={openPane} onUpdate={() => void refresh()} />}
     {view && picking !== null && picking < view.slots.length && <SlotPicker index={picking} sessions={sortByPrefs(sessions, prefs.order).filter(item => !isArchived(item, prefs.archived))} slots={view.slots} onPane={id => { showInSlot(id, picking); setPicking(null) }} onSession={target => { showSession(target); setPicking(null) }} onClose={() => setPicking(null)} />}
@@ -487,6 +498,7 @@ function App() {
     {planSheet && <PlanUsage api={api} onClose={() => setPlanSheet(false)} />}
     {view && menu === 'commands' && <CommandMenu sessions={sortByPrefs(sessions, prefs.order).filter(item => !isArchived(item, prefs.archived))} seen={prefs.seen} selected={pane?.id} slots={multi ? view.slots : []} commands={commands} onPane={openPane} onSession={showSession} onClose={() => setMenu(null)} />}
     {view && menu === 'shortcuts' && <Shortcuts onClose={() => setMenu(null)} />}
+    {agentsPage && <AgentsPage sessions={sessions} seen={prefs.seen} selected={pane?.id} onOpen={openPane} onMarkRead={markRead} onClose={() => setAgentsPage(false)} />}
     {view && !files && <StatusBar panes={panes} loading={loading} error={error} />}
     {updated && <div className="update-banner" role="status"><span>A new version of Tether is ready.</span><button type="button" onClick={reload}>Reload</button></div>}
   </main>

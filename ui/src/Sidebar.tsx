@@ -49,7 +49,7 @@ export function sortSmart(sessions: Session[], seen: Record<string, number>, sel
   const keyed = sessions.map(session => ({ session, status: status(session.panes, seen, selected) }))
   return keyed.sort((a, b) => RANK[a.status.kind] - RANK[b.status.kind] || b.status.at - a.status.at || a.session.name.localeCompare(b.session.name)).map(item => item.session)
 }
-function agoSeconds(seconds: number) {
+export function agoSeconds(seconds: number) {
   const minutes = Math.floor((Date.now() / 1000 - seconds) / 60)
   return minutes < 1 ? 'now' : minutes < 60 ? `${minutes}m` : minutes < 1440 ? `${Math.floor(minutes / 60)}h` : `${Math.floor(minutes / 1440)}d`
 }
@@ -105,6 +105,12 @@ export const runningPanes = (sessions: Session[]) => sessions.flatMap(session =>
   .map(pane => ({ pane, session })))
   .sort((a, b) => Number(needsYou(b.pane.state)) - Number(needsYou(a.pane.state)) || (a.pane.since ?? 0) - (b.pane.since ?? 0))
 
+// Agent turns that ended after you last looked: the "Unread" list. Newest first.
+export const unreadPanes = (sessions: Session[], seen: Record<string, number>, selected?: string) => sessions.flatMap(session => session.panes
+  .filter(pane => pane.agent !== 'shell' && isDone(pane, seen, selected))
+  .map(pane => ({ pane, session })))
+  .sort((a, b) => (b.pane.finished ?? 0) - (a.pane.finished ?? 0))
+
 // "2 need you · 1 working", or "All idle". One wording for the sidebar bar and the bubble.
 export function runningSummary(running: ReturnType<typeof runningPanes>) {
   const working = running.filter(item => item.pane.state === 'Working').length
@@ -112,11 +118,13 @@ export function runningSummary(running: ReturnType<typeof runningPanes>) {
   return running.length ? [waiting && `${waiting} need you`, working && `${working} working`].filter(Boolean).join(' · ') : 'All idle'
 }
 
-export function RunningList({ running, selected, onOpen }: { running: ReturnType<typeof runningPanes>; selected?: string; onOpen: (pane: Pane) => void }) {
+export function RunningList({ running, selected, seen = {}, onOpen }: { running: ReturnType<typeof runningPanes>; selected?: string; seen?: Record<string, number>; onOpen: (pane: Pane) => void }) {
   return <ul className="running-list">{running.map(({ pane, session }) => <li key={pane.id}><button type="button" className={pane.id === selected ? 'selected' : ''} aria-current={pane.id === selected ? 'page' : undefined} onClick={() => onOpen(pane)}>
-    {dot(status([pane], {}, undefined))}
+    {dot(status([pane], seen, undefined))}
     <span className="running-name"><strong>{paneTitle(pane)}</strong><small>{session.name} · {agentNames[pane.agent]}</small></span>
-    {pane.state === 'Working' && pane.since ? <small className="running-time"><Elapsed since={pane.since * 1000} /></small> : <small className="running-time needs">{pane.state === 'Approval' ? 'Approval' : 'Question'}</small>}
+    {pane.state === 'Working' && pane.since ? <small className="running-time"><Elapsed since={pane.since * 1000} /></small>
+      : needsYou(pane.state) ? <small className="running-time needs">{pane.state === 'Approval' ? 'Approval' : 'Question'}</small>
+      : <small className="running-time">{pane.finished ? (ago => ago === 'now' ? 'Just now' : `${ago} ago`)(agoSeconds(pane.finished)) : 'Done'}</small>}
   </button></li>)}</ul>
 }
 
