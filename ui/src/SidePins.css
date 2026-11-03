@@ -80,11 +80,11 @@
 .side-pin-toggle { display: none; }
 .with-rail .side-pin-toggle { display: inline-flex; }
 .side-pin-toggle[aria-pressed="true"] { color: var(--pin); }
-.pinned-strip { display: flex; align-items: center; gap: 6px; padding: 0 6px 0 12px; min-height: 38px; flex: none; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--pin) 7%, var(--bg)); color: var(--pin); font-size: 12.5px; touch-action: pan-y; user-select: none; }
-.pinned-strip-place { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.pinned-strip-note { flex: 1; min-width: 0; min-height: 32px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; padding: 6px 4px; border-radius: 6px; }
-.pinned-strip-note.add { color: var(--muted); }
-.pinned-strip .icon-button { width: 32px; height: 32px; min-height: 32px; flex: none; padding: 8px; color: var(--pin); }
-.pinned-strip input { flex: 1; min-width: 0; font-size: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--pin); border-radius: 6px; padding: 4px 8px; }
 @media (prefers-reduced-motion: reduce) { .side-pin-count, .side-pin-quick { animation: none; } }
 .side-pin-quick-foot button:hover { background: none; text-decoration: underline; text-underline-offset: 2px; }
+/* Pinned mark in the chat header line: no extra row. */
+.pin-mark { display: inline-flex; align-items: center; gap: 4px; min-width: 0; color: var(--pin); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pin-mark svg { flex: none; }
+.pin-mark-note { min-width: 0; max-width: 22ch; overflow: hidden; text-overflow: ellipsis; font-weight: 400; }
+.pin-mark-note::before { content: "· "; color: var(--muted); }
+@media (max-width: 440px) { .pin-mark-note { display: none; } }
