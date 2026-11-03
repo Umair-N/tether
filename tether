@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply tagged Tether releases with a health check and automatic rollback."""
+"""Apply tagged Tether releases with a health check and automatic rollback; message many agent panes (broadcast)."""
 import argparse
 import fcntl
 import hashlib
@@ -12,7 +12,8 @@ import sys
 import tarfile
 import tempfile
 import time
-from urllib.request import urlopen
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'server'))
 import updates
@@ -170,6 +171,58 @@ def activate(root, target, state_file, state):
             shutil.rmtree(entry)
 
 
+def server_port():
+    if os.environ.get('MOBILE_TMUX_PORT'):
+        return int(os.environ['MOBILE_TMUX_PORT'])
+    try:
+        return int(json.loads(updates.install_file().read_text())['options']['port'])
+    except (OSError, ValueError, KeyError, TypeError):
+        return 7683
+
+
+LABELS = {'sent': 'sent', 'sent_busy': 'sent while busy', 'handed_off': 'handed to the master', 'skipped': 'skipped', 'failed': 'failed'}
+
+
+def broadcast(args, opener=urlopen):
+    """Ask the running Tether server to send one message to many panes, through its guarded broker
+    (POST /mobile/api/broadcast). Panes that wait on an approval or a picker are skipped. This pane ($TMUX_PANE) is never a target."""
+    import auth  # server/auth.py: the token file and the cookie the server expects
+    port = server_port()
+    body = {'message': args.text, 'via': 'claude' if args.master else 'direct', 'master': args.master,
+            'exclude': os.environ.get('TMUX_PANE') or None}
+    if args.panes:
+        body['panes'] = [pane for item in args.panes for pane in item.replace(',', ' ').split()]
+    headers = {'Content-Type': 'application/json', 'X-Codex-Mobile': '1', 'Origin': f'http://127.0.0.1:{port}'}
+    try:
+        secret = auth.TOKEN_FILE.read_text().strip()
+    except OSError:
+        secret = ''  # proxy mode needs no sign-in
+    if secret:
+        headers['Cookie'] = f'{auth.COOKIE}={auth.session_value(secret)}'
+    request = Request(f'http://127.0.0.1:{port}/mobile/api/broadcast', data=json.dumps(body).encode(), headers=headers, method='POST')
+    try:
+        with opener(request, timeout=600) as response:
+            data = json.loads(response.read())
+    except HTTPError as error:
+        try:
+            message = json.loads(error.read()).get('error') or str(error)
+        except ValueError:
+            message = str(error)
+        print(message, file=sys.stderr)
+        return 1
+    except URLError as error:
+        print(f'Tether is not reachable on port {port}: {error.reason}', file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(data, indent=2))
+    else:
+        rows = ([dict(data['master'], name='master: ' + data['master']['name'])] if data.get('master') else []) + data['results']
+        for item in rows:
+            reason = f" ({item['reason']})" if item.get('reason') else ''
+            print(f"{item['pane']}\t{item['name']}\t{LABELS.get(item['result'], item['result'])}{reason}")
+    return 2 if any(item.get('result') == 'failed' for item in data['results'] + [data.get('master') or {}]) else 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
@@ -179,7 +232,14 @@ def main(argv=None):
     update.add_argument('--auto', action='store_true')
     update.add_argument('--to')
     commands.add_parser('rollback')
+    send = commands.add_parser('broadcast', help='Message many agent panes through the running Tether server.')
+    send.add_argument('text')
+    send.add_argument('--panes', nargs='+', help='Pane ids such as %%3 %%7 (or %%3,%%7). Default: every idle agent pane.')
+    send.add_argument('--master', help='A Claude pane id: it gets the text and the target list, and delivers with its peer messaging.')
+    send.add_argument('--json', action='store_true', help='Print the server reply as JSON.')
     args = parser.parse_args(argv)
+    if args.command == 'broadcast':
+        return broadcast(args)
     try:
         state_file = updates.install_file()
         state = json.loads(state_file.read_text())

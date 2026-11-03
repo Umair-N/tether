@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
-import { X } from 'lucide-react'
-import type { Pane } from './api'
+import { ArrowLeft, MessagesSquare, X } from 'lucide-react'
+import type { Api, Pane } from './api'
+import { Broadcast } from './Broadcast'
 import { useModal } from './hooks'
 import { RunningList, needsYou, runningPanes, unreadPanes } from './Sidebar'
 import type { Session } from './Sidebar'
@@ -48,11 +49,20 @@ export function AgentTabs({ sessions, seen, selected, tab, onTab, onOpen, onMark
 }
 
 // The Agents page: a full sheet with the same tabs. A tap on Tether's summary notification opens it.
-export function AgentsPage({ sessions, seen, selected, onOpen, onMarkRead, onClose }: { sessions: Session[]; seen: Seen; selected?: string; onOpen: (pane: Pane) => void; onMarkRead: (panes: string[]) => void; onClose: () => void }) {
+// "Message" turns the sheet into the broadcast box (Broadcast.tsx); the back arrow returns to the lists.
+export function AgentsPage({ api, sessions, seen, selected, onOpen, onMarkRead, onClose }: { api: Api; sessions: Session[]; seen: Seen; selected?: string; onOpen: (pane: Pane) => void; onMarkRead: (panes: string[]) => void; onClose: () => void }) {
   const modal = useModal(true, onClose)
   const [tab, setTab] = useState<AgentTab>(() => firstTab(agentLists(sessions, seen, selected)))
+  const [messaging, setMessaging] = useState(false)
   return <dialog {...modal} className="sheet agents-sheet" aria-labelledby="agents-title">
-    <div className="sheet-heading"><h2 id="agents-title">Agents</h2><button type="button" className="icon-button" aria-label="Close" onClick={onClose}><X /></button></div>
-    <AgentTabs sessions={sessions} seen={seen} selected={selected} tab={tab} onTab={setTab} onOpen={pane => { onClose(); onOpen(pane) }} onMarkRead={onMarkRead} />
+    <div className="sheet-heading">
+      {messaging && <button type="button" className="icon-button agents-back" aria-label="Back to agents" onClick={() => setMessaging(false)}><ArrowLeft /></button>}
+      <h2 id="agents-title">{messaging ? 'Message sessions' : 'Agents'}</h2>
+      {!messaging && sessions.some(session => session.panes.some(item => item.agent !== 'shell' && item.writable)) && <button type="button" className="secondary agents-message" onClick={() => setMessaging(true)}><MessagesSquare size={16} />Message</button>}
+      <button type="button" className="icon-button" aria-label="Close" onClick={onClose}><X /></button>
+    </div>
+    {messaging
+      ? <Broadcast api={api} sessions={sessions} onDone={() => setMessaging(false)} />
+      : <AgentTabs sessions={sessions} seen={seen} selected={selected} tab={tab} onTab={setTab} onOpen={pane => { onClose(); onOpen(pane) }} onMarkRead={onMarkRead} />}
   </dialog>
 }

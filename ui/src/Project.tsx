@@ -3,6 +3,7 @@ import { ArrowLeft, Eye, EyeOff, FileText, Link2, Trash2, X } from 'lucide-react
 import { ApiError, errorText } from './api'
 import type { Api } from './api'
 import { useModal } from './hooks'
+import { ProjectCodexLevel } from './CodexLevel'
 import type { Session } from './Sidebar'
 
 // The session's project (server: projects.py). Agents that start in the session get its text: Claude through a
@@ -156,6 +157,8 @@ export function ProjectSheet({ api, session, mark, pin, onChanged, onClose }: { 
         </li>)}</ul> : <p className="hint">No notes yet. Agents save project facts here, and you review them.</p>}
         {fresh > 0 && <div className="sheet-buttons project-row-end"><button type="button" className="secondary" disabled={pending} onClick={() => void post('seen', {})}>Mark all as read</button></div>}
       </section>
+
+      <ProjectCodexLevel api={api} project={project.id} panes={session.panes.map(item => item.id)} />
 
       <section className="settings-group" aria-labelledby="project-size"><h3 id="project-size">Size</h3>
         <div className={`meter-bar ${level > .95 ? 'high' : level > .8 ? 'warn' : ''}`} role="meter" aria-label="Project text size" aria-valuenow={project.chars} aria-valuemin={0} aria-valuemax={project.budget}><span style={{ width: `${Math.min(100, level * 100)}%` }} /></div>

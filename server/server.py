@@ -22,6 +22,7 @@ from terminal_input import NAME_HELP, valid_name, fork_chat, DraftError, card_ke
 from quota_notices import error_message, merge as merge_quota_notices
 import tool_details
 import activity
+import broadcast
 import catalog
 import claude_probe
 import claude_hooks
@@ -56,7 +57,9 @@ import paths
 import side_shells
 import host_stats
 import tmux_merge
+import tmux_names
 import projects_api
+import codex_level
 import browser_api
 import updates
 
@@ -698,6 +701,28 @@ def submit(message, config=None):
         terminal_submit(config, message)
 
 
+def send_text(config, message, state=None):
+    """The chat composer's guarded send to one pane. Returns 'queued' when the agent was working (it takes typed input
+    while busy; Tether keeps no queue of its own), else 'submitted'. state: a status the caller just read."""
+    state = state or live_status(config)['state']
+    if config['agent'] == 'codex' and re.match(r'/ls(\s|$)', message.strip()):
+        message = '!' + message.strip()[1:]   # Codex has no /ls; "!ls" runs it in the shell
+    wants_reply = (config['agent'] == 'codex' and state != 'Working'  # while it works, new lines are its answer, not the command's
+                   and message.strip().startswith('/') and message.strip() != '/model')
+    before = capture(config) if wants_reply else ''
+    note = '' if message.strip().startswith(('/', '!')) else shell_log.folder_note(config['id'], agent_folder(config))
+    submit(note + message.strip(), config)
+    if wants_reply:  # Codex answers its slash commands on the terminal only
+        threading.Thread(target=terminal_replies.record, args=(config, before, capture), daemon=True).start()
+    return 'queued' if state == 'Working' else 'submitted'
+
+
+def broadcast_message(body):
+    """POST /mobile/api/broadcast: one guarded broker for every multi-pane send (the Agents page and `tether broadcast`)."""
+    return broadcast.deliver(body.get('message'), body.get('panes'), via=body.get('via') or 'direct', master=body.get('master'), exclude=body.get('exclude'),
+                             entries=sessions, status=live_status, send=send_text, cli=str(ROOT.parent / 'tether'))
+
+
 DEFAULT_WINDOW = 150
 MAX_WINDOW = 2000
 
@@ -1161,6 +1186,8 @@ class Handler(BaseHTTPRequestHandler):
                 browser_api.get(self)
             elif projects_api.handles(path):
                 projects_api.get(self)
+            elif codex_level.handles(path):
+                codex_level.get(self)
             elif path == '/mobile/api/stream':
                 query = parse_qs(urlsplit(self.path).query)
                 self.stream_chat(query.get('session', [None])[0], query.get('mode') == ['shell'], window_limit(query), preview=query.get('preview') == ['1'])
@@ -1192,8 +1219,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.close_connection = True
                     self.respond(403, {'error': 'Reload the page and try again.'})
             return
-        if self.path not in ('/mobile/api/message', '/mobile/api/approval', '/mobile/api/menu', '/mobile/api/start', '/mobile/api/session', '/mobile/api/tmux-sessions', '/mobile/api/key', '/mobile/api/clear-draft', '/mobile/api/unqueue', '/mobile/api/mode', '/mobile/api/type',
-                         '/mobile/api/push/subscribe', '/mobile/api/push/unsubscribe', '/mobile/api/push/test', '/mobile/api/push/mute', '/mobile/api/shortcuts', '/mobile/api/prefs', '/mobile/api/codex-provider', '/mobile/api/model-options', '/mobile/api/model', '/mobile/api/rename', '/mobile/api/merge', '/mobile/api/shell', '/mobile/api/upload', '/mobile/api/transcribe', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/switch') and not browser_api.handles(self.path) and not projects_api.handles(self.path):
+        if self.path not in ('/mobile/api/message', '/mobile/api/broadcast', '/mobile/api/approval', '/mobile/api/menu', '/mobile/api/start', '/mobile/api/session', '/mobile/api/tmux-sessions', '/mobile/api/key', '/mobile/api/clear-draft', '/mobile/api/unqueue', '/mobile/api/mode', '/mobile/api/type',
+                         '/mobile/api/push/subscribe', '/mobile/api/push/unsubscribe', '/mobile/api/push/test', '/mobile/api/push/mute', '/mobile/api/shortcuts', '/mobile/api/prefs', '/mobile/api/codex-provider', '/mobile/api/model-options', '/mobile/api/model', '/mobile/api/rename', '/mobile/api/merge', '/mobile/api/shell', '/mobile/api/upload', '/mobile/api/transcribe', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/switch') and not browser_api.handles(self.path) and not projects_api.handles(self.path) and not codex_level.handles(self.path):
             self.respond(404, {'error': 'Not found'})
             return
         # Reject unauthenticated and cross-origin submissions.
@@ -1209,6 +1236,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if projects_api.handles(self.path):
             projects_api.post(self)
+            return
+        if codex_level.handles(self.path):
+            codex_level.post(self)
             return
         if self.path == '/mobile/api/upload':
             self.do_upload()
@@ -1227,6 +1257,9 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError('Invalid request.')
             if self.path == '/mobile/api/message' and (not isinstance(message, str) or not message.strip()):
                 self.respond(400, {'error': 'Enter a message first.'})
+                return
+            if self.path == '/mobile/api/broadcast':
+                self.respond(200, broadcast_message(body))
                 return
             if self.path == '/mobile/api/accounts/switch':
                 self.respond(200, saved_accounts.switch(body.get('agent'), body.get('number')))
@@ -1525,19 +1558,9 @@ class Handler(BaseHTTPRequestHandler):
                     respond_approval(config, body.get('approval'), body.get('action'), choice=body.get('choice'), feedback=body.get('feedback'))
                 self.respond(200, {'accepted': True})
             else:
-                state = live_status(config)['state']
-                if config['agent'] == 'codex' and re.match(r'/ls(\s|$)', message.strip()):
-                    message = '!' + message.strip()[1:]   # Codex has no /ls; "!ls" runs it in the shell
-                wants_reply = (config['agent'] == 'codex' and state != 'Working'  # while it works, new lines are its answer, not the command's
-                               and message.strip().startswith('/') and message.strip() != '/model')
-                before = capture(config) if wants_reply else ''
-                note = '' if message.strip().startswith(('/', '!')) else shell_log.folder_note(config['id'], agent_folder(config))
-                submit(note + message.strip(), config)
-                if wants_reply:  # Codex answers its slash commands on the terminal only
-                    threading.Thread(target=terminal_replies.record, args=(config, before, capture), daemon=True).start()
-                self.respond(200, {'accepted': True, 'delivery': 'queued' if state == 'Working' else 'submitted'})
+                self.respond(200, {'accepted': True, 'delivery': send_text(config, message)})
         except (ValueError, UnicodeError) as exc:
-            self.respond(400, {'error': str(exc) if self.path in ('/mobile/api/session', '/mobile/api/merge', '/mobile/api/model', '/mobile/api/shell', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/mode', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/menu', '/mobile/api/push/mute', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/switch') else 'Invalid message.'})
+            self.respond(400, {'error': str(exc) if self.path in ('/mobile/api/session', '/mobile/api/broadcast', '/mobile/api/merge', '/mobile/api/model', '/mobile/api/shell', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/mode', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/menu', '/mobile/api/push/mute', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/switch') else 'Invalid message.'})
         except (OSError, RuntimeError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
             # The journal keeps why a send was refused; the access log shows only "503".
             print(f'{self.path} refused: {type(exc).__name__}: {str(exc)[:200]}', file=sys.stderr, flush=True)
@@ -1645,4 +1668,5 @@ if __name__ == '__main__':
         print('Mobile Tmux listening on http://%s:%d/mobile/ -- sign in with the token in %s' % (host, port, auth.TOKEN_FILE), flush=True)
         auth.token()
     threading.Thread(target=monitor_notices, daemon=True).start()
+    threading.Thread(target=tmux_names.watch, daemon=True).start()  # tmux renames flow back into pane names
     ThreadingHTTPServer((host, port), Handler).serve_forever()

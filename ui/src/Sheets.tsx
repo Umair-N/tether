@@ -14,6 +14,7 @@ import { KeepChoice, keepNeeded } from './Project'
 import type { Keep, ProjectMarks } from './Project'
 import { SCHEMES, schemeById } from './schemes'
 import { HostResources } from './HostResources'
+import { GlobalCodexLevel } from './CodexLevel'
 
 // Push notification mute for one pane, as a row in the ⋯ menu. Hidden when this browser has no push subscription.
 export function MuteItem({ api, pane, disabled = false }: { api: Api; pane: string; disabled?: boolean }) {
@@ -377,6 +378,7 @@ function SystemSettings({ api, onReload }: { api: Api; onReload: () => void }) {
   }, [api])
   return <>
     {host?.resources && <HostResources api={api} terminal={host.terminal} />}
+    <GlobalCodexLevel api={api} />
     <section className="settings-group" aria-labelledby="settings-system"><h3 id="settings-system">Tether</h3>
       {(error || updateError) && <p className="error" role="alert">{error || updateError}</p>}
       <div className="switch-row"><span><strong>Updates</strong><small>{status ? `Version ${status.current} · ${status.mode === 'off' ? 'Checks off' : status.checking ? 'Checking…' : status.available ? `${status.latest} available` : status.latest ? 'Up to date' : 'No release data'}` : 'Loading…'}</small></span>{status?.available && status.url.startsWith('https://') && <a className="secondary" href={status.url} target="_blank" rel="noreferrer">Release notes</a>}</div>

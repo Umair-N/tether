@@ -103,6 +103,43 @@
 .agent-mark-read:hover { background: var(--hover); }
 .agents-sheet { display: flex; flex-direction: column; min-height: min(70dvh, 560px); }
 .agents-sheet .agent-tab-panel { overflow-y: auto; min-height: 0; flex: 1; }
+.agents-sheet .sheet-heading h2 { margin-right: auto; }
+.agents-back { margin-left: -10px; }
+.agents-message { min-height: 36px; padding: 0 12px; font-size: 13px; }
+/* Message sessions (Broadcast.tsx): the pane list scrolls; the text box and the send row stay in view. */
+.broadcast { display: flex; flex-direction: column; gap: 8px; min-height: 0; flex: 1; margin-top: 10px; }
+.broadcast-bar { display: flex; align-items: center; gap: 14px; font-size: 13px; }
+.broadcast-count { margin-right: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+.broadcast-bar button { min-height: 32px; padding: 0 4px; color: var(--accent); font-weight: 500; }
+.broadcast-bar button:hover { text-decoration: underline; }
+.broadcast-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; min-height: 88px; max-height: 40dvh; border: 1px solid var(--line); border-radius: 10px; }
+.broadcast-results .broadcast-list { max-height: 55dvh; margin-bottom: 16px; }
+.broadcast-list li + li { border-top: 1px solid var(--line); }
+.broadcast-row { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 4px 12px; }
+label.broadcast-row { cursor: pointer; }
+label.broadcast-row:hover { background: var(--hover); }
+.broadcast-row input { width: 18px; height: 18px; margin: 0; flex: none; accent-color: var(--accent); }
+.broadcast-row.is-master { cursor: default; }
+.broadcast-name { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.broadcast-name strong { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.broadcast-name small { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.broadcast-results .broadcast-name small { white-space: normal; }
+.broadcast-state { flex: none; font-size: 12px; color: var(--muted); }
+.broadcast-state.state-working { color: var(--accent); }
+.broadcast-state.state-waits, .result-skipped .broadcast-state { color: var(--attention); }
+.result-failed .broadcast-state { color: var(--error); }
+.result-sent .broadcast-state, .result-sent_busy .broadcast-state, .result-handed_off .broadcast-state { color: var(--text); }
+.broadcast-rules { margin: 0; font-size: 12.5px; }
+.broadcast textarea { width: 100%; box-sizing: border-box; resize: vertical; min-height: 72px; max-height: 30dvh; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; font-size: 16px; }
+.broadcast textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.broadcast .error { margin: 0; font-size: 13px; }
+.broadcast-send { display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; }
+.via-button { max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.broadcast-results { margin-top: 10px; }
+.broadcast .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.via-check { display: inline-flex; width: 16px; flex: none; color: var(--accent); }
+.via-menu .action-label { white-space: normal; }
+.via-none { margin: 4px 8px 8px; }
 .agent-pop-hide { min-height: 36px; padding: 0 8px; border-radius: 8px; font-size: 13px; color: var(--text); font-weight: 500; }
 .agent-pop-hide:hover { background: var(--hover); }
 @media (prefers-reduced-motion: reduce) {
@@ -1393,3 +1430,9 @@ button.live-chip:active { background: var(--line); }
 .session-title .project-mark { flex: none; color: var(--muted); }
 .session-title .project-mark.stale { color: var(--attention); }
 
+/* Codex level (CodexLevel.tsx): five steps in the Settings segmented control, the chosen step's rule under it. */
+.settings-group .codex-level .segmented span { font-variant-numeric: tabular-nums; }
+.settings-group .codex-level-note { clear: both; margin: 8px 0 0; }
+.settings-group .codex-level-note strong { color: var(--text); font-weight: 600; }
+.settings-group .codex-level:disabled .segmented, .settings-group .codex-level:disabled .codex-level-note { opacity: .55; }
+.settings-group .codex-runs { border-top: 1px solid var(--line); cursor: default; }

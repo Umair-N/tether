@@ -45,8 +45,8 @@ import './App.css'
 
 function App() {
   const [unauthorized, setUnauthorized] = useState(false)
-  const api: Api = useCallback(async (path, body, signal, method) => {
-    try { return await request(path, body, signal, method) } catch (error) {
+  const api: Api = useCallback(async (path, body, signal, method, timeout) => {
+    try { return await request(path, body, signal, method, timeout) } catch (error) {
       if (error instanceof ApiError && error.status === 401) setUnauthorized(true)
       throw error
     }
@@ -498,7 +498,7 @@ function App() {
     {planSheet && <PlanUsage api={api} onClose={() => setPlanSheet(false)} />}
     {view && menu === 'commands' && <CommandMenu sessions={sortByPrefs(sessions, prefs.order).filter(item => !isArchived(item, prefs.archived))} seen={prefs.seen} selected={pane?.id} slots={multi ? view.slots : []} commands={commands} onPane={openPane} onSession={showSession} onClose={() => setMenu(null)} />}
     {view && menu === 'shortcuts' && <Shortcuts onClose={() => setMenu(null)} />}
-    {agentsPage && <AgentsPage sessions={sessions} seen={prefs.seen} selected={pane?.id} onOpen={openPane} onMarkRead={markRead} onClose={() => setAgentsPage(false)} />}
+    {agentsPage && <AgentsPage api={api} sessions={sessions} seen={prefs.seen} selected={pane?.id} onOpen={openPane} onMarkRead={markRead} onClose={() => setAgentsPage(false)} />}
     {view && !files && <StatusBar panes={panes} loading={loading} error={error} />}
     {updated && <div className="update-banner" role="status"><span>A new version of Tether is ready.</span><button type="button" onClick={reload}>Reload</button></div>}
   </main>

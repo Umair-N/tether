@@ -79,14 +79,15 @@ export class ApiError extends Error {
   draft: boolean  // the agent's own input box has text that blocks this action
   constructor(status: number, message: string, draft = false) { super(message); this.status = status; this.draft = draft }
 }
-export type Api = <T>(path: string, body?: unknown, signal?: AbortSignal, method?: 'DELETE') => Promise<T>
-export async function request<T>(path: string, body?: unknown, signal?: AbortSignal, method?: 'DELETE'): Promise<T> {
+/** timeout: milliseconds before the request gives up (10 s). A broadcast types into many panes one after another, so it waits longer. */
+export type Api = <T>(path: string, body?: unknown, signal?: AbortSignal, method?: 'DELETE', timeout?: number) => Promise<T>
+export async function request<T>(path: string, body?: unknown, signal?: AbortSignal, method?: 'DELETE', timeout = 10000): Promise<T> {
   const response = await fetch(`/mobile/api/${path}`, {
     method: method ?? (body === undefined ? 'GET' : 'POST'),
     credentials: 'same-origin',
     headers: body === undefined ? undefined : { 'Content-Type': 'application/json', 'X-Codex-Mobile': '1' },
     body: body === undefined ? undefined : JSON.stringify(body),
-    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10000)]) : AbortSignal.timeout(10000),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout),
   })
   const data = await response.json().catch(() => ({}))
   if (!response.ok) throw new ApiError(response.status, data.error || `Request failed (${response.status}). Please try again.`, data.draft === true)
@@ -123,3 +124,8 @@ export interface LiveGoal { condition: string; met: boolean; reason?: string; se
 export interface LiveTask { id: string; kind: 'shell' | 'monitor'; title: string; command: string; started: number | null; output: string | null; state: 'running' | 'ended' }
 export interface LiveState { goal: LiveGoal | null; tasks: LiveTask[] }
 export interface ModelOptions { agent: string; models: { id: string; label: string; current: boolean; effort?: boolean }[]; efforts: string[]; current_effort: string | null }
+
+/** One pane's outcome of a broadcast (server/broadcast.py). sent_busy: the agent was working and took the typed text;
+ * Tether keeps no queue. handed_off: in the Claude master's target list. */
+export interface BroadcastRow { pane: string; name: string; agent: Agent | null; result: 'sent' | 'sent_busy' | 'skipped' | 'failed' | 'handed_off'; reason?: string }
+export interface BroadcastResult { via: 'direct' | 'claude'; results: BroadcastRow[]; master?: BroadcastRow }
