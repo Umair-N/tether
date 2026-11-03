@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { Archive, ArchiveRestore, BookMarked, ChevronRight, Code2, Command, GripVertical, Layers, History, Pin, PinOff, Plus, RefreshCw, Search, Settings, Terminal, Trash2, X } from 'lucide-react'
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
+import { Archive, ArchiveRestore, Asterisk, BarChart3, BookMarked, BookOpen, Bug, Cpu, Database, FileText, FlaskConical, GitBranch, Globe, LayoutDashboard, MessageSquare, Mic, Palette, Rocket, Server, Shield, Sparkles, Wrench, Zap, ChevronRight, Code2, GripVertical, Layers, History, Pin, PinOff, Plus, RefreshCw, Search, Settings, Terminal, Trash2, X } from 'lucide-react'
 import { KeepChoice, keepNeeded } from './Project'
 import type { Keep, ProjectMark, ProjectMarks } from './Project'
 import type { Agent, Api, HistoryData, Pane, PastChat, UsageData, UsageReport, UsageWindow } from './api'
@@ -17,10 +17,26 @@ import { UpdateBanner } from './UpdateBanner'
 import { Elapsed } from './Notices'
 
 export const agentNames: Record<Agent, string> = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity', shell: 'Shell' }
-export function AgentIcon({ agent, size = 16 }: { agent: Agent; size?: number }) {
-  const Icon = agent === 'shell' ? Terminal : agent === 'codex' ? Code2 : Command
-  return <Icon size={size} aria-hidden="true" />
+// Icons a pane can wear instead of its agent's icon (tmux option @chat_icon). The person picks one in the pane menu,
+// or the agent sets one itself (server/projects.py). These load at once; any other lucide name loads on demand,
+// and svg-<name> is an icon Claude drew (server/pane_icons.py).
+export const PANE_ICONS = { bug: Bug, flask: FlaskConical, palette: Palette, rocket: Rocket, book: BookOpen, database: Database, globe: Globe,
+  server: Server, shield: Shield, wrench: Wrench, mic: Mic, branch: GitBranch, file: FileText, search: Search, sparkles: Sparkles, zap: Zap,
+  cpu: Cpu, layout: LayoutDashboard, chat: MessageSquare, chart: BarChart3 } as const
+type PaneIcon = keyof typeof PANE_ICONS
+const LucideIcon = lazy(() => import('lucide-react/dynamic').then(module => ({ default: module.DynamicIcon })))
+// Claude gets an asterisk, like the ✳ Claude Code shows in its own title. icon: the pane's own icon, when it has one.
+export function AgentIcon({ agent, icon, size = 16 }: { agent: Agent; icon?: string; size?: number }) {
+  const Own = agent === 'shell' ? Terminal : agent === 'codex' ? Code2 : Asterisk
+  if (icon?.startsWith('svg-')) return <span className="drawn-icon" aria-hidden="true" style={{ width: size, height: size, ['--icon' as string]: `url("/mobile/api/icon/${encodeURIComponent(icon.slice(4))}.svg")` }} />
+  if (icon && icon in PANE_ICONS) { const Icon = PANE_ICONS[icon as PaneIcon]; return <Icon size={size} aria-hidden="true" /> }
+  if (icon && /^[a-z0-9-]+$/.test(icon)) return <Suspense fallback={<Own size={size} aria-hidden="true" />}><LucideIcon name={icon as never} size={size} aria-hidden="true" fallback={() => <Own size={size} aria-hidden="true" />} /></Suspense>
+  return <Own size={size} aria-hidden="true" />
 }
+
+// The name a chat shows everywhere (tab, header, message box): the pane's own name, the agent's /rename name,
+// then the tmux session's name. The same order as paneTitle, but a session name beats the generic "Claude".
+export const chatTitle = (pane: Pane, session?: { name: string }) => pane.pane_name || pane.agent_name || session?.name || pane.label
 
 // One tmux session with all its panes. "ESEF:0.1" is session ESEF, window 0, pane 1.
 export interface Session { id: string; name: string; panes: Pane[]; agent: Agent; state: string; dir: string }

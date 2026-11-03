@@ -21,6 +21,7 @@ from pathlib import Path
 import files
 import paths
 
+
 ID = re.compile(r'[0-9a-f]{12}')
 NOTE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._ -]{0,79}\.md')
 BUDGET = 4000
@@ -345,6 +346,8 @@ def render(pid, agent='claude', home=None):
     if pinned:
         lines = '\n'.join(f'- {item["name"]}: {item["path"]}{" (gone)" if item["missing"] else ""}' for item in pinned)
         parts.append(f'\n## Pinned files\nRead a file when the task needs it.\n{lines}\n')
+    parts.append('\n## Tab icon\nOnce the task is clear, run `tmux set-option -p -t "$TMUX_PANE" @chat_icon NAME`. NAME: a lucide.dev '
+                 f'icon name, or svg-X after you write a 24x24 stroke SVG to {paths.TETHER}/icons/X.svg. Skip it if @chat_icon_by is "user".\n')
     parts.append(f'\n## Notes\nSave a project fact that other agents in this session need as a Markdown file in {folder}/notes/ '
                  '(one topic per file, a "# Title" first line). Keep your own memory as before. The user reviews notes in Tether.\n')
     if found:

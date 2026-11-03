@@ -15,6 +15,8 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from agents import claude_consume, claude_snapshot, discover, usage
 from agents import records
+import agents
+import pane_icons
 from antigravity import snapshot as antigravity_snapshot, transcript_message as antigravity_message, window_active
 from terminal_input import NAME_HELP, valid_name, fork_chat, DraftError, card_key, menu_choose, unqueue, clear_draft as terminal_clear_draft, type_text, live_status, capture, capture_screen, submit as terminal_submit, respond_approval, plan_menu, start_agent, create_session, shell_snapshot, shell_submit, verify
 from quota_notices import error_message, merge as merge_quota_notices
@@ -197,7 +199,7 @@ def sessions():
 # Writes that add, remove or rename tmux panes or sessions. After one succeeds, the next list must come from tmux,
 # so a page that refreshes right away sees the new pane (or no longer sees the closed one).
 TMUX_WRITES = {'/mobile/api/split', '/mobile/api/fork', '/mobile/api/resume', '/mobile/api/shell', '/mobile/api/session',
-               '/mobile/api/tmux-sessions', '/mobile/api/rename', '/mobile/api/pane-name', '/mobile/api/side-shell',
+               '/mobile/api/tmux-sessions', '/mobile/api/rename', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/side-shell',
                '/mobile/api/side-shell/end', '/mobile/api/start', '/mobile/api/merge'}
 
 
@@ -209,7 +211,7 @@ def forget_sessions():
 def session_row(entry):
     """One pane in the session list. `needs` is a one-line summary when the pane waits on the user (the desktop "Needs you" list)."""
     status = shared_status(entry)
-    return dict({key: entry.get(key) for key in ('id', 'tmux_session', 'label', 'agent', 'thread', 'writable', 'pane_name', 'agent_name', 'codex_profile')},
+    return dict({key: entry.get(key) for key in ('id', 'tmux_session', 'label', 'agent', 'thread', 'writable', 'pane_name', 'pane_icon', 'agent_name', 'codex_profile')},
                 dir=home_path(tab_folder(entry)), **status, **timeline(entry['id']), needs=needs.summary(status))
 
 
@@ -217,6 +219,29 @@ def files_sessions():
     """Live panes and their folders, for the Files explorer's Places."""
     return [{'session': entry['id'], 'name': entry.get('pane_name') or entry.get('label') or entry.get('tmux_session'),
              'agent': entry.get('agent'), 'cwd': tab_folder(entry)} for entry in sessions()]
+
+
+# Shown in a pane's top border when its window holds several panes. Claude writes "✳ topic" over the pane title,
+# so the border reads Tether's own name first.
+BORDER_FORMAT = ' #{?@chat_name,#{@chat_name},#{pane_title}} '
+
+
+def name_in_tmux(pane, name):
+    """Show a pane's Tether name in tmux too: a window with only this pane takes the name (and stops renaming itself);
+    a window with several panes shows each pane's name in its border. An empty name gives the window back to tmux."""
+    try:
+        result = subprocess.run([paths.TMUX, 'display-message', '-p', '-t', pane, '#{window_panes}'], capture_output=True, text=True, timeout=5)
+        count = int(result.stdout.strip())
+    except (OSError, ValueError, TypeError, AttributeError, subprocess.SubprocessError):
+        return
+    if count == 1:
+        command = (['rename-window', '-t', pane, name, ';', 'set-option', '-w', '-t', pane, 'automatic-rename', 'off'] if name
+                   else ['set-option', '-w', '-t', pane, '-u', 'automatic-rename'])
+    elif name:
+        command = ['set-option', '-w', '-t', pane, 'pane-border-status', 'top', ';', 'set-option', '-w', '-t', pane, 'pane-border-format', BORDER_FORMAT]
+    else:
+        return
+    subprocess.run([paths.TMUX, *command], capture_output=True, timeout=5)
 
 
 def name_together(pane, name, from_session):
@@ -1000,6 +1025,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(200, STATIC_ASSETS[path], 'application/manifest+json', 'max-age=86400')
             elif path in ('/mobile/icon-192.png', '/mobile/icon-512.png', '/mobile/apple-touch-icon.png'):
                 self.respond(200, STATIC_ASSETS[path], 'image/png', 'max-age=86400')
+            elif path.startswith('/mobile/api/icon/') and path.endswith('.svg'):
+                svg = pane_icons.read(path[len('/mobile/api/icon/'):-4])
+                self.respond(200, svg, 'image/svg+xml', 'max-age=300') if svg else self.respond(404, {'error': 'No such icon.'})
             elif path == '/mobile/api/shortcuts':
                 self.respond(200, {'shortcuts': shortcuts.load()})
             elif path == '/mobile/api/prefs':
@@ -1162,7 +1190,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.respond(403, {'error': 'Reload the page and try again.'})
             return
         if self.path not in ('/mobile/api/message', '/mobile/api/approval', '/mobile/api/menu', '/mobile/api/start', '/mobile/api/session', '/mobile/api/tmux-sessions', '/mobile/api/key', '/mobile/api/clear-draft', '/mobile/api/unqueue', '/mobile/api/mode', '/mobile/api/type',
-                         '/mobile/api/push/subscribe', '/mobile/api/push/unsubscribe', '/mobile/api/push/test', '/mobile/api/push/mute', '/mobile/api/shortcuts', '/mobile/api/prefs', '/mobile/api/codex-provider', '/mobile/api/model-options', '/mobile/api/model', '/mobile/api/rename', '/mobile/api/merge', '/mobile/api/shell', '/mobile/api/upload', '/mobile/api/transcribe', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/switch') and not browser_api.handles(self.path) and not projects_api.handles(self.path):
+                         '/mobile/api/push/subscribe', '/mobile/api/push/unsubscribe', '/mobile/api/push/test', '/mobile/api/push/mute', '/mobile/api/shortcuts', '/mobile/api/prefs', '/mobile/api/codex-provider', '/mobile/api/model-options', '/mobile/api/model', '/mobile/api/rename', '/mobile/api/merge', '/mobile/api/shell', '/mobile/api/upload', '/mobile/api/transcribe', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/switch') and not browser_api.handles(self.path) and not projects_api.handles(self.path):
             self.respond(404, {'error': 'Not found'})
             return
         # Reject unauthenticated and cross-origin submissions.
@@ -1291,8 +1319,42 @@ class Handler(BaseHTTPRequestHandler):
                     result = subprocess.run([paths.TMUX, *command], capture_output=True, text=True, timeout=5)
                     if result.returncode:
                         raise RuntimeError('Could not rename the pane. It may have closed.')
+                    name_in_tmux(pane, name)
                     note = name_together(pane, name, from_session=False)
                 self.respond(200, {'pane': pane, 'name': name, **({'note': note} if note else {})})
+                return
+            if self.path == '/mobile/api/pane-icon/draw':
+                # Claude draws a new icon (pane_icons.draw, a small model, about 10 s) and the pane wears it.
+                pane, label, hint = body.get('pane'), body.get('label'), body.get('hint', '')
+                if not isinstance(pane, str) or not re.fullmatch(r'%[0-9]+', pane):
+                    raise ValueError('Select a pane.')
+                if not isinstance(label, str) or not isinstance(hint, str) or len(hint) > 200:
+                    raise ValueError('Use up to 200 characters to describe the icon.')
+                icon = 'svg-' + pane_icons.draw(label, hint)
+                with SEND_LOCK:
+                    result = subprocess.run([paths.TMUX, 'set-option', '-p', '-t', pane, '@chat_icon', icon, ';',
+                                             'set-option', '-p', '-t', pane, '@chat_icon_by', 'user'], capture_output=True, text=True, timeout=5)
+                if result.returncode:
+                    raise RuntimeError('Could not set the icon. The pane may have closed.')
+                forget_sessions()
+                self.respond(200, {'pane': pane, 'icon': icon})
+                return
+            if self.path == '/mobile/api/pane-icon':
+                # icon: a lucide icon name or svg-<name> (pane_icons.py); '' shows the agent's own icon again.
+                pane, icon = body.get('pane'), body.get('icon')
+                if not isinstance(pane, str) or not re.fullmatch(r'%[0-9]+', pane):
+                    raise ValueError('Select a pane.')
+                if not isinstance(icon, str) or (icon and not agents.ICON.fullmatch(icon)):
+                    raise ValueError('Pick an icon from the list.')
+                # @chat_icon_by tells the agent the person picked it, so it leaves the icon alone (projects.render).
+                command = (['set-option', '-p', '-t', pane, '@chat_icon', icon, ';', 'set-option', '-p', '-t', pane, '@chat_icon_by', 'user'] if icon
+                           else ['set-option', '-p', '-t', pane, '-u', '@chat_icon', ';', 'set-option', '-p', '-t', pane, '-u', '@chat_icon_by'])
+                with SEND_LOCK:
+                    result = subprocess.run([paths.TMUX, *command], capture_output=True, text=True, timeout=5)
+                if result.returncode:
+                    raise RuntimeError('Could not set the icon. The pane may have closed.')
+                forget_sessions()
+                self.respond(200, {'pane': pane, 'icon': icon})
                 return
             if self.path == '/mobile/api/side-shell':
                 # A plain shell in the pane's folder, in Tether's own tmux session. pane: the shell the panel shows now.
@@ -1472,7 +1534,7 @@ class Handler(BaseHTTPRequestHandler):
                     threading.Thread(target=terminal_replies.record, args=(config, before, capture), daemon=True).start()
                 self.respond(200, {'accepted': True, 'delivery': 'queued' if state == 'Working' else 'submitted'})
         except (ValueError, UnicodeError) as exc:
-            self.respond(400, {'error': str(exc) if self.path in ('/mobile/api/session', '/mobile/api/merge', '/mobile/api/model', '/mobile/api/shell', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/mode', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/menu', '/mobile/api/push/mute', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/switch') else 'Invalid message.'})
+            self.respond(400, {'error': str(exc) if self.path in ('/mobile/api/session', '/mobile/api/merge', '/mobile/api/model', '/mobile/api/shell', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/mode', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/menu', '/mobile/api/push/mute', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/switch') else 'Invalid message.'})
         except (OSError, RuntimeError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
             # The journal keeps why a send was refused; the access log shows only "503".
             print(f'{self.path} refused: {type(exc).__name__}: {str(exc)[:200]}', file=sys.stderr, flush=True)

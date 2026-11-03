@@ -1,13 +1,13 @@
 import { playChime, prepareChime } from './sound'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Archive, ArchiveRestore, ArrowDown, BookMarked, ArrowUp, Bell, BellOff, Check, Columns2, GitFork, History, LayoutDashboard, Merge, ArrowRightLeft, Plus, PanelBottom, PanelRight, Pencil, Pin, PinOff, RotateCw, Rows2, Square, Trash2, X } from 'lucide-react'
+import { Archive, ArchiveRestore, ArrowDown, BookMarked, ArrowUp, Bell, BellOff, Check, Columns2, GitFork, History, LayoutDashboard, Merge, ArrowRightLeft, Plus, PanelBottom, PanelRight, Pencil, Pin, PinOff, Shapes, Sparkles, RotateCw, Rows2, Square, Trash2, X } from 'lucide-react'
 import { SESSION_NAME, SESSION_NAME_HELP, canFork, creditsLabel, errorText, usageLabel } from './api'
 import type { Api, Catalog, Footer, ModelOptions, Pane, PastChat, SessionsData } from './api'
 import { loadCatalog } from './Suggest'
 import type { Prefs } from './prefs'
 import { useModal, usePopover, usePolling } from './hooks'
 import type { Anchor } from './hooks'
-import { agentNames, paneTitle, shownIndex } from './Sidebar'
+import { AgentIcon, PANE_ICONS, agentNames, paneTitle, shownIndex } from './Sidebar'
 import type { Session } from './Sidebar'
 import { canSpeak } from './speech'
 import { KeepChoice, keepNeeded } from './Project'
@@ -168,7 +168,7 @@ export function SessionActions({ api, session, pane, pinned, archived, canMoveUp
 export function PaneActions({ api, session, pane, at, place, targets, onFork, onDone, onClose }: {
   api: Api; session: Session | undefined; pane: Pane; at?: Anchor; place?: Place; targets: Session[]; onFork?: () => void; onDone: (newPane?: string, direction?: 'right' | 'down') => void; onClose: () => void
 }) {
-  const [mode, setMode] = useState<'menu' | 'rename' | 'close' | 'move'>('menu')
+  const [mode, setMode] = useState<'menu' | 'rename' | 'icon' | 'close' | 'move'>('menu')
   const [name, setName] = useState(pane.pane_name ?? '')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
@@ -200,6 +200,8 @@ export function PaneActions({ api, session, pane, at, place, targets, onFork, on
           <p className="hint">{pane.agent === 'claude' || pane.agent === 'codex' ? `${agentNames[pane.agent]} gets the same name. ` : ''}{last ? 'The session takes it too. ' : ''}Leave it empty to show the agent name again.</p>
           <div className="sheet-buttons"><button type="button" className="secondary" disabled={pending} onClick={() => setMode('menu')}>Cancel</button><button className="primary" disabled={pending}>{pending ? 'Saving…' : 'Save'}</button></div>
         </form>
+      : mode === 'icon'
+      ? <IconPicker api={api} pane={pane} pending={pending} run={run} onBack={() => setMode('menu')} />
       : mode === 'close'
       ? <div className="confirm-box" role="alertdialog" aria-labelledby="close-pane-title">
           <p id="close-pane-title"><strong>Close this pane?</strong> {last ? `It is the last pane, so this also ends the session ${session?.name ?? ''}.` : 'This stops anything running in it.'} You cannot undo this.</p>
@@ -207,6 +209,7 @@ export function PaneActions({ api, session, pane, at, place, targets, onFork, on
         </div>
       : <div className="action-list">
           <button disabled={pending} onClick={() => setMode('rename')}><Pencil size={18} />Rename pane</button>
+          <button disabled={pending} onClick={() => setMode('icon')}><Shapes size={18} />Change icon</button>
           <button disabled={pending} onClick={() => setMode('move')}><ArrowRightLeft size={18} />Move to session…</button>
           <hr />
           <PlaceItems place={place} pending={pending} onClose={onClose} />
@@ -218,6 +221,41 @@ export function PaneActions({ api, session, pane, at, place, targets, onFork, on
         </div>}
     {error && <p className="error" role="alert">{error}</p>}
   </dialog>
+}
+
+// Pick a pane icon: suggested ones, a search over all lucide icons, or one Claude draws (server/pane_icons.py, about 10 s).
+function IconPicker({ api, pane, pending, run, onBack }: { api: Api; pane: Pane; pending: boolean; run: (action: () => Promise<string | undefined>) => Promise<void>; onBack: () => void }) {
+  const [query, setQuery] = useState('')
+  const [names, setNames] = useState<string[]>([])
+  const [hint, setHint] = useState('')
+  const [drawing, setDrawing] = useState(false)
+  useEffect(() => { if (query && !names.length) void import('lucide-react/dynamic').then(module => setNames(module.iconNames)) }, [query, names.length])
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  const found = words.length ? names.filter(name => words.every(word => name.includes(word))).slice(0, 96) : []
+  const choices: [string, string][] = words.length ? found.map(name => [name, name.replace(/-/g, ' ')])
+    : [['', 'Agent icon'], ...(pane.pane_icon?.startsWith('svg-') ? [[pane.pane_icon, 'Drawn by Claude'] as [string, string]] : []), ...Object.keys(PANE_ICONS).map(key => [key, key] as [string, string])]
+  const pick = (icon: string) => void run(async () => { await api('pane-icon', { pane: pane.id, icon }); return undefined })
+  async function draw() {
+    setDrawing(true)
+    try { await run(async () => { await api('pane-icon/draw', { pane: pane.id, label: paneTitle(pane), hint }); return undefined }) } finally { setDrawing(false) }
+  }
+  const busy = pending || drawing
+  return <div className="icon-picker">
+    <input type="search" aria-label="Search icons" placeholder="Search 1,600 icons" value={query} disabled={busy} onChange={event => setQuery(event.target.value)} />
+    <div className={words.length ? 'icon-grid scroll' : 'icon-grid'} role="group" aria-label="Pane icon">
+      {choices.map(([key, label]) =>
+        <button key={key || 'agent'} type="button" title={label} aria-label={label} aria-pressed={(pane.pane_icon ?? '') === key} disabled={busy} onClick={() => pick(key)}>
+          <AgentIcon agent={pane.agent} icon={key} size={20} />
+        </button>)}
+    </div>
+    {words.length > 0 && !found.length && <p className="hint">{names.length ? 'No icon has that name. Ask Claude to draw one.' : 'Loading icons…'}</p>}
+    <form className="icon-draw" onSubmit={event => { event.preventDefault(); void draw() }}>
+      <input aria-label="Describe the icon for Claude" placeholder={`Describe it, or leave empty for “${paneTitle(pane)}”`} maxLength={200} value={hint} disabled={busy} onChange={event => setHint(event.target.value)} />
+      <button className="primary" disabled={busy}><Sparkles size={16} />{drawing ? 'Drawing…' : 'Draw'}</button>
+    </form>
+    <p className="hint">Claude Haiku draws it in about 10 s.</p>
+    <div className="sheet-buttons"><button type="button" className="secondary" disabled={busy} onClick={onBack}>Back</button></div>
+  </div>
 }
 
 function slug(title: string) {

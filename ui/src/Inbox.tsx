@@ -136,7 +136,7 @@ export function Inbox({ api, items, sessions, selected, open, onToggle, onOpen, 
             aria-label={`${KIND_LABEL[item.kind]}: ${title}, ${agentNames[pane.agent]}. ${item.text}. ${age(item.at, now)}.`}>
             <span className="inbox-kind"><span className="inbox-dot" aria-hidden="true" />{KIND_LABEL[item.kind]}<span className="inbox-age">{age(item.at, now)}</span></span>
             <span className="inbox-title">{title}</span>
-            <span className="inbox-meta"><AgentIcon agent={pane.agent} size={13} />{agentNames[pane.agent]}</span>
+            <span className="inbox-meta"><AgentIcon agent={pane.agent} icon={pane.pane_icon} size={13} />{agentNames[pane.agent]}</span>
             {item.text && <span className="inbox-text" title={item.text}>{item.text}</span>}
           </button>
           {(item.yes || item.no || item.menu) && <div className="inbox-actions" role="group" aria-label={`Answer ${title}`}>

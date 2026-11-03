@@ -78,6 +78,17 @@ class SideShellTests(unittest.TestCase):
         entries = agents.discover({'thread': None, 'transcript': None}, self.run_tmux)
         self.assertEqual({entry['label'] for entry in entries}, {'work'})
 
+    def test_discovery_reads_the_pane_icon_and_drops_unknown_text(self):
+        import agents
+        self.tmux('set-option', '-p', '-t', self.user_pane, '@chat_name', 'api')
+        self.tmux('set-option', '-p', '-t', self.user_pane, '@chat_icon', 'bug')
+        entry, = agents.discover({'thread': None, 'transcript': None}, self.run_tmux)
+        self.assertEqual((entry['pane_name'], entry['pane_icon']), ('api', 'bug'))
+        self.assertTrue(os.path.isdir(entry['cwd']))  # the icon field does not leak into the folder
+        self.tmux('set-option', '-p', '-t', self.user_pane, '@chat_icon', 'Not An Icon')
+        entry, = agents.discover({'thread': None, 'transcript': None}, self.run_tmux)
+        self.assertEqual(entry['pane_icon'], '')
+
     def test_folder_names_are_not_tmux_formats(self):
         # tmux expands formats in -c and -n; #(...) would run a command. The shell must start in the folder as named.
         marker = os.path.join(self.folder, 'ran')

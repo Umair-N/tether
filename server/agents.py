@@ -17,6 +17,7 @@ import paths
 from side_shells import SESSION as SIDE_SHELLS
 
 HOME = paths.HOME
+ICON = re.compile(r"[a-z0-9][a-z0-9-]{0,43}")  # tmux option @chat_icon: a lucide icon name, or svg-<name> (pane_icons.py)
 METRICS = paths.CACHE / 'usage'
 
 
@@ -117,7 +118,7 @@ def codex_database():
 
 def discover(config, run):
     result = run([paths.TMUX, 'list-panes', '-a', '-F',
-                  '#{pane_id}\t#{session_id}\t#{session_name}\t#{window_index}.#{pane_index}\t#{pane_pid}\t#{pane_current_path}\t#{@chat_name_at}\t#{@chat_name}'],
+                  '#{pane_id}\t#{session_id}\t#{session_name}\t#{window_index}.#{pane_index}\t#{pane_pid}\t#{pane_current_path}\t#{@chat_name_at}\t#{@chat_name}\t#{@chat_icon}'],
                  capture_output=True, text=True, timeout=5)
     if result.returncode:
         return ([{'id': 'saved', 'label': 'Last chat', 'agent': 'codex',
@@ -148,6 +149,8 @@ def discover(config, run):
             # The last fields are when and what the pane was named in tmux-chat (tmux options @chat_name_at, @chat_name).
             # Older callers send six or seven fields.
             named_at = ''
+            # A ninth field is the pane's icon (tmux option @chat_icon), set in Tether or by the agent itself.
+            icon = fields.pop() if len(fields) > 8 else ''
             if len(fields) > 7:
                 cwd, named_at, pane_name = '\t'.join(fields[5:-2]), fields[-2], fields[-1]
             elif len(fields) > 6:
@@ -158,7 +161,7 @@ def discover(config, run):
             names = {processes[p][1] for p in tree if p in processes}
             entry = {'id': pane, 'tmux_session': tmux_session, 'label': label, 'position': position,
                      'agent': 'shell', 'writable': False,
-                     'pane_pid': int(pid), 'pane_start': process_start(int(pid)), 'cwd': cwd, 'pane_name': pane_name,
+                     'pane_pid': int(pid), 'pane_start': process_start(int(pid)), 'cwd': cwd, 'pane_name': pane_name, 'pane_icon': icon if ICON.fullmatch(icon) else '',
                      'pane_named_at': int(named_at) if named_at.isdigit() else 0}
             live = next((r for r in claude if r['pid'] in tree and r.get('tmux', '').endswith('.' + pane)), None)
             if live:

@@ -80,7 +80,8 @@ class ProjectTests(unittest.TestCase):
         self.assertIn('## Notes', text)
         self.assertIn(str(projects.bundle(PID) / 'notes'), text)
         self.assertNotIn('## Instructions', text)
-        self.assertLess(len(text), 600)
+        self.assertIn('@chat_icon', text)  # agents learn to set their tab icon
+        self.assertLess(len(text), 700)
         self.assertFalse(projects.has_context(PID, self.home))
         state = projects.state(PID, self.home)
         self.assertEqual((state['chars'] > 0, state['revision']), (True, 0))

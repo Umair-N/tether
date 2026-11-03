@@ -1,4 +1,5 @@
 import { history, loadHistory, remember } from './history'
+import { chatTitle } from './Sidebar'
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { ArrowUp, Blocks, Camera, CornerDownLeft, FolderOpen, Smartphone, Image, Mic, Paperclip, Plus, Square, X, AtSign, Slash } from 'lucide-react'
 import { errorText } from './api'
@@ -284,7 +285,7 @@ export function Composer({ api, pane, thread, disabled, onSend, error, errorActi
       else if (walk(event)) event.preventDefault()
       else if (shellMode && event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setDraft(draft.slice(1)) }
       else if (shellMode && event.key === 'Backspace' && !draft.slice(1).trim() && event.currentTarget.selectionEnd <= 1) { event.preventDefault(); setDraft(draft.slice(1)) }
-      else if (sendsOnEnter(event)) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} onPaste={event => { if (canAttach && event.clipboardData.files.length) { event.preventDefault(); void attach(event.clipboardData.files) } }} ref={textarea} aria-label={pane.agent === 'shell' ? 'Run a command' : shellMode ? 'Shell command' : `Message ${pane.label}`} aria-describedby={shellMode ? hintId : undefined} spellCheck={!shellMode} autoCapitalize={shellMode ? 'off' : undefined} autoCorrect={shellMode ? 'off' : undefined} placeholder={hint ?? (pane.agent === 'shell' ? 'Run a command' : `Message ${pane.label}`)} rows={1} value={draft} readOnly={listening || transcribing || sending} disabled={disabled} onChange={event => setDraft(event.target.value)} /></div>
+      else if (sendsOnEnter(event)) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} onPaste={event => { if (canAttach && event.clipboardData.files.length) { event.preventDefault(); void attach(event.clipboardData.files) } }} ref={textarea} aria-label={pane.agent === 'shell' ? 'Run a command' : shellMode ? 'Shell command' : `Message ${chatTitle(pane)}`} aria-describedby={shellMode ? hintId : undefined} spellCheck={!shellMode} autoCapitalize={shellMode ? 'off' : undefined} autoCorrect={shellMode ? 'off' : undefined} placeholder={hint ?? (pane.agent === 'shell' ? 'Run a command' : `Message ${chatTitle(pane)}`)} rows={1} value={draft} readOnly={listening || transcribing || sending} disabled={disabled} onChange={event => setDraft(event.target.value)} /></div>
     <div className="composer-controls"><div>{canAttach && <div className="attach-container" ref={menuRef}>
       <input ref={picker} type="file" multiple hidden onChange={event => { const chosen = Array.from(event.target.files ?? []); event.target.value = ''; void attach(chosen) }} />
       <input ref={photos} type="file" accept="image/*" hidden onChange={event => { const chosen = Array.from(event.target.files ?? []); event.target.value = ''; void attach(chosen) }} />

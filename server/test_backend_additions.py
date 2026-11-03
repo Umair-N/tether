@@ -77,13 +77,60 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(self.run.call_args.args[0], [paths.TMUX, 'rename-session', '-t', '%12', 'build logs'])
         self.assertEqual(command[7:13], [';', 'set-option', '-p', '-t', '%12', '@chat_name_at'])
         self.assertTrue(command[13].isdigit())
+        self.run.reset_mock()
         self.assertEqual(self.request('/mobile/api/pane-name', {'pane': '%12', 'name': ''})[0], 200)
-        self.assertEqual(self.run.call_args.args[0], [paths.TMUX, 'set-option', '-p', '-t', '%12', '-u', '@chat_name', ';',
+        self.assertEqual(self.run.call_args_list[0].args[0], [paths.TMUX, 'set-option', '-p', '-t', '%12', '-u', '@chat_name', ';',
                                                         'set-option', '-p', '-t', '%12', '-u', '@chat_name_at'])
         self.run.reset_mock()
         for body in ({'pane': '$1', 'name': 'x'}, {'pane': '%12', 'name': 'x' * 41}, {'pane': '%12', 'name': 'a\nb'}, {'pane': '%12'}):
             self.assertEqual(self.request('/mobile/api/pane-name', body)[0], 400)
         self.run.assert_not_called()
+
+    def test_pane_icon_sets_and_clears_a_tmux_pane_option(self):
+        self.run.reset_mock()
+        status, _ = self.request('/mobile/api/pane-icon', {'pane': '%3', 'icon': 'bug'})
+        self.assertEqual(status, 200)
+        command = self.run.call_args_list[0].args[0]
+        self.assertEqual(command[1:7], ['set-option', '-p', '-t', '%3', '@chat_icon', 'bug'])
+        self.assertIn('@chat_icon_by', command)
+        self.run.reset_mock()
+        status, _ = self.request('/mobile/api/pane-icon', {'pane': '%3', 'icon': ''})
+        self.assertEqual(status, 200)
+        self.assertIn('-u', self.run.call_args_list[0].args[0])
+        status, _ = self.request('/mobile/api/pane-icon', {'pane': '%3', 'icon': 'Bad Icon!'})
+        self.assertEqual(status, 400)
+
+    def test_claude_draws_a_pane_icon_and_the_ui_can_load_it(self):
+        with patch.object(server.pane_icons, 'draw', return_value='dabc') as draw:
+            self.run.reset_mock()
+            self.assertEqual(self.request('/mobile/api/pane-icon/draw', {'pane': '%3', 'label': 'api', 'hint': 'a plug'}), (200, {'pane': '%3', 'icon': 'svg-dabc'}))
+            draw.assert_called_once_with('api', 'a plug')
+            self.assertIn('svg-dabc', self.run.call_args_list[0].args[0])
+        with patch.object(server.pane_icons, 'draw', side_effect=RuntimeError('Claude did not return a usable icon. Try again.')):
+            self.assertEqual(self.request('/mobile/api/pane-icon/draw', {'pane': '%3', 'label': 'api'})[:2], (503, {'error': 'Claude did not return a usable icon. Try again.', 'draft': False}))
+        with patch.object(server.pane_icons, 'read', return_value='<svg/>'):
+            self.assertEqual(self.request('/mobile/api/icon/dabc.svg', method='GET'), (200, '<svg/>', 'image/svg+xml', 'max-age=300'))
+        with patch.object(server.pane_icons, 'read', return_value=None):
+            self.assertEqual(self.request('/mobile/api/icon/nope.svg', method='GET')[0], 404)
+
+    def test_pane_name_shows_in_tmux_window_or_border(self):
+        def panes(count):
+            def run(command, **kwargs):
+                return Mock(returncode=0, stdout=f'{count}\n' if '#{window_panes}' in command else '')
+            return run
+        commands = lambda: [call.args[0][1:] for call in self.run.call_args_list]
+        self.run.side_effect = panes(1)
+        self.assertEqual(self.request('/mobile/api/pane-name', {'pane': '%12', 'name': 'api'})[0], 200)
+        self.assertIn(['rename-window', '-t', '%12', 'api', ';', 'set-option', '-w', '-t', '%12', 'automatic-rename', 'off'], commands())
+        self.run.reset_mock()
+        self.assertEqual(self.request('/mobile/api/pane-name', {'pane': '%12', 'name': ''})[0], 200)
+        self.assertIn(['set-option', '-w', '-t', '%12', '-u', 'automatic-rename'], commands())
+        self.run.reset_mock()
+        self.run.side_effect = panes(2)
+        self.assertEqual(self.request('/mobile/api/pane-name', {'pane': '%12', 'name': 'api'})[0], 200)
+        self.assertIn(['set-option', '-w', '-t', '%12', 'pane-border-status', 'top', ';', 'set-option', '-w', '-t', '%12',
+                       'pane-border-format', server.BORDER_FORMAT], commands())
+        self.assertFalse(any(command[0] == 'rename-window' for command in commands()))  # several panes: the window keeps its name
 
     def test_one_name_per_pane(self):
         claude = {'id': '%12', 'tmux_session': '$1', 'label': 'web:0.0', 'agent': 'claude', 'writable': True, 'thread': CHAT}

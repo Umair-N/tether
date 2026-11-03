@@ -10,6 +10,7 @@ export interface Pane {
   thread: string | null
   approval: unknown
   pane_name?: string
+  pane_icon?: string  // tmux option @chat_icon: a lucide icon name, or svg-<name> for an icon Claude drew (Sidebar.tsx AgentIcon)
   agent_name?: string  // the Claude or Codex session name (/rename); shown when the pane has no Tether name
   codex_profile?: string | null  // a Codex pane started with `codex -p foundry`: 'foundry'. null = the ChatGPT plan
   since?: number | null
