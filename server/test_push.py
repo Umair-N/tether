@@ -135,6 +135,9 @@ class ReplyPreviewTests(unittest.TestCase):
         self.assertEqual(push.reply_summary('x' * 160), 'x' * 160)
         self.assertEqual(push.reply_summary('x' * 161), 'x' * 159 + '…')
         self.assertEqual(push.reply_summary(None), '')
+        table = 'Each window shows its status.\n\n| Window | Item | Now |\n|---|---|---|\n| uncategorized | t | done |'
+        self.assertEqual(push.reply_summary(table), 'Each window shows its status.')
+        self.assertEqual(push.reply_summary('| Window | Now |\n| :--- | ---: |\n| one | done |'), 'Window · Now one · done')
 
     def test_done_body_uses_reply(self):
         self.assertEqual(self.notify('Idle', Mock(return_value='**All done.**')), 'Finished: All done.')

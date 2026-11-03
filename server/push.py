@@ -205,6 +205,18 @@ def approval_summary(text, limit=SUMMARY_LIMIT):
 def reply_summary(text, limit=160):
     """Plain text at the start of a reply, suitable for a notification."""
     text = str(text or '')
+    # Tables: text before a table is the preview; a reply that starts with a table reads its rows as "cell · cell".
+    lines = text.splitlines()
+    first = next((index for index, line in enumerate(lines) if line.lstrip().startswith('|')), None)
+    if first is not None and any(line.strip() for line in lines[:first]):
+        lines = lines[:first]
+    rows = []
+    for line in lines:
+        if line.lstrip().startswith('|'):
+            cells = [cell.strip() for cell in line.strip().strip('|').split('|')]
+            line = '' if all(re.fullmatch(r':?-{3,}:?', cell) for cell in cells if cell) else ' · '.join(cell for cell in cells if cell)
+        rows.append(line)
+    text = '\n'.join(rows)
     text = re.sub(r'(?ms)^\s*(`{3,}|~{3,})[^\n]*\n.*?(?:^\s*\1\s*$|\Z)', ' [code] ', text)
     text = re.sub(r'!?\[([^\]]*)\]\([^\n]*?\)', r'\1', text)
     text = re.sub(r'(?m)^\s*\[[^\]]+\]:\s+\S+.*$', '', text)
