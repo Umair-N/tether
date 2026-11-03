@@ -1,0 +1,443 @@
+import { useEffect, useRef, useState } from 'react'
+import { AudioLines, Check, ChevronDown, Mic, MicOff, X } from 'lucide-react'
+import { errorText, type Api, type Approval, type ChatData, type Choice, type Pane } from './api'
+import type { Command } from './CommandMenu'
+import { agentNames, paneTitle } from './Sidebar'
+import { LiveVoice, sentences } from './liveVoice'
+import { speakable } from './speech'
+import './Live.css'
+
+// Live mode: talk to the agents hands-free. The orb listens, the words go to the target pane,
+// and the reply comes back as one or two spoken sentences. Colors come from the Settings color scheme.
+
+export const ASSISTANT = 'Friday'
+
+// Like a phone call: the mic stays open and each pause sends the phrase. 'paused' is the person's own pause button.
+type Phase = 'starting' | 'idle' | 'paused' | 'listening' | 'converting' | 'sending' | 'speaking'
+interface Watch { lastId: string | null; since: number; name: string }
+interface Brief { speech: string }
+
+const STATUS: Record<Phase, string> = { starting: 'Starting', idle: 'Tap to talk', paused: 'Paused', listening: 'Listening', converting: 'Converting', sending: 'Sending', speaking: 'Speaking' }
+const PANELS: Record<string, string> = { preview: 'browser', browser: 'browser', terminal: 'terminal', changes: 'changes', diff: 'changes', file: 'files', files: 'files', sidebar: 'sidebar' }
+
+const approvalOf = (pane: Pane) => {
+  const approval = pane.approval as Approval | null
+  return approval?.id && approval.options?.length ? approval : null
+}
+const name = (pane: Pane) => `${paneTitle(pane)} · ${agentNames[pane.agent]}`
+const lastReply = (data: ChatData) => [...data.messages].reverse().find(item => item.role === 'assistant' && !item.kind && item.text.trim()) ?? null
+const shortText = (text: string, limit: number) => { const plain = speakable(text); return plain.length > limit ? `${plain.slice(0, limit).replace(/\s+\S*$/, '')}…` : plain }
+
+export function Live({ api, panes, selected, commands, onClose }: { api: Api; panes: Pane[]; selected?: Pane; commands: Command[]; onClose: () => void }) {
+  const agents = panes.filter(pane => pane.agent !== 'shell')
+  const [targetId, setTargetId] = useState(() => (selected && selected.agent !== 'shell' ? selected : agents[0])?.id ?? '')
+  const target = agents.find(pane => pane.id === targetId)
+  const asking = agents.filter(approvalOf)
+  const approvalPane = target && approvalOf(target) ? target : asking[0]
+  const approval = approvalPane ? approvalOf(approvalPane) : null
+  const [phase, setPhase] = useState<Phase>('starting')
+  const [said, setSaid] = useState('')
+  const [reply, setReply] = useState({ who: ASSISTANT, text: '' })
+  const [muted, setMuted] = useState(false)
+  const [awake, setAwake] = useState(false)
+  const [problem, setProblem] = useState('')
+  const [menu, setMenu] = useState(false)
+  const [watching, setWatching] = useState(0)
+  const voice = useRef<LiveVoice | null>(null)
+  const canvas = useRef<HTMLCanvasElement>(null)
+  const talkButton = useRef<HTMLButtonElement>(null)
+  const phaseNow = useRef<Phase>('starting')
+  const talking = useRef(false)  // the person is mid-phrase: hold announcements until they pause
+  const queue = useRef<{ who: string; text: string }[]>([])
+  const watches = useRef(new Map<string, Watch>())
+  const announced = useRef(new Set<string>())
+  const live = useRef({ agents, target, approval, approvalPane, commands, api, onClose })
+  useEffect(() => { live.current = { agents, target, approval, approvalPane, commands, api, onClose } })
+  const go = (next: Phase) => { phaseNow.current = next; setPhase(next) }
+
+  // Every step reads the latest panes and commands through `live`, so the voice callbacks never go stale.
+  const flow = useRef({
+    async say(who: string, text: string) {
+      if (!text.trim() || !voice.current) return
+      setReply({ who, text })
+      go('speaking')
+      const done = await voice.current.speak(sentences(text))
+      if (done) flow.current.next()
+    },
+    /** Speak now, unless the person is talking or a reply is on its way; then after it. */
+    announce(who: string, text: string) {
+      const phase = phaseNow.current
+      if (phase === 'listening' && !talking.current) voice.current?.cancelListening()
+      else if (phase !== 'idle' && phase !== 'paused') { queue.current.push({ who, text }); return }
+      void flow.current.say(who, text)
+    },
+    /** After speech: the next queued line, else listen again. */
+    next() {
+      const line = queue.current.shift()
+      if (line) { void flow.current.say(line.who, line.text); return }
+      flow.current.listen(true)
+    },
+    /** Open the mic for the next phrase. The tone marks "your turn" after Friday speaks. */
+    listen(tone = false) {
+      const engine = voice.current
+      talking.current = false
+      if (engine?.listening) { go('listening'); return }
+      if (engine?.listen()) { if (tone) engine.cue('listen'); go('listening') }
+      else go(engine?.muted ? 'paused' : 'idle')
+    },
+    /** Nothing to say: the next queued line, else keep listening. */
+    rest() {
+      if (queue.current.length) flow.current.next()
+      else flow.current.listen()
+    },
+    async phrase(audio: Blob) {
+      go('converting')
+      try {
+        const response = await fetch('/mobile/api/transcribe', { method: 'POST', body: audio, credentials: 'same-origin', signal: AbortSignal.timeout(60000), headers: { 'X-Codex-Mobile': '1', 'X-Recording': `live-${Date.now()}`, 'Content-Type': audio.type } })
+        const data = await response.json().catch(() => ({})) as { text?: string; error?: string }
+        if (!response.ok) throw new Error(data.error || 'Voice-to-text failed.')
+        const text = (data.text ?? '').trim()
+        if (!text) { flow.current.rest(); return }
+        setSaid(text)
+        setProblem('')
+        await flow.current.act(text)
+      } catch (failure) {
+        setProblem(errorText(failure))
+        flow.current.rest()
+      }
+    },
+    /** Commands Live mode runs itself; anything else goes to the target pane. */
+    async act(text: string) {
+      const { agents, target, approval, approvalPane } = live.current
+      const words = text.toLowerCase().replace(/[.!?,]/g, '').trim()
+      if (/^(stop|cancel|quiet|be quiet|never ?mind|shh+)$/.test(words)) { flow.current.rest(); return }
+      if (/^(end|exit|close|stop) (live|live mode|session)$|^(goodbye|bye)\b/.test(words)) { live.current.onClose(); return }
+      if (/\b(what'?s|what is) (running|happening|going on)\b|^(status|brief me|catch me up|briefing)$/.test(words)) { await flow.current.brief(); return }
+      if (approval && approvalPane && /^(approve|approved|yes|yeah|yep|allow|go ahead|do it|accept|ok(ay)?)\b/.test(words)) {
+        await flow.current.choose(approvalPane, approval, approval.options!.find(option => !option.free && !/^no\b/i.test(option.text)) ?? approval.options![0], 'Approved.')
+        return
+      }
+      if (approval && approvalPane && /^(deny|denied|no|nope|reject|don'?t|do not|decline)\b/.test(words)) {
+        const options = approval.options!
+        await flow.current.choose(approvalPane, approval, options.find(option => /^no\b/i.test(option.text)) ?? options[options.length - 1], 'Denied.')
+        return
+      }
+      const panel = words.match(/\b(open|show|close|hide)\b.*?\b(preview|browser|terminal|changes|diff|files?|sidebar)\b/)
+      if (panel) { flow.current.panel(panel[1], PANELS[panel[2]]); return }
+      const pick = words.match(/^(switch|talk|go|change|send it) to (.+)$/)
+      if (pick) {
+        const wanted = pick[2].replace(/^the /, '').replace(/ (pane|chat|tab)$/, '')
+        const found = agents.find(pane => paneTitle(pane).toLowerCase() === wanted) ?? agents.find(pane => paneTitle(pane).toLowerCase().includes(wanted) || pane.agent === wanted)
+        if (found) { setTargetId(found.id); await flow.current.say(ASSISTANT, `Now talking to ${paneTitle(found)}.`) }
+        else await flow.current.say(ASSISTANT, `I can't find a chat called ${wanted}.`)
+        return
+      }
+      if (!target) { await flow.current.say(ASSISTANT, 'Pick a chat first.'); return }
+      await flow.current.send(target, text)
+    },
+    async send(pane: Pane, text: string) {
+      go('sending')
+      try {
+        const before = await live.current.api<ChatData>(`chat?session=${encodeURIComponent(pane.id)}&limit=4`).catch(() => null)
+        await live.current.api('message', { session: pane.id, thread: before?.thread ?? pane.thread ?? null, message: text })
+        voice.current?.cue('sent')
+        watches.current.set(pane.id, { lastId: before ? lastReply(before)?.id ?? null : null, since: Date.now(), name: paneTitle(pane) })
+        setWatching(watches.current.size)
+        setReply({ who: name(pane), text: '' })
+        flow.current.listenOrWork()
+      } catch (failure) {
+        await flow.current.say(ASSISTANT, `That did not send. ${errorText(failure)}`)
+      }
+    },
+    /** After a send: keep the floor open for the next command while the agent works. */
+    listenOrWork() { flow.current.rest() },
+    async choose(pane: Pane, approval: Approval, option: Choice, spoken: string) {
+      go('sending')
+      try {
+        await live.current.api('approval', { session: pane.id, thread: pane.thread ?? null, approval: approval.id, choice: option.id })
+        if (!watches.current.has(pane.id)) watches.current.set(pane.id, { lastId: null, since: Date.now(), name: paneTitle(pane) })
+        setWatching(watches.current.size)
+        await flow.current.say(ASSISTANT, spoken)
+      } catch (failure) { await flow.current.say(ASSISTANT, `That did not go through. ${errorText(failure)}`) }
+    },
+    panel(verb: string, kind: string) {
+      const { commands } = live.current
+      if (!commands.length) { void flow.current.say(ASSISTANT, 'Panels work on the desktop only.'); return }
+      const open = verb === 'open' || verb === 'show'
+      const label = kind === 'sidebar' ? 'the sidebar' : `the ${kind === 'browser' ? 'browser' : kind}`
+      const command = commands.find(item => item.label.toLowerCase().includes(label) && item.label.startsWith(open ? 'Show' : 'Hide'))
+      const other = commands.find(item => item.label.toLowerCase().includes(label))
+      const spokenName = kind === 'browser' ? 'preview' : kind
+      if (command) { command.run(); void flow.current.say(ASSISTANT, `${open ? 'Opened' : 'Closed'} the ${spokenName}.`) }
+      else if (other) void flow.current.say(ASSISTANT, `The ${spokenName} is already ${open ? 'open' : 'closed'}.`)
+      else void flow.current.say(ASSISTANT, `There is no ${spokenName} panel for this chat.`)
+    },
+    async brief() {
+      const { agents } = live.current
+      const data = await live.current.api<Brief>('live/brief').catch(() => null)
+      const working = agents.filter(pane => pane.state === 'Working').map(paneTitle)
+      const waiting = agents.filter(approvalOf).map(paneTitle)
+      const local = !agents.length ? 'No chats are open.'
+        : [waiting.length ? `${waiting.join(', ')} ${waiting.length > 1 ? 'need' : 'needs'} your OK.` : '', working.length ? `${working.join(', ')} ${working.length > 1 ? 'are' : 'is'} working.` : '',
+          !waiting.length && !working.length ? `All ${agents.length} chats are idle.` : ''].filter(Boolean).join(' ')
+      await flow.current.say(ASSISTANT, data?.speech || local)
+    },
+  })
+
+  // Start: mic, screen lock, a short briefing, then listen.
+  useEffect(() => {
+    const engine = new LiveVoice({
+      onPhrase: audio => { talking.current = false; void flow.current.phrase(audio) },
+      onSpeech: () => { talking.current = true },
+      onBargeIn: () => { engine.stopSpeaking(); flow.current.listen() },
+    })
+    voice.current = engine
+    let gone = false
+    engine.open().then(() => { if (!gone) void flow.current.brief() }, failure => {
+      if (gone) return
+      setProblem(failure instanceof DOMException && failure.name === 'NotAllowedError' ? 'The microphone is blocked. Allow it in the browser, then start Live mode again.' : errorText(failure))
+      go('idle')
+    })
+    return () => { gone = true; engine.close(); voice.current = null }
+  }, [])
+
+  // Keep the screen on. The browser drops the lock when the page hides, so ask again when it shows.
+  useEffect(() => {
+    let lock: WakeLockSentinel | null = null
+    let gone = false
+    const ask = () => {
+      if (gone || document.visibilityState !== 'visible' || !('wakeLock' in navigator)) return
+      navigator.wakeLock.request('screen').then(sentinel => {
+        if (gone) { void sentinel.release(); return }
+        lock = sentinel
+        setAwake(true)
+        sentinel.addEventListener('release', () => setAwake(false))
+      }, () => setAwake(false))
+    }
+    ask()
+    document.addEventListener('visibilitychange', ask)
+    return () => { gone = true; document.removeEventListener('visibilitychange', ask); void lock?.release() }
+  }, [])
+
+  // New approvals on any chat: say them once.
+  useEffect(() => {
+    for (const pane of asking) {
+      const item = approvalOf(pane)!
+      if (announced.current.has(item.id!)) continue
+      announced.current.add(item.id!)
+      if (phaseNow.current === 'starting') continue  // the briefing covers it
+      flow.current.announce(ASSISTANT, `${paneTitle(pane)} needs your OK: ${shortText(item.text, 140)} Say approve or deny.`)
+    }
+  })
+
+  // Watch each chat we sent to. When it stops working with a new reply, say a short version of it.
+  useEffect(() => {
+    if (!watching) return
+    const timer = window.setInterval(() => {
+      for (const [id, watch] of watches.current) {
+        void api<ChatData>(`chat?session=${encodeURIComponent(id)}&limit=6`).then(async data => {
+          if (!watches.current.has(id)) return
+          const message = lastReply(data)
+          const done = !data.busy && data.state !== 'Working' && Date.now() - watch.since > 1500
+          if (Date.now() - watch.since > 15 * 60000) { watches.current.delete(id); setWatching(watches.current.size); return }
+          if (!done || !message || message.id === watch.lastId || data.approval) return
+          watches.current.delete(id)
+          setWatching(watches.current.size)
+          const result = await api<{ summary: string }>('live/summary', { text: message.text, pane: watch.name }).catch(() => null)
+          const summary = result?.summary || sentences(message.text).slice(0, 2).join(' ')
+          flow.current.announce(watch.name, summary)
+        }, () => undefined)
+      }
+    }, 2500)
+    return () => window.clearInterval(timer)
+  }, [api, watching])
+
+  // The orb: soft blobs that swell with the voice level. Colors follow the Settings scheme.
+  useEffect(() => {
+    const element = canvas.current
+    const context = element?.getContext('2d')
+    if (!element || !context) return
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const probe = document.createElement('canvas').getContext('2d')!
+    const rgb = (token: string, fallback: string) => {
+      probe.fillStyle = fallback
+      probe.fillStyle = getComputedStyle(element).getPropertyValue(token).trim() || fallback
+      const value = probe.fillStyle
+      const hex = value.startsWith('#') ? parseInt(value.slice(1), 16) : 0
+      return value.startsWith('#') ? [hex >> 16 & 255, hex >> 8 & 255, hex & 255] : (value.match(/\d+/g) ?? ['200', '100', '66']).slice(0, 3).map(Number)
+    }
+    // The agent's color: the accent's hue turned half way round, a little lighter, so it reads on both themes.
+    const opposite = ([r, g, b]: number[]) => {
+      const max = Math.max(r, g, b) / 255, min = Math.min(r, g, b) / 255, light = (max + min) / 2, delta = max - min
+      const sat = delta ? delta / (1 - Math.abs(2 * light - 1)) : 0
+      let hue = !delta ? 0 : max === r / 255 ? ((g - b) / 255 / delta) % 6 : max === g / 255 ? (b - r) / 255 / delta + 2 : (r - g) / 255 / delta + 4
+      hue = (hue * 60 + 360 + 180) % 360
+      const l = Math.min(0.68, Math.max(0.5, light)), s2 = Math.max(0.35, Math.min(0.55, sat))
+      const c = (1 - Math.abs(2 * l - 1)) * s2, x = c * (1 - Math.abs((hue / 60) % 2 - 1)), m = l - c / 2
+      const [r1, g1, b1] = hue < 60 ? [c, x, 0] : hue < 120 ? [x, c, 0] : hue < 180 ? [0, c, x] : hue < 240 ? [0, x, c] : hue < 300 ? [x, 0, c] : [c, 0, x]
+      return [r1, g1, b1].map(v => Math.round((v + m) * 255))
+    }
+    let width = 0, height = 0, smooth = 0, frame = 0
+    const size = () => { const box = element.getBoundingClientRect(), ratio = Math.min(devicePixelRatio || 1, 2); width = element.width = Math.round(box.width * ratio); height = element.height = Math.round(box.height * ratio) }
+    const observer = new ResizeObserver(size)
+    observer.observe(element)
+    size()
+    const color = { you: [0, 0, 0], agent: [0, 0, 0], ask: [0, 0, 0], light: true }
+    const read = () => {
+      color.you = rgb('--accent', '#c96442'); color.agent = opposite(color.you); color.ask = rgb('--attention', '#e8a33d')
+      element.closest<HTMLElement>('.live')?.style.setProperty('--live-agent', `rgb(${color.agent.join(',')})`)
+      const [r, g, b] = rgb('--bg', '#ffffff'); color.light = (r * 0.299 + g * 0.587 + b * 0.114) > 140
+    }
+    read()
+    const scheme = new MutationObserver(read)
+    scheme.observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'data-theme', 'class'] })
+    const current = [...color.you], second = [...color.agent]
+    const blob = (cx: number, cy: number, r: number, t: number, amp: number, seed: number, tint: number[], alpha: number) => {
+      context.beginPath()
+      for (let i = 0; i <= 120; i++) {
+        const a = i / 120 * Math.PI * 2
+        const d = 1 + amp * (Math.sin(a * 3 + t * 1.3 + seed) * 0.5 + Math.sin(a * 5 - t * 1.7 + seed * 2) * 0.3 + Math.sin(a * 2 + t * 0.7 + seed * 3) * 0.4)
+        const x = cx + Math.cos(a) * r * d, y = cy + Math.sin(a) * r * d
+        if (i) context.lineTo(x, y); else context.moveTo(x, y)
+      }
+      const fill = context.createRadialGradient(cx - r * 0.25, cy - r * 0.3, r * 0.05, cx, cy, r * 1.25)
+      fill.addColorStop(0, color.light ? `rgba(${tint.join(',')},${alpha})` : `rgba(255,248,240,${alpha})`)
+      fill.addColorStop(0.35, `rgba(${tint.join(',')},${alpha})`)
+      fill.addColorStop(1, `rgba(${tint.join(',')},0)`)
+      context.fillStyle = fill
+      context.fill()
+    }
+    const draw = (now: number) => {
+      const t = now / 1000
+      const state = phaseNow.current
+      const level = voice.current?.level() ?? 0
+      let wanted = 0.06
+      if (state === 'listening') wanted = Math.max(0.12, level)
+      else if (state === 'speaking') wanted = Math.max(0.15, level)
+      else if (state === 'converting' || state === 'sending') wanted = 0.22
+      else if (state === 'paused') wanted = 0.02
+      if (state === 'listening' && watches.current.size) wanted = Math.max(wanted, 0.1 + 0.04 * Math.sin(t * 2))
+      smooth += (wanted - smooth) * (reduced ? 1 : 0.18)
+      element.parentElement?.parentElement?.parentElement?.style.setProperty('--level', reduced ? '0.4' : smooth.toFixed(3))
+      const [first, next] = state === 'speaking' ? [color.agent, color.you] : live.current.approval ? [color.ask, color.you] : [color.you, color.agent]
+      for (let i = 0; i < 3; i++) { current[i] += (first[i] - current[i]) * 0.06; second[i] += (next[i] - second[i]) * 0.06 }
+      context.clearRect(0, 0, width, height)
+      // Everything must end inside the canvas: a gradient cut by the edge shows as a hard square.
+      // Largest blob reach: 0.22 × 1.35 (level) × 1.05 × 1.39 (wobble) ≈ 0.43 of the canvas.
+      const cx = width / 2, cy = height / 2, half = Math.min(width, height) / 2, base = half * 0.44
+      const tt = reduced ? 0 : t * (state === 'converting' ? 2.6 : state === 'paused' ? 0.4 : 1)
+      const r = base * (1 + (reduced ? 0 : smooth * 0.35))
+      const amp = reduced ? 0.02 : 0.05 + smooth * 0.22
+      const one = current.map(Math.round), two = second.map(Math.round)
+      context.globalCompositeOperation = color.light ? 'source-over' : 'lighter'
+      const halo = context.createRadialGradient(cx, cy, r * 0.6, cx, cy, Math.min(r * 2, half))
+      halo.addColorStop(0, `rgba(${one.join(',')},${0.14 + smooth * 0.25})`)
+      halo.addColorStop(1, `rgba(${one.join(',')},0)`)
+      context.fillStyle = halo
+      context.beginPath(); context.arc(cx, cy, Math.min(r * 2, half), 0, Math.PI * 2); context.fill()
+      blob(cx, cy, r * 1.05, tt, amp * 1.2, 0, one, 0.55)
+      blob(cx, cy, r * 0.95, tt * 1.15, amp, 2.1, two, 0.45)
+      blob(cx, cy, r * 0.8, tt * 0.9, amp * 0.8, 4.2, color.light ? two : [255, 244, 232], 0.3)
+      if (color.light) blob(cx - r * 0.12, cy - r * 0.15, r * 0.45, tt * 1.3, amp * 0.6, 5.3, [255, 255, 255], 0.55)
+      if ((state === 'converting' || state === 'sending') && !reduced) {
+        context.lineWidth = Math.max(2, width / 260)
+        context.strokeStyle = `rgba(${one.join(',')},0.8)`
+        context.lineCap = 'round'
+        context.beginPath(); context.arc(cx, cy, Math.min(r * 1.45, half - context.lineWidth), t * 4, t * 4 + 1.1); context.stroke()
+      }
+      context.globalCompositeOperation = 'source-over'
+      frame = requestAnimationFrame(draw)
+    }
+    frame = requestAnimationFrame(draw)
+    return () => { cancelAnimationFrame(frame); observer.disconnect(); scheme.disconnect() }
+  }, [])
+
+  function talk() {
+    const engine = voice.current
+    if (!engine || phase === 'starting') return
+    if (phase === 'speaking') { engine.stopSpeaking(); flow.current.listen(); return }
+    if (phase === 'listening') { engine.finishListening(); return }
+    if (phase === 'paused') { togglePause(); return }
+    if (phase === 'idle') flow.current.listen(true)
+  }
+  /** Pause: the mic stops; Friday still reads replies and approvals. Resume: listen again. */
+  function togglePause() {
+    const engine = voice.current
+    if (!engine) return
+    engine.muted = !muted
+    setMuted(engine.muted)
+    if (engine.muted) { engine.cancelListening(); if (phaseNow.current === 'listening') go('paused') }
+    else if (phaseNow.current === 'paused' || phaseNow.current === 'idle') flow.current.listen(true)
+  }
+  function tapApproval(yes: boolean) {
+    if (!approval || !approvalPane) return
+    const options = approval.options!
+    const option = yes ? options.find(item => !item.free && !/^no\b/i.test(item.text)) ?? options[0] : options.find(item => /^no\b/i.test(item.text)) ?? options[options.length - 1]
+    voice.current?.stopSpeaking()
+    void flow.current.choose(approvalPane, approval, option, yes ? 'Approved.' : 'Denied.')
+  }
+
+  // Space talks, Esc ends.
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); if (menu) setMenu(false); else onClose() }
+      else if (event.key === ' ' && !(event.target as Element).closest('input, textarea, [role="menu"]')) { event.preventDefault(); talkButton.current?.click() }
+    }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [menu, onClose])
+  useEffect(() => { talkButton.current?.focus() }, [])
+
+  const working = agents.filter(pane => pane.state === 'Working').length
+  const status = STATUS[phase]
+  const talkLabel = phase === 'speaking' ? 'Interrupt' : phase === 'listening' ? 'Send now' : phase === 'paused' ? 'Resume' : 'Talk'
+  const picker = agents.map(pane => <button key={pane.id} type="button" role="menuitemradio" aria-checked={pane.id === targetId} className="live-pane" data-state={approvalOf(pane) ? 'asking' : pane.state === 'Working' ? 'working' : 'idle'} onClick={() => { setTargetId(pane.id); setMenu(false) }}>
+    <i aria-hidden="true" /><span><b>{paneTitle(pane)}</b><small>{agentNames[pane.agent]}{approvalOf(pane) ? ' · needs your OK' : pane.state === 'Working' ? ' · working' : ''}</small></span><Check size={15} className="live-check" aria-hidden="true" />
+  </button>)
+
+  return <div className="live" role="dialog" aria-modal="true" aria-label={`${ASSISTANT} Live mode`} data-phase={phase}>
+    <aside className="live-rail" aria-label="Commands go to">
+      <h2>Commands go to</h2>
+      <div role="menu" aria-label="Send voice commands to">{picker}</div>
+      <p className="live-note">Just talk: each pause sends what you said. Say “switch to” and a chat name to change it, or “what's running” for a briefing.</p>
+    </aside>
+    <section className="live-stage">
+      <div className="live-aurora" aria-hidden="true" />
+      <header className="live-top">
+        <span className="live-tag"><i aria-hidden="true" />{ASSISTANT}</span>
+        <span className="live-chip" title={awake ? 'The screen stays on while Live mode runs.' : 'This browser can turn the screen off.'}><span className="live-wake" data-on={awake} aria-hidden="true" />{awake ? 'Screen on' : 'Screen may sleep'}</span>
+        <span className="live-target-wrap">
+          <button type="button" className="live-chip live-target" aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(open => !open)}>
+            {target ? <>{paneTitle(target)}<span className="live-k">{agentNames[target.agent]}</span></> : 'No chat'}<ChevronDown size={14} aria-hidden="true" />
+          </button>
+          {menu && <div className="live-popover" role="menu" aria-label="Send voice commands to"><h3>Commands go to</h3>{picker.length ? picker : <p className="live-note">No agent chats are open.</p>}</div>}
+        </span>
+      </header>
+
+      <div className="live-center">
+        <div className="live-orb">
+          <canvas ref={canvas} aria-hidden="true" onClick={talk} />
+          <div className="live-status" aria-live="polite">{status}{working ? <span> · {working} working</span> : null}</div>
+        </div>
+      </div>
+
+      <div className="live-words" aria-live="polite">
+        {said && <p className="live-said">“{said}”</p>}
+        {reply.text && <p className="live-reply"><span className="live-who">{reply.who}</span>{reply.text}</p>}
+        {problem && <p className="live-problem" role="alert">{problem}</p>}
+      </div>
+
+      {approval && approvalPane && <div className="live-approval" role="group" aria-label={`${paneTitle(approvalPane)} needs your OK`}>
+        <p><b>{name(approvalPane)}</b> {shortText(approval.text, 220)}</p>
+        <p className="live-say">Say “approve” or “deny”, or tap.</p>
+        <div className="live-row"><button type="button" className="live-deny" onClick={() => tapApproval(false)}>Deny</button><button type="button" className="live-approve" onClick={() => tapApproval(true)}>Approve</button></div>
+      </div>}
+
+      <div className="live-controls">
+        <div className="live-ctl"><button type="button" className="live-round" aria-pressed={muted} aria-label={muted ? 'Resume listening' : 'Pause listening'} onClick={togglePause}>{muted ? <MicOff size={22} /> : <Mic size={22} />}</button><span>{muted ? 'Paused' : 'Pause'}</span></div>
+        <div className="live-ctl live-talk" data-on={phase === 'listening'}><button ref={talkButton} type="button" className="live-round" aria-label={talkLabel} onClick={talk} disabled={phase === 'starting'}><AudioLines size={28} /></button><span>{talkLabel} <kbd>Space</kbd></span></div>
+        <div className="live-ctl live-end"><button type="button" className="live-round" aria-label="End Live mode" onClick={onClose}><X size={22} /></button><span>End <kbd>Esc</kbd></span></div>
+      </div>
+    </section>
+  </div>
+}

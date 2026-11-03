@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
-import { Folder, MessageCircle, SquareTerminal } from 'lucide-react'
+import { AudioLines, Folder, MessageCircle, SquareTerminal } from 'lucide-react'
+import { ASSISTANT } from './Live'
 import type { Screen } from './Rail'
 import { toggleButton } from './phoneScreen'
 import './ExplorerPhone.css'
@@ -13,7 +14,7 @@ const TABS: { id: Screen; label: string; icon: typeof Folder }[] = [
   { id: 'terminals', label: 'Terminals', icon: SquareTerminal },
 ]
 
-export function PhoneTabs({ screen, onScreen, setScreen, terminals }: { screen: Screen; onScreen: (screen: Screen) => void; setScreen: (screen: Screen) => void; terminals: boolean }) {
+export function PhoneTabs({ screen, onScreen, setScreen, terminals, onLive }: { screen: Screen; onScreen: (screen: Screen) => void; setScreen: (screen: Screen) => void; terminals: boolean; onLive?: () => void }) {
   // The chat header has its own terminal button, and each pane keeps its own view. Keep the tab in step with what shows.
   useEffect(() => {
     if (screen === 'files') return
@@ -31,5 +32,6 @@ export function PhoneTabs({ screen, onScreen, setScreen, terminals }: { screen: 
   return <nav className="phone-tabbar" aria-label="Tether">
     {TABS.map(({ id, label, icon: Icon }) => <button key={id} type="button" aria-current={screen === id ? 'page' : undefined}
       disabled={id === 'terminals' && !terminals} onClick={() => onScreen(id)}><Icon size={22} aria-hidden="true" /><span>{label}</span></button>)}
+    {onLive && <button type="button" onClick={onLive}><AudioLines size={22} aria-hidden="true" /><span>{ASSISTANT}</span></button>}
   </nav>
 }

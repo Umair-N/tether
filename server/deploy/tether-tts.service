@@ -1,0 +1,13 @@
+[Unit]
+Description=Tether natural voice worker
+After=network.target
+
+[Service]
+# Set TETHER_REPO to the checkout that contains server/tts_worker.py.
+Environment=TETHER_REPO=%h/apps/tether
+ExecStart=%h/.local/share/tether/tts-venv/bin/python ${TETHER_REPO}/server/tts_worker.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

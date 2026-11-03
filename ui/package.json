@@ -12,6 +12,7 @@
   "dependencies": {
     "@assistant-ui/react": "^0.15.32",
     "@assistant-ui/react-markdown": "^0.14.24",
+    "@ricky0123/vad-web": "^0.0.31",
     "lucide-react": "^1.66.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

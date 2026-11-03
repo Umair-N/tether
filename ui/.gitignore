@@ -26,3 +26,6 @@ dist-ssr
 
 .work-notes-lane/
 .work-notes/
+
+# Silero VAD and onnxruntime files, copied from node_modules by vite.config.ts
+public/vad/

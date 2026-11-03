@@ -32,7 +32,7 @@ LIMIT = 10 * 1024 * 1024
 PORT = int(os.environ.get('MOBILE_TMUX_TRANSCRIBE_PORT', '7684'))
 LANGUAGE = os.environ.get('MOBILE_TMUX_WHISPER_LANGUAGE', 'en') or None
 # Words that Whisper often mishears in coding talk.
-PROMPT = os.environ.get('TETHER_WHISPER_PROMPT') or os.environ.get('MOBILE_TMUX_WHISPER_PROMPT', 'tmux, Tailscale, Claude, Codex, Tether, split the pane, git push, version, release, npm, repo, PWA, API, JSON.')
+PROMPT = os.environ.get('TETHER_WHISPER_PROMPT') or os.environ.get('MOBILE_TMUX_WHISPER_PROMPT', 'tmux, Tailscale, Claude, Codex, Tether, Friday, approve, deny, preview, split the pane, git push, version, release, npm, repo, PWA, API, JSON.')
 THREADS = int(os.environ.get('MOBILE_TMUX_WHISPER_THREADS', '8'))
 BEAM = int(os.environ.get('MOBILE_TMUX_WHISPER_BEAM', '1'))
 MODEL = WhisperModel(os.environ.get('MOBILE_TMUX_WHISPER_MODEL', 'small'), device='cpu', compute_type='int8', cpu_threads=THREADS)

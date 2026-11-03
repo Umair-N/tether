@@ -1,0 +1,103 @@
+/* Live mode: one full-screen stage over the app. The orb sits in the middle, the spoken words below it,
+   three controls at the thumb. On a wide screen a rail of chats on the left shows where each command goes.
+   Every color comes from the Settings scheme: --accent is the person's voice, --live-agent (set in Live.tsx,
+   the accent's opposite hue) is the agent's, --attention is "needs your OK". */
+.live {
+  --live-you: var(--accent);
+  --live-agent: var(--muted);
+  --live-panel: var(--surface);
+  --live-display: "Newsreader", "Iowan Old Style", Georgia, serif;
+  --live-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  position: fixed; inset: 0; z-index: 200; display: grid; grid-template-columns: 1fr;
+  background: var(--bg); color: var(--text); overflow: hidden; -webkit-tap-highlight-color: transparent;
+}
+.live button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+.live :focus-visible { outline: 2px solid var(--text); outline-offset: 3px; border-radius: 10px; }
+
+.live-stage { position: relative; display: grid; grid-template-rows: auto 1fr auto auto auto; min-height: 0; min-width: 0;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: calc(12px + env(safe-area-inset-top, 0px)) calc(18px + env(safe-area-inset-bottom, 0px)); }
+
+/* Bottom light: grows with the voice level (--level, 0..1, set by the orb loop). */
+.live-aurora { position: absolute; inset: auto 0 0 0; height: 46%; pointer-events: none; z-index: 0;
+  background: radial-gradient(60% 70% at 50% 100%, color-mix(in oklab, var(--live-you) 45%, transparent), transparent 70%),
+              radial-gradient(35% 45% at 25% 100%, color-mix(in oklab, var(--live-you) 25%, transparent), transparent 70%),
+              radial-gradient(35% 45% at 78% 100%, color-mix(in oklab, var(--live-agent) 25%, transparent), transparent 70%);
+  transform-origin: 50% 100%; transform: scaleY(calc(.45 + var(--level, 0) * .9)); opacity: calc(.3 + var(--level, 0) * .6);
+  transition: transform .12s linear, opacity .2s linear; filter: blur(8px); }
+.live[data-phase="speaking"] .live-aurora { --live-you: var(--live-agent); }
+.live[data-phase="paused"] .live-aurora { opacity: .15; }
+
+.live-top { position: relative; z-index: 3; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.live-tag { display: inline-flex; align-items: center; gap: 8px; margin-right: auto; font-family: var(--live-mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.live-tag i { width: 7px; height: 7px; border-radius: 50%; background: var(--live-you); box-shadow: 0 0 10px var(--live-you); }
+.live-chip { display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line); background: color-mix(in oklab, var(--live-panel) 85%, transparent); font-size: 13px; color: var(--text); }
+button.live-chip:hover { background: var(--hover); }
+.live-k { font-family: var(--live-mono); font-size: 11px; color: var(--muted); }
+.live-wake { width: 6px; height: 6px; border-radius: 50%; background: var(--line); }
+.live-wake[data-on="true"] { background: var(--live-agent); box-shadow: 0 0 8px var(--live-agent); }
+.live-target-wrap { position: relative; }
+.live-popover { position: absolute; z-index: 20; top: calc(100% + 8px); right: 0; width: min(320px, calc(100vw - 32px)); max-height: 60vh; overflow: auto; padding: 6px; border-radius: 14px; border: 1px solid var(--line); background: var(--live-panel); box-shadow: 0 18px 50px color-mix(in oklab, black 30%, transparent); }
+.live-popover h3, .live-rail h2 { margin: 6px 10px; font-family: var(--live-mono); font-size: 11px; font-weight: 400; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+
+.live-pane { display: grid; grid-template-columns: 10px 1fr auto; align-items: center; gap: 10px; width: 100%; padding: 10px; border-radius: 10px; text-align: left; border: 1px solid transparent; }
+.live-pane:hover { background: var(--hover); }
+.live-pane i { width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
+.live-pane[data-state="working"] i { background: var(--live-agent); box-shadow: 0 0 8px var(--live-agent); }
+.live-pane[data-state="asking"] i { background: var(--attention); box-shadow: 0 0 8px var(--attention); }
+.live-pane span { min-width: 0; }
+.live-pane b { display: block; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-pane small { display: block; margin-top: 1px; color: var(--muted); font-size: 12px; }
+.live-check { opacity: 0; color: var(--live-you); }
+.live-pane[aria-checked="true"] { border-color: color-mix(in oklab, var(--live-you) 50%, var(--line)); background: color-mix(in oklab, var(--live-you) 8%, transparent); }
+.live-pane[aria-checked="true"] .live-check { opacity: 1; }
+
+.live-center { position: relative; z-index: 1; display: grid; place-items: center; min-height: 0; }
+.live-orb { position: relative; width: min(64vw, 42vh, 380px); aspect-ratio: 1; max-width: 100%; }
+.live-orb canvas { display: block; width: 100%; height: 100%; cursor: pointer; }
+.live-status { position: absolute; left: 50%; bottom: -6px; transform: translateX(-50%); white-space: nowrap; font-family: var(--live-mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+
+.live-words { position: relative; z-index: 2; display: grid; align-content: end; gap: 12px; justify-self: center; width: 100%; max-width: 34em; min-height: 9.5em; padding-bottom: 14px; }
+.live-words p { margin: 0; }
+.live-said { font-family: var(--live-display); font-style: italic; font-weight: 300; font-size: clamp(20px, 5vw, 30px); line-height: 1.22; text-wrap: balance; color: var(--muted); }
+.live-reply { font-size: clamp(16px, 3.9vw, 19px); line-height: 1.5; color: var(--text); animation: live-in .35s cubic-bezier(.2, .7, .2, 1) both; }
+.live-who { display: block; margin-bottom: 4px; font-family: var(--live-mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--live-agent); }
+.live-problem { font-size: 14px; color: var(--error); }
+@keyframes live-in { from { opacity: 0; transform: translateY(.35em); } to { opacity: 1; transform: none; } }
+
+.live-approval { position: relative; z-index: 4; justify-self: center; width: min(100%, 30em); margin-bottom: 14px; padding: 14px 14px 12px; border-radius: 16px; border: 1px solid color-mix(in oklab, var(--attention) 55%, var(--line)); background: color-mix(in oklab, var(--attention) 10%, var(--live-panel)); }
+.live-approval p { margin: 0 0 4px; font-size: 15px; overflow-wrap: anywhere; }
+.live-say { margin-bottom: 12px !important; color: var(--muted); font-size: 13px !important; }
+.live-row { display: flex; gap: 8px; }
+.live-row button { flex: 1; min-height: 44px; border-radius: 12px; font-weight: 600; }
+.live .live-approve { background: var(--attention); color: var(--bg); }
+.live .live-deny { border: 1px solid var(--line); background: var(--live-panel); }
+
+.live-controls { position: relative; z-index: 3; display: flex; align-items: flex-start; justify-content: center; gap: clamp(22px, 9vw, 52px); }
+.live-ctl { display: grid; justify-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.live .live-round { display: grid; place-items: center; width: 56px; height: 56px; border-radius: 50%; border: 1px solid var(--line); background: var(--live-panel); color: var(--text); transition: transform .15s, background .2s, border-color .2s; }
+.live .live-round:active { transform: scale(.94); }
+.live .live-round:disabled { opacity: .5; cursor: default; }
+.live .live-talk .live-round { width: 76px; height: 76px; border-color: transparent; background: var(--text); color: var(--bg); }
+.live .live-talk[data-on="true"] .live-round { background: var(--live-you); color: var(--accent-text); box-shadow: 0 0 0 6px color-mix(in oklab, var(--live-you) 25%, transparent), 0 0 40px color-mix(in oklab, var(--live-you) 55%, transparent); }
+.live .live-round[aria-pressed="true"] { border-color: color-mix(in oklab, var(--error) 50%, var(--line)); color: var(--error); }
+.live .live-end .live-round { color: var(--error); }
+.live-ctl kbd { padding: 1px 5px; border: 1px solid var(--line); border-radius: 5px; font-family: var(--live-mono); font-size: 10px; color: var(--muted); }
+@media (hover: none) { .live-ctl kbd { display: none; } }
+
+.live-rail { display: none; }
+.live-note { margin: 0; padding: 10px; font-size: 12px; line-height: 1.5; color: var(--muted); }
+@media (min-width: 980px) {
+  .live { grid-template-columns: 300px 1fr; }
+  .live-rail { position: relative; z-index: 2; display: flex; flex-direction: column; gap: 4px; min-height: 0; overflow: auto; padding: 20px 14px; border-right: 1px solid var(--line); background: var(--sidebar); }
+  .live-rail .live-note { margin-top: auto; }
+  .live-target-wrap { display: none; }
+  .live-words { min-height: 11em; }
+  .live-said { font-size: 34px; }
+  .live-reply { font-size: 20px; }
+}
+@media (max-height: 640px) { .live-words { min-height: 7em; } .live-orb { width: min(54vw, 36vh); } }
+@media (prefers-reduced-motion: reduce) {
+  .live-reply { animation: none; }
+  .live-aurora { transition: none; transform: scaleY(.7); }
+}
