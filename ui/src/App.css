@@ -138,6 +138,13 @@
 .keep-choice .hint, .merge-confirm .keep-choice .hint { margin: 8px 0 0; font-size: 13px; }
 .merge-hint { flex: none; margin-right: 8px; padding: 2px 8px; border-radius: 999px; background: var(--accent); color: var(--accent-text); font-size: 12px; font-weight: 500; pointer-events: none; }
 .new-session-drop { display: flex; align-items: center; gap: 10px; min-height: 40px; margin: 4px 0 8px; padding: 0 10px; border: 1.5px dashed var(--line); border-radius: 8px; color: var(--muted); font-size: 13px; }
+.session-list > li.carried > .swipe-row { opacity: .45; }
+.pane-children button { -webkit-touch-callout: none; user-select: none; }
+.touch-carrying .session-groups { overscroll-behavior: contain; }
+.touch-ghost { position: fixed; left: 0; top: 0; z-index: 60; pointer-events: none; }
+.touch-ghost > span { display: block; max-width: 220px; overflow: hidden; padding: 8px 12px; border-radius: 10px; background: var(--accent); color: var(--accent-text); font-size: 14px; font-weight: 500; white-space: nowrap; text-overflow: ellipsis; box-shadow: 0 8px 24px rgb(0 0 0 / .25); transform: translate(-50%, calc(-100% - 18px)) scale(1.02); animation: ghost-in .16s ease-out; }
+@keyframes ghost-in { from { opacity: 0; transform: translate(-50%, calc(-100% - 10px)) scale(.9); } }
+@media (prefers-reduced-motion: reduce) { .touch-ghost > span { animation: none; } }
 .new-session-drop.over { border-color: var(--accent); color: var(--text); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .rename-row { flex: 1; min-width: 0; padding: 4px 6px 6px; }
 .rename-row input { width: 100%; height: 32px; padding: 0 8px; border: 1px solid var(--accent); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; font-size: 14px; }

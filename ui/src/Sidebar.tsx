@@ -195,6 +195,72 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
     else if (source) { setCarry(null); setConfirming({ source, target }) }
   }
   const startCarry = (next: Carry | null) => { if (next) setRenaming(null); setCarry(next) }
+  // Phone: browsers do not drag with touch, so a long press picks a row up. Move it onto another session to merge,
+  // or a pane onto "New session" to split it out. A long press released on the spot opens the row's menu, as before.
+  const root = useRef<HTMLDivElement>(null)
+  const hold = useRef<{ timer: number; x: number; y: number; carried: Carry; label: string; menu: () => void; active: boolean; moved: boolean } | null>(null)
+  const [ghost, setGhost] = useState<{ x: number; y: number; label: string } | null>(null)
+  const [touchOver, setTouchOver] = useState<string | null>(null)
+  const latest = useRef({ dropOn, merge, sessions })
+  useEffect(() => { latest.current = { dropOn, merge, sessions } })
+  const holdStart = (event: React.TouchEvent, carried: Carry, label: string, menu: () => void) => {
+    if (drag || reorder || event.touches.length !== 1) return
+    const { clientX: x, clientY: y } = event.touches[0]
+    if (hold.current) window.clearTimeout(hold.current.timer)
+    hold.current = { x, y, carried, label, menu, active: false, moved: false, timer: window.setTimeout(() => {
+      const held = hold.current
+      if (!held) return
+      held.active = true
+      navigator.vibrate?.(12)
+      startCarry(held.carried)
+      setGhost({ x: held.x, y: held.y, label: held.label })
+    }, 450) }
+  }
+  useEffect(() => {
+    const el = root.current
+    if (!el || drag) return
+    const spotAt = (x: number, y: number) => document.elementFromPoint(x, y)?.closest<HTMLElement>('.new-session-drop, .session-list > li[data-id]') ?? null
+    const end = () => { if (hold.current) window.clearTimeout(hold.current.timer); hold.current = null; setGhost(null); setTouchOver(null); setOverNew(false) }
+    const move = (event: TouchEvent) => {
+      const held = hold.current, touch = event.touches[0]
+      if (!held || !touch) return
+      const far = Math.hypot(touch.clientX - held.x, touch.clientY - held.y) > 10
+      if (!held.active) { if (far) end(); return }  // a scroll or a swipe, not a hold
+      event.preventDefault()
+      held.moved ||= far
+      setGhost({ x: touch.clientX, y: touch.clientY, label: held.label })
+      const spot = spotAt(touch.clientX, touch.clientY)
+      setOverNew(!!held.carried.pane && !!spot?.classList.contains('new-session-drop'))
+      const id = spot?.dataset.id
+      setTouchOver(id && id !== held.carried.session ? id : null)
+      // Near the top or bottom edge of the list, the list scrolls so far rows can be reached.
+      const nav = el.querySelector<HTMLElement>('.session-groups')
+      if (nav) { const box = nav.getBoundingClientRect(); if (touch.clientY < box.top + 48) nav.scrollTop -= 14; else if (touch.clientY > box.bottom - 48) nav.scrollTop += 14 }
+    }
+    const up = (event: TouchEvent) => {
+      const held = hold.current
+      if (!held) return
+      if (!held.active) { end(); return }
+      event.preventDefault()  // no click after a hold
+      const touch = event.changedTouches[0]
+      const spot = touch ? spotAt(touch.clientX, touch.clientY) : null
+      const { dropOn, merge, sessions } = latest.current
+      end()
+      if (!held.moved) { setCarry(null); held.menu(); return }
+      if (spot?.classList.contains('new-session-drop') && held.carried.pane) { merge('break', held.carried.pane); return }
+      const target = sessions.find(session => session.id === spot?.dataset.id)
+      if (target && target.id !== held.carried.session) dropOn(target)
+      else setCarry(null)
+    }
+    const cancel = () => { if (hold.current?.active) setCarry(null); end() }
+    // The phone's own long-press menu would open the row's menu at once; the hold decides on release instead.
+    const menu = (event: Event) => { if (hold.current) { event.preventDefault(); event.stopPropagation() } }
+    el.addEventListener('touchmove', move, { passive: false })
+    el.addEventListener('touchend', up)
+    el.addEventListener('touchcancel', cancel)
+    document.addEventListener('contextmenu', menu, true)
+    return () => { end(); el.removeEventListener('touchmove', move); el.removeEventListener('touchend', up); el.removeEventListener('touchcancel', cancel); document.removeEventListener('contextmenu', menu, true) }
+  }, [drag])
   const renamed = () => { setRenaming(null); onRetry() }
   const search = query.trim().toLowerCase()
   const smart = prefs.sort === 'smart'
@@ -228,7 +294,7 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
     else if (event.key === 'ArrowDown' && first) { event.preventDefault(); first.focus() }
     else if (event.key === 'Escape' && query) { event.preventDefault(); event.stopPropagation(); setQuery('') }
   }
-  return <div className="sidebar-inner">
+  return <div className={`sidebar-inner ${ghost ? 'touch-carrying' : ''}`} ref={root}>
     <div className="sidebar-top">
       <div className="sidebar-brand"><img src="/chat/icon.svg" alt="" width="22" height="22" />Tether</div>
       <span className="sidebar-top-actions"><button className="icon-button" aria-label="New session" title="New session" onClick={onNew}><Plus size={20} /></button>
@@ -246,7 +312,7 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
           {isOpen(group.key) && group.items.length > 1 && !search && !smart && group.key !== 'archived' && <button className="group-edit" onClick={() => setReorder(reorder === group.key ? null : group.key)}>{reorder === group.key ? 'Done' : 'Reorder'}</button>}
         </div>
         {isOpen(group.key) && (group.items.length
-          ? <SessionList items={group.items} reorder={reorder === group.key} selected={selected} prefs={prefs} update={update} onOpen={onOpen} onActions={onActions} onPaneActions={onPaneActions} onMove={ids => moveWithin(group.items, ids)} pinned={group.key === 'pinned'} slots={slots ?? []} canDrag={!!drag} api={api} carry={carry} onCarry={startCarry} onDrop={dropOn} renaming={renameRow} onRenamed={renamed} marks={marks} />
+          ? <SessionList items={group.items} reorder={reorder === group.key} selected={selected} prefs={prefs} update={update} onOpen={onOpen} onActions={onActions} onPaneActions={onPaneActions} onMove={ids => moveWithin(group.items, ids)} pinned={group.key === 'pinned'} slots={slots ?? []} canDrag={!!drag} api={api} carry={carry} onCarry={startCarry} onDrop={dropOn} onHold={holdStart} touchOver={touchOver} renaming={renameRow} onRenamed={renamed} marks={marks} />
           : <p className="group-empty">{loading ? 'Finding sessions…' : group.key === 'terminals' ? 'No plain terminals. Create one with New session.' : 'Nothing here yet.'}</p>)}
       </section>)}
       {carry?.pane && <div className={`new-session-drop ${overNew ? 'over' : ''}`} onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setOverNew(true) }} onDragLeave={() => setOverNew(false)} onDrop={event => { event.preventDefault(); merge('break', carry.pane!) }}><Plus size={14} aria-hidden="true" />New session</div>}
@@ -255,6 +321,7 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
         {isOpen('past') && <PastChats api={api} search={search} showPaths={prefs.showPaths} onPick={onPastChat} />}
       </section>
     </nav>
+    {ghost && <div className="touch-ghost" aria-hidden="true" style={{ transform: `translate3d(${ghost.x}px, ${ghost.y}px, 0)` }}><span>{ghost.label}</span></div>}
     {confirming && <MergeConfirm {...confirming} marks={marks} onMerge={keep => merge('session', confirming.source.id, confirming.target.id, keep)} onCancel={() => setConfirming(null)} />}
     <footer className="sidebar-footer">
       <RunningNow sessions={sessions} selected={selected} onOpen={onOpen} />
@@ -272,7 +339,7 @@ function projectMark(mark: ProjectMark | undefined) {
   return <BookMarked size={11} className={`project-mark ${stale ? 'stale' : ''}`} aria-label={stale ? 'Project changed. Restart its agents to apply.' : 'Has project context'} />
 }
 
-function SessionList({ items, reorder, selected, prefs, update, onOpen, onActions, onPaneActions, onMove, pinned, slots, canDrag, api, carry, onCarry, onDrop, renaming, onRenamed, marks }: { marks?: ProjectMarks; items: Session[]; reorder: boolean; selected: string | undefined; prefs: Prefs; update: Props['update']; onOpen: Props['onOpen']; onActions: Props['onActions']; onPaneActions: Props['onPaneActions']; onMove: (ids: string[]) => void; pinned: boolean; slots: string[]; canDrag: boolean; api: Api; carry: Carry | null; onCarry: (carry: Carry | null) => void; onDrop: (target: Session) => void; renaming: Moved | null; onRenamed: () => void }) {
+function SessionList({ items, reorder, selected, prefs, update, onOpen, onActions, onPaneActions, onMove, pinned, slots, canDrag, api, carry, onCarry, onDrop, onHold, touchOver, renaming, onRenamed, marks }: { marks?: ProjectMarks; onHold: (event: React.TouchEvent, carried: Carry, label: string, menu: () => void) => void; touchOver: string | null; items: Session[]; reorder: boolean; selected: string | undefined; prefs: Prefs; update: Props['update']; onOpen: Props['onOpen']; onActions: Props['onActions']; onPaneActions: Props['onPaneActions']; onMove: (ids: string[]) => void; pinned: boolean; slots: string[]; canDrag: boolean; api: Api; carry: Carry | null; onCarry: (carry: Carry | null) => void; onDrop: (target: Session) => void; renaming: Moved | null; onRenamed: () => void }) {
   const list = useRef<HTMLUListElement>(null)
   const dragging = useRef<string | null>(null)
   const ids = items.map(session => session.id)
@@ -310,13 +377,13 @@ function SessionList({ items, reorder, selected, prefs, update, onOpen, onAction
       // A session with several panes is open by default; its heading folds the pane rows away.
       const open = !multi || prefs.expanded[session.id] !== false
       const toggleOpen = () => update(current => ({ expanded: { ...current.expanded, [session.id]: current.expanded[session.id] === false } }))
-      const dropping = over === session.id && !!carry
-      return <li key={session.id} data-id={session.id} className={`${dragging.current === session.id ? 'dragging' : ''} ${dropping ? 'drop-over' : ''}`} {...dropTarget(session)}>
+      const dropping = (over === session.id || touchOver === session.id) && !!carry
+      return <li key={session.id} data-id={session.id} className={`${dragging.current === session.id ? 'dragging' : ''} ${dropping ? 'drop-over' : ''} ${carry && !carry.pane && carry.session === session.id ? 'carried' : ''}`} {...dropTarget(session)}>
         <div className={`swipe-row ${swiped === session.id ? 'swiped' : ''}`}
           onTouchStart={event => { if (!reorder) touch.current = { x: event.touches[0].clientX, y: event.touches[0].clientY, id: session.id } }}
           onTouchEnd={event => {
             const start = touch.current; touch.current = null
-            if (!start || start.id !== session.id) return
+            if (carry || !start || start.id !== session.id) return
             const dx = event.changedTouches[0].clientX - start.x, dy = event.changedTouches[0].clientY - start.y
             if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy) * 2) return
             setSwiped(dx < 0 ? session.id : null)
@@ -327,7 +394,7 @@ function SessionList({ items, reorder, selected, prefs, update, onOpen, onAction
           <button type="button" className="swipe-delete" tabIndex={swiped === session.id ? 0 : -1} onClick={() => { setSwiped(null); onActions(session, true) }}><Trash2 size={18} />Delete</button>
         </span>
         <div className={`session-row ${active && !multi ? 'selected' : ''} ${multi ? 'session-head' : ''}`}>
-          {renaming?.session === session.id ? <RenameRow key={renaming.pane} api={api} moved={renaming} onDone={onRenamed} /> : <button className="session-main" {...dragAs(multi ? DRAG_SESSION : DRAG_PANE, multi ? session.id : session.panes[0].id, { session: session.id })} aria-current={active && !multi ? 'page' : undefined} aria-expanded={multi ? open : undefined} onMouseEnter={clipTitle} onClick={() => { if (swiped) { setSwiped(null); return } if (multi) toggleOpen(); else onOpen(target) }} onContextMenu={event => { event.preventDefault(); onActions(session, false, anchorOf(event)) }}>
+          {renaming?.session === session.id ? <RenameRow key={renaming.pane} api={api} moved={renaming} onDone={onRenamed} /> : <button className="session-main" {...dragAs(multi ? DRAG_SESSION : DRAG_PANE, multi ? session.id : session.panes[0].id, { session: session.id })} aria-current={active && !multi ? 'page' : undefined} aria-expanded={multi ? open : undefined} onMouseEnter={clipTitle} onTouchStart={event => onHold(event, { session: session.id }, session.name, () => onActions(session))} onClick={() => { if (swiped) { setSwiped(null); return } if (multi) toggleOpen(); else onOpen(target) }} onContextMenu={event => { event.preventDefault(); onActions(session, false, anchorOf(event)) }}>
             {multi && <ChevronRight size={14} className="chevron" aria-hidden="true" />}
             {!multi && dot(state)}
             <span className="session-text"><span className="session-title">{session.name}{pinned ? null : prefs.pinned.includes(session.id) && <Pin size={11} aria-label="Pinned" />}{projectMark(marks?.[session.id])}</span>{prefs.showPaths && <span className="session-folder"><bdi dir="ltr">{session.dir}</bdi></span>}</span>
@@ -338,7 +405,7 @@ function SessionList({ items, reorder, selected, prefs, update, onOpen, onAction
           {reorder && <span className="grip" aria-label={`Drag to move ${session.name}`} onPointerDown={event => { dragging.current = session.id; event.currentTarget.setPointerCapture(event.pointerId) }} onPointerMove={drag} onPointerUp={() => { dragging.current = null }} onPointerCancel={() => { dragging.current = null }}><GripVertical size={18} /></span>}
         </div>
         </div>
-        {multi && open && !reorder && <ul className="pane-children">{session.panes.map(pane => { const paneState = status([pane], prefs.seen, selected); return <li key={pane.id}><button {...dragAs(DRAG_PANE, pane.id, { session: session.id, pane: pane.id })} className={pane.id === selected ? 'selected' : ''} aria-current={pane.id === selected ? 'page' : undefined} onMouseEnter={clipTitle} onClick={() => onOpen(pane)} onContextMenu={event => { event.preventDefault(); onPaneActions(pane, anchorOf(event)) }}>{dot(paneState)}<span className="pane-child-name">{[paneTitle(pane), shownIndex(pane)].filter(Boolean).join(' ')} · {agentNames[pane.agent]}{profileSuffix(pane)}</span>{slotKey(pane.id)}</button></li> })}</ul>}
+        {multi && open && !reorder && <ul className="pane-children">{session.panes.map(pane => { const paneState = status([pane], prefs.seen, selected); return <li key={pane.id}><button {...dragAs(DRAG_PANE, pane.id, { session: session.id, pane: pane.id })} className={pane.id === selected ? 'selected' : ''} aria-current={pane.id === selected ? 'page' : undefined} onMouseEnter={clipTitle} onTouchStart={event => onHold(event, { session: session.id, pane: pane.id }, paneTitle(pane) || session.name, () => onPaneActions(pane))} onClick={() => onOpen(pane)} onContextMenu={event => { event.preventDefault(); onPaneActions(pane, anchorOf(event)) }}>{dot(paneState)}<span className="pane-child-name">{[paneTitle(pane), shownIndex(pane)].filter(Boolean).join(' ')} · {agentNames[pane.agent]}{profileSuffix(pane)}</span>{slotKey(pane.id)}</button></li> })}</ul>}
       </li>
     })}
   </ul>
