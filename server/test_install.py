@@ -416,6 +416,73 @@ class InstallTests(unittest.TestCase):
         self.apply(self.plan('--hooks'))
         self.assertEqual(claude.read_text(), 'invalid JSON')
 
+    def test_claude_hooks_merge_repeat_and_remove_only_tether(self):
+        import claude_hooks
+        settings = self.home / '.claude/settings.json'
+        settings.parent.mkdir()
+        guards = [{'matcher': 'Bash', 'hooks': [{'type': 'command', 'command': 'guard-one'},
+                                              {'type': 'command', 'command': 'guard-two'}]}]
+        notifiers = [{'hooks': [{'type': 'command', 'command': 'notify'}]}]
+        original = {'statusLine': {'command': 'custom'}, 'other': True,
+                    'hooks': {'PreToolUse': guards, 'PostToolUse': notifiers,
+                              'UnknownEvent': [{'custom': True}]}}
+        settings.write_text(json.dumps(original))
+        plan = self.plan('--hooks')
+        registration = next(hook for hook in plan['hooks'] if 'entries' in hook)
+        self.assertEqual(set(registration['entries']), set(claude_hooks.EVENTS))
+        self.assertEqual(registration['action'], 'merge')
+        self.apply(plan)
+        data = json.loads(settings.read_text())
+        self.assertEqual(data['hooks']['PreToolUse'][:-1], guards)
+        self.assertEqual(data['hooks']['PostToolUse'][:-1], notifiers)
+        self.assertEqual(data['statusLine'], original['statusLine'])
+        for event, entry in registration['entries'].items():
+            self.assertEqual(entry['hooks'][0].get('async', False), event == 'SubagentStop')
+        first = settings.read_text()
+        self.apply(self.plan('--hooks'))
+        self.assertEqual(settings.read_text(), first)
+        self.apply(self.plan('--uninstall'))
+        self.assertEqual(json.loads(settings.read_text()), original)
+        self.apply(self.plan('--uninstall'))
+        self.assertEqual(json.loads(settings.read_text()), original)
+
+    def test_claude_hooks_preserve_malformed_configuration(self):
+        settings = self.home / '.claude/settings.json'
+        settings.parent.mkdir()
+        for hooks in [None, [], {'PreToolUse': {}}, {'PostToolUse': [{'hooks': None}]},
+                      {'Stop': [{'hooks': [None]}]}]:
+            data = {'statusLine': {'command': 'custom'}, 'hooks': hooks}
+            settings.write_text(json.dumps(data))
+            first = settings.read_text()
+            self.apply(self.plan('--hooks'))
+            self.assertEqual(settings.read_text(), first)
+            self.apply(self.plan('--uninstall'))
+            self.assertEqual(settings.read_text(), first)
+        settings.write_text('{"hooks": {"Stop": []}}')
+        self.apply(self.plan('--uninstall'))
+        self.assertEqual(json.loads(settings.read_text()), {'hooks': {'Stop': []}})
+
+    def test_claude_hooks_recheck_settings_changed_after_plan(self):
+        settings = self.home / '.claude/settings.json'
+        settings.parent.mkdir()
+        settings.write_text('{"statusLine": {"command": "custom"}}')
+        plan = self.plan('--hooks')
+        data = {'statusLine': {'command': 'custom'}, 'hooks': {'PreToolUse': [
+            {'hooks': [{'type': 'command', 'command': 'new-guard'}]}]}}
+        settings.write_text(json.dumps(data))
+        self.apply(plan)
+        self.assertEqual(json.loads(settings.read_text())['hooks']['PreToolUse'][0], data['hooks']['PreToolUse'][0])
+        uninstall = self.plan('--uninstall')
+        entries = next(hook['entries'] for hook in uninstall['hooks'] if 'entries' in hook)
+        # If a user adds another handler to Tether's group, remove only Tether's handler.
+        data = json.loads(settings.read_text())
+        data['hooks']['Stop'][0]['hooks'].append({'type': 'command', 'command': 'user-stop'})
+        settings.write_text(json.dumps(data))
+        self.apply(uninstall)
+        self.assertEqual(json.loads(settings.read_text())['hooks']['Stop'],
+                         [{'hooks': [{'type': 'command', 'command': 'user-stop'}]}])
+        self.assertIn('PostModelSwitch', entries)
+
     def test_side_ports_do_not_clash_and_units_use_server_environment(self):
         plan = self.plan('--terminal', '--voice', '--push')
         self.assertEqual(len(plan['units']), 3)

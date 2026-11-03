@@ -105,6 +105,11 @@ Those checks restrict previews to supported files under your home folder and exc
 
 Claude Code and Antigravity supply usage through status-line hooks.
 Run `python3 install.py --apply --hooks` to add hooks where no status line exists.
+For Claude Code, this also appends live state hooks without changing existing user hooks.
+Session hooks supply mode, effort, tool activity, turn activity, permission waiting, and subagents to the footer.
+Mode and effort last until the session ends. A differing mode line from a later screen read takes precedence.
+Open tools have no age limit. Other turn state uses the screen after 30 minutes, or after a newer transcript turn.
+Screen agent rows and other footer fields remain. Missing or invalid hooks use the screen as a fallback.
 The installer preserves an existing status line. To combine one with the recorder, update the agent settings yourself.
 
 For Claude Code, a standalone recorder in `~/.claude/settings.json` looks like this:
@@ -128,7 +133,7 @@ Saved choices live in `~/.config/tether/install.json`. Runs without options reus
 `--terminal` defaults on when ttyd exists. `--voice`, `--push`, `--hooks`, and `--resources` default off.
 Each switch accepts a `--no-` form. `--build-ui` forces a build; the default builds missing or stale `ui/dist`.
 Voice uses `~/.local/share/tether/whisper-venv`; push shares that environment or uses `~/.local/share/tether/server-venv`.
-Uninstall keeps the repository, hooks, tokens, dependencies, and data.
+Uninstall removes only Tether's Claude live state hooks. It keeps status lines, user hooks, tokens, dependencies, and data.
 The installer prints the optional `loginctl enable-linger $USER` command for services that must survive logout.
 It does not run this command; admin permission may be needed.
 

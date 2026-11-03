@@ -186,6 +186,56 @@ def parser():
     return result
 
 
+def claude_hook_entries(repo):
+    # These events mutate one lifecycle state, so they must finish in event order.
+    # SubagentStop only removes a unique id; it cannot revive a turn or an agent.
+    events = ('SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse',
+              'PostToolUseFailure', 'PermissionRequest', 'PermissionDenied',
+              'Notification', 'Stop', 'StopFailure', 'SubagentStart', 'SubagentStop',
+              'SessionEnd', 'PostModelSwitch')
+    command = shlex.join([sys.executable, str(repo / 'server/claude_hooks.py')])
+    return {event: dict({'matcher': 'permission_prompt|idle_prompt'} if event == 'Notification' else {},
+                       hooks=[dict(type='command', command=command,
+                                   **({'async': True} if event == 'SubagentStop' else {'timeout': 1}))])
+            for event in events}
+
+
+def merge_claude_hooks(data, entries, remove=False):
+    """Append our groups without changing existing order; remove only our command."""
+    if not isinstance(data, dict) or not isinstance(data.get('hooks', {}), dict):
+        return None
+    hooks = dict(data.get('hooks', {}))
+    for event, entry in entries.items():
+        groups = hooks.get(event, [])
+        if not isinstance(groups, list) or any(not isinstance(group, dict) or
+                not isinstance(group.get('hooks'), list) or
+                any(not isinstance(handler, dict) for handler in group['hooks']) for group in groups):
+            return None
+        command = entry['hooks'][0]['command']
+        def owned(handler):
+            return handler.get('type') == 'command' and handler.get('command') == command
+        if remove:
+            if not any(owned(handler) for group in groups for handler in group['hooks']):
+                continue
+            remaining = []
+            for group in groups:
+                handlers = [handler for handler in group['hooks'] if not owned(handler)]
+                if len(handlers) == len(group['hooks']):
+                    remaining.append(group)
+                elif handlers or set(group) - {'hooks', 'matcher'}:
+                    remaining.append(dict(group, hooks=handlers))
+            if remaining:
+                hooks[event] = remaining
+            else:
+                hooks.pop(event, None)
+        elif not any(owned(handler) for group in groups for handler in group['hooks']):
+            hooks[event] = [*groups, entry]
+    result = dict(data)
+    if hooks or 'hooks' in data:
+        result['hooks'] = hooks
+    return result
+
+
 def make_plan(args, repo=ROOT, home=None):
     home = home or Path.home()
     state_file = Path(os.environ.get('TETHER_INSTALL_STATE') or home / '.config/tether/install.json')
@@ -365,6 +415,17 @@ def make_plan(args, repo=ROOT, home=None):
                 status = 'preserve invalid JSON'
             hooks.append(dict(path=str(settings), action=status,
                               value=dict(type='command', command=shlex.join([sys.executable, str(service_repo / 'server' / script)]), **extra)))
+    if options['hooks'] or args.uninstall:
+        settings = home / '.claude/settings.json'
+        if settings.parent.is_dir():
+            entries = claude_hook_entries(Path(saved.get('repo', service_repo)) if args.uninstall else service_repo)
+            try:
+                data = json.loads(settings.read_text()) if settings.exists() else {}
+                merged = merge_claude_hooks(data, entries, remove=args.uninstall)
+                status = 'preserve' if merged is None or merged == data else 'remove' if args.uninstall else 'merge'
+            except ValueError:
+                status = 'preserve invalid JSON'
+            hooks.append(dict(path=str(settings), action=status, entries=entries))
     return dict(version=VERSION, action='uninstall' if args.uninstall else 'install', repo=str(service_repo), build_repo=str(repo),
                 options=options, reused_saved_choices=sorted(set(reused)), checks=checks,
                 legacy_units=legacy, legacy_action='disable and stop' if args.replace_legacy and not args.uninstall else 'leave untouched',
@@ -417,6 +478,20 @@ def apply_plan(plan, home=None):
     if not written:
         raise ValueError('Plan has no unit reload step.')
     state = Path(plan['state_file'])
+    for hook in plan['hooks']:
+        if 'entries' not in hook or hook['action'] not in ('merge', 'remove'):
+            continue
+        settings = Path(hook['path'])
+        try:
+            data = json.loads(settings.read_text()) if settings.exists() else {}
+        except ValueError:
+            continue
+        merged = merge_claude_hooks(data, hook['entries'], remove=plan['action'] == 'uninstall')
+        if merged is None or merged == data:
+            continue
+        if settings.exists():
+            shutil.copy2(settings, settings.with_name(settings.name + '.before-tether'))
+        settings.write_text(json.dumps(merged, indent=2) + '\n')
     if plan['action'] == 'uninstall':
         state.unlink(missing_ok=True)
         return
@@ -457,7 +532,7 @@ def print_plan(plan):
         print(f'Hook {hook["path"]}: {hook["action"]}')
     print(f'{"Remove" if plan["action"] == "uninstall" else "Save choices to"} {plan["state_file"]}')
     if plan['action'] == 'uninstall':
-        print('Keep the repository, hooks, tokens, dependencies, and data.')
+        print('Keep the repository, status lines, user hooks, tokens, dependencies, and data.')
     else:
         print(f'URL: {plan["url"]}\nToken: {plan["token_file"]}')
         print('loginctl enable-linger $USER keeps services running after logout; it may need admin. This installer does not run it.')

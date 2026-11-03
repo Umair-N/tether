@@ -24,6 +24,7 @@ import tool_details
 import activity
 import catalog
 import claude_probe
+import claude_hooks
 import footer
 import accounts
 import live_usage
@@ -1052,7 +1053,9 @@ class Handler(BaseHTTPRequestHandler):
                     self.respond(200, {'files': catalog.find_files(folder, query.get('q', [''])[0][:200])})
             elif path == '/mobile/api/footer':
                 config = choose(parse_qs(urlsplit(self.path).query).get('session', [None])[0])
+                screen_read_at = time.time()  # before capture: hooks during the read still win
                 result = footer.parse(capture(config, styled=True)) if config['agent'] == 'claude' else {}
+                result = claude_hooks.overlay(config, result, screen_read_at=screen_read_at)
                 if config['agent'] == 'codex' and not config.get('ambiguous'):
                     state = history.read(config['transcript'], codex_state, codex_consume)
                     result = footer.codex(codex_metrics(config, state['usage'], state['model'], state.get('effort', ''), state.get('credits')))
