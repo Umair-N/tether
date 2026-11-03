@@ -89,7 +89,7 @@ function RunOptions({ run, models, disabled, onChange }: { run: CodexRun; models
 export function GlobalCodexLevel({ api }: { api: Api }) {
   const { data, error, pending, save } = useCodexLevel(api)
   const value = typeof pending?.level === 'number' ? pending.level : data?.global
-  return <section className="settings-group" aria-labelledby="settings-codex"><h3 id="settings-codex">Codex level</h3>
+  return <section className="settings-group" aria-labelledby="settings-codex"><h3 id="settings-codex">Codex helper</h3>
     {error && <p className="error" role="alert">{error}</p>}
     {!data ? <p className="setting-note">Loading…</p> : <>
       <Stepper name="codex-level-global" legend="Level" levels={data.levels} value={value ?? 0} disabled={!!pending} onChange={level => void save({ level })} />

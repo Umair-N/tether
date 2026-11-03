@@ -391,7 +391,7 @@ function Notifications({ api }: { api: Api }) {
   </>
 }
 
-const SETTINGS_TABS = ['Look', 'Chat', 'Voice', 'Alerts', 'System'] as const
+const SETTINGS_TABS = ['Look', 'Chat', 'Voice', 'Alerts', 'Codex', 'System'] as const
 type SettingsTab = typeof SETTINGS_TABS[number]
 interface UpdateStatus { current: string; latest: string | null; available: boolean; checking: boolean; mode: string; checked_at: number | null; url: string }
 function SystemSettings({ api, onReload }: { api: Api; onReload: () => void }) {
@@ -406,7 +406,6 @@ function SystemSettings({ api, onReload }: { api: Api; onReload: () => void }) {
   }, [api])
   return <>
     {host?.resources && <HostResources api={api} terminal={host.terminal} />}
-    <GlobalCodexLevel api={api} />
     <section className="settings-group" aria-labelledby="settings-system"><h3 id="settings-system">Tether</h3>
       {(error || updateError) && <p className="error" role="alert">{error || updateError}</p>}
       <div className="switch-row"><span><strong>Updates</strong><small>{status ? `Version ${status.current} · ${status.mode === 'off' ? 'Checks off' : status.checking ? 'Checking…' : status.available ? `${status.latest} available` : status.latest ? 'Up to date' : 'No release data'}` : 'Loading…'}</small></span>{status?.available && status.url.startsWith('https://') && <a className="secondary" href={status.url} target="_blank" rel="noreferrer">Release notes</a>}</div>
@@ -437,7 +436,7 @@ export function Settings({ api, prefs, update, onReload, onClose }: { api: Api; 
     }}>
       {SETTINGS_TABS.map(item => <button type="button" role="tab" id={`settings-tab-${item}`} key={item} aria-selected={tab === item} aria-controls={`settings-panel-${item}`} tabIndex={tab === item ? 0 : -1} onClick={() => choose(item)}>{item}</button>)}
     </div>
-    {tab !== 'System' && tab !== 'Alerts' && <p className="settings-device-note">Saved on this device</p>}
+    {tab !== 'System' && tab !== 'Alerts' && tab !== 'Codex' && <p className="settings-device-note">Saved on this device</p>}
     {SETTINGS_TABS.map(item => <div key={item} role="tabpanel" id={`settings-panel-${item}`} aria-labelledby={`settings-tab-${item}`} hidden={tab !== item} tabIndex={0}>
       {tab === item && <>
       {item === 'Look' && <>
@@ -470,6 +469,7 @@ export function Settings({ api, prefs, update, onReload, onClose }: { api: Api; 
     </section>
       </>}
       {item === 'Alerts' && <section className="settings-group" aria-labelledby="settings-notify"><h3 id="settings-notify">Notifications</h3><Notifications api={api} /></section>}
+      {item === 'Codex' && <GlobalCodexLevel api={api} />}
       {item === 'System' && <SystemSettings api={api} onReload={onReload} />}
       </>}
     </div>)}
@@ -529,6 +529,7 @@ export function ModelSheet({ api, pane, thread, currentLabel, currentEffort, onC
   const [effort, setEffort] = useState(data?.current_effort ?? '')
   const [busy, setBusy] = useState(false)
   const modal = useModal(true, () => { if (!busy) onClose() })
+  const [view, setView] = useState<'model' | 'codex'>('model')
   const live = useRef(true)
   useEffect(() => () => { live.current = false }, [])
   const fetchList = useCallback(() => {
@@ -555,6 +556,12 @@ export function ModelSheet({ api, pane, thread, currentLabel, currentEffort, onC
   }
   return <dialog {...modal} className="sheet model-sheet" aria-labelledby="model-title">
     <div className="sheet-heading"><h2 id="model-title">Model</h2><button type="button" className="icon-button" aria-label="Close" disabled={busy} onClick={onClose}><X /></button></div>
+    {pane.agent === 'claude' && <div className="settings-tabs model-tabs" role="tablist" aria-label="Model or Codex">
+      {(['model', 'codex'] as const).map(item => <button type="button" role="tab" key={item} id={`model-tab-${item}`} aria-selected={view === item} aria-controls="model-panel" tabIndex={view === item ? 0 : -1} disabled={busy}
+        onClick={() => setView(item)} onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); const next = item === 'model' ? 'codex' : 'model'; setView(next); document.getElementById(`model-tab-${next}`)?.focus() } }}>
+        {item === 'model' ? 'This session' : 'Codex helper'}</button>)}
+    </div>}
+    {view === 'codex' ? <div role="tabpanel" id="model-panel" aria-labelledby="model-tab-codex"><GlobalCodexLevel api={api} /></div> : <>
     <p className="sheet-sub">{pane.agent === 'antigravity' ? 'Applies as soon as you choose.' : 'Applies to this session only.'}</p>
     {data && <div className="model-list" role="radiogroup" aria-label="Model">{data.models.map(item => <button key={item.id} type="button" role="radio" aria-checked={item.id === model} disabled={busy} onClick={() => setModel(item.id)}>
       <span>{item.label}</span>{item.current && <small>current</small>}{item.id === model && <Check size={18} />}</button>)}</div>}
@@ -565,5 +572,6 @@ export function ModelSheet({ api, pane, thread, currentLabel, currentEffort, onC
     {note && <p className="hint" role="status">{note}</p>}
     {!loading && <button type="button" className="link-button refresh-models" disabled={busy} onClick={fetchList}><RotateCw size={14} />{data ? 'Refresh model list' : 'Try again'}</button>}
     {data && <button type="button" className="primary create-button" disabled={busy || !changed} onClick={() => void apply()}>{busy ? 'Applying…' : 'Apply'}</button>}
+    </>}
   </dialog>
 }

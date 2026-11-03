@@ -898,8 +898,14 @@ button.live-chip:active { background: var(--line); }
 .settings-group { margin: 0 0 10px; padding: 10px 12px 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); min-width: 0; }
 .settings-group h3 { margin: 0 0 8px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
 .settings-group .choice { margin-bottom: 10px; }
-.settings-group .choice:not(.schemes) legend { float: left; width: 80px; margin: 8px 0; font-size: 13px; }
+.settings-group .choice:not(.schemes):not(.codex-run) legend { float: left; width: 80px; margin: 8px 0; font-size: 13px; }
 .settings-group .choice:not(.schemes) .segmented { margin-left: 84px; }
+.codex-run { margin-top: 18px; }
+.codex-run legend { font-size: 13px; margin-bottom: 4px; }
+.codex-run .project-size-row { margin: 8px 0; }
+.codex-run .project-size-row label { width: 80px; font-size: 13px; }
+.model-tabs { margin: 0 0 12px; }
+.model-sheet .settings-group { border: 0; padding: 0; background: none; }
 .settings-group .segmented { background: var(--hover); }
 .settings-group .segmented span { padding: 7px 8px; font-size: 12px; }
 .settings-group .segmented input:checked + span { box-shadow: 0 0 0 1px var(--line), 0 1px 3px #0000001f; }
