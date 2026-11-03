@@ -30,7 +30,7 @@ Do not ask for ports, dependencies, or build choices unless the plan reports a f
    Explain briefly: terminal needs ttyd; voice adds a local transcription worker; push needs browser support and HTTPS. Resources shows host usage in Settings.
    Usage hooks add status lines only where the installer permits them.
    An empty selection disables all five features.
-2. **Phone access**, single choice: Tailscale / same Wi-Fi LAN / HTTPS reverse proxy / this computer only.
+2. **Remote access** (phone, tablet, other computers), single choice: Tailscale / same Wi-Fi LAN / HTTPS reverse proxy / this computer only.
    Recommend Tailscale for phone access; this computer only offers no remote phone access.
    Include the LAN plain-HTTP warning below in this choice.
 3. **Updates**, single choice: notify / auto / off; recommend notify.
@@ -51,7 +51,7 @@ Use an explicit flag for each feature, including features the user disables:
 | Push notifications | `--push` | `--no-push` |
 | Usage hooks | `--hooks` | `--no-hooks` |
 
-| Phone access | Installer flags |
+| Remote access | Installer flags |
 | --- | --- |
 | Tailscale | `--host 127.0.0.1 --auth token` |
 | Same Wi-Fi LAN | `--host 0.0.0.0 --auth token` |

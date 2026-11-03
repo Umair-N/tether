@@ -1,6 +1,6 @@
 # Coding guide
 
-Tether is a phone-first chat UI for Claude Code, Codex, and Antigravity in tmux.
+Tether is a browser chat UI for Claude Code, Codex, and Antigravity in tmux, for desktop, tablet, and phone.
 
 ## Layout and checks
 

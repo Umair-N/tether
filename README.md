@@ -1,7 +1,7 @@
 # Tether
 
-Tether is a phone-first chat UI for coding agents in tmux: Claude Code, Codex, and Antigravity (`agy`).
-Run an agent on your Linux machine, then read its chat, approve requests, answer questions, and send instructions from your phone.
+Tether is a chat UI for coding agents in tmux: Claude Code, Codex, and Antigravity (`agy`).
+Run agents on your Linux machine, then read their chat, approve requests, answer questions, and send instructions from any browser: desktop, tablet, or phone.
 The agent stays in tmux when you leave your desk.
 
 - Read chat from the agent's transcript, with tool actions collapsed.
@@ -38,7 +38,7 @@ The core server uses only the Python standard library. The React UI requires a b
 
 ## Set up with Claude Code or Codex
 
-The agent offers features and phone access, shows an installer plan, then waits for your yes before apply.
+The agent offers features and remote access, shows an installer plan, then waits for your yes before apply.
 
 **Claude Code**
 
@@ -71,7 +71,7 @@ Existing `mobile-tmux*.service` units stay untouched unless you add `--replace-l
 The old `server/deploy/install.py` entry point still works.
 To run without a service, use `python3 server/server.py` after the UI build.
 
-## Reaching it from your phone
+## Reaching it from other devices
 
 The server binds to `127.0.0.1` by default. Anyone with access can control your agents and run commands as you.
 Do not expose it directly to the internet.
@@ -82,7 +82,7 @@ See the [nginx proxy example](server/deploy/examples/nginx-auth-proxy.conf).
 
 For a trusted LAN, `MOBILE_TMUX_HOST=0.0.0.0` allows token access over the network.
 Plain HTTP sends the token and chat without encryption. Push notifications and home-screen installation need HTTPS.
-On the phone, open `/chat/` and use “Add to Home Screen” where the browser supports it.
+On a phone or tablet, open `/chat/` and use “Add to Home Screen” where the browser supports it.
 
 ## Signing in and security
 
