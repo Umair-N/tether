@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 import paths
+from notification_priority import classify
 
 # A private copy of pywebpush lives here; system packages keep priority.
 sys.path.append(str(paths.HOME / '.local/share/mobile-tmux/pylib'))
@@ -23,6 +24,9 @@ except ImportError:  # Notifications are optional; the rest of the app must keep
 KEYS = paths.private_file('push_keys.json')
 STORE = paths.CACHE / 'push_subscriptions.json'
 MUTED = paths.CACHE / 'push_muted.json'
+SETTINGS = paths.CACHE / 'push_settings.json'
+DEFAULT_DELIVERY = {'urgent': 'sound', 'important': 'sound', 'low': 'off'}
+PANE_LEVELS = ('all', 'important', 'urgent', 'off')
 PANE_ID = re.compile(r'^%\d{1,6}$')
 SUBJECT = os.environ.get('MOBILE_TMUX_PUSH_SUBJECT') or 'mailto:mobile-tmux@localhost'
 PUSH_SERVICES = ('googleapis.com', 'push.services.mozilla.com', 'push.apple.com', 'notify.windows.com')
@@ -131,29 +135,76 @@ def _mutes(store):
         return {}
     if not isinstance(data, dict):
         return {}
-    return {pane: run for pane, run in data.items() if isinstance(pane, str) and PANE_ID.match(pane) and isinstance(run, str)}
+    result = {}
+    for pane, value in data.items():
+        if not isinstance(pane, str) or not PANE_ID.fullmatch(pane):
+            continue
+        # Old boolean mutes were stored as pane -> owning run. They become off.
+        if isinstance(value, str):
+            value = {'run': value, 'level': 'off'}
+        if isinstance(value, dict) and isinstance(value.get('run'), str):
+            level = value.get('level')
+            if isinstance(level, bool):
+                level = 'off' if level else 'all'
+            if level in PANE_LEVELS:
+                result[pane] = {'run': value['run'], 'level': level}
+    return result
+
+
+def pane_levels(store=MUTED, run=None):
+    """Non-default pane levels, scoped to the tmux server run."""
+    run = tmux_run() if run is None else run
+    return {pane: value['level'] for pane, value in _mutes(store).items() if run and value['run'] == run}
 
 
 def muted(store=MUTED, run=None):
-    """Pane ids whose notifications are off. A mute from an earlier tmux run does not count."""
-    run = tmux_run() if run is None else run
-    return sorted(pane for pane, owner in _mutes(store).items() if run and owner == run)
+    """Compatibility for old clients: only off counts as muted."""
+    return sorted(pane for pane, level in pane_levels(store, run).items() if level == 'off')
 
 
-def set_muted(session, value, store=MUTED, run=None):
-    if not isinstance(session, str) or not PANE_ID.match(session) or not isinstance(value, bool):
-        raise ValueError('Invalid pane.')
+def set_level(session, level, store=MUTED, run=None):
+    if not isinstance(session, str) or not PANE_ID.fullmatch(session) or level not in PANE_LEVELS:
+        raise ValueError('Invalid pane notification level.')
     run = tmux_run() if run is None else run
     if not run:
         raise ValueError('tmux is not running.')
     with LOCK:
-        current = {pane: owner for pane, owner in _mutes(store).items() if owner == run}  # drop mutes from old runs
-        if value:
-            current[session] = run
-        else:
+        current = {pane: value for pane, value in _mutes(store).items() if value['run'] == run}
+        if level == 'all':
             current.pop(session, None)
+        else:
+            current[session] = {'run': run, 'level': level}
         save(current, store)
-        return sorted(current)
+        return {pane: value['level'] for pane, value in current.items()}
+
+
+def set_muted(session, value, store=MUTED, run=None):
+    if not isinstance(value, bool):
+        raise ValueError('Invalid pane.')
+    levels = set_level(session, 'off' if value else 'all', store, run)
+    return sorted(pane for pane, level in levels.items() if level == 'off')
+
+
+def delivery_settings(store=SETTINGS):
+    data = load(store)
+    return {level: data.get(level) if data.get(level) in ('sound', 'silent', 'off') else default
+            for level, default in DEFAULT_DELIVERY.items()}
+
+
+def set_delivery(settings, store=SETTINGS):
+    if not isinstance(settings, dict) or not settings or any(
+            level not in DEFAULT_DELIVERY or value not in ('sound', 'silent', 'off') for level, value in settings.items()):
+        raise ValueError('Invalid notification settings.')
+    with LOCK:
+        current = delivery_settings(store)
+        current.update(settings)
+        save(current, store)
+        return current
+
+
+def allows(level, priority):
+    return priority in {'all': ('urgent', 'important', 'low'), 'important': ('urgent', 'important'),
+                        'urgent': ('urgent',), 'off': ()}.get(level, ())
 
 
 def send_all(payload, urgent=False, store=STORE, sender=None):
@@ -233,9 +284,9 @@ class Notifier:
 
     MESSAGES = {'done': 'Finished', 'approval': 'Needs approval', 'input': 'Needs your input'}
 
-    def __init__(self, send, watching=lambda session: False, settle=4, minimum_work=5, clock=time.monotonic, muted=lambda: (), reply=lambda entry: ''):
+    def __init__(self, send, watching=lambda session: False, settle=4, minimum_work=5, clock=time.monotonic, muted=lambda: (), reply=lambda entry: '', context=None, levels=lambda: {}, delivery=lambda: DEFAULT_DELIVERY):
         self.send, self.watching, self.settle, self.minimum_work, self.clock, self.muted = send, watching, settle, minimum_work, clock, muted
-        self.reply = reply
+        self.reply, self.context, self.levels, self.delivery = reply, context, levels, delivery
         self.seen = {}
 
     def observe(self, entry, status):
@@ -265,22 +316,33 @@ class Notifier:
             record['worked'] = None
         if self.watching(entry['id']) or entry['id'] in self.muted():
             return
+        reply, records = '', []
+        attention = status.get('attention') if isinstance(status.get('attention'), dict) else {}
+        if kind == 'done' or (kind == 'input' and not (attention.get('question') or attention.get('text'))):
+            try:
+                if self.context:
+                    reply, records = self.context(entry)
+                else:
+                    reply = self.reply(entry)
+            except Exception:  # A broken transcript must not prevent delivery.
+                pass
+        priority, preview = classify(kind, entry.get('agent'), records, reply)
+        mode = self.delivery().get(priority, DEFAULT_DELIVERY[priority])
+        if mode == 'off' or not allows(self.levels().get(entry['id'], 'all'), priority):
+            return
         payload = {'title': notification_title(entry), 'body': self.MESSAGES[kind], 'tag': 'session-' + entry['id'],
-                   'session': entry['id'], 'url': '/mobile/#session=' + quote(entry['id'], safe='')}
+                   'session': entry['id'], 'priority': priority, 'silent': mode == 'silent', 'url': '/mobile/#session=' + quote(entry['id'], safe='')}
         pending = status.get('approval') if kind == 'approval' and isinstance(status.get('approval'), dict) else {}
         summary = approval_summary(pending.get('text'))
         if kind in ('done', 'input'):
             attention = status.get('attention') if isinstance(status.get('attention'), dict) else {}
             summary = reply_summary(attention.get('question') or attention.get('text')) if kind == 'input' else ''
             if not summary:
-                try:
-                    summary = reply_summary(self.reply(entry))
-                except Exception:  # Transcript previews must never prevent delivery.
-                    summary = ''
+                summary = reply_summary(preview)
         if summary:
             payload['body'] = self.MESSAGES[kind] + ': ' + summary  # say what it wants, not only that it waits
         quick = quick_approval(pending)
         if quick:
             # The service worker answers with this exact id; the server refuses it once the prompt on screen changes.
             payload.update(approval=quick, thread=entry.get('thread'))
-        self.send(payload, kind != 'done')
+        self.send(payload, priority == 'urgent')

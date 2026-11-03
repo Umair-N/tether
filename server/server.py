@@ -85,7 +85,7 @@ def notify(payload, urgent):
     threading.Thread(target=push.send_all, args=(payload, urgent), daemon=True).start()
 
 
-NOTIFIER = push.Notifier(notify, watching, muted=push.muted, reply=lambda entry: notification_reply(entry))
+NOTIFIER = push.Notifier(notify, watching, levels=push.pane_levels, delivery=push.delivery_settings, context=lambda entry: notification_context(entry))
 
 
 def monitor_notices():
@@ -611,10 +611,10 @@ def codex_metrics(config, reported_usage, model='', effort='', credits=None):
 NOTIFICATION_TAIL_BYTES = 256 * 1024
 
 
-def notification_reply(entry):
-    """Use the chat parsers on a bounded transcript tail, without tmux or history cache locks."""
+def notification_records(entry):
+    """Read a bounded tail without tmux or history cache locks."""
     if entry.get('agent') not in ('claude', 'codex', 'antigravity') or entry.get('ambiguous'):
-        return ''
+        return []
     try:
         with open(entry['transcript'], 'rb') as stream:
             size = stream.seek(0, os.SEEK_END)
@@ -623,14 +623,30 @@ def notification_reply(entry):
             tail = stream.read(NOTIFICATION_TAIL_BYTES)
         if start:
             tail = tail.partition(b'\n')[2]  # discard a record clipped by the byte limit
-        latest_step, latest_text = None, ''
-        for index, line in reversed(list(enumerate(tail.splitlines()))):
+        records = []
+        for line in tail.splitlines():
             try:
                 record = json.loads(line)
             except (ValueError, UnicodeError):
                 continue
-            if not isinstance(record, dict):
-                continue
+            if isinstance(record, dict):
+                records.append(record)
+        return records
+    except (OSError, KeyError, ValueError):
+        return []
+
+
+def notification_context(entry):
+    records = notification_records(entry)
+    return notification_reply(entry, records), records
+
+
+def notification_reply(entry, records=None):
+    """Use the chat parsers to extract the last reply from the bounded tail."""
+    records = notification_records(entry) if records is None else records
+    try:
+        latest_step, latest_text = None, ''
+        for index, record in reversed(list(enumerate(records))):
             if entry['agent'] == 'antigravity':
                 message = antigravity_message(record, index, display_text)
                 if message and message['role'] == 'assistant':
@@ -1124,7 +1140,7 @@ class Handler(BaseHTTPRequestHandler):
                               time=chat['time'], live=chat['id'] in live) for chat in history.recent_chats(limit)]
                 self.respond(200, {'chats': chats})
             elif path == '/mobile/api/push/config':
-                self.respond(200, {'supported': push.available(), 'publicKey': push.vapid_keys()[1] if push.available() else None, 'muted': push.muted()})
+                self.respond(200, {'supported': push.available(), 'publicKey': push.vapid_keys()[1] if push.available() else None, 'muted': push.muted(), 'levels': push.pane_levels(), 'delivery': push.delivery_settings()})
             elif path == '/mobile/api/search':
                 query = parse_qs(urlsplit(self.path).query)
                 config = choose(query.get('session', [None])[0])
@@ -1220,7 +1236,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.respond(403, {'error': 'Reload the page and try again.'})
             return
         if self.path not in ('/mobile/api/message', '/mobile/api/broadcast', '/mobile/api/approval', '/mobile/api/menu', '/mobile/api/start', '/mobile/api/session', '/mobile/api/tmux-sessions', '/mobile/api/key', '/mobile/api/clear-draft', '/mobile/api/unqueue', '/mobile/api/mode', '/mobile/api/type',
-                         '/mobile/api/push/subscribe', '/mobile/api/push/unsubscribe', '/mobile/api/push/test', '/mobile/api/push/mute', '/mobile/api/shortcuts', '/mobile/api/prefs', '/mobile/api/codex-provider', '/mobile/api/model-options', '/mobile/api/model', '/mobile/api/rename', '/mobile/api/merge', '/mobile/api/shell', '/mobile/api/upload', '/mobile/api/transcribe', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/switch') and not browser_api.handles(self.path) and not projects_api.handles(self.path) and not codex_level.handles(self.path):
+                         '/mobile/api/push/subscribe', '/mobile/api/push/unsubscribe', '/mobile/api/push/test', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/shortcuts', '/mobile/api/prefs', '/mobile/api/codex-provider', '/mobile/api/model-options', '/mobile/api/model', '/mobile/api/rename', '/mobile/api/merge', '/mobile/api/shell', '/mobile/api/upload', '/mobile/api/transcribe', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/switch') and not browser_api.handles(self.path) and not projects_api.handles(self.path) and not codex_level.handles(self.path):
             self.respond(404, {'error': 'Not found'})
             return
         # Reject unauthenticated and cross-origin submissions.
@@ -1460,6 +1476,12 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == '/mobile/api/push/mute':
                 self.respond(200, {'muted': push.set_muted(body.get('session'), body.get('muted'))})
                 return
+            if self.path == '/mobile/api/push/level':
+                self.respond(200, {'levels': push.set_level(body.get('session'), body.get('level'))})
+                return
+            if self.path == '/mobile/api/push/settings':
+                self.respond(200, {'delivery': push.set_delivery(body.get('delivery'))})
+                return
             if self.path.startswith('/mobile/api/push/'):
                 if not push.available():
                     raise RuntimeError('Push notifications are not installed on the server.')
@@ -1469,7 +1491,7 @@ class Handler(BaseHTTPRequestHandler):
                     if isinstance(body.get('endpoint'), str):
                         push.unsubscribe(body['endpoint'])
                 else:
-                    delivered = push.send_all({'title': 'Tether', 'body': 'Notifications are working.', 'tag': 'test', 'url': '/mobile/'})
+                    delivered = push.send_all({'title': 'Tether', 'body': 'Notifications are working.', 'tag': 'test', 'priority': 'important', 'url': '/mobile/'})
                     self.respond(200, {'accepted': True, 'delivered': delivered})
                     return
                 self.respond(200, {'accepted': True})
@@ -1560,7 +1582,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.respond(200, {'accepted': True, 'delivery': send_text(config, message)})
         except (ValueError, UnicodeError) as exc:
-            self.respond(400, {'error': str(exc) if self.path in ('/mobile/api/session', '/mobile/api/broadcast', '/mobile/api/merge', '/mobile/api/model', '/mobile/api/shell', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/mode', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/menu', '/mobile/api/push/mute', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/switch') else 'Invalid message.'})
+            self.respond(400, {'error': str(exc) if self.path in ('/mobile/api/session', '/mobile/api/broadcast', '/mobile/api/merge', '/mobile/api/model', '/mobile/api/shell', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/mode', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/menu', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/switch') else 'Invalid message.'})
         except (OSError, RuntimeError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
             # The journal keeps why a send was refused; the access log shows only "503".
             print(f'{self.path} refused: {type(exc).__name__}: {str(exc)[:200]}', file=sys.stderr, flush=True)

@@ -1436,3 +1436,11 @@ button.live-chip:active { background: var(--line); }
 .settings-group .codex-level-note strong { color: var(--text); font-weight: 600; }
 .settings-group .codex-level:disabled .segmented, .settings-group .codex-level:disabled .codex-level-note { opacity: .55; }
 .settings-group .codex-runs { border-top: 1px solid var(--line); cursor: default; }
+
+.notification-levels { margin: 0 4px 4px 20px; border-left: 1px solid var(--line); padding-left: 4px; }
+.notification-levels button > span { flex: 1; }
+.notification-levels button[aria-pressed="true"] { color: var(--accent); background: var(--hover); }
+.notification-delivery fieldset { min-width: 0; margin: 0; padding: 10px 0; border: 0; border-top: 1px solid var(--line); }
+.notification-delivery legend { padding: 0; font-size: 13px; line-height: 1.4; }
+.notification-delivery .segmented { margin-top: 8px; }
+.notification-delivery fieldset:disabled { opacity: .5; }

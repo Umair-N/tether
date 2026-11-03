@@ -1,6 +1,6 @@
 import { playChime, prepareChime } from './sound'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Archive, ArchiveRestore, ArrowDown, BookMarked, ArrowUp, Bell, BellOff, Check, Columns2, GitFork, History, LayoutDashboard, Merge, ArrowRightLeft, Plus, PanelBottom, PanelRight, Pencil, Pin, PinOff, Shapes, Sparkles, RotateCw, Rows2, Square, Trash2, X } from 'lucide-react'
+import { Archive, ArchiveRestore, ArrowDown, BookMarked, ArrowUp, Bell, Check, Columns2, GitFork, History, LayoutDashboard, Merge, ArrowRightLeft, Plus, PanelBottom, PanelRight, Pencil, Pin, PinOff, Shapes, Sparkles, RotateCw, Rows2, Square, Trash2, X } from 'lucide-react'
 import { SESSION_NAME, SESSION_NAME_HELP, canFork, creditsLabel, errorText, usageLabel } from './api'
 import type { Api, Catalog, Footer, ModelOptions, Pane, PastChat, SessionsData } from './api'
 import { loadCatalog } from './Suggest'
@@ -16,26 +16,37 @@ import { SCHEMES, schemeById } from './schemes'
 import { HostResources } from './HostResources'
 import { GlobalCodexLevel } from './CodexLevel'
 
-// Push notification mute for one pane, as a row in the ⋯ menu. Hidden when this browser has no push subscription.
+type PaneLevel = 'all' | 'important' | 'urgent' | 'off'
+type Delivery = 'sound' | 'silent' | 'off'
+type Priority = 'urgent' | 'important' | 'low'
+interface PushConfig { supported: boolean; publicKey: string; muted?: string[]; levels?: Record<string, PaneLevel>; delivery?: Record<Priority, Delivery> }
+const PANE_LEVELS: [PaneLevel, string][] = [['all', 'All'], ['important', 'Important and urgent'], ['urgent', 'Urgent only'], ['off', 'Off']]
+const PRIORITIES: [Priority, string][] = [['urgent', 'Urgent — approvals, questions, errors'], ['important', 'Important — tasks you started'], ['low', 'Low — background updates']]
+
+// Pane notification submenu. Hidden when this browser has no push subscription.
 export function MuteItem({ api, pane, disabled = false }: { api: Api; pane: string; disabled?: boolean }) {
-  const [muted, setMuted] = useState<boolean | null>(null)
+  const [level, setLevel] = useState<PaneLevel | null>(null)
+  const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   useEffect(() => {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) return
     let live = true
-    Promise.all([navigator.serviceWorker.ready.then(registration => registration.pushManager.getSubscription()), api<{ muted?: string[] }>('push/config')])
-      .then(([subscription, config]) => { if (live) setMuted(subscription ? (config.muted ?? []).includes(pane) : null) }, () => {})
+    Promise.all([navigator.serviceWorker.ready.then(registration => registration.pushManager.getSubscription()), api<PushConfig>('push/config')])
+      .then(([subscription, config]) => { if (live) setLevel(subscription ? config.levels?.[pane] ?? ((config.muted ?? []).includes(pane) ? 'off' : 'all') : null) }, () => {})
     return () => { live = false }
   }, [api, pane])
-  if (muted === null) return null
-  async function toggle() {
+  if (level === null) return null
+  async function choose(next: PaneLevel) {
     setBusy(true); setError('')
-    try { const result = await api<{ muted: string[] }>('push/mute', { session: pane, muted: !muted }); setMuted(result.muted.includes(pane)) }
+    try { const result = await api<{ levels: Record<string, PaneLevel> }>('push/level', { session: pane, level: next }); setLevel(result.levels[pane] ?? 'all') }
     catch (failure) { setError(errorText(failure)) } finally { setBusy(false) }
   }
   return <>
-    <button type="button" aria-pressed={muted} disabled={disabled || busy} onClick={() => void toggle()}>{muted ? <Bell size={16} /> : <BellOff size={16} />}{muted ? 'Turn on notifications' : 'Mute notifications'}</button>
+    <button type="button" aria-expanded={open} disabled={disabled || busy} onClick={() => setOpen(!open)}><Bell size={16} />Notifications</button>
+    {open && <div className="notification-levels" role="group" aria-label="Pane notifications">
+      {PANE_LEVELS.map(([value, label]) => <button type="button" key={value} aria-pressed={level === value} disabled={disabled || busy} onClick={() => void choose(value)}><span>{label}</span>{level === value && <Check size={16} />}</button>)}
+    </div>}
     {error && <p className="error" role="alert">{error}</p>}
   </>
 }
@@ -304,7 +315,7 @@ function Choice<T extends string>({ legend, name, value, options, onChange }: { 
   </div></fieldset>
 }
 
-// Settings live in this browser only, like pins and order.
+// Push subscription is browser-specific; delivery settings apply to all subscribed devices.
 function Notifications({ api }: { api: Api }) {
   const [notice, onNotice] = useState('')
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => onNotice(''), 5000); return () => clearTimeout(timer) }, [notice])
@@ -312,13 +323,15 @@ function Notifications({ api }: { api: Api }) {
   const [state, setState] = useState(supported ? Notification.permission === 'denied' ? 'blocked' : 'off' : 'unsupported')
   const [pending, setPending] = useState(true)
   const [publicKey, setPublicKey] = useState('')
+  const [delivery, setDelivery] = useState<Record<Priority, Delivery>>({ urgent: 'sound', important: 'sound', low: 'off' })
   useEffect(() => {
     if (!supported) { setPending(false); return }
     let live = true
-    Promise.all([api<{ supported: boolean; publicKey: string }>('push/config'), navigator.serviceWorker.ready.then(registration => registration.pushManager.getSubscription())])
+    Promise.all([api<PushConfig>('push/config'), navigator.serviceWorker.ready.then(registration => registration.pushManager.getSubscription())])
       .then(([config, subscription]) => {
         if (!live) return
         setPublicKey(config.publicKey || '')
+        if (config.delivery) setDelivery(config.delivery)
         setState(!config.supported ? 'unsupported' : Notification.permission === 'denied' ? 'blocked' : subscription ? 'on' : 'off')
       }, failure => { if (live) onNotice(errorText(failure)) })
       .finally(() => { if (live) setPending(false) })
@@ -348,6 +361,13 @@ function Notifications({ api }: { api: Api }) {
       }
     } catch (failure) { onNotice(errorText(failure)) } finally { setPending(false) }
   }
+  async function changeDelivery(priority: Priority, value: Delivery) {
+    setPending(true)
+    try {
+      const result = await api<{ delivery: Record<Priority, Delivery> }>('push/settings', { delivery: { [priority]: value } })
+      setDelivery(result.delivery)
+    } catch (failure) { onNotice(errorText(failure)) } finally { setPending(false) }
+  }
   async function test() {
     setPending(true)
     try {
@@ -359,6 +379,14 @@ function Notifications({ api }: { api: Api }) {
   return <>
     <label className="switch-row"><span><strong>Push notifications</strong><small>{pending ? 'Please wait…' : label}</small></span><input type="checkbox" role="switch" checked={state === 'on'} disabled={pending || state === 'unsupported' || state === 'blocked' || (!publicKey && state !== 'on')} onChange={() => void toggle()} /></label>
     {notice && <div className="toast" role="status">{notice}</div>}
+    {state === 'on' && <div className="notification-delivery">
+      <p className="setting-note">Applies to all subscribed devices.</p>
+      {PRIORITIES.map(([priority, label]) => <fieldset key={priority} disabled={pending}>
+        <legend>{label}</legend><div className="segmented">
+          {(['sound', 'silent', 'off'] as const).map(value => <label key={value}><input type="radio" name={`notify-${priority}`} value={value} checked={delivery[priority] === value} onChange={() => void changeDelivery(priority, value)} /><span>{value === 'sound' ? 'Sound' : value === 'silent' ? 'Silent' : 'Off'}</span></label>)}
+        </div>
+      </fieldset>)}
+    </div>}
     {state === 'on' && <div className="switch-row"><span><strong>Test notifications</strong><small>Send a notification to subscribed devices.</small></span><button type="button" className="secondary" disabled={pending} onClick={() => void test()}>Send test</button></div>}
   </>
 }
@@ -409,7 +437,7 @@ export function Settings({ api, prefs, update, onReload, onClose }: { api: Api; 
     }}>
       {SETTINGS_TABS.map(item => <button type="button" role="tab" id={`settings-tab-${item}`} key={item} aria-selected={tab === item} aria-controls={`settings-panel-${item}`} tabIndex={tab === item ? 0 : -1} onClick={() => choose(item)}>{item}</button>)}
     </div>
-    {tab !== 'System' && <p className="settings-device-note">Saved on this device</p>}
+    {tab !== 'System' && tab !== 'Alerts' && <p className="settings-device-note">Saved on this device</p>}
     {SETTINGS_TABS.map(item => <div key={item} role="tabpanel" id={`settings-panel-${item}`} aria-labelledby={`settings-tab-${item}`} hidden={tab !== item} tabIndex={0}>
       {tab === item && <>
       {item === 'Look' && <>

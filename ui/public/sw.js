@@ -19,7 +19,7 @@ self.addEventListener('fetch', event => {
   })())
 })
 
-// One notification per pane, so each update alerts on its own and keeps its own tap, Approve/Deny or Mute.
+// One notification per pane, so each update alerts on its own and keeps its own tap, Approve/Deny or Urgent only.
 // Android folds 4+ notifications of one app into a group whose tap opens only one pane, so a plain update also offers
 // "All agents", which opens the Agents page. An older Tether folded updates into one summary (tag tether-summary);
 // a new push closes that leftover.
@@ -33,11 +33,11 @@ self.addEventListener('push', event => {
 async function notify(payload) {
   const title = payload.title || 'Tether', body = payload.body || ''
   for (const item of await self.registration.getNotifications({ tag: SUMMARY })) item.close()
-  await self.registration.showNotification(title, { ...ICONS, body, tag: payload.tag,
+  await self.registration.showNotification(title, { ...ICONS, body, tag: payload.tag, silent: payload.silent === true,
     data: { session: payload.session, thread: payload.thread, approval: payload.approval, body: payload.body },
-    // A plain yes/no prompt gets Approve and Deny (the server picked it as safe to answer from here); others get Mute.
+    // A plain yes/no prompt gets Approve and Deny (the server picked it as safe to answer from here); others get Urgent only.
     actions: payload.approval ? [{ action: 'approve', title: 'Approve' }, { action: 'deny', title: 'Deny' }]
-      : payload.session ? [{ action: 'mute', title: 'Mute this pane' }, { action: 'agents', title: 'All agents' }] : [],
+      : payload.session ? [{ action: 'mute', title: 'Urgent only' }, { action: 'agents', title: 'All agents' }] : [],
   })
 }
 // Answer the prompt by its id. The server checks the prompt on screen is still that one, so an old notification cannot
@@ -68,8 +68,8 @@ self.addEventListener('notificationclick', event => {
   }
   if (event.action === 'mute' && session) {
     // One tap from the notification: no window opens.
-    event.waitUntil(fetch('/mobile/api/push/mute', { method: 'POST', credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json', 'X-Codex-Mobile': '1' }, body: JSON.stringify({ session, muted: true }) }))
+    event.waitUntil(fetch('/mobile/api/push/level', { method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', 'X-Codex-Mobile': '1' }, body: JSON.stringify({ session, level: 'urgent' }) }))
     return
   }
   event.waitUntil(event.action === 'agents' || event.notification.data?.go === 'agents' ? openAgents() : openPane(session))
