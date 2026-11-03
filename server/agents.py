@@ -14,6 +14,7 @@ import tool_details
 import activity
 import history
 import paths
+import pane_view
 from side_shells import SESSION as SIDE_SHELLS
 
 HOME = paths.HOME
@@ -117,12 +118,18 @@ def codex_database():
 
 
 def discover(config, run):
+    pane_view.zoom_repair_all()
     result = run([paths.TMUX, 'list-panes', '-a', '-F',
-                  '#{pane_id}\t#{session_id}\t#{session_name}\t#{window_index}.#{pane_index}\t#{pane_pid}\t#{pane_current_path}\t#{@chat_name_at}\t#{@chat_name}\t#{@chat_icon}'],
+                  '#{pane_id}\t#{session_id}\t#{session_name}\t#{window_index}.#{pane_index}\t#{pane_pid}\t#{pane_current_path}\t#{@chat_name_at}\t#{@chat_name}\t#{@chat_icon}\t#{@zoom_for}'],
                  capture_output=True, text=True, timeout=5)
     if result.returncode:
         return ([{'id': 'saved', 'label': 'Last chat', 'agent': 'codex',
                   'thread': config['thread'], 'transcript': config['transcript'], 'writable': False}] if config.get('thread') else [])
+    positions = {}
+    for line in result.stdout.splitlines():
+        fields = line.split('\t')
+        if len(fields) > 9 and fields[-1]:
+            positions[(fields[1], fields[-1])] = fields[3]
     ps = run(['ps', '-eo', 'pid=,ppid=,comm='], capture_output=True, text=True, timeout=5)
     processes = {}
     for line in ps.stdout.splitlines():
@@ -143,7 +150,10 @@ def discover(config, run):
     try:
         for line in result.stdout.splitlines():
             fields = line.split('\t')
+            if len(fields) > 9 and fields.pop():
+                continue  # @zoom_for identifies the placeholder, never a chat.
             pane, tmux_session, label, position, pid = fields[:5]
+            position = positions.get((tmux_session, pane), position)
             if label == SIDE_SHELLS:  # the desktop terminal panel's own shells are not sessions
                 continue
             # The last fields are when and what the pane was named in tmux-chat (tmux options @chat_name_at, @chat_name).

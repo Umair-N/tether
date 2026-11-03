@@ -22,7 +22,7 @@ def _tmux(run, *args):
 
 def _panes(run):
     """(pane id, folder) for the first pane of each shell window. Empty when the session does not exist."""
-    result = _tmux(run, 'list-panes', '-s', '-t', '=' + SESSION, '-F', FORMAT)
+    result = _tmux(run, 'list-panes', '-s', '-t', '=' + SESSION, '-f', '#{&&:#{==:#{@zoom_for},},#{!=:#{window_name},tether-zoom}}', '-F', FORMAT)
     if result.returncode:
         return []
     out = []

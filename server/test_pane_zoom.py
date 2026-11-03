@@ -1,4 +1,4 @@
-"""Zoom sizing and cleanup use mocked tmux; no commands reach a user's terminal."""
+"""Zoom uses mocks or a private tmux server; no commands reach a user's terminal."""
 import json
 import os
 from pathlib import Path
@@ -8,159 +8,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
 import unittest
 from unittest.mock import Mock, patch
 
 import pane_view
-
-
-class ZoomSize(unittest.TestCase):
-    def setUp(self):
-        folder = tempfile.TemporaryDirectory()
-        self.addCleanup(folder.cleanup)
-        cache = patch.object(pane_view.paths, 'CACHE', Path(folder.name))
-        cache.start()
-        self.addCleanup(cache.stop)
-        self.width, self.height = 120, 40
-        self.local, self.global_size = '', 'latest'
-        self.zoomed, self.active = False, '%8'
-        self.calls = []
-        tmux = patch.object(pane_view, 'tmux', side_effect=self.tmux)
-        tmux.start()
-        self.addCleanup(tmux.stop)
-
-    def tmux(self, *args):
-        self.calls.append(args)
-        output = ''
-        if args[0] == 'display-message':
-            fmt = args[-1]
-            if fmt == '#{socket_path}\n#{pid}\n#{window_id}':
-                output = '/example/tmux.sock\n123\n@2\n'
-            elif fmt == '#{window_width} #{window_height}':
-                output = '%d %d' % (self.width, self.height)
-            elif fmt == '#{window_zoomed_flag} #{window_panes} #{window_id}':
-                output = '%d 2 @2' % self.zoomed
-            elif fmt == '#{pane_id}':
-                output = self.active
-            elif fmt == '#{window_zoomed_flag} #{pane_active}':
-                output = '%d %d' % (self.zoomed, self.active == args[3])
-            else:
-                raise AssertionError(args)
-        elif args[0] == 'show-options':
-            output = self.global_size if '-gwv' in args else self.local
-        elif args[0] == 'resize-pane':
-            self.zoomed = not self.zoomed
-            self.active = args[-1]
-        elif args[0] == 'select-pane':
-            self.active = args[-1]
-        elif args[0] == 'resize-window':
-            self.width, self.height = int(args[4]), int(args[6])
-            self.local = 'manual'
-        elif args[0] == 'set-option':
-            self.local = '' if '-wu' in args else args[-1]
-        else:
-            raise AssertionError(args)
-        return subprocess.CompletedProcess(args, 0, output, '')
-
-    def phone_resize(self):
-        self.width, self.height = 50, 20
-
-    def test_restores_size_inheritance_zoom_and_focus(self):
-        view = pane_view.zoom_enter('%7')
-        state = json.loads((view[0] / 'state.json').read_text())
-        self.assertEqual((state['width'], state['height'], state['window_size'], state['global_size']),
-                         (120, 40, '', 'latest'))
-        self.phone_resize()
-        pane_view.zoom_leave(view)
-        self.assertEqual((self.width, self.height, self.local, self.global_size), (120, 40, '', 'latest'))
-        self.assertEqual((self.zoomed, self.active), (False, '%8'))
-        self.assertFalse((view[0] / 'state.json').exists())
-
-    def test_explicit_window_option_survives(self):
-        for option in ('manual', 'smallest', 'largest', 'latest'):
-            with self.subTest(option=option):
-                self.local = option
-                view = pane_view.zoom_enter('%7')
-                self.phone_resize()
-                pane_view.zoom_leave(view)
-                self.assertEqual(self.local, option)
-
-    def test_only_last_tab_restores_even_if_first_tab_exits_first(self):
-        first = pane_view.zoom_enter('%7')
-        self.phone_resize()
-        second = pane_view.zoom_enter('%7')
-        pane_view.zoom_leave(first)
-        self.assertEqual((self.width, self.zoomed), (50, True))
-        pane_view.zoom_leave(second)
-        self.assertEqual((self.width, self.height, self.zoomed, self.active), (120, 40, False, '%8'))
-
-    def test_last_tab_can_be_first_owner(self):
-        first = pane_view.zoom_enter('%7')
-        second = pane_view.zoom_enter('%7')
-        self.phone_resize()
-        pane_view.zoom_leave(second)
-        self.assertEqual(self.width, 50)
-        pane_view.zoom_leave(first)
-        self.assertEqual(self.width, 120)
-
-    def test_hard_kill_repairs_before_next_snapshot(self):
-        dead = pane_view.zoom_enter('%7')
-        self.phone_resize()
-        dead[2].close()  # SIGKILL releases the lease without running cleanup
-        next_view = pane_view.zoom_enter('%7')
-        self.assertEqual(self.width, 120)
-        state = json.loads((next_view[0] / 'state.json').read_text())
-        self.assertEqual((state['width'], state['height']), (120, 40))
-        self.phone_resize()
-        pane_view.zoom_leave(next_view)
-        self.assertEqual(self.width, 120)
-
-    def test_dead_owner_does_not_restore_while_another_tab_is_live(self):
-        first = pane_view.zoom_enter('%7')
-        self.phone_resize()
-        second = pane_view.zoom_enter('%7')
-        first[2].close()
-        third = pane_view.zoom_enter('%7')
-        self.assertEqual(self.width, 50)
-        pane_view.zoom_leave(second)
-        self.assertEqual(self.width, 50)
-        pane_view.zoom_leave(third)
-        self.assertEqual(self.width, 120)
-
-    def test_preexisting_zoom_is_preserved(self):
-        self.zoomed, self.active = True, '%7'
-        view = pane_view.zoom_enter('%7')
-        self.phone_resize()
-        pane_view.zoom_leave(view)
-        self.assertTrue(self.zoomed)
-        self.assertEqual(self.width, 120)
-
-    def test_restore_failure_keeps_repair_record(self):
-        view = pane_view.zoom_enter('%7')
-        self.phone_resize()
-        with patch.object(pane_view, 'zoom_restore', side_effect=subprocess.TimeoutExpired('tmux', 5)):
-            with self.assertRaises(subprocess.TimeoutExpired):
-                pane_view.zoom_leave(view)
-        self.assertTrue((view[0] / 'state.json').exists())
-        next_view = pane_view.zoom_enter('%7')
-        self.assertEqual(self.width, 120)
-        pane_view.zoom_leave(next_view)
-
-    def test_failure_after_zoom_starts_restores_immediately(self):
-        failed = False
-        def failing_tmux(*args):
-            nonlocal failed
-            result = self.tmux(*args)
-            if args[0] == 'resize-pane' and not failed:
-                failed = True
-                raise subprocess.TimeoutExpired('tmux', 5)
-            return result
-        with patch.object(pane_view, 'tmux', side_effect=failing_tmux):
-            with self.assertRaises(subprocess.TimeoutExpired):
-                pane_view.zoom_enter('%7')
-        self.assertEqual((self.width, self.height, self.zoomed, self.active), (120, 40, False, '%8'))
-        self.assertFalse(list(pane_view.paths.CACHE.glob('zoom/*/state.json')))
 
 
 class ZoomExit(unittest.TestCase):
@@ -194,6 +45,7 @@ class ZoomExit(unittest.TestCase):
              patch.object(pane_view.signal, 'signal', side_effect=install), \
              patch.object(pane_view, 'snapshot', return_value=shot), \
              patch.object(pane_view.select, 'select', side_effect=ready), \
+             patch.object(pane_view, 'zoom_resize') as resize, \
              patch.object(pane_view, 'zoom_enter', return_value='view') as enter, \
              patch.object(pane_view, 'zoom_leave', side_effect=leave) as cleanup:
             try:
@@ -201,30 +53,41 @@ class ZoomExit(unittest.TestCase):
             except (SystemExit, BrokenPipeError):
                 if exit_path not in (signal.SIGHUP, signal.SIGTERM, 'broken-pipe'):
                     raise
-        return control, events, enter, cleanup
+        return control, events, enter, cleanup, resize
 
     def test_exit_paths_detach_before_restore(self):
         for exit_path in ('stdin', 'pane-ended', 'control-eof', 'control-exit', 'broken-pipe', signal.SIGHUP, signal.SIGTERM):
             with self.subTest(exit_path=exit_path):
-                control, events, enter, cleanup = self.run_view(exit_path=exit_path)
+                control, events, enter, cleanup, resize = self.run_view(exit_path=exit_path)
                 self.assertEqual(events, ['kill', 'wait', 'restore'])
                 enter.assert_called_once_with('%7')
                 cleanup.assert_called_once_with('view')
-                self.assertIn(b'refresh-client -C 50x20\n', [call.args[0] for call in control.stdin.write.call_args_list])
+                resize.assert_called_once_with('view', 50, 20)
+                control.stdin.write.assert_not_called()
 
     def test_non_zoom_never_resizes_or_saves_state(self):
-        control, events, enter, cleanup = self.run_view(zoom=False)
+        control, events, enter, cleanup, resize = self.run_view(zoom=False)
         self.assertEqual(events, ['kill', 'wait'])
         enter.assert_not_called()
         cleanup.assert_not_called()
+        resize.assert_not_called()
         control.stdin.write.assert_not_called()
 
-    def test_zero_initial_size_waits_before_enabling_client_sizing(self):
-        control, events, enter, cleanup = self.run_view(initial_zero=True)
+    def test_zero_initial_size_waits_before_private_window_resize(self):
+        control, events, enter, cleanup, resize = self.run_view(initial_zero=True)
         self.assertEqual(events, ['zero-size', 'kill', 'wait', 'restore'])
         enter.assert_called_once_with('%7')
         cleanup.assert_called_once_with('view')
-        self.assertIn(b"refresh-client -f '!ignore-size'\n", [call.args[0] for call in control.stdin.write.call_args_list])
+        resize.assert_called_once_with('view', 50, 20)
+        control.stdin.write.assert_not_called()
+
+
+class EmptyZoomCache(unittest.TestCase):
+    def test_repair_without_state_never_calls_tmux(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(pane_view.paths, 'CACHE', Path(folder)), \
+             patch.object(pane_view, 'tmux') as tmux:
+            pane_view.zoom_repair_all()
+            tmux.assert_not_called()
 
 
 @unittest.skipUnless(shutil.which('tmux'), 'tmux is not installed')
@@ -238,7 +101,10 @@ class IsolatedZoom(unittest.TestCase):
         self.tmux('new-session', '-d', '-s', 'zoom-test', '-x', '120', '-y', '40').check_returncode()
         self.addCleanup(self.tmux, 'kill-server')
         self.pane = self.tmux('display-message', '-p', '-t', 'zoom-test', '#{pane_id}').stdout.strip()
-        self.tmux('split-window', '-t', self.pane).check_returncode()
+        self.home = self.tmux('display-message', '-p', '-t', self.pane, '#{window_id}').stdout.strip()
+        self.tmux('split-window', '-h', '-t', self.pane).check_returncode()
+        self.tmux('split-window', '-h', '-t', self.pane).check_returncode()
+        self.other = self.tmux('display-message', '-p', '-t', self.home, '#{pane_id}').stdout.strip()
         for replacement in (patch.object(pane_view, 'tmux', side_effect=self.tmux),
                             patch.object(pane_view.paths, 'CACHE', Path(self.folder.name) / 'cache')):
             replacement.start()
@@ -262,13 +128,60 @@ class IsolatedZoom(unittest.TestCase):
                 before = self.dimensions()
                 global_size = self.tmux('show-options', '-gwv', 'window-size').stdout
                 view = pane_view.zoom_enter(self.pane)
-                self.tmux('resize-window', '-t', self.pane, '-x', '50', '-y', '20').check_returncode()
+                pane_view.zoom_resize(view, 50, 20)
                 pane_view.zoom_leave(view)
                 self.assertEqual(self.dimensions(), before)
                 self.assertEqual(self.tmux('show-options', '-wqv', '-t', self.pane, 'window-size').stdout.strip(), option)
                 self.assertEqual(self.tmux('show-options', '-gwv', 'window-size').stdout, global_size)
 
-    def test_sigkill_releases_cross_process_lease_and_next_zoom_repairs(self):
+    def home_layout(self):
+        return self.tmux('list-panes', '-t', self.home, '-F',
+                         '#{pane_id} #{pane_index} #{pane_width} #{pane_height} #{pane_active}').stdout
+
+    def test_other_panes_and_home_slot_focus_stay_exact(self):
+        for zoomed in (False, True):
+            for active_target in (self.pane, self.other):
+                with self.subTest(zoomed=zoomed, active=active_target):
+                    self.tmux('select-pane', '-t', active_target).check_returncode()
+                    if zoomed:
+                        self.tmux('resize-pane', '-Z', '-t', active_target).check_returncode()
+                    before = self.home_layout()
+                    flags = self.tmux('display-message', '-p', '-t', self.home,
+                                      '#{window_zoomed_flag} #{window_active}').stdout
+                    view = pane_view.zoom_enter(self.pane)
+                    self.addCleanup(pane_view.zoom_leave, view)
+                    state = json.loads((view[0] / 'state.json').read_text())
+                    pane_view.zoom_resize(view, 50, 20)
+                    self.assertEqual(self.home_layout().replace(state['placeholder'], self.pane), before)
+                    self.assertEqual(self.tmux('display-message', '-p', '-t', self.home,
+                                              '#{window_zoomed_flag} #{window_active}').stdout, flags)
+                    self.assertEqual(self.dimensions(), '50 20')
+                    pane_view.zoom_leave(view)
+                    self.assertEqual(self.home_layout(), before)
+                    self.assertEqual(self.tmux('display-message', '-p', '-t', self.home,
+                                              '#{window_zoomed_flag} #{window_active}').stdout, flags)
+                    self.assertEqual(self.tmux('list-windows', '-t', 'zoom-test', '-F', '#{window_id}').stdout.split(), [self.home])
+                    if zoomed:
+                        self.tmux('resize-pane', '-Z', '-t', active_target).check_returncode()
+
+    def test_views_share_window_and_latest_resize_wins(self):
+        before = self.home_layout()
+        first = pane_view.zoom_enter(self.pane)
+        self.addCleanup(pane_view.zoom_leave, first)
+        pane_view.zoom_resize(first, 50, 20)
+        second = pane_view.zoom_enter(self.pane)
+        self.addCleanup(pane_view.zoom_leave, second)
+        self.assertEqual(first[:2], second[:2])
+        self.assertEqual(len(self.tmux('list-windows', '-t', 'zoom-test', '-F', '#{window_id}').stdout.split()), 2)
+        pane_view.zoom_resize(second, 65, 25)
+        self.assertEqual(self.dimensions(), '65 25')
+        pane_view.zoom_repair_all()  # Discovery must not disturb live owners.
+        pane_view.zoom_leave(first)
+        self.assertEqual(self.dimensions(), '65 25')
+        pane_view.zoom_leave(second)
+        self.assertEqual(self.home_layout(), before)
+
+    def killed_view(self, while_live=None):
         code = '''
 import subprocess, sys
 from pathlib import Path
@@ -280,7 +193,7 @@ def tmux(*args):
 pane_view.tmux = tmux
 pane_view.paths.CACHE = Path(cache)
 view = pane_view.zoom_enter(pane)
-tmux('resize-window', '-t', pane, '-x', '50', '-y', '20').check_returncode()
+pane_view.zoom_resize(view, 50, 20)
 print('ready', flush=True)
 sys.stdin.buffer.read()
 pane_view.zoom_leave(view)
@@ -292,16 +205,10 @@ pane_view.zoom_leave(view)
             self.assertTrue(select.select([process.stdout], [], [], 5)[0], 'Zoom child did not start')
             self.assertEqual(process.stdout.readline(), b'ready\n')
             self.assertEqual(self.dimensions(), '50 20')
-            # A second process joins without restoring while the child holds its lease.
-            second = pane_view.zoom_enter(self.pane)
-            self.assertEqual(self.dimensions(), '50 20')
-            pane_view.zoom_leave(second)
-            self.assertEqual(self.dimensions(), '50 20')
+            if while_live:
+                while_live()
             process.kill()
             self.assertEqual(process.wait(timeout=5), -signal.SIGKILL)
-            next_view = pane_view.zoom_enter(self.pane)
-            self.assertEqual(self.dimensions(), '120 40')
-            pane_view.zoom_leave(next_view)
         finally:
             if process.poll() is None:
                 process.kill()
@@ -309,42 +216,176 @@ pane_view.zoom_leave(view)
             process.stdin.close()
             process.stdout.close()
 
-    def test_attached_desktop_takes_over_after_phone_detaches(self):
-        self.tmux('set-option', '-w', '-t', self.pane, 'window-size', 'latest').check_returncode()
-        clients = []
-        def attach(width, height):
-            client = subprocess.Popen([self.binary, '-S', self.socket, '-C', 'attach-session', '-t', 'zoom-test'],
-                                      env=self.env, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            clients.append(client)
-            client.stdin.write(b'refresh-client -C %dx%d\n' % (width, height))
-            client.stdin.flush()
-            return client
-        def wait_for(width):
-            deadline = time.monotonic() + 5
-            while time.monotonic() < deadline:
-                if self.dimensions().split()[0] == str(width):
-                    return
-                time.sleep(.02)
-            self.fail('Isolated window did not reach width %d: %s' % (width, self.dimensions()))
+    def test_dead_owner_does_not_restore_a_live_view(self):
+        before = self.home_layout()
+        views = []
+        self.killed_view(lambda: views.append(pane_view.zoom_enter(self.pane)))
+        view, = views
+        self.addCleanup(pane_view.zoom_leave, view)
+        pane_view.zoom_repair_all()
+        self.assertEqual(self.dimensions(), '50 20')
+        pane_view.zoom_leave(view)
+        self.assertEqual(self.home_layout(), before)
+
+    def test_two_panes_in_one_home_have_separate_private_windows(self):
+        before = self.home_layout()
+        other = self.tmux('display-message', '-p', '-t', self.home, '#{pane_id}').stdout.strip()
+        first = pane_view.zoom_enter(self.pane)
+        self.addCleanup(pane_view.zoom_leave, first)
+        second = pane_view.zoom_enter(other)
+        self.addCleanup(pane_view.zoom_leave, second)
+        self.assertNotEqual(first[:2], second[:2])
+        pane_view.zoom_resize(first, 50, 20)
+        pane_view.zoom_resize(second, 65, 25)
+        self.assertEqual(self.dimensions(), '50 20')
+        pane_view.zoom_leave(second)
+        pane_view.zoom_leave(first)
+        self.assertEqual(self.home_layout(), before)
+
+    def test_partial_swap_failure_repairs_immediately(self):
+        before = self.home_layout()
+        def failed(*args):
+            result = self.tmux(*args)
+            if 'swap-pane' in args and args[args.index('-s') + 1] == self.pane:
+                raise subprocess.TimeoutExpired('tmux', 5)
+            return result
+        with patch.object(pane_view, 'tmux', side_effect=failed):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                pane_view.zoom_enter(self.pane)
+        self.assertEqual(self.home_layout(), before)
+        self.assertFalse(list(pane_view.paths.CACHE.glob('zoom/*/state.json')))
+
+    def test_sigkill_repair_all_swaps_home(self):
+        before = self.home_layout()
+        self.killed_view()
+        pane_view.zoom_repair_all()
+        self.assertEqual(self.home_layout(), before)
+        self.assertFalse(list(pane_view.paths.CACHE.glob('zoom/*/state.json')))
+
+    def test_sigkill_next_zoom_repairs_before_new_swap(self):
+        before = self.home_layout()
+        self.killed_view()
+        view = pane_view.zoom_enter(self.pane)
+        pane_view.zoom_leave(view)
+        self.assertEqual(self.home_layout(), before)
+
+    def test_old_format_repairs_dimensions_options_zoom_and_focus(self):
+        import hashlib
+        for option in ('', 'manual', 'latest', 'smallest', 'largest'):
+            with self.subTest(option=option):
+                shown = self.tmux('display-message', '-p', '-t', self.pane,
+                                  '#{socket_path}\n#{pid}\n#{window_id}').stdout.splitlines()
+                folder = pane_view.paths.CACHE / 'zoom' / hashlib.sha256('\n'.join(shown).encode()).hexdigest()
+                folder.mkdir(parents=True, exist_ok=True)
+                active = self.tmux('display-message', '-p', '-t', self.home, '#{pane_id}').stdout.strip()
+                before = self.home_layout()
+                pane_view.zoom_save(folder, dict(pane=self.pane, width=120, height=40, window_size=option,
+                                                zooming=True, active=active, owners=[]))
+                self.tmux('resize-pane', '-Z', '-t', self.pane).check_returncode()
+                self.tmux('resize-window', '-t', self.pane, '-x', '50', '-y', '20').check_returncode()
+                pane_view.zoom_repair_all()
+                self.assertEqual(self.dimensions(), '120 40')
+                self.assertEqual(self.home_layout(), before)
+                self.assertEqual(self.tmux('show-options', '-wqv', '-t', self.home, 'window-size').stdout.strip(), option)
+                self.assertFalse((folder / 'state.json').exists())
+
+    def test_discover_hides_placeholder_keeps_position_and_pane_options(self):
+        import agents
+        def run(arguments, **kwargs):
+            if arguments[0] == pane_view.paths.TMUX:
+                return self.tmux(*arguments[1:])
+            return subprocess.run(arguments, **kwargs)
+        before = agents.discover({}, run)
+        self.tmux('set-option', '-p', '-t', self.pane, '@chat_name', 'My chat').check_returncode()
+        self.tmux('set-option', '-p', '-t', self.pane, '@chat_icon', 'terminal').check_returncode()
+        view = pane_view.zoom_enter(self.pane)
+        self.addCleanup(pane_view.zoom_leave, view)
+        after = agents.discover({}, run)
+        self.assertEqual({e['id']: (e['tmux_session'], e['position'], e['label']) for e in after},
+                         {e['id']: (e['tmux_session'], e['position'], e['label']) for e in before})
+        entry = next(e for e in after if e['id'] == self.pane)
+        self.assertEqual((entry['pane_name'], entry['pane_icon']), ('My chat', 'terminal'))
+        # Exercise the real registry matcher with its pre-swap window ID.
+        home = Path(self.folder.name) / 'home'
+        registries = home / '.claude/sessions'
+        registries.mkdir(parents=True)
+        registry = dict(kind='interactive', pid=entry['pane_pid'], tmux='zoom-test:' + self.home + '.' + self.pane,
+                        cwd='/work', sessionId='zoom-thread')
+        (registries / 'zoom.json').write_text(json.dumps(registry))
+        with patch.object(agents, 'HOME', home):
+            entry = next(e for e in agents.discover({}, run) if e['id'] == self.pane)
+        self.assertEqual((entry['agent'], entry['thread']), ('claude', 'zoom-thread'))
+
+    def test_discover_repairs_killed_view_before_listing(self):
+        import agents
+        before = self.home_layout()
+        self.killed_view()
+        def run(arguments, **kwargs):
+            return self.tmux(*arguments[1:]) if arguments[0] == pane_view.paths.TMUX else subprocess.run(arguments, **kwargs)
+        entries = agents.discover({}, run)
+        self.assertEqual(self.home_layout(), before)
+        self.assertEqual(len(entries), 3)
+
+    def test_old_format_repairs_window_after_pane_ends(self):
+        import hashlib
+        shown = self.tmux('display-message', '-p', '-t', self.pane,
+                          '#{socket_path}\n#{pid}\n#{window_id}').stdout.splitlines()
+        folder = pane_view.paths.CACHE / 'zoom' / hashlib.sha256('\n'.join(shown).encode()).hexdigest()
+        folder.mkdir(parents=True)
+        pane_view.zoom_save(folder, dict(pane=self.pane, width=120, height=40, window_size='',
+                                        zooming=False, active=None, owners=[]))
+        self.tmux('resize-window', '-t', self.home, '-x', '50', '-y', '20').check_returncode()
+        self.tmux('kill-pane', '-t', self.pane).check_returncode()
+        pane_view.zoom_repair_all()
+        self.assertEqual(self.tmux('display-message', '-p', '-t', self.home, '#{window_width} #{window_height}').stdout.strip(), '120 40')
+        self.assertFalse((folder / 'state.json').exists())
+
+    def test_missing_placeholder_keeps_live_pane_visible(self):
+        view = pane_view.zoom_enter(self.pane)
+        state = json.loads((view[0] / 'state.json').read_text())
+        self.tmux('kill-pane', '-t', state['placeholder']).check_returncode()
+        view[2].close()
+        pane_view.zoom_repair_all()
+        self.assertEqual(self.tmux('display-message', '-p', '-t', self.pane, '#{automatic-rename}').stdout.strip(), '1')
+        self.assertEqual(self.tmux('show-options', '-pqv', '-t', self.pane, '@chat_name').stdout.strip(), '')
+        self.assertFalse((view[0] / 'state.json').exists())
+
+    def test_missing_pane_removes_placeholder_and_private_window(self):
+        view = pane_view.zoom_enter(self.pane)
+        state = json.loads((view[0] / 'state.json').read_text())
+        self.tmux('kill-pane', '-t', self.pane).check_returncode()
+        view[2].close()
+        pane_view.zoom_repair_all()
+        self.assertEqual(self.tmux('display-message', '-p', '-t', state['placeholder'], '#{pane_id}').stdout.strip(), '')
+        self.assertFalse((view[0] / 'state.json').exists())
+
+    def test_restore_failure_keeps_record_for_retry(self):
+        before = self.home_layout()
+        view = pane_view.zoom_enter(self.pane)
+        with patch.object(pane_view, 'zoom_restore', side_effect=subprocess.TimeoutExpired('tmux', 5)):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                pane_view.zoom_leave(view)
+        self.assertTrue((view[0] / 'state.json').exists())
+        pane_view.zoom_repair_all()
+        self.assertEqual(self.home_layout(), before)
+
+    def test_control_client_ignores_size_for_whole_zoom(self):
+        before = self.home_layout()
+        client = subprocess.Popen([self.binary, '-S', self.socket, '-C', 'attach-session', '-f', 'ignore-size', '-t', 'zoom-test'],
+                                  env=self.env, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
-            desktop = attach(160, 50)
-            wait_for(160)
             view = pane_view.zoom_enter(self.pane)
-            phone = attach(50, 20)
-            wait_for(50)
-            desktop.stdin.write(b'refresh-client -C 180x55\n')
-            desktop.stdin.flush()
-            phone.kill()
-            phone.wait(timeout=5)
+            self.addCleanup(pane_view.zoom_leave, view)
+            pane_view.zoom_resize(view, 50, 20)
+            self.assertIn('ignore-size', self.tmux('list-clients', '-F', '#{client_flags}').stdout)
+            state = json.loads((view[0] / 'state.json').read_text())
+            self.assertEqual(self.home_layout().replace(state['placeholder'], self.pane), before)
             pane_view.zoom_leave(view)
-            wait_for(180)
-            self.assertEqual(self.tmux('show-options', '-wqv', '-t', self.pane, 'window-size').stdout.strip(), 'latest')
+            self.assertEqual(self.home_layout(), before)
         finally:
-            for client in clients:
-                if client.poll() is None:
-                    client.kill()
-                client.wait(timeout=5)
-                client.stdin.close()
+            client.kill()
+            client.wait(timeout=5)
+            client.stdin.close()
 
 
 if __name__ == '__main__':

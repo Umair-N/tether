@@ -378,7 +378,7 @@ def marks(run=subprocess.run, home=None):
     """For the sidebar: {session id: {project, context, revision, stale: [pane ids]}}. Read only: a session with no
     @project yet is left out. A pane is stale when its agent started with an older revision or another project
     (@project_rev, set by project_launch.py). A pane with no @project_rev did not start through Tether."""
-    shown = run([paths.TMUX, 'list-panes', '-a', '-F', '#{session_id}\t#{@project}\t#{pane_id}\t#{@project_rev}'],
+    shown = run([paths.TMUX, 'list-panes', '-a', '-f', '#{==:#{@zoom_for},}', '-F', '#{session_id}\t#{@project}\t#{pane_id}\t#{@project_rev}'],
                 capture_output=True, text=True, timeout=5)
     if shown.returncode:
         return {}

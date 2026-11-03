@@ -1657,6 +1657,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == '__main__':
+    import pane_view
+    pane_view.zoom_repair_all()
     paths.SCOPE_TMUX = bool(os.environ.get('INVOCATION_ID'))
     # A tmux server that this service starts takes its default-shell from $SHELL. systemd gives /bin/bash, so new panes
     # ran bash without the user's zsh setup (the claude/codex project launchers). Use the account's login shell.
