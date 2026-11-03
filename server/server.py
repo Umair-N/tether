@@ -13,9 +13,9 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from agents import claude_snapshot, discover, usage
+from agents import claude_consume, claude_snapshot, discover, usage
 from agents import records
-from antigravity import snapshot as antigravity_snapshot, window_active
+from antigravity import snapshot as antigravity_snapshot, transcript_message as antigravity_message, window_active
 from terminal_input import NAME_HELP, valid_name, fork_chat, DraftError, card_key, menu_choose, unqueue, clear_draft as terminal_clear_draft, type_text, live_status, capture, capture_screen, submit as terminal_submit, respond_approval, plan_menu, start_agent, create_session, shell_snapshot, shell_submit, verify
 from quota_notices import error_message, merge as merge_quota_notices
 import tool_details
@@ -79,7 +79,7 @@ def notify(payload, urgent):
     threading.Thread(target=push.send_all, args=(payload, urgent), daemon=True).start()
 
 
-NOTIFIER = push.Notifier(notify, watching, muted=push.muted)
+NOTIFIER = push.Notifier(notify, watching, muted=push.muted, reply=lambda entry: notification_reply(entry))
 
 
 def monitor_notices():
@@ -577,6 +577,50 @@ def codex_metrics(config, reported_usage, model='', effort='', credits=None):
             pass
         report.update(allowance_inherited=any(report[key] for key in ('five_hour', 'weekly')), allowance_reported_at=stamp)
     return report
+
+
+NOTIFICATION_TAIL_BYTES = 256 * 1024
+
+
+def notification_reply(entry):
+    """Use the chat parsers on a bounded transcript tail, without tmux or history cache locks."""
+    if entry.get('agent') not in ('claude', 'codex', 'antigravity') or entry.get('ambiguous'):
+        return ''
+    try:
+        with open(entry['transcript'], 'rb') as stream:
+            size = stream.seek(0, os.SEEK_END)
+            start = max(0, size - NOTIFICATION_TAIL_BYTES)
+            stream.seek(start)
+            tail = stream.read(NOTIFICATION_TAIL_BYTES)
+        if start:
+            tail = tail.partition(b'\n')[2]  # discard a record clipped by the byte limit
+        latest_step, latest_text = None, ''
+        for index, line in reversed(list(enumerate(tail.splitlines()))):
+            try:
+                record = json.loads(line)
+            except (ValueError, UnicodeError):
+                continue
+            if not isinstance(record, dict):
+                continue
+            if entry['agent'] == 'antigravity':
+                message = antigravity_message(record, index, display_text)
+                if message and message['role'] == 'assistant':
+                    step = record.get('step_index')
+                    step = step if isinstance(step, int) else index
+                    if latest_step is None or step > latest_step:
+                        latest_step, latest_text = step, message['text']
+                continue  # the chat orders by step; the newest version of a step wins
+            state = codex_state()
+            if entry['agent'] == 'claude':
+                claude_consume(state['messages'], index, record, display_text)
+            else:
+                codex_consume(state, index, record)
+            for message in reversed(state['messages']):
+                if message.get('role') == 'assistant' and not message.get('kind'):
+                    return message['text']
+        return latest_text
+    except Exception:  # A missing, malformed or changing transcript must not break the poll loop.
+        return ''
 
 
 def snapshot(config=None):

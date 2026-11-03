@@ -1,4 +1,7 @@
 import unittest
+import json
+import tempfile
+from pathlib import Path
 from unittest.mock import Mock, patch
 from urllib.parse import quote
 
@@ -110,6 +113,115 @@ class PushTests(unittest.TestCase):
         notifier.observe(self.entry, {'state': 'Input needed', 'attention': {'id': 'second'}})
         self.assertEqual(send.call_args.args[0]['session'], '%7')
 
+
+class ReplyPreviewTests(unittest.TestCase):
+    def notify(self, state, reply, **status):
+        send = Mock()
+        notifier = push.Notifier(send, settle=0, minimum_work=0, clock=lambda: 100, reply=reply)
+        entry = {'id': '%7', 'label': 'Task'}
+        notifier.observe(entry, {'state': 'Working'})
+        notifier.observe(entry, dict(status, state=state))
+        return send.call_args.args[0]['body']
+
+    def test_snippet_cleans_markdown(self):
+        text = '# Result\n- **Fixed** _the_ `file_name`.\n1. See [details](https://example.test).\n' \
+               '> ~~Old~~\n```python\nprint("hidden")\n```\nNext\n~~~sh\necho hidden\n~~~'
+        self.assertEqual(push.reply_summary(text), 'Result Fixed the file_name. See details. Old [code] Next [code]')
+        self.assertEqual(push.reply_summary('## Title\n===\n* [Guide][docs]\n[docs]: https://example.test'), 'Title Guide')
+        self.assertEqual(push.reply_summary('Before\n```sh\nunclosed code'), 'Before [code]')
+
+    def test_snippet_collapses_whitespace_and_truncates(self):
+        self.assertEqual(push.reply_summary(' a\n\t b   c '), 'a b c')
+        self.assertEqual(push.reply_summary('x' * 160), 'x' * 160)
+        self.assertEqual(push.reply_summary('x' * 161), 'x' * 159 + '…')
+        self.assertEqual(push.reply_summary(None), '')
+
+    def test_done_body_uses_reply(self):
+        self.assertEqual(self.notify('Idle', Mock(return_value='**All done.**')), 'Finished: All done.')
+
+    def test_input_prefers_question_then_attention_text_then_reply(self):
+        reply = Mock(return_value='Which **file**?')
+        self.assertEqual(self.notify('Input needed', reply, attention={'question': 'Which branch?', 'text': 'Menu'}),
+                         'Needs your input: Which branch?')
+        self.assertEqual(self.notify('Input needed', reply, attention={'text': 'Choose a folder.'}),
+                         'Needs your input: Choose a folder.')
+        reply.assert_not_called()
+        self.assertEqual(self.notify('Input needed', reply), 'Needs your input: Which file?')
+
+    def test_empty_reply_and_parser_errors_preserve_plain_bodies(self):
+        for reply in (Mock(return_value=''), Mock(side_effect=RuntimeError('parser failed'))):
+            self.assertEqual(self.notify('Idle', reply), 'Finished')
+            self.assertEqual(self.notify('Input needed', reply), 'Needs your input')
+
+    def transcript(self, agent, records):
+        folder = self.enterContext(tempfile.TemporaryDirectory())
+        path = Path(folder) / 'transcript.jsonl'
+        path.write_text(''.join(json.dumps(record) + '\n' for record in records))
+        return {'agent': agent, 'transcript': str(path)}
+
+    def test_claude_uses_last_assistant_text_not_tools_thinking_or_debug_copies(self):
+        entry = self.transcript('claude', [
+            {'type': 'assistant', 'message': {'role': 'assistant', 'content': 'Earlier'}},
+            {'type': 'assistant', 'message': {'role': 'assistant', 'content': [
+                {'type': 'thinking', 'thinking': 'Private reasoning'}, {'type': 'text', 'text': 'Last reply'}]}},
+            {'type': 'assistant', 'message': {'role': 'assistant', 'content': [
+                {'type': 'tool_use', 'id': 'tool', 'name': 'Bash', 'input': {'command': 'echo tool'}}]}},
+            {'type': 'api-request-blob', 'message': {'role': 'assistant', 'content': 'Debug copy'}},
+            {'type': 'user', 'message': {'role': 'user', 'content': 'Next request'}},
+        ])
+        self.assertEqual(server.notification_reply(entry), 'Last reply')
+
+    def test_codex_uses_response_item_not_event_copy_reasoning_or_tool_output(self):
+        def message(text, **extra):
+            return {'type': 'response_item', 'payload': dict(type='message', role='assistant',
+                    content=[{'type': 'output_text', 'text': text}], **extra)}
+        entry = self.transcript('codex', [message('Commentary', phase='commentary'), message('Final reply', phase='final_answer'),
+            {'type': 'response_item', 'payload': {'type': 'reasoning', 'summary': 'Reasoning'}},
+            {'type': 'response_item', 'payload': {'type': 'function_call_output', 'call_id': 'tool', 'output': 'Tool output'}},
+            {'type': 'event_msg', 'payload': {'type': 'agent_message', 'message': 'Event copy'}},
+            {'type': 'event_msg', 'payload': {'type': 'task_complete'}},
+        ])
+        self.assertEqual(server.notification_reply(entry), 'Final reply')
+
+    def test_antigravity_uses_latest_step_and_last_version_of_step(self):
+        entry = self.transcript('antigravity', [
+            {'type': 'PLANNER_RESPONSE', 'step_index': 1, 'content': 'Plan'},
+            {'type': 'AGENT_RESPONSE', 'step_index': 3, 'content': 'Partial'},
+            {'type': 'AGENT_RESPONSE', 'step_index': 3, 'content': 'Final reply'},
+            {'type': 'PLANNER_RESPONSE', 'step_index': 2, 'content': 'Older step updated'},
+            {'type': 'USER_INPUT', 'step_index': 4, 'content': 'Question'},
+            {'type': 'ERROR_MESSAGE', 'step_index': 5, 'content': 'Error'},
+        ])
+        self.assertEqual(server.notification_reply(entry), 'Final reply')
+        planner = self.transcript('antigravity', [{'type': 'PLANNER_RESPONSE', 'content': 'Planner reply'}])
+        self.assertEqual(server.notification_reply(planner), 'Planner reply')
+
+    def test_transcript_missing_or_parser_throws_still_sends(self):
+        entry = self.transcript('claude', [{'type': 'assistant', 'message': {'role': 'assistant', 'content': 'Reply'}}])
+        with patch.object(server, 'claude_consume', side_effect=RuntimeError('bad parser')):
+            self.assertEqual(self.notify('Idle', lambda _: server.notification_reply(entry)), 'Finished')
+        Path(entry['transcript']).unlink()
+        self.assertEqual(self.notify('Idle', lambda _: server.notification_reply(entry)), 'Finished')
+        self.assertEqual(self.notify('Input needed', lambda _: server.notification_reply(entry)), 'Needs your input')
+
+    def test_tail_is_bounded_and_skips_clipped_and_malformed_records(self):
+        entry = self.transcript('antigravity', [{'type': 'AGENT_RESPONSE', 'content': 'Last reply'}])
+        path = Path(entry['transcript'])
+        path.write_bytes(b'x' * (server.NOTIFICATION_TAIL_BYTES * 2) + b'\nnull\ninvalid\n' + path.read_bytes() + b'{"partial":')
+        real_open = open
+        streams = []
+        def tracked_open(*args):
+            stream = self.enterContext(real_open(*args))
+            wrapped = Mock(wraps=stream)
+            wrapped.__enter__ = Mock(return_value=wrapped)
+            wrapped.__exit__ = Mock(return_value=False)
+            streams.append(wrapped)
+            return wrapped
+        with patch('server.open', side_effect=tracked_open):
+            self.assertEqual(server.notification_reply(entry), 'Last reply')
+        streams[0].read.assert_called_once_with(server.NOTIFICATION_TAIL_BYTES)
+        path.write_bytes(b'x' * (server.NOTIFICATION_TAIL_BYTES * 2))
+        self.assertEqual(server.notification_reply(entry), '')
 
 
 class MuteTests(unittest.TestCase):

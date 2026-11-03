@@ -24,6 +24,10 @@ self.addEventListener('fetch', event => {
 // (tag tether-summary) whose tap opens the Agents page. A yes/no prompt stays on its own, for its Approve and Deny.
 const SUMMARY = 'tether-summary'
 const ICONS = { icon: '/chat/icon-192.png', badge: '/chat/badge-96.png' }
+function summaryText(text) {
+  const line = text.replace(/\s+/g, ' ').trim()
+  return line.length <= 80 ? line : line.slice(0, 79).trimEnd() + '…'
+}
 self.addEventListener('push', event => {
   let payload = {}
   try { payload = event.data?.json() || {} } catch { /* still show a notification for an empty push */ }
@@ -38,6 +42,7 @@ async function notify(payload) {
       .filter(line => line.tag !== payload.tag)
     if (lines.length) {
       const all = [{ tag: payload.tag, text: `${title} ${body}`.trim() }, ...lines].slice(0, 20)
+        .map(line => ({ ...line, text: summaryText(line.text) }))
       for (const item of shown) item.close()
       await self.registration.showNotification(`${all.length} agent updates`, { ...ICONS, tag: SUMMARY, renotify: true,
         body: all.map(line => line.text).join('\n'), data: { go: 'agents', lines: all } })

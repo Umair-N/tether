@@ -203,6 +203,27 @@ def account_quota():
     return {}
 
 
+def transcript_message(record, index, clean):
+    """The chat text in one transcript step; repeated steps replace earlier text."""
+    kind = record.get('type')
+    if kind not in ('USER_INPUT', 'PLANNER_RESPONSE', 'AGENT_RESPONSE'):
+        return None
+    content = record.get('content', '')
+    if not isinstance(content, str) or not content.strip():
+        return None
+    if kind == 'USER_INPUT':
+        user_request = re.search(r'<USER_REQUEST>(.*?)</USER_REQUEST>', content, re.DOTALL)
+        if user_request:
+            content = user_request.group(1).strip()
+        else:
+            content = content.split('<ADDITIONAL_METADATA>', 1)[0].strip()
+    content = clean(content)
+    if not content.strip():
+        return None
+    return {'id': str(record.get('step_index', index)), 'role': 'user' if kind == 'USER_INPUT' else 'assistant',
+            'text': content, 'time': record.get('created_at')}
+
+
 def snapshot(entry, clean, read_records, normalize_usage):
     messages, positions, extras = {}, {}, []
     for index, record in read_records(entry['transcript']):
@@ -218,24 +239,12 @@ def snapshot(entry, clean, read_records, normalize_usage):
         if kind == 'PLANNER_RESPONSE' and isinstance(record.get('tool_calls'), list):
             for number, call in enumerate(record['tool_calls']):
                 extras.append((position, activity_action(f'{step}.t{number}', record.get('created_at'), agy_tool_line(call))))
-        if kind not in ('USER_INPUT', 'PLANNER_RESPONSE', 'AGENT_RESPONSE'):
+        message = transcript_message(record, index, clean)
+        if message is None:
             continue
-        content = record.get('content', '')
-        if not isinstance(content, str) or not content.strip():
-            continue
-        if kind == 'USER_INPUT':
-            user_request = re.search(r'<USER_REQUEST>(.*?)</USER_REQUEST>', content, re.DOTALL)
-            if user_request:
-                content = user_request.group(1).strip()
-            else:
-                content = content.split('<ADDITIONAL_METADATA>', 1)[0].strip()
-        content = clean(content)
-        if not content.strip():
-            continue
-        key = str(record.get('step_index', index))
+        key = message['id']
         positions[key] = record.get('step_index') if isinstance(record.get('step_index'), int) else index
-        messages[key] = {'id': key, 'role': 'user' if kind == 'USER_INPUT' else 'assistant',
-                         'text': content, 'time': record.get('created_at')}
+        messages[key] = message
     metrics = {}
     try:
         metrics = json.loads((CACHE / (entry['thread'] + '.json')).read_text())

@@ -202,13 +202,28 @@ def approval_summary(text, limit=SUMMARY_LIMIT):
     return line if len(line) <= limit else line[:limit - 1].rstrip() + '…'
 
 
+def reply_summary(text, limit=160):
+    """Plain text at the start of a reply, suitable for a notification."""
+    text = str(text or '')
+    text = re.sub(r'(?ms)^\s*(`{3,}|~{3,})[^\n]*\n.*?(?:^\s*\1\s*$|\Z)', ' [code] ', text)
+    text = re.sub(r'!?\[([^\]]*)\]\([^\n]*?\)', r'\1', text)
+    text = re.sub(r'(?m)^\s*\[[^\]]+\]:\s+\S+.*$', '', text)
+    text = re.sub(r'\[([^\]]+)\]\[[^\]]*\]', r'\1', text)
+    text = re.sub(r'(?m)^\s*(?:#{1,6}\s+|[-*+•]\s+|\d+[.)]\s+|>\s*)', '', text)
+    text = re.sub(r'(?m)^\s*(?:[-=*_]\s*){3,}$', '', text)
+    text = re.sub(r'[*`~]', '', text)
+    text = re.sub(r'(?<!\w)_|_(?!\w)', '', text)
+    return approval_summary(text, limit)
+
+
 class Notifier:
     """Turns agent state changes into notifications, once per change and never while the page is being watched."""
 
     MESSAGES = {'done': 'Finished', 'approval': 'Needs approval', 'input': 'Needs your input'}
 
-    def __init__(self, send, watching=lambda session: False, settle=4, minimum_work=5, clock=time.monotonic, muted=lambda: ()):
+    def __init__(self, send, watching=lambda session: False, settle=4, minimum_work=5, clock=time.monotonic, muted=lambda: (), reply=lambda entry: ''):
         self.send, self.watching, self.settle, self.minimum_work, self.clock, self.muted = send, watching, settle, minimum_work, clock, muted
+        self.reply = reply
         self.seen = {}
 
     def observe(self, entry, status):
@@ -242,6 +257,14 @@ class Notifier:
                    'session': entry['id'], 'url': '/mobile/#session=' + quote(entry['id'], safe='')}
         pending = status.get('approval') if kind == 'approval' and isinstance(status.get('approval'), dict) else {}
         summary = approval_summary(pending.get('text'))
+        if kind in ('done', 'input'):
+            attention = status.get('attention') if isinstance(status.get('attention'), dict) else {}
+            summary = reply_summary(attention.get('question') or attention.get('text')) if kind == 'input' else ''
+            if not summary:
+                try:
+                    summary = reply_summary(self.reply(entry))
+                except Exception:  # Transcript previews must never prevent delivery.
+                    summary = ''
         if summary:
             payload['body'] = self.MESSAGES[kind] + ': ' + summary  # say what it wants, not only that it waits
         quick = quick_approval(pending)
