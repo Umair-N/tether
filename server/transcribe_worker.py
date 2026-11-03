@@ -40,8 +40,9 @@ LIVE_MODEL = WhisperModel(os.environ.get('MOBILE_TMUX_WHISPER_LIVE_MODEL', 'base
 FINAL_LOCK = threading.Lock()
 LIVE_LOCK = threading.Lock()
 RATE = 16000
-COMMIT_AFTER = 6.0  # seconds of audio not yet converted by the accurate model before a background pass starts
-KEEP_TAIL = 2.5  # never commit a segment that ends in the last seconds: the user may be mid-word
+COMMIT_AFTER = 4.0  # seconds of audio not yet converted by the accurate model before a background pass starts
+KEEP_TAIL = 2.5  # never commit a word that ends in the last seconds: the user may be mid-word
+PAUSE = 0.15  # seconds of quiet between two words that make a good place to cut
 RECORDING_ID = re.compile(r'[A-Za-z0-9-]{8,64}')
 
 
@@ -74,25 +75,39 @@ def join(*parts):
     return ' '.join(part.strip() for part in parts if part.strip())
 
 
-def accurate(samples, before=''):
+def accurate(samples, before='', words=False):
     """The accurate model's segments. before: the text so far, so the model keeps the same style across parts."""
     prompt = join(PROMPT, before[-200:])
     with FINAL_LOCK:
-        segments, _ = MODEL.transcribe(samples, language=LANGUAGE, initial_prompt=prompt, vad_filter=True, beam_size=BEAM)
+        segments, _ = MODEL.transcribe(samples, language=LANGUAGE, initial_prompt=prompt, vad_filter=True, beam_size=BEAM, word_timestamps=words)
         return list(segments)
 
 
+def settled(segments, cut):
+    """The text and end time of the words that end before cut (seconds into this part), or None.
+    Whole segments often run to the end of the clip while the user speaks, so cut between words.
+    Prefer a pause between words (PAUSE or longer) in the last 3 s before cut; cut in its middle so no word loses its start."""
+    words = [word for segment in segments for word in (segment.words or ())]
+    last = max((at for at, word in enumerate(words) if word.end <= cut), default=-1)
+    if last < 0:
+        return None
+    gaps = [at for at in range(last + 1) if at + 1 < len(words) and words[at + 1].start - words[at].end >= PAUSE
+            and words[at].end >= words[last].end - 3.0]
+    at = gaps[-1] if gaps else last
+    end = (words[at].end + words[at + 1].start) / 2 if at + 1 < len(words) and words[at + 1].start > words[at].end else words[at].end
+    return ''.join(word.word for word in words[:at + 1]).strip(), end
+
+
 def commit(item, samples):
-    """Background pass: convert the audio after item.done and keep the segments that end before the last KEEP_TAIL seconds."""
+    """Background pass: convert the audio after item.done and keep the words that end before the last KEEP_TAIL seconds."""
     if not item.lock.acquire(blocking=False):
         return
     try:
         start, text = item.done
         length = len(samples) / RATE
-        segments = accurate(samples[int(start * RATE):], text)
-        keep = [segment for segment in segments if start + segment.end <= length - KEEP_TAIL]
-        if keep:
-            item.done = (start + keep[-1].end, join(text, *(segment.text for segment in keep)))
+        found = settled(accurate(samples[int(start * RATE):], text, words=True), length - KEEP_TAIL - start)
+        if found:
+            item.done = (start + found[1], join(text, found[0]))
             print('commit audio=%.1fs upto=%.1fs' % (length, item.done[0]), file=sys.stderr, flush=True)
         else:
             item.tried = length
