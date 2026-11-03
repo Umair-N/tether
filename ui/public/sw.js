@@ -19,15 +19,12 @@ self.addEventListener('fetch', event => {
   })())
 })
 
-// Android folds 4+ notifications of one app into a group whose tap only starts the app on its start page.
-// So Tether keeps its own summary instead: from the second plain update on, the updates fold into one notification
-// (tag tether-summary) whose tap opens the Agents page. A yes/no prompt stays on its own, for its Approve and Deny.
+// One notification per pane, so each update alerts on its own and keeps its own tap, Approve/Deny or Mute.
+// Android folds 4+ notifications of one app into a group whose tap opens only one pane, so a plain update also offers
+// "All agents", which opens the Agents page. An older Tether folded updates into one summary (tag tether-summary);
+// a new push closes that leftover.
 const SUMMARY = 'tether-summary'
 const ICONS = { icon: '/chat/icon-192.png', badge: '/chat/badge-96.png' }
-function summaryText(text) {
-  const line = text.replace(/\s+/g, ' ').trim()
-  return line.length <= 80 ? line : line.slice(0, 79).trimEnd() + '…'
-}
 self.addEventListener('push', event => {
   let payload = {}
   try { payload = event.data?.json() || {} } catch { /* still show a notification for an empty push */ }
@@ -35,25 +32,12 @@ self.addEventListener('push', event => {
 })
 async function notify(payload) {
   const title = payload.title || 'Tether', body = payload.body || ''
-  if (!payload.approval && payload.session) {
-    const shown = (await self.registration.getNotifications()).filter(item => item.tag === SUMMARY || (item.data?.session && !item.data?.approval && item.tag !== payload.tag))
-    // One line per pane: a newer update of the same pane replaces its line.
-    const lines = shown.flatMap(item => item.tag === SUMMARY ? item.data?.lines || [] : [{ tag: item.tag, text: `${item.title} ${item.data?.body || item.body || ''}`.trim() }])
-      .filter(line => line.tag !== payload.tag)
-    if (lines.length) {
-      const all = [{ tag: payload.tag, text: `${title} ${body}`.trim() }, ...lines].slice(0, 20)
-        .map(line => ({ ...line, text: summaryText(line.text) }))
-      for (const item of shown) item.close()
-      await self.registration.showNotification(`${all.length} agent updates`, { ...ICONS, tag: SUMMARY, renotify: true,
-        body: all.map(line => line.text).join('\n'), data: { go: 'agents', lines: all } })
-      return
-    }
-  }
+  for (const item of await self.registration.getNotifications({ tag: SUMMARY })) item.close()
   await self.registration.showNotification(title, { ...ICONS, body, tag: payload.tag,
     data: { session: payload.session, thread: payload.thread, approval: payload.approval, body: payload.body },
     // A plain yes/no prompt gets Approve and Deny (the server picked it as safe to answer from here); others get Mute.
     actions: payload.approval ? [{ action: 'approve', title: 'Approve' }, { action: 'deny', title: 'Deny' }]
-      : payload.session ? [{ action: 'mute', title: 'Mute this pane' }] : [],
+      : payload.session ? [{ action: 'mute', title: 'Mute this pane' }, { action: 'agents', title: 'All agents' }] : [],
   })
 }
 // Answer the prompt by its id. The server checks the prompt on screen is still that one, so an old notification cannot
@@ -88,9 +72,9 @@ self.addEventListener('notificationclick', event => {
       headers: { 'Content-Type': 'application/json', 'X-Codex-Mobile': '1' }, body: JSON.stringify({ session, muted: true }) }))
     return
   }
-  event.waitUntil(event.notification.data?.go === 'agents' ? openAgents() : openPane(session))
+  event.waitUntil(event.action === 'agents' || event.notification.data?.go === 'agents' ? openAgents() : openPane(session))
 })
-// The summary opens the Agents page: in the open Tether window when there is one, else in a new window.
+// "All agents" (or an old summary) opens the Agents page: in the open Tether window when there is one, else in a new window.
 async function openAgents() {
   const chat = await lastWindow()
   if (chat) {
