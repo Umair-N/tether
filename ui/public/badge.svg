@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="100 110 312 312">
+  <!-- Android notification badge: only the alpha channel counts, so the bubble is white and the prompt is cut out. -->
+  <mask id="prompt"><rect x="0" y="0" width="512" height="512" fill="#fff"/>
+    <path d="m180 214 40 36-40 36" fill="none" stroke="#000" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M248 286h84" stroke="#000" stroke-width="26" stroke-linecap="round"/></mask>
+  <path mask="url(#prompt)" d="M150 150h212a40 40 0 0 1 40 40v120a40 40 0 0 1-40 40H236l-64 52v-52h-22a40 40 0 0 1-40-40V190a40 40 0 0 1 40-40Z" fill="#fff"/>
+</svg>

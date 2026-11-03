@@ -1,0 +1,7 @@
+{
+  "name": "tether",
+  "description": "Set up Tether, a phone-first chat UI for coding agents in tmux, through its deterministic installer.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "repository": "https://github.com/incmak/tether"
+}

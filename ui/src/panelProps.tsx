@@ -1,0 +1,63 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { Pane } from './api'
+import { ImageViewer } from './ImageViewer'
+import type { Media } from './ImageViewer'
+import { mediaPath } from './MediaLink'
+import { TextViewer } from './TextViewer'
+import type { TextFile } from './TextViewer'
+import { useHost } from './host'
+
+export type { PanelProps } from './panels'
+
+/** Run `load` now and every `ms` while the panel is active and the page is visible. A new load aborts the one before. */
+export function usePanelPoll(load: (signal: AbortSignal) => Promise<void>, ms: number, active: boolean) {
+  const latest = useRef(load)
+  useEffect(() => { latest.current = load })
+  useEffect(() => {
+    if (!active) return
+    let controller = new AbortController()
+    let timer = 0
+    const tick = () => {
+      window.clearTimeout(timer)
+      if (document.visibilityState === 'visible') {
+        controller.abort()
+        controller = new AbortController()
+        void latest.current(controller.signal)
+      }
+      timer = window.setTimeout(tick, ms)
+    }
+    tick()
+    const visible = () => { if (document.visibilityState === 'visible') tick() }
+    document.addEventListener('visibilitychange', visible)
+    return () => { window.clearTimeout(timer); controller.abort(); document.removeEventListener('visibilitychange', visible) }
+  }, [active, ms, load])
+}
+
+/** The query that names a panel's folder: the folder when the frame passes one, and the pane so the server can fall back to the tab's folder. */
+export const folderQuery = (pane: Pane, folder: string | null) => `session=${encodeURIComponent(pane.id)}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}`
+
+/** Open a file the way chat does: text in the text viewer, media in the media viewer, PDFs in a new tab. GET /mobile/api/file decides what may open. */
+export function useFileOpener(pane: Pane) {
+  const host = useHost()
+  const [media, setMedia] = useState<Media | null>(null)
+  const [text, setText] = useState<TextFile | null>(null)
+  const open = useCallback(async (path: string) => {
+    const url = `/mobile/api/file?session=${encodeURIComponent(pane.id)}&path=${encodeURIComponent(path)}`
+    const name = path.split('/').pop() || path
+    const kind = mediaPath(path)?.kind
+    if (!kind) { setMedia({ name, url, error: 'Tether opens images, videos, audio, PDFs and text files only.' }); return }
+    if (kind === 'text') { setText({ path, url }); return }
+    try {
+      const check = await fetch(url, { headers: { Range: 'bytes=0-0' } })
+      if (!check.ok) { const body = await check.json().catch(() => null) as { error?: string } | null; setMedia({ name, url, error: body?.error ?? 'Tether cannot open this file.' }); return }
+      void check.body?.cancel()
+    } catch { setMedia({ name, url, error: `Cannot reach ${host}.` }); return }
+    if (kind === 'pdf') window.open(url, '_blank', 'noopener')
+    else setMedia({ name, url, kind })
+  }, [pane.id, host])
+  const viewers = <>
+    <ImageViewer image={media} close={() => setMedia(null)} />
+    <TextViewer file={text} close={() => setText(null)} />
+  </>
+  return [open, viewers] as const
+}

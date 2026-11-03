@@ -1,0 +1,479 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Archive, ArchiveRestore, BookMarked, ChevronRight, Code2, Command, GripVertical, Layers, History, Pin, PinOff, Plus, RefreshCw, Search, Settings, Terminal, Trash2, X } from 'lucide-react'
+import { KeepChoice, keepNeeded } from './Project'
+import type { Keep, ProjectMark, ProjectMarks } from './Project'
+import type { Agent, Api, HistoryData, Pane, PastChat, UsageData, UsageReport, UsageWindow } from './api'
+import { SESSION_NAME, SESSION_NAME_HELP, errorText } from './api'
+import { anchorOf, clipTitle, useModal, usePolling } from './hooks'
+import type { Anchor } from './hooks'
+import { AccountLogin } from './AccountLogin'
+import { CodexProviderSwitch } from './CodexProvider'
+import { profileSuffix } from './provider'
+import type { Prefs } from './prefs'
+import { DRAG_PANE, DRAG_SESSION } from './workspace'
+import { shareUsage } from './usage'
+import { useHost } from './host'
+import { UpdateBanner } from './UpdateBanner'
+import { Elapsed } from './Notices'
+
+export const agentNames: Record<Agent, string> = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity', shell: 'Shell' }
+export function AgentIcon({ agent, size = 16 }: { agent: Agent; size?: number }) {
+  const Icon = agent === 'shell' ? Terminal : agent === 'codex' ? Code2 : Command
+  return <Icon size={size} aria-hidden="true" />
+}
+
+// One tmux session with all its panes. "ESEF:0.1" is session ESEF, window 0, pane 1.
+export interface Session { id: string; name: string; panes: Pane[]; agent: Agent; state: string; dir: string }
+
+// A turn that ended after you last looked at the pane. The open pane never counts: you are reading it.
+// A permission prompt ("Approval") or a question, menu or plan ("Input needed"): the agent waits on you.
+export const needsYou = (state: string) => state === 'Approval' || state === 'Input needed'
+export const isDone = (pane: Pane, seen: Record<string, number>, selected?: string) =>
+  pane.id !== selected && pane.state !== 'Working' && !needsYou(pane.state) && !!pane.finished && pane.finished > (seen[pane.id] ?? 0)
+type Status = { kind: 'approval' | 'working' | 'done' | 'background' | 'idle' | 'unavailable'; label: string; at: number }
+export function status(panes: Pane[], seen: Record<string, number>, selected?: string): Status {
+  // Only the agent's own activity counts. Opening a session is not activity, so it does not move the session up.
+  const at = Math.max(0, ...panes.map(pane => Math.max(pane.since ?? 0, pane.finished ?? 0)))
+  if (panes.some(pane => needsYou(pane.state))) return { kind: 'approval', label: 'Needs you', at }
+  const done = panes.filter(pane => isDone(pane, seen, selected))
+  if (done.length) return { kind: 'done', label: `Done · ${agoSeconds(Math.max(...done.map(pane => pane.finished!)))}`, at }
+  if (panes.some(pane => pane.state === 'Working')) return { kind: 'working', label: 'Working', at }
+  const tasks = panes.flatMap(pane => pane.tasks ?? [])
+  if (tasks.length) return { kind: 'background', label: tasks.join(' · '), at }
+  if (panes.every(pane => pane.state === 'Unavailable')) return { kind: 'unavailable', label: 'Unavailable', at }
+  return { kind: 'idle', label: 'Idle', at }
+}
+const RANK = { approval: 0, done: 1, working: 2, background: 3, idle: 4, unavailable: 5 }
+// Smart order: what needs you first, then the most recent agent activity (a state change or a finished turn).
+export function sortSmart(sessions: Session[], seen: Record<string, number>, selected?: string) {
+  const keyed = sessions.map(session => ({ session, status: status(session.panes, seen, selected) }))
+  return keyed.sort((a, b) => RANK[a.status.kind] - RANK[b.status.kind] || b.status.at - a.status.at || a.session.name.localeCompare(b.session.name)).map(item => item.session)
+}
+function agoSeconds(seconds: number) {
+  const minutes = Math.floor((Date.now() / 1000 - seconds) / 60)
+  return minutes < 1 ? 'now' : minutes < 60 ? `${minutes}m` : minutes < 1440 ? `${Math.floor(minutes / 60)}h` : `${Math.floor(minutes / 1440)}d`
+}
+// A name set in Tether wins; then the agent's own session name (/rename), which follows later renames; then the agent.
+export const paneTitle = (pane: Pane) => pane.pane_name || pane.agent_name || agentNames[pane.agent]
+export const paneIndex = (pane: Pane) => pane.label.includes(':') ? pane.label.slice(pane.label.lastIndexOf(':') + 1) : '0.0'
+/** The pane index for display: empty when the pane has a name of its own. */
+export const shownIndex = (pane: Pane) => pane.pane_name || pane.agent_name ? '' : paneIndex(pane)
+const sessionName = (pane: Pane) => pane.label.includes(':') ? pane.label.slice(0, pane.label.lastIndexOf(':')) : pane.label
+
+export function groupSessions(panes: Pane[]): Session[] {
+  const byId = new Map<string, Pane[]>()
+  for (const pane of panes) byId.set(pane.tmux_session, [...(byId.get(pane.tmux_session) ?? []), pane])
+  return [...byId.entries()].map(([id, list]) => {
+    const sorted = [...list].sort((a, b) => paneIndex(a).localeCompare(paneIndex(b), undefined, { numeric: true }))
+    const states = sorted.map(pane => pane.state)
+    return {
+      id, name: sessionName(sorted[0]), panes: sorted, dir: sorted[0].dir,
+      agent: sorted.find(pane => pane.agent !== 'shell')?.agent ?? 'shell',
+      state: states.find(needsYou) ?? (states.includes('Working') ? 'Working' : states[0]),
+    }
+  })
+}
+
+// Archived: the id still names the session it had when you archived it. tmux reuses ids after a restart; a new session stays out.
+export const isArchived = (session: Session, archived: Record<string, string>) => archived[session.id] === session.name
+export const toggleArchive = (session: Session) => (current: Prefs) => {
+  const archived = { ...current.archived }
+  if (isArchived(session, current.archived)) delete archived[session.id]; else archived[session.id] = session.name
+  return { archived }
+}
+
+export function sortByPrefs(sessions: Session[], order: string[]) {
+  const rank = (session: Session) => { const at = order.indexOf(session.id); return at < 0 ? Number.MAX_SAFE_INTEGER : at }
+  return [...sessions].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name, undefined, { numeric: true }))
+}
+
+function ago(time: string) {
+  const minutes = Math.round((Date.now() - Date.parse(time)) / 60000)
+  if (!Number.isFinite(minutes)) return ''
+  if (minutes < 60) return `${Math.max(1, minutes)}m ago`
+  if (minutes < 60 * 24) return `${Math.round(minutes / 60)}h ago`
+  return `${Math.round(minutes / 60 / 24)}d ago`
+}
+// Every row starts with the same status column, so the marks line up from row to row. Idle is a quiet ring.
+const dot = (state: Status) => <span className="state-slot">{state.kind === 'background'
+  ? <Layers size={14} className="state-background" role="img" aria-label={`Running: ${state.label}`} />
+  : <span className={`state-dot ${state.kind}`} role="img" aria-label={state.label} title={state.label} />}</span>
+
+// Agents that work now or wait for you, across every session, so one look answers "what is running?" (and "can I restart?").
+export const runningPanes = (sessions: Session[]) => sessions.flatMap(session => session.panes
+  .filter(pane => pane.agent !== 'shell' && (pane.state === 'Working' || needsYou(pane.state)))
+  .map(pane => ({ pane, session })))
+  .sort((a, b) => Number(needsYou(b.pane.state)) - Number(needsYou(a.pane.state)) || (a.pane.since ?? 0) - (b.pane.since ?? 0))
+
+// "2 need you · 1 working", or "All idle". One wording for the sidebar bar and the bubble.
+export function runningSummary(running: ReturnType<typeof runningPanes>) {
+  const working = running.filter(item => item.pane.state === 'Working').length
+  const waiting = running.length - working
+  return running.length ? [waiting && `${waiting} need you`, working && `${working} working`].filter(Boolean).join(' · ') : 'All idle'
+}
+
+export function RunningList({ running, selected, onOpen }: { running: ReturnType<typeof runningPanes>; selected?: string; onOpen: (pane: Pane) => void }) {
+  return <ul className="running-list">{running.map(({ pane, session }) => <li key={pane.id}><button type="button" className={pane.id === selected ? 'selected' : ''} aria-current={pane.id === selected ? 'page' : undefined} onClick={() => onOpen(pane)}>
+    {dot(status([pane], {}, undefined))}
+    <span className="running-name"><strong>{paneTitle(pane)}</strong><small>{session.name} · {agentNames[pane.agent]}</small></span>
+    {pane.state === 'Working' && pane.since ? <small className="running-time"><Elapsed since={pane.since * 1000} /></small> : <small className="running-time needs">{pane.state === 'Approval' ? 'Approval' : 'Question'}</small>}
+  </button></li>)}</ul>
+}
+
+// Collapsed bar at the foot of the sidebar. Open, it shows the list, which scrolls on its own.
+function RunningNow({ sessions, selected, onOpen }: { sessions: Session[]; selected?: string; onOpen: (pane: Pane) => void }) {
+  const [open, setOpen] = useState(false)
+  const running = runningPanes(sessions)
+  if (!sessions.some(session => session.panes.some(pane => pane.agent !== 'shell'))) return null
+  const waiting = running.some(item => item.pane.state !== 'Working')
+  return <section className="running-now">
+    <button type="button" className="running-toggle" aria-expanded={open} aria-controls="running-now-list" onClick={() => setOpen(!open)}>
+      <span className={`running-mark ${waiting ? 'attention' : running.length ? 'working' : ''}`} aria-hidden="true" />
+      <span>Running now</span><span className="group-count">{runningSummary(running)}</span><ChevronRight size={14} className="chevron" />
+    </button>
+    {open && <div id="running-now-list" className="running-scroll">{running.length ? <RunningList running={running} selected={selected} onOpen={onOpen} /> : <p className="group-empty">No agent is working. All are idle.</p>}</div>}
+  </section>
+}
+
+type Section = 'pinned' | 'agents' | 'terminals' | 'archived' | 'past'
+// What a sidebar drag carries: a whole session, or one pane of a session with several panes.
+type Carry = { session: string; pane?: string }
+// The server's answer to a merge: the session that now holds the moved panes, for the rename prompt.
+type Moved = { session: string; name: string; pane: string }
+interface Props {
+  api: Api
+  sessions: Session[]
+  selected: string | undefined
+  prefs: Prefs
+  update: (change: (current: Prefs) => Partial<Prefs>) => void
+  loading: boolean
+  error: string
+  onRetry: () => void
+  onOpen: (pane: Pane) => void
+  onNew: () => void
+  onActions: (session: Session, remove?: boolean, at?: Anchor) => void
+  onPaneActions: (pane: Pane, at?: Anchor) => void
+  onPastChat: (chat: PastChat) => void
+  onSettings: () => void
+  onClose?: () => void
+  // Panes shown in the desktop workspace, in slot order: their rows show the slot key (⌥1 to ⌥4).
+  slots?: string[]
+  /** Desktop workspace: rows can be dragged into a slot. */
+  drag?: boolean
+  /** Desktop workspace: ⌘K opens the command menu, so the key hint opens it too. */
+  onCommandMenu?: () => void
+  /** Sessions whose project gives agents context, and panes that started with an older version. */
+  marks?: ProjectMarks
+  onMarks?: () => void
+}
+
+export function Sidebar({ api, sessions, selected, prefs, update, loading, error, onRetry, onOpen, onNew, onActions, onPaneActions, onPastChat, onSettings, onClose, slots, drag, onCommandMenu, marks, onMarks }: Props) {
+  const host = useHost()
+  const [query, setQuery] = useState('')
+  const [reorder, setReorder] = useState<Section | null>(null)
+  // Drag a session or a pane onto another session to merge them. Drag one pane to "New session" to give it its own.
+  const [carry, setCarry] = useState<Carry | null>(null)
+  const [overNew, setOverNew] = useState(false)
+  // The rename box waits for the list that holds the moved panes (`before` is the list at the merge).
+  const [renaming, setRenaming] = useState<{ moved: Moved; before: Session[] } | null>(null)
+  const [mergeError, setMergeError] = useState('')
+  // A whole-session merge closes the dragged session, so it asks first. A pane move does not.
+  const [confirming, setConfirming] = useState<{ source: Session; target: Session } | null>(null)
+  const merge = (kind: 'session' | 'pane' | 'break', source: string, target?: string, keep?: Keep) => {
+    setCarry(null); setOverNew(false); setMergeError(''); setConfirming(null)
+    // Moved panes keep their old session's name (server), so only a new group asks for a name: a single-pane target,
+    // or a split-out the server had to call split-HHMMSS. Merging into a group that already has a name does not ask.
+    const single = sessions.find(session => session.id === target)?.panes.length === 1
+    api<Moved>('merge', { kind, source, target, ...(keep && { keep }) }).then(moved => {
+      if (kind === 'break' ? /^split-\d{6}/.test(moved.name) : single) setRenaming({ moved, before: sessions })
+      onRetry()
+    }, failure => { setMergeError(errorText(failure)); onMarks?.() })
+  }
+  const dropOn = (target: Session) => {
+    const source = carry && !carry.pane ? sessions.find(session => session.id === carry.session) : undefined
+    if (carry?.pane) merge('pane', carry.pane, target.id)
+    else if (source) { setCarry(null); setConfirming({ source, target }) }
+  }
+  const startCarry = (next: Carry | null) => { if (next) setRenaming(null); setCarry(next) }
+  const renamed = () => { setRenaming(null); onRetry() }
+  const search = query.trim().toLowerCase()
+  const smart = prefs.sort === 'smart'
+  const visible = (smart ? sortSmart(sessions, prefs.seen, selected) : sortByPrefs(sessions, prefs.order)).filter(session => !search || `${session.name} ${session.dir} ${session.panes.map(pane => agentNames[pane.agent]).join(' ')}`.toLowerCase().includes(search))
+  const archived = visible.filter(session => isArchived(session, prefs.archived))
+  const live = visible.filter(session => !isArchived(session, prefs.archived))
+  const pinned = live.filter(session => prefs.pinned.includes(session.id))
+  const rest = live.filter(session => !prefs.pinned.includes(session.id))
+  const groups: { key: Section; title: string; items: Session[] }[] = [
+    ...(pinned.length ? [{ key: 'pinned' as const, title: 'Pinned', items: pinned }] : []),
+    { key: 'agents', title: 'Claude & Codex', items: rest.filter(session => session.agent !== 'shell') },
+    ...(rest.some(session => session.agent === 'shell') ? [{ key: 'terminals' as const, title: 'Terminals', items: rest.filter(session => session.agent === 'shell') }] : []),
+    ...(archived.length ? [{ key: 'archived' as const, title: 'Archived', items: archived }] : []),
+  ]
+  const closedAtFirst = (key: Section) => key === 'past' || key === 'archived'
+  const toggle = (key: Section) => update(current => ({ collapsed: { ...current.collapsed, [key]: !(current.collapsed[key] ?? closedAtFirst(key)) } }))
+  const isOpen = (key: Section) => !!search || !(prefs.collapsed[key] ?? closedAtFirst(key))
+  // After the refresh, a target the list does not show (search, closed group) gets no rename box later.
+  const shown = groups.filter(group => isOpen(group.key)).flatMap(group => group.items.map(session => session.id))
+  const renameRow = renaming && (sessions === renaming.before || shown.includes(renaming.moved.session)) ? renaming.moved : null
+  useEffect(() => { if (renaming && !renameRow) setRenaming(null) }, [renaming, renameRow])
+  // A drag reorders one section; the other sessions keep their places in the saved order.
+  const moveWithin = (items: Session[], ids: string[]) => update(current => {
+    const others = sortByPrefs(sessions, current.order).map(session => session.id).filter(id => !ids.includes(id))
+    return items === pinned ? { pinned: ids, order: [...ids, ...others] } : { order: [...ids, ...others] }
+  })
+  // Enter opens the first match; Down moves into the list; Escape clears the search.
+  const searchKeys = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    const first = event.currentTarget.closest('.sidebar-inner')?.querySelector<HTMLButtonElement>('.session-groups .session-main')
+    if (event.key === 'Enter' && query.trim() && first) { event.preventDefault(); first.click(); setQuery(''); event.currentTarget.blur() }
+    else if (event.key === 'ArrowDown' && first) { event.preventDefault(); first.focus() }
+    else if (event.key === 'Escape' && query) { event.preventDefault(); event.stopPropagation(); setQuery('') }
+  }
+  return <div className="sidebar-inner">
+    <div className="sidebar-top">
+      <div className="sidebar-brand"><img src="/chat/icon.svg" alt="" width="22" height="22" />Tether</div>
+      <span className="sidebar-top-actions"><button className="icon-button" aria-label="New session" title="New session" onClick={onNew}><Plus size={20} /></button>
+      {onClose && <button className="icon-button" aria-label="Close sessions" onClick={onClose}><X size={20} /></button>}</span>
+    </div>
+    <label className="sidebar-search"><Search size={16} aria-hidden="true" /><input type="search" placeholder="Search" aria-label="Search sessions" aria-keyshortcuts={onCommandMenu ? undefined : 'Control+K Meta+K'} value={query} onChange={event => setQuery(event.target.value)} onKeyDown={searchKeys} />{onCommandMenu
+      ? <button type="button" className="search-key" aria-label="Command menu" aria-keyshortcuts="Control+K Meta+K" title="Go to a pane or run a command" onClick={onCommandMenu}>{shortcutLabel}</button>
+      : <kbd className="search-key" aria-hidden="true">{shortcutLabel}</kbd>}</label>
+    <nav className="session-groups" aria-label="Sessions">
+      {error && <div className="sidebar-error" role="alert">{error}<button onClick={onRetry}>Retry</button></div>}
+      {mergeError && <div className="sidebar-error" role="alert">{mergeError}<button onClick={() => setMergeError('')}>Dismiss</button></div>}
+      {groups.map(group => <section key={group.key} className="group">
+        <div className="group-head">
+          <button className="group-toggle" aria-expanded={isOpen(group.key)} onClick={() => toggle(group.key)}>{group.title}<span className="group-count">· {group.items.length}</span>{group.key === 'archived' && !isOpen('archived') && group.items.some(session => status(session.panes, prefs.seen, selected).kind === 'approval') && <span className="state-dot approval" role="img" aria-label="An archived session needs you" />}<ChevronRight size={14} className="chevron" /></button>
+          {isOpen(group.key) && group.items.length > 1 && !search && !smart && group.key !== 'archived' && <button className="group-edit" onClick={() => setReorder(reorder === group.key ? null : group.key)}>{reorder === group.key ? 'Done' : 'Reorder'}</button>}
+        </div>
+        {isOpen(group.key) && (group.items.length
+          ? <SessionList items={group.items} reorder={reorder === group.key} selected={selected} prefs={prefs} update={update} onOpen={onOpen} onActions={onActions} onPaneActions={onPaneActions} onMove={ids => moveWithin(group.items, ids)} pinned={group.key === 'pinned'} slots={slots ?? []} canDrag={!!drag} api={api} carry={carry} onCarry={startCarry} onDrop={dropOn} renaming={renameRow} onRenamed={renamed} marks={marks} />
+          : <p className="group-empty">{loading ? 'Finding sessions…' : group.key === 'terminals' ? 'No plain terminals. Create one with New session.' : 'Nothing here yet.'}</p>)}
+      </section>)}
+      {carry?.pane && <div className={`new-session-drop ${overNew ? 'over' : ''}`} onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setOverNew(true) }} onDragLeave={() => setOverNew(false)} onDrop={event => { event.preventDefault(); merge('break', carry.pane!) }}><Plus size={14} aria-hidden="true" />New session</div>}
+      <section className="group">
+        <div className="group-head"><button className="group-toggle" aria-expanded={isOpen('past')} onClick={() => toggle('past')}>Past chats<ChevronRight size={14} className="chevron" /></button></div>
+        {isOpen('past') && <PastChats api={api} search={search} showPaths={prefs.showPaths} onPick={onPastChat} />}
+      </section>
+    </nav>
+    {confirming && <MergeConfirm {...confirming} marks={marks} onMerge={keep => merge('session', confirming.source.id, confirming.target.id, keep)} onCancel={() => setConfirming(null)} />}
+    <footer className="sidebar-footer">
+      <RunningNow sessions={sessions} selected={selected} onOpen={onOpen} />
+      <UpdateBanner />
+      <Usage api={api} />
+      <div className="footer-row"><span className="state-dot" aria-hidden="true" /><span>{host}</span><button className="icon-button" aria-label="Settings" onClick={onSettings}><Settings size={18} /></button></div>
+    </footer>
+  </div>
+}
+
+// A book on sessions whose project gives agents context. Amber when an agent there started with an older version.
+function projectMark(mark: ProjectMark | undefined) {
+  if (!mark || (!mark.context && !mark.stale.length)) return null
+  const stale = mark.stale.length > 0
+  return <BookMarked size={11} className={`project-mark ${stale ? 'stale' : ''}`} aria-label={stale ? 'Project changed. Restart its agents to apply.' : 'Has project context'} />
+}
+
+function SessionList({ items, reorder, selected, prefs, update, onOpen, onActions, onPaneActions, onMove, pinned, slots, canDrag, api, carry, onCarry, onDrop, renaming, onRenamed, marks }: { marks?: ProjectMarks; items: Session[]; reorder: boolean; selected: string | undefined; prefs: Prefs; update: Props['update']; onOpen: Props['onOpen']; onActions: Props['onActions']; onPaneActions: Props['onPaneActions']; onMove: (ids: string[]) => void; pinned: boolean; slots: string[]; canDrag: boolean; api: Api; carry: Carry | null; onCarry: (carry: Carry | null) => void; onDrop: (target: Session) => void; renaming: Moved | null; onRenamed: () => void }) {
+  const list = useRef<HTMLUListElement>(null)
+  const dragging = useRef<string | null>(null)
+  const ids = items.map(session => session.id)
+  const drag = useCallback((event: React.PointerEvent) => {
+    const id = dragging.current
+    if (!id || !list.current) return
+    const rows = [...list.current.querySelectorAll<HTMLElement>(':scope > li')]
+    const target = rows.findIndex(row => { const box = row.getBoundingClientRect(); return event.clientY < box.top + box.height / 2 })
+    const without = ids.filter(other => other !== id)
+    const at = target < 0 ? without.length : Math.min(target, without.length)
+    const next = [...without.slice(0, at), id, ...without.slice(at)]
+    if (next.join() !== ids.join()) onMove(next)
+  }, [ids, onMove])
+  // Swipe a row left to show Pin, Archive and Delete (Delete still asks first); swipe right or tap the row to hide them.
+  const [swiped, setSwiped] = useState<string | null>(null)
+  const touch = useRef<{ x: number; y: number; id: string } | null>(null)
+  const togglePin = (id: string) => update(current => ({ pinned: current.pinned.includes(id) ? current.pinned.filter(other => other !== id) : [...current.pinned, id] }))
+  // In the desktop workspace, a pane on screen shows its slot key.
+  // The same drag drops into a workspace slot (the data) or onto another session row (the carry).
+  const dragAs = (type: string, value: string, carried: Carry) => canDrag && !reorder ? { draggable: true, onDragStart: (event: React.DragEvent) => { event.dataTransfer.setData(type, value); event.dataTransfer.effectAllowed = 'copyMove'; onCarry(carried) }, onDragEnd: () => onCarry(null) } : {}
+  const [over, setOver] = useState<string | null>(null)
+  const dropTarget = (session: Session) => carry && carry.session !== session.id && !reorder ? {
+    onDragOver: (event: React.DragEvent) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setOver(session.id) },
+    onDragLeave: (event: React.DragEvent) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOver(null) },
+    onDrop: (event: React.DragEvent) => { event.preventDefault(); setOver(null); onDrop(session) },
+  } : {}
+  const slotKey = (id: string) => { const at = slots.indexOf(id); return at < 0 ? null : <kbd className="slot-key" aria-label={`In slot ${at + 1}`}>⌥{at + 1}</kbd> }
+  return <ul className={`session-list ${reorder ? 'reordering' : ''}`} ref={list}>
+    {items.map(session => {
+      const multi = session.panes.length > 1
+      const active = session.panes.some(pane => pane.id === selected)
+      const state = status(session.panes, prefs.seen, selected)
+      const target = session.panes.find(pane => pane.id === prefs.lastPane[session.id]) ?? session.panes[0]
+      const archived = isArchived(session, prefs.archived)
+      // A session with several panes is open by default; its heading folds the pane rows away.
+      const open = !multi || prefs.expanded[session.id] !== false
+      const toggleOpen = () => update(current => ({ expanded: { ...current.expanded, [session.id]: current.expanded[session.id] === false } }))
+      const dropping = over === session.id && !!carry
+      return <li key={session.id} data-id={session.id} className={`${dragging.current === session.id ? 'dragging' : ''} ${dropping ? 'drop-over' : ''}`} {...dropTarget(session)}>
+        <div className={`swipe-row ${swiped === session.id ? 'swiped' : ''}`}
+          onTouchStart={event => { if (!reorder) touch.current = { x: event.touches[0].clientX, y: event.touches[0].clientY, id: session.id } }}
+          onTouchEnd={event => {
+            const start = touch.current; touch.current = null
+            if (!start || start.id !== session.id) return
+            const dx = event.changedTouches[0].clientX - start.x, dy = event.changedTouches[0].clientY - start.y
+            if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy) * 2) return
+            setSwiped(dx < 0 ? session.id : null)
+          }}>
+        <span className="swipe-actions" aria-hidden={swiped !== session.id}>
+          <button type="button" tabIndex={swiped === session.id ? 0 : -1} onClick={() => { togglePin(session.id); setSwiped(null) }}>{prefs.pinned.includes(session.id) ? <PinOff size={18} /> : <Pin size={18} />}{prefs.pinned.includes(session.id) ? 'Unpin' : 'Pin'}</button>
+          <button type="button" tabIndex={swiped === session.id ? 0 : -1} onClick={() => { update(toggleArchive(session)); setSwiped(null) }}>{archived ? <ArchiveRestore size={18} /> : <Archive size={18} />}{archived ? 'Restore' : 'Archive'}</button>
+          <button type="button" className="swipe-delete" tabIndex={swiped === session.id ? 0 : -1} onClick={() => { setSwiped(null); onActions(session, true) }}><Trash2 size={18} />Delete</button>
+        </span>
+        <div className={`session-row ${active && !multi ? 'selected' : ''} ${multi ? 'session-head' : ''}`}>
+          {renaming?.session === session.id ? <RenameRow key={renaming.pane} api={api} moved={renaming} onDone={onRenamed} /> : <button className="session-main" {...dragAs(multi ? DRAG_SESSION : DRAG_PANE, multi ? session.id : session.panes[0].id, { session: session.id })} aria-current={active && !multi ? 'page' : undefined} aria-expanded={multi ? open : undefined} onMouseEnter={clipTitle} onClick={() => { if (swiped) { setSwiped(null); return } if (multi) toggleOpen(); else onOpen(target) }} onContextMenu={event => { event.preventDefault(); onActions(session, false, anchorOf(event)) }}>
+            {multi && <ChevronRight size={14} className="chevron" aria-hidden="true" />}
+            {!multi && dot(state)}
+            <span className="session-text"><span className="session-title">{session.name}{pinned ? null : prefs.pinned.includes(session.id) && <Pin size={11} aria-label="Pinned" />}{projectMark(marks?.[session.id])}</span>{prefs.showPaths && <span className="session-folder"><bdi dir="ltr">{session.dir}</bdi></span>}</span>
+            {!multi && slotKey(session.panes[0].id)}
+            {multi && !open && state.kind !== 'idle' && dot(state)}
+          </button>}
+          {dropping && <span className="merge-hint" aria-hidden="true">{carry.pane ? 'Move here' : 'Merge here'}</span>}
+          {reorder && <span className="grip" aria-label={`Drag to move ${session.name}`} onPointerDown={event => { dragging.current = session.id; event.currentTarget.setPointerCapture(event.pointerId) }} onPointerMove={drag} onPointerUp={() => { dragging.current = null }} onPointerCancel={() => { dragging.current = null }}><GripVertical size={18} /></span>}
+        </div>
+        </div>
+        {multi && open && !reorder && <ul className="pane-children">{session.panes.map(pane => { const paneState = status([pane], prefs.seen, selected); return <li key={pane.id}><button {...dragAs(DRAG_PANE, pane.id, { session: session.id, pane: pane.id })} className={pane.id === selected ? 'selected' : ''} aria-current={pane.id === selected ? 'page' : undefined} onMouseEnter={clipTitle} onClick={() => onOpen(pane)} onContextMenu={event => { event.preventDefault(); onPaneActions(pane, anchorOf(event)) }}>{dot(paneState)}<span className="pane-child-name">{[paneTitle(pane), shownIndex(pane)].filter(Boolean).join(' ')} · {agentNames[pane.agent]}{profileSuffix(pane)}</span>{slotKey(pane.id)}</button></li> })}</ul>}
+      </li>
+    })}
+  </ul>
+}
+
+// After a merge: name the session that now holds the moved panes. Enter saves; Esc or leaving the box keeps the name.
+function RenameRow({ api, moved, onDone }: { api: Api; moved: Moved; onDone: () => void }) {
+  const [name, setName] = useState(moved.name)
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const save = (event: React.FormEvent) => {
+    event.preventDefault()
+    const clean = name.trim()
+    if (clean === moved.name) { onDone(); return }
+    if (!SESSION_NAME.test(clean)) { setError(SESSION_NAME_HELP); return }
+    setSaving(true)
+    api<{ note?: string }>('rename', { pane: moved.pane, name: clean }).then(saved => { if (saved.note) { setSaving(false); setError(`Saved. ${saved.note}`) } else onDone() }, failure => { setSaving(false); setError(errorText(failure)) })
+  }
+  return <form className="rename-row" onSubmit={save}>
+    <input aria-label="Session name" value={name} readOnly={saving} autoFocus onFocus={event => event.currentTarget.select()} onChange={event => { setName(event.target.value); setError('') }}
+      onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onDone() } }} onBlur={() => { if (!saving) onDone() }} />
+    {error ? <span className="rename-hint inline-error" role="alert">{error}</span> : <span className="rename-hint">Enter saves · Esc keeps the name</span>}
+  </form>
+}
+
+function PastChats({ api, search, showPaths, onPick }: { api: Api; search: string; showPaths: boolean; onPick: (chat: PastChat) => void }) {
+  const fetcher = useCallback((signal: AbortSignal) => api<HistoryData>('history?limit=40', undefined, signal), [api])
+  const { data, error, loading, refresh } = usePolling(fetcher, 30000)
+  const chats = (data?.chats ?? []).filter(chat => !search || `${chat.title} ${chat.dir ?? ''}`.toLowerCase().includes(search))
+  if (error) return <div className="sidebar-error" role="alert">{error}<button onClick={() => void refresh()}>Retry</button></div>
+  if (loading) return <p className="group-empty">Loading past chats…</p>
+  if (!chats.length) return <p className="group-empty">No past chats found.</p>
+  return <ul className="session-list">{chats.map(chat => <li key={chat.id}><div className="session-row"><button className="session-main" onClick={() => onPick(chat)}>
+    <span className="session-icon"><History size={16} aria-hidden="true" /></span>
+    <span className="session-text"><span className="session-title">{chat.title || 'Untitled chat'}</span><span className="past-meta"><span>{chat.live ? 'Open now · ' : ''}{ago(chat.time)}</span>{showPaths && chat.dir && <span className="session-folder"><bdi dir="ltr">{chat.dir}</bdi></span>}</span></span>
+  </button></div></li>)}</ul>
+}
+
+// Hours or days until a window resets: "3h", "2d".
+export function resetsIn(resets: number | null) {
+  if (!resets) return ''
+  const hours = (resets * 1000 - Date.now()) / 3600000
+  if (hours <= 0) return ''
+  return hours < 1 ? `${Math.max(1, Math.round(hours * 60))}m` : hours < 48 ? `${Math.round(hours)}h` : `${Math.round(hours / 24)}d`
+}
+
+function Meter({ name, window }: { name: string; window: UsageWindow }) {
+  const percent = Math.max(0, Math.min(100, Math.round(window.percent)))
+  const reset = resetsIn(window.resets_at)
+  const level = percent >= 90 ? 'high' : percent >= 70 ? 'warn' : ''
+  return <li className="meter" aria-label={`${name} ${window.label} limit: ${percent}% used${reset ? `, resets in ${reset}` : ''}`}>
+    <span className="meter-name">{name}</span><span className="meter-window">{window.label}</span>
+    <span className={`meter-bar ${level}`} aria-hidden="true"><span style={{ width: `${percent}%` }} /></span>
+    <span className="meter-value">{percent}%</span><span className="meter-reset">{reset}</span>
+  </li>
+}
+
+// Plan limits for Claude and Codex. Both are account-wide, so one report covers every session.
+function Usage({ api }: { api: Api }) {
+  const fetcher = useCallback((signal: AbortSignal) => api<UsageData>('usage', undefined, signal), [api])
+  const { data, refresh } = usePolling(fetcher, 60000)
+  const [details, setDetails] = useState(false)
+  useEffect(() => shareUsage(data), [data])
+  if (!data) return null
+  const rows = [['Claude', data.claude], ['Codex', data.codex]] as const
+  return <>
+    <button type="button" className="usage-button" aria-label="Plan usage. Show details" onClick={() => { void refresh(); setDetails(true) }}>
+      <ul className="usage">
+        {rows.map(([name, report]) => report?.windows.length
+          ? report.windows.map(window => <Meter key={name + window.label} name={name} window={window} />)
+          : <li key={name} className="meter empty"><span className="meter-name">{name}</span><span className="meter-none">No usage report yet</span></li>)}
+      </ul>
+    </button>
+    {details && <UsageSheet data={data} api={api} onDone={refresh} onClose={() => setDetails(false)} />}
+  </>
+}
+
+// The Plan usage sheet on its own, for /usage, /cost, /stats and /status in a Claude chat. It starts a live check at once.
+export function PlanUsage({ api, onClose }: { api: Api; onClose: () => void }) {
+  const [data, setData] = useState<UsageData | null>(null)
+  const load = useCallback((live: boolean) => api<UsageData>(live ? 'usage?live=1' : 'usage').then(setData, () => {}), [api])
+  useEffect(() => { void load(false).then(() => load(true)) }, [load])
+  if (!data) return null
+  return <UsageSheet data={data} api={api} onDone={() => load(false)} onClose={onClose} />
+}
+
+const WINDOW_NAMES: Record<string, string> = { '5h': '5-hour limit', '7d': 'Weekly limit' }
+const when = (seconds: number) => new Date(seconds * 1000).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })
+function MergeConfirm({ source, target, marks, onMerge, onCancel }: { source: Session; target: Session; marks?: ProjectMarks; onMerge: (keep?: Keep) => void; onCancel: () => void }) {
+  const modal = useModal(true, onCancel)
+  const [keep, setKeep] = useState<Keep | null>(null)
+  const ask = keepNeeded(marks, source.id, target.id)
+  const count = source.panes.length
+  return <dialog {...modal} className="sheet merge-confirm" aria-labelledby="merge-title" aria-describedby="merge-text">
+    <div className="sheet-heading"><h2 id="merge-title">Merge sessions?</h2><button type="button" className="icon-button" aria-label="Close" onClick={onCancel}><X /></button></div>
+    <p id="merge-text">Merge {source.name} into {target.name}? {count === 1 ? 'Its pane moves' : `Its ${count} panes move`} there, and {source.name} closes.</p>
+    {ask && <KeepChoice source={source} target={target} value={keep} onChange={setKeep} />}
+    <div className="sheet-buttons"><button type="button" className="secondary" autoFocus onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={ask && !keep} onClick={() => onMerge(keep ?? undefined)}>Merge</button></div>
+  </dialog>
+}
+
+function reportedAgo(value: string | number | null) {
+  if (value === null) return ''
+  const time = typeof value === 'number' ? value * 1000 : Date.parse(value)
+  if (Number.isFinite(time) && Date.now() - time < 60000) return 'just now'
+  return Number.isFinite(time) ? ago(new Date(time).toISOString()) : ''
+}
+
+function UsageSheet({ data, api, onDone, onClose }: { data: UsageData; api: Api; onDone: () => Promise<void> | void; onClose: () => void }) {
+  const modal = useModal(true, onClose)
+  const [loading, setLoading] = useState(false)
+  // Refresh asks the server for a live Codex check (at most 30 s old), then redraws the meters from it.
+  // Claude's live check asks Claude Code in SDK mode (no prompt, about 15 s).
+  const reload = () => { setLoading(true); void api('usage?live=1').catch(() => {}).then(() => onDone()).finally(() => setLoading(false)) }
+  const section = (name: string, report: UsageReport | null, missing: React.ReactNode, agent: 'claude' | 'codex') => <section className="usage-detail">
+    <h3>{name}{report?.reported_at != null && <small>{report.source === 'live' ? 'Live' : 'Saved report'} · {reportedAgo(report.reported_at)}</small>}</h3>
+    {data.live_errors?.[agent] && <p className="hint">{data.live_errors[agent]}</p>}
+    <AccountLogin agent={agent} api={api} account={data.accounts?.[agent]} onDone={onDone} />
+    {agent === 'codex' && <CodexProviderSwitch api={api} />}
+    {report?.windows.length ? [...report.windows.map(window => {
+      const percent = Math.max(0, Math.min(100, Math.round(window.percent)))
+      return <div key={window.label} className="usage-row">
+        <div><strong>{WINDOW_NAMES[window.label] ?? window.label}</strong><span>{percent}% used</span></div>
+        <span className={`meter-bar ${percent >= 90 ? 'high' : percent >= 70 ? 'warn' : ''}`} aria-hidden="true"><span style={{ width: `${percent}%` }} /></span>
+        <small>{window.resets_at ? `Resets ${when(window.resets_at)} (in ${resetsIn(window.resets_at)})` : 'Reset time not reported'}</small>
+      </div>
+    }), !report.windows.some(window => window.label === '5h') && <p key="no-5h" className="hint">No 5-hour limit reported. {name} sends only the weekly limit for this plan.</p>] : <p className="hint">{missing}</p>}
+  </section>
+  return <dialog {...modal} className="sheet" aria-labelledby="usage-title">
+    <div className="sheet-heading"><h2 id="usage-title">Plan usage</h2><button type="button" className="icon-button usage-refresh" aria-label="Refresh" aria-busy={loading} disabled={loading} onClick={reload}><RefreshCw className={loading ? 'spin' : undefined} /></button><button type="button" className="icon-button" aria-label="Close" onClick={onClose}><X /></button></div>
+    <p className="sheet-sub">Limits are for your whole account, not one session.</p>
+    {section('Claude', data.claude, <>No report yet. In a Claude chat, send <code>! bash ~/apps/tmux-chat/tools/enable-claude-usage.sh</code> once. The meter fills in after the next Claude reply.</>, 'claude')}
+    {section('Codex', data.codex, 'No report yet. The meter fills in after the next Codex reply.', 'codex')}
+    <p className="hint">For Codex's full panel, send <code>/status</code> in a Codex chat. It opens in the terminal.</p>
+  </dialog>
+}
+
+const shortcutLabel = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘K' : 'Ctrl K'

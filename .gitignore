@@ -1,0 +1,10 @@
+node_modules/
+/ui/dist/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+*.pem
+.work-notes/
+.work-notes-lane/
+.work/

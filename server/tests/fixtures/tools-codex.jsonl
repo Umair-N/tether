@@ -1,0 +1,4 @@
+{"type":"response_item","payload":{"type":"function_call","call_id":"exec-1","name":"exec_command","arguments":"{\"cmd\":\"git status\"}"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"exec-1","output":"Process exited with code 1\nOutput:\nfailed"}}
+{"type":"response_item","payload":{"type":"custom_tool_call","call_id":"patch-1","name":"apply_patch","input":"*** Begin Patch\n*** Update File: a.py\n@@\n-old\n+new\n*** End Patch"}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"patch-1","output":"Success. Updated a.py"}}

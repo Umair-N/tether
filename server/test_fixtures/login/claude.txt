@@ -1,0 +1,3 @@
+Browser didn't open? Use the url below to sign in:
+https://claude.ai/oauth/authorize?code=true&client_id=fixture&state=example
+Paste code here if prompted >

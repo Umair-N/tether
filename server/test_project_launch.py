@@ -1,0 +1,157 @@
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import tomllib
+import unittest
+from pathlib import Path
+from unittest import mock
+
+import paths
+import project_launch
+import projects
+
+HERE = Path(__file__).resolve().parent
+PID = 'a1b2c3d4e5f6'
+
+
+class UnitTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.temp = Path(temp.name)
+        for name, value in (('TETHER', self.temp / 'tether'), ('CODEX', self.temp / 'codex')):
+            patch = mock.patch.object(paths, name, value)
+            patch.start()
+            self.addCleanup(patch.stop)
+        patch = mock.patch.dict(os.environ, {'TMUX': '', 'TMUX_PANE': '', 'CODEX_HOME': ''})
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_toml_string_round_trips(self):
+        for text in ('plain', 'a "quote" and \\ slash', 'line\nnext\ttab\r', 'emoji 🙂 and ü', 'del \x7f bell \x07', "'''"):
+            self.assertEqual(tomllib.loads('v = ' + project_launch.toml_string(text))['v'], text)
+
+    def test_claude_gets_folder_and_hook_before_the_prompt(self):
+        args = project_launch.claude_args(PID, ['fix the bug'])
+        self.assertEqual(args[:2], ['--add-dir', str(projects.bundle(PID))])
+        self.assertEqual(args[2], '--settings')
+        self.assertEqual(args[-1], 'fix the bug')
+        hook = json.loads(args[3])['hooks']['SessionStart'][0]
+        self.assertEqual(hook['matcher'], 'startup|resume|clear|compact')
+        self.assertIn(f'hook {PID}', hook['hooks'][0]['command'])
+        self.assertNotIn('autoMemoryDirectory', json.loads(args[3]))
+        self.assertTrue((projects.bundle(PID) / 'notes').is_dir())
+
+    def test_claude_plain_cases(self):
+        for args in (['-p', 'hi'], ['--print'], ['mcp', 'list'], ['--settings', 'x.json'], ['--settings=x.json'], ['--version'], ['update']):
+            self.assertEqual(project_launch.claude_args(PID, args), args)
+
+    def test_codex_gets_the_notes_part_even_for_an_empty_project(self):
+        args = project_launch.codex_args(PID, ['resume', '--last'])
+        self.assertEqual((args[0], args[2:]), ('-c', ['resume', '--last']))
+        self.assertIn('## Notes', tomllib.loads('v = ' + args[1].partition('=')[2])['v'])
+        projects.set_instructions(PID, 'Use "pnpm".\nNo emoji 🙂', 0)
+        args = project_launch.codex_args(PID, ['resume', '--last'])
+        self.assertEqual(args[0], '-c')
+        self.assertEqual(args[2:], ['resume', '--last'])
+        key, _, value = args[1].partition('=')
+        self.assertEqual(key, 'developer_instructions')
+        self.assertIn('Use "pnpm".', tomllib.loads('v = ' + value)['v'])
+
+    def test_codex_plain_cases(self):
+        projects.set_instructions(PID, 'x', 0)
+        for args in (['exec', 'hi'], ['e', 'hi'], ['login'], ['-c', 'developer_instructions="mine"'], ['--help'], ['review']):
+            self.assertEqual(project_launch.codex_args(PID, args), args)
+        (paths.CODEX).mkdir()
+        (paths.CODEX / 'config.toml').write_text('model = "x"\ndeveloper_instructions = "own"\n')
+        self.assertEqual(project_launch.codex_args(PID, []), [])
+
+    def test_hook_prints_context_or_nothing(self):
+        def run_hook(pid):
+            out = subprocess.run([sys.executable, str(HERE / 'project_launch.py'), 'hook', pid], input='{}', capture_output=True,
+                                 text=True, env=dict(os.environ, TETHER_HOME=str(self.temp / 'tether')), timeout=10)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            return out.stdout
+        self.assertIn('## Notes', json.loads(run_hook(PID))['hookSpecificOutput']['additionalContext'])
+        self.assertEqual(run_hook('../bad'), '')
+        projects.set_instructions(PID, 'Use pnpm.', 0)
+        data = json.loads(run_hook(PID))['hookSpecificOutput']
+        self.assertEqual(data['hookEventName'], 'SessionStart')
+        self.assertIn('Use pnpm.', data['additionalContext'])
+
+
+@unittest.skipUnless(shutil.which('tmux'), 'needs tmux')
+class WrapperTests(unittest.TestCase):
+    """The real launcher in an isolated tmux server, with fake claude and codex that write their argv to a file."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.temp = Path(temp.name)
+        bin_dir = self.temp / 'bin'
+        bin_dir.mkdir()
+        for agent in ('claude', 'codex'):
+            fake = bin_dir / agent
+            fake.write_text(f'#!{sys.executable}\nimport json, os, sys\n'
+                            f'open({str(self.temp / "argv")!r}, "a").write(json.dumps([sys.argv[0]] + sys.argv[1:] + [os.environ.get("TETHER_LAUNCH", "")]) + "\\n")\n')
+            fake.chmod(0o755)
+        self.socket = str(self.temp / 'tmux.sock')
+        self.env = {key: value for key, value in os.environ.items() if key not in ('TMUX', 'TMUX_PANE', 'TETHER_LAUNCH', 'INVOCATION_ID')}
+        self.env.update(PATH=f'{bin_dir}:{os.environ["PATH"]}', TETHER_HOME=str(self.temp / 'tether'), CODEX_HOME=str(self.temp / 'codex'), SHELL='/bin/sh')
+        self.tmux('new-session', '-d', '-s', 'proj', '-x', '120', '-y', '30', '/bin/sh')  # not a login shell: /etc/profile would reset PATH
+        self.addCleanup(self.tmux, 'kill-server')
+
+    def tmux(self, *args):
+        assert self.socket
+        return subprocess.run(['tmux', '-f', '/dev/null', '-S', self.socket, *args], capture_output=True, text=True, env=self.env, timeout=5)
+
+    def run_in_pane(self, command):
+        target = self.temp / 'argv'
+        target.unlink(missing_ok=True)
+        self.tmux('send-keys', '-t', 'proj', f'{command}; tmux -S {self.socket} wait-for -S done', 'Enter')
+        self.tmux('wait-for', 'done')
+        for _ in range(50):
+            if target.exists():
+                return [json.loads(line) for line in target.read_text().splitlines()][-1]
+            time.sleep(0.1)
+        self.fail(f'no run for {command}: {self.tmux("capture-pane", "-p", "-t", "proj").stdout}')
+
+    def project(self):
+        return self.tmux('show-options', '-t', 'proj', '-v', '@project').stdout.strip()
+
+    def test_wrapper_paths(self):
+        launcher = f'{sys.executable} {HERE / "project_launch.py"}'
+        argv = self.run_in_pane(f'{launcher} claude "fix it"')
+        pid = self.project()
+        self.assertRegex(pid, projects.ID)
+        self.assertEqual(argv[1:3], ['--add-dir', str(self.temp / 'tether/projects' / pid)])
+        self.assertEqual(argv[-2:], ['fix it', '1'])
+        pane = self.tmux('display-message', '-p', '-t', 'proj', '#{@project_rev}').stdout.strip()
+        self.assertEqual(pane, f'{pid}:0')
+        argv = self.run_in_pane(f'{launcher} codex resume --last')
+        self.assertEqual((argv[1], argv[3:]), ('-c', ['resume', '--last', '1']))  # the Notes part, even with no instructions
+        with mock.patch.object(paths, 'TETHER', self.temp / 'tether'):
+            projects.set_instructions(pid, 'Use pnpm.', 0)
+        argv = self.run_in_pane(f'{launcher} codex resume --last')
+        self.assertEqual(argv[1], '-c')
+        self.assertIn('Use pnpm.', argv[2])
+        self.assertEqual(self.run_in_pane(f'{launcher} codex exec hi')[1:], ['exec', 'hi', '1'])
+        self.assertEqual(self.run_in_pane(f'TETHER_LAUNCH=1 {launcher} claude x')[1:], ['x', '1'])
+        # A broken project folder: the agent still starts, plain.
+        (self.temp / 'tether/projects').chmod(0o500)  # read-only: the new project's notes folder cannot be made
+        self.addCleanup((self.temp / 'tether/projects').chmod, 0o700)
+        self.tmux('set-option', '-t', 'proj', '@project', 'b1b2c3d4e5f6')
+        self.assertEqual(self.run_in_pane(f'{launcher} claude y')[1:], ['y', '1'])
+
+    def test_outside_tmux_runs_plain(self):
+        out = subprocess.run([sys.executable, str(HERE / 'project_launch.py'), 'claude', 'z'], env=self.env, capture_output=True, text=True, timeout=10)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(json.loads((self.temp / 'argv').read_text())[1:], ['z', '1'])
+
+
+if __name__ == '__main__':
+    unittest.main()

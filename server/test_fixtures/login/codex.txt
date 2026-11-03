@@ -1,0 +1,7 @@
+Welcome to Codex
+Sign in with ChatGPT using device authorization:
+1. Open this link in your browser
+   https://auth.openai.com/codex/device
+2. Enter this one-time code
+   ABCD-1234
+Waiting for authorization…

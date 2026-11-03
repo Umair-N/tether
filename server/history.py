@@ -1,0 +1,204 @@
+"""Incremental reading of append-only JSONL history files.
+
+A chat history only ever grows at the end, so each file is parsed once; later calls read just the bytes
+appended since, instead of re-parsing hundreds of megabytes on every update.
+"""
+import json
+import os
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
+import re
+
+import paths
+
+MAX_FILES = 12
+# The chat view never asks for more than the latest 2,000 messages (see window_limit in server.py), so only a little more than
+# that is kept per conversation; trimming happens in batches, and `dropped` keeps the true total.
+KEEP_MESSAGES = 2500
+TRIM_SLACK = 500
+_states = {}
+_locks = {}
+_registry_lock = threading.Lock()
+
+
+def _lock_for(path):
+    with _registry_lock:
+        return _locks.setdefault(path, threading.Lock())
+
+
+def keep_tail(state):
+    """Trim the oldest messages of a `{'messages': [...], 'dropped': n}` state once it is well over the cap."""
+    if not isinstance(state, dict) or 'messages' not in state:
+        return  # only message-list states are capped
+    excess = len(state['messages']) - KEEP_MESSAGES
+    if excess > TRIM_SLACK:
+        del state['messages'][:excess]
+        state['dropped'] += excess
+
+
+def read(path, fresh, consume, trim=None):
+    """Bring the cached state for `path` up to date and return it.
+
+    `fresh()` builds an empty state; `consume(state, index, record)` folds one decoded record in, where `index`
+    is the record's zero-based line number; `trim(state)` bounds its size after each read. The returned state is
+    shared: callers must copy before changing it.
+    """
+    path = str(path)
+    trim = keep_tail if trim is None else trim  # looked up now, so it can be replaced; pass False to disable
+    try:
+        info = os.stat(path)
+    except (OSError, TypeError):
+        return fresh()
+    with _lock_for(path):
+        cached = _states.get(path)
+        if cached and (cached['inode'] != info.st_ino or info.st_size < cached['offset']):
+            cached = None  # replaced or truncated: start over
+        if cached is None:
+            cached = {'inode': info.st_ino, 'offset': 0, 'index': 0, 'state': fresh()}
+        if info.st_size > cached['offset']:
+            with open(path, 'rb') as stream:
+                stream.seek(cached['offset'])
+                if cached.pop('unterminated', False) and stream.read(1) == b'\n':
+                    cached['offset'] += 1  # the newline that finished a record already consumed
+                stream.seek(cached['offset'])
+                since_trim = 0
+                while True:
+                    line = stream.readline()
+                    if not line:
+                        break
+                    complete = line.endswith(b'\n')
+                    try:
+                        record = json.loads(line)
+                    except ValueError:
+                        if not complete:
+                            break  # a record still being written is picked up on the next call
+                        record = None
+                    cached['offset'] += len(line)
+                    index, cached['index'] = cached['index'], cached['index'] + 1
+                    cached['unterminated'] = not complete
+                    if record is not None:
+                        try:
+                            consume(cached['state'], index, record)
+                        except (AttributeError, TypeError):  # one odd record (an unexpected null) must not break the whole chat
+                            pass
+                        since_trim += 1
+                        if trim and since_trim >= 2000:  # keep the first load of a huge file bounded too
+                            trim(cached['state'])
+                            since_trim = 0
+            if trim:
+                trim(cached['state'])
+        with _registry_lock:
+            _states.pop(path, None)
+            _states[path] = cached  # most recently used goes last
+            while len(_states) > MAX_FILES:
+                oldest = next(iter(_states))
+                _states.pop(oldest)
+        return cached['state']
+
+
+def forget():
+    with _registry_lock:
+        _states.clear()
+
+
+UUID = re.compile(r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}')
+PREVIEW_BYTES = 65536
+_previews = {}
+_preview_lock = threading.Lock()
+
+
+def transcript_files(identifier=None):
+    """Only direct project children are chats; subagents have their own subfolders."""
+    try:
+        with os.scandir(paths.CLAUDE / 'projects') as projects:
+            for project in projects:
+                if not project.is_dir(follow_symlinks=False):
+                    continue
+                try:
+                    with os.scandir(project.path) as files:
+                        for entry in files:
+                            if not entry.name.endswith('.jsonl') or not UUID.fullmatch(entry.name[:-6]):
+                                continue
+                            if identifier is not None and entry.name != identifier + '.jsonl':
+                                continue
+                            if entry.is_file(follow_symlinks=False):
+                                yield Path(entry.path), entry.stat()
+                except OSError:
+                    continue  # a project can disappear during a poll
+    except OSError:
+        return
+
+
+def user_title(entry):
+    if entry.get('type') != 'user' or entry.get('isMeta') or entry.get('isSidechain'):
+        return ''
+    message = entry.get('message')
+    content = message.get('content') if isinstance(message, dict) else None
+    if isinstance(content, list):
+        content = '\n'.join(part.get('text', '') for part in content
+                            if isinstance(part, dict) and part.get('type') == 'text' and isinstance(part.get('text'), str))
+    if not isinstance(content, str):
+        return ''
+    text = ' '.join(line for line in content.splitlines() if not line.lstrip().startswith('<'))
+    return ' '.join(text.split())[:80]
+
+
+def preview(path, info):
+    signature = (info.st_mtime_ns, info.st_size)
+    with _preview_lock:
+        cached = _previews.get(path)
+        if cached and cached[0] == signature:
+            return dict(cached[1])
+        with open(path, 'rb') as stream:
+            head = stream.read(PREVIEW_BYTES)
+            tail_start = max(len(head), info.st_size - PREVIEW_BYTES)
+            stream.seek(tail_start)
+            tail = stream.read(PREVIEW_BYTES)
+        # Never join two partial records across the unread middle of a large file.
+        if tail_start > len(head):
+            tail = tail.partition(b'\n')[2]
+        title, first_user, cwd = '', '', None
+        lines = (head + tail).splitlines() if tail_start == len(head) else head.splitlines() + tail.splitlines()
+        for line in lines:
+            try:
+                entry = json.loads(line)
+            except (ValueError, UnicodeError):
+                continue
+            if not isinstance(entry, dict):
+                continue
+            if isinstance(entry.get('cwd'), str) and entry['cwd']:
+                cwd = entry['cwd']
+            kind = entry.get('type')
+            field = {'custom-title': 'customTitle', 'ai-title': 'aiTitle', 'summary': 'summary'}.get(kind) if isinstance(kind, str) else None
+            value = entry.get(field) if field else None
+            if isinstance(value, str) and value.strip():
+                title = ' '.join(value.split())
+            if not first_user:
+                first_user = user_title(entry)
+        result = {'id': path.stem, 'title': title or first_user or path.stem, 'cwd': cwd,
+                  'time': datetime.fromtimestamp(info.st_mtime, timezone.utc).isoformat()}
+        _previews[path] = (signature, result)
+        return dict(result)
+
+
+def recent_chats(limit=30):
+    files = sorted(transcript_files(), key=lambda item: item[1].st_mtime_ns, reverse=True)[:limit]
+    chats = []
+    for path, info in files:
+        try:
+            chats.append(preview(path, info))
+        except OSError:
+            continue
+    return chats
+
+
+def find_chat(identifier):
+    if not isinstance(identifier, str) or not UUID.fullmatch(identifier):
+        raise ValueError('Choose a valid chat id.')
+    for path, info in transcript_files(identifier):
+        try:
+            return preview(path, info)
+        except OSError:
+            continue
+    return None

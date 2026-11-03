@@ -1,0 +1,63 @@
+"""Validate shipped integrations without installing or changing services."""
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+import unittest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SKILLS = (
+    ROOT / 'integrations/claude/tether/skills/setup/SKILL.md',
+    ROOT / 'integrations/codex/skills/tether-setup/SKILL.md',
+)
+
+
+class IntegrationTests(unittest.TestCase):
+    def test_marketplace_resolves_plugin_manifest(self):
+        marketplace = json.loads((ROOT / '.claude-plugin/marketplace.json').read_text())
+        self.assertEqual(marketplace['name'], 'tether')
+        self.assertTrue(marketplace['owner']['name'])
+        self.assertEqual(len(marketplace['plugins']), 1)
+        entry = marketplace['plugins'][0]
+        self.assertEqual(entry['name'], 'tether')
+        self.assertEqual(entry['source'], './integrations/claude/tether')
+        plugin_path = ROOT / entry['source']
+        self.assertTrue(plugin_path.is_dir())
+        plugin = json.loads((plugin_path / '.claude-plugin/plugin.json').read_text())
+        self.assertEqual(plugin['name'], entry['name'])
+        self.assertTrue(plugin['description'])
+        version_file = ROOT / 'VERSION'
+        version = version_file.read_text().strip() if version_file.is_file() else '0.1.0'
+        self.assertEqual(plugin['version'], version)
+        self.assertEqual(plugin['license'], 'MIT')
+        self.assertEqual(plugin['repository'], 'https://github.com/incmak/tether')
+        self.assertTrue((plugin_path / 'commands/tether-setup.md').is_file())
+
+    def test_skills_have_required_frontmatter(self):
+        for path in SKILLS:
+            with self.subTest(skill=path.relative_to(ROOT)):
+                text = path.read_text()
+                frontmatter = re.match(r'\A---\r?\n(.*?)\r?\n---(?:\r?\n|\Z)', text, re.DOTALL)
+                self.assertIsNotNone(frontmatter, 'Skill must start with YAML frontmatter')
+                for field in ('name', 'description'):
+                    value = re.search(rf'^{field}:\s*(\S[^\r\n]*)$', frontmatter[1], re.MULTILINE)
+                    self.assertIsNotNone(value, f'Missing or empty {field}')
+                    self.assertNotIn(value[1].strip(), ('""', "''"))
+
+    def test_documented_installer_flags_exist(self):
+        result = subprocess.run(
+            [sys.executable, str(ROOT / 'install.py'), '--help'],
+            cwd=ROOT, capture_output=True, text=True, check=True, timeout=10,
+        )
+        help_flags = set(re.findall(r'(?<![\w-])--[a-z][a-z-]*\b', result.stdout))
+        for path in SKILLS:
+            with self.subTest(skill=path.relative_to(ROOT)):
+                flags = set(re.findall(r'(?<![\w-])--[a-z][a-z-]*\b', path.read_text()))
+                self.assertTrue(flags, 'Skill must document installer flags')
+                self.assertFalse(flags - help_flags, f'Unsupported installer flags: {sorted(flags - help_flags)}')
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -1,0 +1,2 @@
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"edit-1","name":"Edit","input":{"file_path":"/work/a.py","old_string":"old\nkeep\n","new_string":"new\nkeep\n"}},{"type":"tool_use","id":"bash-1","name":"Bash","input":{"command":"printf hello"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"edit-1","content":"updated"},{"type":"tool_result","tool_use_id":"bash-1","is_error":true,"content":[{"type":"text","text":"Exit code: 1\nhello"}]}]}}

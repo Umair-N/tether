@@ -1,0 +1,12 @@
+{
+  "name": "tether",
+  "owner": { "name": "Tether" },
+  "description": "Guided Tether setup for coding agents.",
+  "plugins": [
+    {
+      "name": "tether",
+      "source": "./integrations/claude/tether",
+      "description": "Set up Tether with a short feature menu and a reviewed installer plan."
+    }
+  ]
+}

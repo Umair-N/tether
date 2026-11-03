@@ -1,0 +1,257 @@
+#!/usr/bin/env python3
+"""Apply tagged Tether releases with a health check and automatic rollback."""
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path, PurePosixPath
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+from urllib.request import urlopen
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / 'server'))
+import updates
+
+
+def switch(link, target):
+    temp = link.with_name(link.name + '.new')
+    temp.unlink(missing_ok=True)
+    temp.symlink_to(target, target_is_directory=True)
+    temp.replace(link)
+
+
+def extract(archive, destination):
+    with tarfile.open(archive, 'r:gz') as bundle:
+        members = bundle.getmembers()
+        for member in members:
+            path = PurePosixPath(member.name)
+            if path.is_absolute() or '..' in path.parts or not (member.isfile() or member.isdir()):
+                raise ValueError('Unsafe tar member: ' + member.name)
+        # Validate the whole archive before writing; do not rely on version-specific tar filters.
+        for member in members:
+            target = destination.joinpath(*PurePosixPath(member.name).parts)
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with bundle.extractfile(member) as source, target.open('wb') as output:
+                    shutil.copyfileobj(source, output)
+                target.chmod(member.mode & 0o777)
+
+
+def download(url, destination):
+    with urlopen(url, timeout=30) as response, destination.open('wb') as output:
+        shutil.copyfileobj(response, output)
+
+
+def release_files(release, directory):
+    ver = release['tag_name'].removeprefix('v')
+    updates.version(ver)
+    name = f'tether-{ver}.tar.gz'
+    assets = {item['name']: item['browser_download_url'] for item in release.get('assets', [])}
+    if name not in assets or 'SHA256SUMS' not in assets:
+        raise ValueError('Release lacks the tarball or SHA256SUMS')
+    archive = directory / name
+    sums = directory / 'SHA256SUMS'
+    download(assets[name], archive)
+    download(assets['SHA256SUMS'], sums)
+    expected = None
+    for line in sums.read_text().splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[1].lstrip('*') == name:
+            expected = parts[0]
+    hasher = hashlib.sha256()
+    with archive.open('rb') as source:
+        for chunk in iter(lambda: source.read(262144), b''):
+            hasher.update(chunk)
+    digest = hasher.hexdigest()
+    if expected is None or digest != expected:
+        raise ValueError('Checksum mismatch; update refused')
+    return archive, ver
+
+
+def run(command):
+    subprocess.run(command, check=True, timeout=600)
+
+
+def restart(state):
+    units = [unit for unit in state.get('unit_names', ['tether.service'])
+             if unit in ('tether.service', 'tether-terminal.service', 'tether-voice.service')]
+    if 'tether.service' not in units:
+        units.insert(0, 'tether.service')
+    run(['systemctl', '--user', 'daemon-reload'])
+    run(['systemctl', '--user', 'restart', *units])
+
+
+def healthy(port, seconds=30, host='127.0.0.1'):
+    host = '127.0.0.1' if host in ('0.0.0.0', 'localhost', '::') else host
+    if ':' in host:
+        host = f'[{host}]'
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        try:
+            with urlopen(f'http://{host}:{int(port)}/chat/', timeout=min(2, max(.1, end - time.monotonic()))) as response:
+                if response.status == 200:
+                    return True
+        except (OSError, ValueError):
+            pass
+        time.sleep(min(1, max(0, end - time.monotonic())))
+    return False
+
+
+def git_checkout(repo):
+    # A .git marker counts even when git refuses the folder (ownership, broken worktree).
+    if (Path(repo) / '.git').exists():
+        return True
+    try:
+        # Only a checkout rooted at this folder counts; a dotfiles repo in $HOME does not.
+        result = subprocess.run(['git', '-C', str(repo), 'rev-parse', '--show-toplevel'],
+                                capture_output=True, text=True, timeout=10)
+        return result.returncode == 0 and Path(result.stdout.strip()).resolve() == Path(repo).resolve()
+    except (OSError, subprocess.SubprocessError):
+        return (Path(repo) / '.git').exists()
+
+
+def snapshot(state_file):
+    units = Path.home() / '.config/systemd/user'
+    return state_file.read_bytes(), {name: (units / name).read_bytes() if (units / name).exists() else None
+                                    for name in ('tether.service', 'tether-terminal.service', 'tether-voice.service',
+                                                 'tether-update.service', 'tether-update.timer')}
+
+
+def restore(state_file, backup):
+    content, files = backup
+    state_file.write_bytes(content)
+    units = Path.home() / '.config/systemd/user'
+    units.mkdir(parents=True, exist_ok=True)
+    for name, data in files.items():
+        if data is None:
+            (units / name).unlink(missing_ok=True)
+        else:
+            (units / name).write_bytes(data)
+
+
+def activate(root, target, state_file, state):
+    link = root / 'current'
+    old = link.resolve(strict=True)
+    backup = snapshot(state_file)
+    try:
+        # Stage stable unit paths before changing the running release.
+        run([sys.executable, str(target / 'install.py'), '--apply', '--no-build-ui',
+             '--release-current', str(link), '--defer-restart'])
+        switch(link, target)
+        new_state = json.loads(state_file.read_text())
+        restart(new_state)
+        if not healthy(state['options']['port'], host=state['options'].get('host', '127.0.0.1')):
+            raise RuntimeError('Health check failed')
+    except Exception as error:
+        switch(link, old)
+        restore(state_file, backup)
+        try:
+            restart(state)
+        except Exception as rollback_error:
+            raise RuntimeError(f'{error}; restored prior release, but restart failed: {rollback_error}') from error
+        raise RuntimeError(f'{error}; rolled back to {old.name}') from error
+    (root / 'previous.json').write_text(json.dumps({'release': old.name}))
+    # Retain the active release and its rollback target, regardless of version order.
+    for entry in (root / 'releases').iterdir():
+        if entry.is_dir() and not entry.is_symlink() and entry.resolve() not in (old, target.resolve()):
+            try:
+                updates.version(entry.name)
+                if (entry / 'VERSION').read_text().strip() != entry.name or git_checkout(entry):
+                    continue
+            except (OSError, ValueError):
+                continue
+            shutil.rmtree(entry)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest='command', required=True)
+    update = commands.add_parser('update')
+    update.add_argument('--check', action='store_true')
+    update.add_argument('--yes', action='store_true')
+    update.add_argument('--auto', action='store_true')
+    update.add_argument('--to')
+    commands.add_parser('rollback')
+    args = parser.parse_args(argv)
+    try:
+        state_file = updates.install_file()
+        state = json.loads(state_file.read_text())
+        if git_checkout(state['repo']):
+            print('this is a git checkout: run git pull, then python3 install.py --apply')
+            return 1
+        root = Path.home() / '.local/share/tether'
+        releases = root / 'releases'
+        link = root / 'current'
+        old = link.resolve(strict=True)
+        if old.parent != releases.resolve() or updates.version(old.name) != updates.version((old / 'VERSION').read_text().strip()):
+            raise ValueError('Install is not a managed release')
+        root.mkdir(parents=True, exist_ok=True)
+        with (root / 'update.lock').open('a') as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise ValueError('Another update is in progress') from None
+            if args.command == 'rollback':
+                previous = json.loads((root / 'previous.json').read_text())['release']
+                updates.version(previous)
+                target = releases / previous
+                if not target.is_dir() or target.is_symlink() or target == old:
+                    raise ValueError('No previous release is available')
+                activate(root, target, state_file, state)
+                print('Rolled back to v' + target.name)
+                return 0
+            if args.auto and updates.mode() != 'auto':
+                print('Automatic updates are disabled')
+                return 0
+            tag = None
+            if args.to:
+                updates.version(args.to)
+                tag = 'v' + args.to.removeprefix('v')
+            release = updates.fetch_release(tag)
+            ver = release['tag_name'].removeprefix('v')
+            if (not tag and updates.version(ver) <= updates.version(old.name)) or ver == old.name:
+                print('Already up to date: v' + old.name)
+                return 0
+            print(f'Update available: v{ver}\n{release.get("html_url", "")}')
+            if args.check:
+                return 0
+            if not (args.yes or args.auto) and input('Apply this release? [y/N] ').strip().lower() not in ('y', 'yes'):
+                return 0
+            with tempfile.TemporaryDirectory(prefix='tether-update-') as temp:
+                archive, ver = release_files(release, Path(temp))
+                stage = Path(temp) / 'release'
+                stage.mkdir()
+                extract(archive, stage)
+                if stage.joinpath('VERSION').read_text().strip() != ver or not (stage / 'install.py').is_file() or not (stage / 'ui/dist/index.html').is_file():
+                    raise ValueError('Invalid release contents')
+                target = releases / ver
+                if target.exists():
+                    raise ValueError('Release directory already exists; use tether rollback for the previous release')
+                partial = releases / f'.{ver}.partial'
+                try:
+                    shutil.copytree(stage, partial)
+                    partial.rename(target)
+                    activate(root, target, state_file, state)
+                except Exception:
+                    if partial.exists():
+                        shutil.rmtree(partial)
+                    if link.resolve() != target.resolve():
+                        if target.exists():
+                            shutil.rmtree(target)
+                    raise
+            print('Updated to v' + ver)
+            return 0
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError, EOFError, subprocess.SubprocessError, tarfile.TarError) as error:
+        print(str(error), file=sys.stderr)
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

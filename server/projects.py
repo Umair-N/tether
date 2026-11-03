@@ -1,0 +1,403 @@
+"""Session projects: context that agents in a tmux session get when they start.
+
+Each tmux session has the session option @project (a random id). The id names a bundle folder,
+paths.TETHER/projects/<id>/:
+  project.json      name, revision (+1 on each change the person makes), budget, seen, archived_from
+  INSTRUCTIONS.md   what the person wrote
+  files/            pinned copies; links.json holds pins that point at files that exist elsewhere
+  notes/            agent notes that the person reviews; a deleted note goes to notes/.trash/
+render() builds the text an agent gets at start, resume, clear and compact. It stays inside the budget. An
+empty project gives only the short Notes part, so agents learn where notes go. Rename, cd, split and close do not change the id. A bundle folder exists only after the
+first write."""
+import json
+import os
+import re
+import secrets
+import shutil
+import subprocess
+import time
+from pathlib import Path
+
+import files
+import paths
+
+ID = re.compile(r'[0-9a-f]{12}')
+NOTE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._ -]{0,79}\.md')
+BUDGET = 4000
+BUDGET_MIN, BUDGET_MAX = 1000, 10000  # 10,000 is the limit of a Claude Code hook's output
+INSTRUCTIONS_LIMIT = 20000
+NOTE_LIMIT = 100000
+COPY_LIMIT = 1024 * 1024
+PINS_LIMIT = 50
+NEWEST = 5
+EXCERPT = 600
+
+
+class ProjectError(Exception):
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status = status
+
+
+def invalid(message):
+    return ProjectError(400, message)
+
+
+def root():
+    return paths.TETHER / 'projects'
+
+
+def bundle(pid):
+    if not isinstance(pid, str) or not ID.fullmatch(pid):
+        raise invalid('Choose a project.')
+    return root() / pid
+
+
+# ---- the session option ----
+
+def session_project(session_id, run=subprocess.run):
+    """The @project id of a tmux session ($N). A session without one gets a new id."""
+    if not isinstance(session_id, str) or not re.fullmatch(r'\$[0-9]+', session_id):
+        raise invalid('Choose a session.')
+    shown = run([paths.TMUX, 'display-message', '-p', '-t', session_id + ':', '#{session_id}\t#{session_name}\t#{@project}'],
+                capture_output=True, text=True, timeout=5)
+    fields = shown.stdout.rstrip('\n').split('\t')
+    if shown.returncode or len(fields) != 3 or fields[0] != session_id:
+        raise ProjectError(404, 'That session is gone. Refresh the list and try again.')
+    pid = fields[2]
+    if not ID.fullmatch(pid):
+        pid = secrets.token_hex(6)
+        set_ = run([paths.TMUX, 'set-option', '-t', session_id, '@project', pid], capture_output=True, text=True, timeout=5)
+        if set_.returncode:
+            raise ProjectError(500, set_.stderr.strip() or 'Could not give the session a project.')
+    return pid, fields[1]
+
+
+# ---- files on disk ----
+
+def _write(path, text):
+    """Write a file in one step: a reader sees the old file or the new one."""
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    temp = path.with_name(f'.{path.name}.{secrets.token_hex(4)}.tmp')
+    try:
+        with open(temp, 'x', encoding='utf-8') as out:
+            out.write(text)
+        os.replace(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def _read(path, limit=None):
+    try:
+        with open(path, encoding='utf-8', errors='replace') as source:
+            return source.read(limit) if limit else source.read()
+    except FileNotFoundError:
+        return ''
+
+
+def meta(pid):
+    data = {}
+    try:
+        data = json.loads(_read(bundle(pid) / 'project.json') or '{}')
+    except ValueError:
+        pass
+    data = data if isinstance(data, dict) else {}
+    budget = data.get('budget')
+    return {'name': data.get('name') if isinstance(data.get('name'), str) else '',
+            'revision': data.get('revision') if isinstance(data.get('revision'), int) else 0,
+            'budget': budget if isinstance(budget, int) and BUDGET_MIN <= budget <= BUDGET_MAX else BUDGET,
+            'seen': data.get('seen') if isinstance(data.get('seen'), (int, float)) else 0,
+            'archived_from': data.get('archived_from') if isinstance(data.get('archived_from'), list) else []}
+
+
+def _save_meta(pid, data):
+    _write(bundle(pid) / 'project.json', json.dumps(data, indent=2) + '\n')
+
+
+def _changed(pid, revision=None, **fields):
+    """Save fields and count one more revision. A stale revision (another tab saved first) is refused."""
+    data = meta(pid)
+    if revision is not None and revision != data['revision']:
+        raise ProjectError(409, 'The project changed in another tab. Reload it and try again.')
+    data.update(fields, revision=data['revision'] + 1)
+    _save_meta(pid, data)
+    return data
+
+
+def set_name(pid, name):
+    """Keep the name the bundle shows in an archive. Not a revision: agents do not see it."""
+    if isinstance(name, str) and name and meta(pid)['name'] != name and bundle(pid).exists():
+        data = meta(pid)
+        data['name'] = name
+        _save_meta(pid, data)
+
+
+def instructions(pid):
+    return _read(bundle(pid) / 'INSTRUCTIONS.md')
+
+
+def set_instructions(pid, text, revision):
+    if not isinstance(text, str) or len(text) > INSTRUCTIONS_LIMIT:
+        raise invalid(f'Instructions can have at most {INSTRUCTIONS_LIMIT:,} characters.')
+    if not isinstance(revision, int):
+        raise invalid('Reload the project and try again.')
+    data = _changed(pid, revision)
+    _write(bundle(pid) / 'INSTRUCTIONS.md', text.strip() + '\n' if text.strip() else '')
+    return data
+
+
+def set_budget(pid, chars, revision):
+    if not isinstance(chars, int) or not BUDGET_MIN <= chars <= BUDGET_MAX:
+        raise invalid(f'Choose a size from {BUDGET_MIN:,} to {BUDGET_MAX:,} characters.')
+    return _changed(pid, revision, budget=chars)
+
+
+# ---- pinned files ----
+
+def _links(pid):
+    try:
+        data = json.loads(_read(bundle(pid) / 'links.json') or '[]')
+    except ValueError:
+        return []
+    return [item for item in data if isinstance(item, dict) and isinstance(item.get('name'), str) and isinstance(item.get('path'), str)] if isinstance(data, list) else []
+
+
+def pins(pid, home=None):
+    """Every pin: copies in files/ first, then links. A link to a file that is gone says so."""
+    home = files.files_root(home)
+    folder = bundle(pid) / 'files'
+    found = []
+    if folder.is_dir():
+        for entry in sorted(folder.iterdir()):
+            if entry.is_file() and not entry.is_symlink() and not entry.name.startswith('.'):
+                found.append({'name': entry.name, 'kind': 'copy', 'path': str(entry), 'size': entry.stat().st_size, 'missing': False})
+    for link in _links(pid):
+        real = Path(link['path'])
+        found.append({'name': link['name'], 'kind': 'link', 'path': files.shown(real, home) if files.inside(real, home) else str(real),
+                      'size': real.stat().st_size if real.is_file() else None, 'missing': not real.is_file()})
+    return found
+
+
+def pin(pid, path_text, mode, revision, home=None):
+    """Pin a file from the Files explorer: a link to it, or a copy (at most 1 MB). Secret files are refused."""
+    if mode not in ('link', 'copy'):
+        raise invalid('Choose link or copy.')
+    home = files.files_root(home)
+    try:
+        _, real, is_dir, _ = files.locate(path_text, home)
+    except files.FilesError as exc:
+        raise ProjectError(exc.status, str(exc)) from exc
+    if is_dir:
+        raise invalid('Pin a file, not a folder.')
+    current = pins(pid, home)
+    if len(current) >= PINS_LIMIT:
+        raise invalid(f'A project can pin at most {PINS_LIMIT} files.')
+    names = {item['name'] for item in current}
+    name = real.name
+    stem, dot, suffix = name.partition('.')
+    count = 2
+    while name in names:
+        name = f'{stem} {count}{dot}{suffix}'
+        count += 1
+    if mode == 'link':
+        if any(item['kind'] == 'link' and item['path'] == files.shown(real, home) for item in current):
+            raise invalid('That file is pinned already.')
+        data = _changed(pid, revision)
+        _write(bundle(pid) / 'links.json', json.dumps(_links(pid) + [{'name': name, 'path': str(real)}], indent=2) + '\n')
+        return data
+    fd = files.open_read(home, real)
+    with os.fdopen(fd, 'rb') as source:
+        body = source.read(COPY_LIMIT + 1)
+    if len(body) > COPY_LIMIT:
+        raise invalid('A copy can be at most 1 MB. Pin a link instead.')
+    data = _changed(pid, revision)
+    target = bundle(pid) / 'files' / name
+    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with open(target, 'xb') as out:
+        out.write(body)
+    return data
+
+
+def unpin(pid, name, revision):
+    if not isinstance(name, str) or not name or '/' in name or name.startswith('.'):
+        raise invalid('Choose a pinned file.')
+    links = _links(pid)
+    kept = [item for item in links if item['name'] != name]
+    copy = bundle(pid) / 'files' / name
+    if len(kept) == len(links) and not copy.is_file():
+        raise ProjectError(404, 'That pin is gone.')
+    data = _changed(pid, revision)
+    if len(kept) != len(links):
+        _write(bundle(pid) / 'links.json', json.dumps(kept, indent=2) + '\n')
+    else:
+        copy.unlink()
+    return data
+
+
+# ---- notes ----
+
+def _title(text, name):
+    """A note's title: the frontmatter name or description, else the first heading, else the file name."""
+    lines = text.splitlines()
+    if lines[:1] == ['---']:
+        for line in lines[1:20]:
+            if line == '---':
+                break
+            key, _, value = line.partition(':')
+            if key.strip() in ('description', 'name') and value.strip():
+                return value.strip()[:120]
+    for line in lines[:30]:
+        if line.startswith('#'):
+            return line.lstrip('#').strip()[:120] or name
+    return name
+
+
+def _note(pid, name):
+    if not isinstance(name, str) or not NOTE.fullmatch(name):
+        raise invalid('Use a note name that ends in .md, with letters, digits, space, dot, dash or underscore.')
+    return bundle(pid) / 'notes' / name
+
+
+def notes(pid):
+    """Every note, newest first. A note is new when it changed after the person last looked."""
+    folder = bundle(pid) / 'notes'
+    seen = meta(pid)['seen']
+    found = []
+    if folder.is_dir():
+        for entry in folder.iterdir():
+            if NOTE.fullmatch(entry.name) and entry.is_file() and not entry.is_symlink():
+                st = entry.stat()
+                found.append({'name': entry.name, 'title': _title(_read(entry, 4096), entry.name), 'size': st.st_size,
+                              'mtime': int(st.st_mtime * 1000), 'new': st.st_mtime > seen})
+    return sorted(found, key=lambda item: -item['mtime'])
+
+
+def read_note(pid, name):
+    path = _note(pid, name)
+    if not path.is_file() or path.is_symlink():
+        raise ProjectError(404, 'That note is gone.')
+    return {'name': name, 'text': _read(path, NOTE_LIMIT)}
+
+
+def write_note(pid, name, text):
+    if not isinstance(text, str) or len(text) > NOTE_LIMIT:
+        raise invalid(f'A note can have at most {NOTE_LIMIT:,} characters.')
+    path = _note(pid, name)
+    if path.is_symlink():
+        raise invalid('That note is a link. Tether does not change it.')
+    _write(path, text)
+    return {'name': name}
+
+
+def delete_note(pid, name):
+    """Move the note to notes/.trash/. Nothing is deleted for good."""
+    path = _note(pid, name)
+    if not path.is_file() or path.is_symlink():
+        raise ProjectError(404, 'That note is gone.')
+    trash = path.parent / '.trash'
+    trash.mkdir(mode=0o700, exist_ok=True)
+    os.replace(path, trash / f'{time.strftime("%Y%m%d-%H%M%S")}-{secrets.token_hex(2)}-{name}')
+    return {'name': name}
+
+
+def mark_seen(pid):
+    if bundle(pid).exists():
+        data = meta(pid)
+        data['seen'] = time.time()
+        _save_meta(pid, data)
+
+
+# ---- what an agent gets ----
+
+def _fit(parts, budget):
+    """Join the parts in order. The first part that does not fit is cut, and the rest are left out."""
+    out, used = [], 0
+    for part in parts:
+        if used + len(part) <= budget:
+            out.append(part)
+            used += len(part)
+            continue
+        note = '\n[Cut to fit the project size limit. The full text is in the project folder.]\n'
+        room = budget - used - len(note)
+        if room > 200:
+            out.append(part[:room].rsplit('\n', 1)[0] + note)
+        elif budget - used >= len(note):
+            out.append(note)
+        break
+    return ''.join(out)
+
+
+def render(pid, agent='claude', home=None):
+    """The text an agent gets. An empty project still gets the Notes part: without it no agent knows the notes folder,
+    so no note is ever written. Claude keeps its own auto memory where it is: Tether does not move it, so Claude's
+    notes from before stay in reach. Both agents get the same text. Reading never makes the bundle folder."""
+    data = meta(pid)
+    text = instructions(pid).strip()
+    pinned = pins(pid, home)
+    found = notes(pid)
+    folder = bundle(pid)
+    parts = [f'# Tether project{": " + data["name"] if data["name"] else ""}\n'
+             + ('Project guidance from Tether. The user wrote it for every agent in this tmux session. Follow it.\n'
+                if text or pinned else 'Agents in this tmux session share this project folder.\n')
+             + f'Project folder: {folder}\n']
+    if text:
+        parts.append(f'\n## Instructions\n{text}\n')
+    if pinned:
+        lines = '\n'.join(f'- {item["name"]}: {item["path"]}{" (gone)" if item["missing"] else ""}' for item in pinned)
+        parts.append(f'\n## Pinned files\nRead a file when the task needs it.\n{lines}\n')
+    parts.append(f'\n## Notes\nSave a project fact that other agents in this session need as a Markdown file in {folder}/notes/ '
+                 '(one topic per file, a "# Title" first line). Keep your own memory as before. The user reviews notes in Tether.\n')
+    if found:
+        parts.append(''.join(f'- {item["name"]}: {item["title"]}\n' for item in found))
+        for item in found[:NEWEST]:
+            body = _read(folder / 'notes' / item['name'], EXCERPT + 1).strip()
+            parts.append(f'\n### {item["name"]}\n{body[:EXCERPT]}{" …" if len(body) > EXCERPT else ""}\n')
+    return _fit(parts, data['budget'])
+
+
+def state(pid, home=None):
+    """What the Project sheet shows."""
+    data = meta(pid)
+    preview = render(pid, 'claude', home)
+    return {'id': pid, 'name': data['name'], 'revision': data['revision'], 'budget': data['budget'],
+            'budget_min': BUDGET_MIN, 'budget_max': BUDGET_MAX, 'instructions': instructions(pid),
+            'pins': pins(pid, home), 'notes': notes(pid), 'preview': preview, 'chars': len(preview),
+            'folder': str(bundle(pid))}
+
+
+def has_context(pid, home=None):
+    """True when the person gave agents in the session something: instructions, a pin or a note.
+    The Notes part that every project sends does not count."""
+    return bundle(pid).is_dir() and bool(instructions(pid).strip() or pins(pid, home) or notes(pid))
+
+
+def marks(run=subprocess.run, home=None):
+    """For the sidebar: {session id: {project, context, revision, stale: [pane ids]}}. Read only: a session with no
+    @project yet is left out. A pane is stale when its agent started with an older revision or another project
+    (@project_rev, set by project_launch.py). A pane with no @project_rev did not start through Tether."""
+    shown = run([paths.TMUX, 'list-panes', '-a', '-F', '#{session_id}\t#{@project}\t#{pane_id}\t#{@project_rev}'],
+                capture_output=True, text=True, timeout=5)
+    if shown.returncode:
+        return {}
+    out = {}
+    for line in shown.stdout.splitlines():
+        fields = line.split('\t')
+        if len(fields) != 4 or not ID.fullmatch(fields[1]):
+            continue
+        session_id, pid, pane, started = fields
+        if session_id not in out:
+            data = meta(pid)
+            out[session_id] = {'project': pid, 'revision': data['revision'], 'stale': [], 'context': has_context(pid, home)}
+        mark = out[session_id]
+        if started and started != f'{pid}:{mark["revision"]}':
+            mark['stale'].append(pane)
+    return out
+
+
+def archive(pid):
+    """Move a bundle to projects/.archive/ (merge keeps the other one). It can be moved back."""
+    folder = bundle(pid)
+    if folder.exists():
+        target = root() / '.archive' / f'{pid}-{time.strftime("%Y%m%d-%H%M%S")}'
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        shutil.move(str(folder), str(target))

@@ -1,0 +1,1539 @@
+"""Mobile transcript and message bridge to one existing Codex CLI thread."""
+from datetime import datetime
+import hashlib
+import json
+import os
+import re
+import socket
+import sqlite3
+from pathlib import Path
+import subprocess
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, unquote, urlsplit
+
+from agents import claude_snapshot, discover, usage
+from agents import records
+from antigravity import snapshot as antigravity_snapshot, window_active
+from terminal_input import NAME_HELP, valid_name, fork_chat, DraftError, card_key, menu_choose, unqueue, clear_draft as terminal_clear_draft, type_text, live_status, capture, capture_screen, submit as terminal_submit, respond_approval, plan_menu, start_agent, create_session, shell_snapshot, shell_submit, verify
+from quota_notices import error_message, merge as merge_quota_notices
+import tool_details
+import activity
+import catalog
+import claude_probe
+import footer
+import accounts
+import live_usage
+import login_flow
+import saved_accounts
+import history
+import live as live_state
+from terminal_input import resume_session, rename_agent
+import model_picker
+import push
+import shortcuts
+import prefs_sync
+import codex_provider
+import foundry_spend
+import transcribe
+import shell_log
+import terminal_replies
+import reply_preview
+import uploads
+import media_files
+import repo_panel
+import files
+import auth
+import needs
+import select
+import sys
+import socket
+import paths
+import side_shells
+import host_stats
+import tmux_merge
+import projects_api
+import browser_api
+import updates
+
+ROOT = Path(__file__).resolve().parent
+KEEPALIVE = 10
+UI_ASSETS = {name: (ROOT / name).read_text() for name in ('index.html', 'app.js')}
+STATIC_ASSETS = {'/mobile/' + p.name: p.read_bytes() for p in [*(ROOT / 'vendor').glob('*.js'), ROOT / 'sw.js', ROOT / 'manifest.webmanifest', *ROOT.glob('*.png')]}
+TERMINAL_ASSETS = {'html': (ROOT / 'termius.html').read_text(), 'js': (ROOT / 'termius.js').read_text()}
+CONFIG = paths.private_file('default_conversation.json')
+TTYD_PORT = int(os.environ.get('MOBILE_TMUX_TTYD_PORT', '7682'))
+SEND_LOCK = threading.Lock()
+WATCHING = {}
+WATCHED = {}
+WATCHING_LOCK = threading.Lock()
+
+
+def watching(session):
+    with WATCHING_LOCK:
+        return WATCHING.get(session, 0) > 0 or time.monotonic() - WATCHED.get(session, float('-inf')) < 10
+
+
+def notify(payload, urgent):
+    threading.Thread(target=push.send_all, args=(payload, urgent), daemon=True).start()
+
+
+NOTIFIER = push.Notifier(notify, watching, muted=push.muted)
+
+
+def monitor_notices():
+    """Keep native quota notices even when the phone page is closed."""
+    while True:
+        try:
+            entries = sessions()
+        except (OSError, ValueError, sqlite3.Error, subprocess.SubprocessError):
+            entries = []
+        for entry in entries:
+            try:
+                if entry.get('owner_pid') and entry.get('writable'):
+                    NOTIFIER.observe(entry, shared_status(entry))
+            except Exception:  # one odd pane must never stop the monitor for everyone
+                continue
+        time.sleep(2)
+
+
+def display_text(text):
+    def fence(value, language=''):
+        delimiter = '`' * max(3, max((len(part) + 1 for part in re.findall(r'`+', value)), default=3))
+        return delimiter + language + '\n' + value + '\n' + delimiter
+
+    def shell_command(match):
+        command, result = match[1].strip(), match[2].strip()
+        ticks = '`' * max(1, max((len(part) + 1 for part in re.findall(r'`+', command)), default=1))
+        rendered = '! ' + ticks + ' ' + command + ' ' + ticks if '\n' not in command else '!\n\n' + fence(command, 'sh')
+        exit_code = re.search(r'(?m)^Exit code:\s*(-?\d+)', result)
+        output_header = re.search(r'(?m)^Output:[ \t]*(?:\r?\n)?', result)
+        output = result[output_header.end():].strip('\r\n') if output_header else ''
+        if output:
+            rendered += '\n\n' + fence(output, 'text')
+        if exit_code and exit_code[1] != '0':
+            rendered += '\n\nExit code: ' + exit_code[1]
+        elif not output_header and not exit_code and result:
+            rendered += '\n\n' + fence(result, 'text')
+        return rendered
+
+    text = re.sub(r'<user_shell_command>\s*<command>(.*?)</command>\s*<result>(.*?)</result>\s*</user_shell_command>',
+                  shell_command, text, flags=re.DOTALL)
+    def answer(match):
+        try:
+            reply = json.loads(match.group(1))
+            return '\n'.join(item['answer'] for item in reply
+                             if isinstance(item, dict) and isinstance(item.get('answer'), str))
+        except (ValueError, TypeError):
+            return ''
+    return re.sub(r'<send_user_message_question_reply>(.*?)</send_user_message_question_reply>',
+                  answer, text, flags=re.DOTALL)
+
+
+def settings():
+    """The saved default conversation (optional: a fresh install has none)."""
+    try:
+        saved = json.loads(CONFIG.read_text())
+    except (OSError, ValueError):
+        saved = {}
+    return {'thread': saved.get('thread'), 'transcript': saved.get('transcript')}
+
+
+STATUS_CACHE = {}  # entry id -> (when, status)
+STATUS_LOCK = threading.Lock()
+
+
+def shared_status(entry):
+    """live_status for the session list and the monitor, which would otherwise each re-read the pane every few seconds."""
+    with STATUS_LOCK:
+        when, status = STATUS_CACHE.get(entry['id'], (0.0, None))
+        if time.monotonic() - when > 1:
+            try:
+                status = live_status(entry)
+            except (OSError, ValueError, KeyError, subprocess.SubprocessError):  # a pane that just closed must not fail the whole tab list
+                status = {'state': 'Unavailable', 'approval': None}
+            STATUS_CACHE[entry['id']] = (time.monotonic(), status)
+            track(entry['id'], status['state'])
+        return status
+
+
+TRANSITIONS = {}  # entry id -> {'state', 'since', 'finished'}: wall-clock times, so the phone can sort and mark finished turns
+
+
+ACTIVE_STATES = ('Working', 'Approval', 'Input needed')  # the turn is not over while the agent waits on you
+
+
+def track(identifier, state, now=None):
+    """Remember when a pane changed state, and when its last turn ended (Working, Approval or Input needed, then anything calmer)."""
+    now = now or time.time()
+    seen = TRANSITIONS.get(identifier)
+    if not seen:
+        TRANSITIONS[identifier] = {'state': state, 'since': now, 'finished': None}
+    elif seen['state'] != state:
+        if seen['state'] in ACTIVE_STATES and state not in ACTIVE_STATES:
+            seen['finished'] = now
+        seen.update(state=state, since=now)
+
+
+def timeline(identifier):
+    seen = TRANSITIONS.get(identifier) or {}
+    return {'since': seen.get('since'), 'finished': seen.get('finished')}
+
+
+SESSIONS_CACHE = [0.0, []]
+SESSIONS_LOCK = threading.Lock()
+
+
+def sessions():
+    """Discovery shells out (ps, tmux, sqlite); every open page and the monitor ask every 2s, so share one result for a second."""
+    with SESSIONS_LOCK:
+        if time.monotonic() - SESSIONS_CACHE[0] > 1:
+            SESSIONS_CACHE[1] = discover(settings(), subprocess.run)
+            SESSIONS_CACHE[0] = time.monotonic()
+        return SESSIONS_CACHE[1]
+
+
+# Writes that add, remove or rename tmux panes or sessions. After one succeeds, the next list must come from tmux,
+# so a page that refreshes right away sees the new pane (or no longer sees the closed one).
+TMUX_WRITES = {'/mobile/api/split', '/mobile/api/fork', '/mobile/api/resume', '/mobile/api/shell', '/mobile/api/session',
+               '/mobile/api/tmux-sessions', '/mobile/api/rename', '/mobile/api/pane-name', '/mobile/api/side-shell',
+               '/mobile/api/side-shell/end', '/mobile/api/start', '/mobile/api/merge'}
+
+
+def forget_sessions():
+    with SESSIONS_LOCK:
+        SESSIONS_CACHE[0] = 0.0
+
+
+def session_row(entry):
+    """One pane in the session list. `needs` is a one-line summary when the pane waits on the user (the desktop "Needs you" list)."""
+    status = shared_status(entry)
+    return dict({key: entry.get(key) for key in ('id', 'tmux_session', 'label', 'agent', 'thread', 'writable', 'pane_name', 'agent_name', 'codex_profile')},
+                dir=home_path(tab_folder(entry)), **status, **timeline(entry['id']), needs=needs.summary(status))
+
+
+def files_sessions():
+    """Live panes and their folders, for the Files explorer's Places."""
+    return [{'session': entry['id'], 'name': entry.get('pane_name') or entry.get('label') or entry.get('tmux_session'),
+             'agent': entry.get('agent'), 'cwd': tab_folder(entry)} for entry in sessions()]
+
+
+def name_together(pane, name, from_session):
+    """Keep one name per pane: the agent gets `/rename NAME`, and in a tmux session with only this pane the session
+    and the pane share the name too. from_session: the user renamed the session (else the pane). Returns a note or ''."""
+    entries = sessions()
+    entry = next((e for e in entries if e['id'] == pane), None)
+    if not entry or not name:
+        return ''
+    alone = sum(e.get('tmux_session') == entry.get('tmux_session') for e in entries) == 1
+    if alone and from_session:
+        subprocess.run([paths.TMUX, 'set-option', '-p', '-t', pane, '@chat_name', name, ';', 'set-option', '-p', '-t', pane,
+                        '@chat_name_at', str(int(time.time() * 1000))], capture_output=True, timeout=5)
+    elif alone and valid_name(name) and name != entry.get('label'):
+        subprocess.run([paths.TMUX, 'rename-session', '-t', pane, name], capture_output=True, timeout=5)  # a taken name keeps the old one
+    if from_session and not alone:
+        return ''
+    return rename_agent(entry, name)
+
+
+def choose(identifier=None):
+    entries = sessions()
+    if identifier is None:
+        if not entries:
+            raise ValueError('No tmux sessions found. Start one (tmux new -s work) and run an agent in it.')
+        return next((entry for entry in entries if entry.get('thread') and entry.get('thread') == settings()['thread']), entries[0])
+    entry = next((entry for entry in entries if entry['id'] == identifier), None)
+    if not entry:
+        raise ValueError('That session has ended. Select another tab.')
+    return entry
+
+
+CODEX_COMMAND = re.compile(r'\bcmd\s*:\s*("(?:[^"\\]|\\.)*")')
+QUIET_CALLS = {'wait', 'sleep'}
+
+
+def codex_action_lines(payload):
+    """One short line per command or tool call in a Codex response item."""
+    name = payload.get('name') or 'tool'
+    raw = payload.get('input') if payload.get('type') == 'custom_tool_call' else payload.get('arguments')
+    if not isinstance(raw, str):
+        return ['Ran a script' if name == 'exec' else name]
+    commands = []
+    for found in CODEX_COMMAND.findall(raw):
+        try:
+            commands.append(json.loads(found))
+        except ValueError:
+            continue
+    if not commands and payload.get('type') == 'function_call':
+        try:
+            arguments = json.loads(raw)
+            commands = [arguments.get('cmd') or arguments.get('command')] if isinstance(arguments, dict) else []
+        except ValueError:
+            pass
+    commands = [command for command in commands if isinstance(command, str) and command.strip()]
+    if commands:
+        return ['Ran ' + command.strip().split('\n')[0] for command in commands]
+    return [] if name in QUIET_CALLS else ['Ran a script' if name == 'exec' else name]
+
+
+def codex_state():
+    return {'messages': [], 'dropped': 0, 'busy': False, 'usage': None, 'model': '', 'effort': '', 'credits': None}
+
+
+def codex_consume(state, index, entry):
+    """Fold one rollout record into the chat messages, busy flag and latest usage figures."""
+    messages = state['messages']
+    payload = entry.get('payload', {})
+    kind = payload.get('type')
+    if entry.get('type') == 'turn_context' and payload.get('model'):
+        state['model'] = str(payload['model'])
+        state['effort'] = payload.get('effort') or payload.get('reasoning_effort') or ''
+    if entry.get('type') == 'event_msg':
+        if kind in ('error', 'warning'):
+            text = error_message(payload)
+            if text:
+                messages.append({'id': str(index), 'role': 'assistant', 'kind': 'notice',
+                                 'text': text, 'time': entry.get('timestamp')})
+        if kind == 'token_count':
+            info = payload.get('info') or {}
+            tokens = (info.get('last_token_usage') or {}).get('total_tokens')
+            limit = info.get('model_context_window')
+            rates = payload.get('rate_limits') or {}
+            windows = [{'label': f"{value['window_minutes'] / 60:g}h", 'percent': value.get('used_percent'),
+                        'resets_at': value.get('resets_at')}
+                       for key in ('primary', 'secondary') if isinstance((value := rates.get(key)), dict)
+                       and isinstance(value.get('window_minutes'), (int, float)) and value.get('used_percent') is not None]
+            previous = state['usage'] or ({}, [], None)
+            context = {'percent': tokens / limit * 100 if tokens is not None and limit else None,
+                       'tokens': tokens, 'limit': limit, 'total_token_usage': info.get('total_token_usage')}
+            state['usage'] = (context if info else previous[0], windows if rates else previous[1], entry.get('timestamp'))
+            if rates:
+                state['credits'] = rates.get('credits')
+        if kind == 'task_started':
+            state['busy'] = True
+        elif kind in ('task_complete', 'turn_aborted'):
+            state['busy'] = False
+    if entry.get('type') == 'compacted' or (entry.get('type') == 'response_item' and kind == 'compaction'):
+        messages.append(activity.notice(index, entry.get('timestamp'), 'Context compacted.'))
+        return
+    if entry.get('type') == 'event_msg' and kind == 'turn_aborted':
+        messages.append(activity.notice(index, entry.get('timestamp'), 'Turn ' + str(payload.get('reason') or 'aborted') + '.'))
+        return
+    if entry.get('type') == 'response_item' and kind in ('custom_tool_call', 'function_call'):
+        lines = codex_action_lines(payload)
+        item = activity.action(f'{index}.0', entry.get('timestamp'), '; '.join(lines))
+        item['tool'] = tool_details.summary(payload)
+        messages.append(item)
+        return
+    if entry.get('type') == 'response_item' and kind in ('function_call_output', 'custom_tool_call_output'):
+        tool_details.mark_result(messages, payload.get('call_id'), payload)
+        return
+    if entry.get('type') != 'response_item' or kind != 'message':
+        return
+    role = payload.get('role')
+    if role not in ('user', 'assistant'):
+        return
+    text = '\n'.join(item.get('text', '') for item in payload.get('content', [])
+                     if item.get('type') in ('input_text', 'output_text', 'text'))
+    text = display_text(text)
+    if not text.strip() or text.startswith('# AGENTS.md instructions'):
+        return
+    messages.append({'id': str(index), 'role': role, 'text': text,
+                     'time': entry.get('timestamp'), 'phase': payload.get('phase')})
+
+
+def claude_cwd(entry):
+    """Where a Claude or Antigravity session is working now: its transcript records the folder, which changes as it moves around."""
+    try:
+        with open(entry['transcript'], 'rb') as handle:
+            size = handle.seek(0, 2)
+            window = 131072
+            pattern = rb'"Cwd":"(?:\\")?(/[^"\\]+)' if entry.get('agent') == 'antigravity' else rb'"cwd":"((?:[^"\\]|\\.)*)"'
+            while True:  # a long run of tool output can push the last folder record far from the end: widen until found
+                handle.seek(max(0, size - window))
+                found = re.findall(pattern, handle.read())
+                if found or window >= size or window >= 33554432:
+                    break
+                window *= 4
+        return json.loads('"' + found[-1].decode('utf-8', 'ignore') + '"') if found else None
+    except (OSError, KeyError, ValueError):
+        return None
+
+
+def codex_cwd(entry):
+    """Where a Codex session works now: each turn records its folder, so a /cd shows from the next turn on."""
+    try:
+        with open(entry['transcript'], 'rb') as handle:
+            size = handle.seek(0, 2)
+            window = 262144
+            while True:  # long tool output can push the last turn record far from the end, so widen the search until it is found
+                handle.seek(max(0, size - window))
+                found = re.findall(rb'"type":"turn_context","payload":\{[^\n]*?"cwd":"((?:[^"\\]|\\.)*)"', handle.read())
+                if found or window >= size or window >= 33554432:
+                    break
+                window *= 4
+        return json.loads('"' + found[-1].decode('utf-8', 'ignore') + '"') if found else None
+    except (OSError, KeyError, ValueError):
+        return None
+
+
+def antigravity_model(entry, usage):
+    """agy's status report can be minutes behind a model change, but its history notes every change on the next message
+    ("changed setting `Model Selection` from A to B"); when that is newer than the report, show B."""
+    try:
+        reported = (usage or {}).get('reported_at') or 0
+        path = entry['transcript']
+        if os.stat(path).st_mtime <= reported:
+            return None
+        with open(path, 'rb') as handle:
+            size = handle.seek(0, 2)
+            handle.seek(max(0, size - 262144))
+            found = re.findall(rb'Model Selection` from .{1,120}? to (.{1,120}?)\.\s+No need', handle.read())
+        return found[-1].decode('utf-8', 'ignore') if found else None
+    except (OSError, KeyError, ValueError, TypeError):
+        return None
+
+
+def antigravity_cwd(entry):
+    """Antigravity reports its folder with every status update; its transcript only sometimes records one."""
+    try:
+        reported = json.loads((paths.CACHE / 'antigravity' / (entry['thread'] + '.json')).read_text())
+        return reported.get('cwd') or None
+    except (OSError, KeyError, ValueError):
+        return None
+
+
+def agent_folder(entry):
+    """Where the agent itself says it is working."""
+    agent = entry.get('agent')
+    found = (claude_cwd(entry) if agent in ('claude', 'antigravity') else codex_cwd(entry) if agent == 'codex' else None) \
+        or (antigravity_cwd(entry) if agent == 'antigravity' else None)
+    return found or entry.get('thread_cwd') or entry.get('cwd')
+
+
+def tab_folder(entry):
+    """The folder a tab shows: where the agent works, except that a `!cd` made in the tab sticks until the agent moves somewhere else
+    (agents often snap back to their start folder after a command, which must not undo the user's cd)."""
+    folder = agent_folder(entry)
+    shell = shell_log.moved(entry['id'])
+    if shell and shell[3] in (None, str(entry.get('process_start'))) and (shell[2] is None or shell[2] == folder):
+        return shell[0]
+    return folder
+
+
+def home_path(path):
+    """A folder as shown to people: <home>/x becomes ~/x."""
+    if not path:
+        return ''
+    home = str(Path.home())
+    return '~' + path[len(home):] if path == home or path.startswith(home + '/') else path
+
+
+RATES_FILE = paths.CACHE / 'codex_rates.json'
+LAST_RATES = [None]
+
+
+def recent_rates(limit=6, tail=400_000):
+    """The newest allowance report found in the most recent Codex history files, as (windows, reported_at)."""
+    files = sorted((paths.CODEX / 'sessions').glob('**/rollout-*.jsonl'), key=lambda path: path.stat().st_mtime, reverse=True)[:limit]
+    for path in files:
+        try:
+            with open(path, 'rb') as stream:
+                stream.seek(0, 2)
+                stream.seek(max(0, stream.tell() - tail))
+                lines = stream.read().decode('utf-8', 'ignore').splitlines()
+        except OSError:
+            continue
+        for line in reversed(lines):
+            if '"token_count"' not in line or '"rate_limits"' not in line:
+                continue
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            rates = (entry.get('payload') or {}).get('rate_limits') or {}
+            windows = [{'label': f"{value.get('window_minutes', 0) / 60:g}h", 'percent': value.get('used_percent'), 'resets_at': value.get('resets_at')}
+                       for key in ('primary', 'secondary') if isinstance((value := rates.get(key)), dict)]
+            if windows:
+                return windows, entry.get('timestamp')
+    return [], None
+
+
+def usage_summary(now=None, live_age=None):
+    """Account allowances for the sidebar: Claude from the newest status-line report, Codex from the newest rollout report.
+    With live_age, a live Codex check no older than that many seconds replaces a saved report that is older."""
+    now = now or time.time()
+    claude = None
+    from agents import METRICS
+    try:
+        files = sorted(METRICS.glob('*.json'), key=lambda path: path.stat().st_mtime, reverse=True)[:20]
+    except OSError:
+        files = []
+    for path in files:
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        rates = data.get('rate_limits') or {}
+        windows = [{'label': {'five_hour': '5h', 'seven_day': '7d'}.get(name, name.replace('_', ' ')),
+                    'percent': value.get('used_percentage'), 'resets_at': value.get('resets_at')}
+                   for name, value in rates.items() if isinstance(value, dict) and value.get('used_percentage') is not None]
+        if windows:
+            claude = {'windows': windows, 'reported_at': data.get('reported_at')}
+            break
+    codex = None
+    try:
+        saved = json.loads(RATES_FILE.read_text())
+        windows, reported = saved['windows'], saved.get('reported_at')
+    except (OSError, ValueError, KeyError, TypeError):
+        windows, reported = recent_rates()
+    if windows:
+        codex = {'windows': [dict(w, label={'168h': '7d'}.get(w.get('label'), w.get('label'))) for w in windows], 'reported_at': reported}
+    errors = {}
+    if live_age is not None:
+        # Claude: a live check through Claude Code's SDK mode (no prompt, no cost). Runs beside the Codex check.
+        claude_live = {}
+        worker = threading.Thread(target=lambda: claude_live.update(claude_probe.check_usage(live_age)), daemon=True)
+        worker.start()
+        result = live_usage.check(live_age)
+        worker.join(45)
+        report = claude_live.get('report')
+        if report and report['windows'] and (epoch_of((claude or {}).get('reported_at')) or 0) <= report['reported_at']:
+            claude = dict(report, windows=[dict(window) for window in report['windows']])
+        if claude_live.get('error'):
+            errors['claude'] = claude_live['error']
+        report = result.get('report')
+        if report and report['windows'] and (epoch_of((codex or {}).get('reported_at')) or 0) <= report['reported_at']:
+            codex = dict(report, windows=[dict(window) for window in report['windows']], source='live')
+        if result.get('error'):
+            errors['codex'] = result['error']
+    for report in (claude, codex):  # a window that has reset since the report is back at 0%
+        for window in (report or {}).get('windows', []):
+            if isinstance(window.get('resets_at'), (int, float)) and window['resets_at'] <= now:
+                window.update(percent=0, resets_at=None)
+    return {'claude': claude, 'codex': codex, 'accounts': accounts.summary(), 'live_errors': errors}
+
+
+def epoch_of(value):
+    if isinstance(value, (int, float)) or value is None:
+        return value
+    try:
+        return datetime.fromisoformat(str(value).replace('Z', '+00:00')).timestamp()
+    except ValueError:
+        return None
+
+
+def fresh_codex_screen(screen):
+    """True when the pane shows Codex's start banner and nothing said yet (a new session, or one just cleared with /clear)."""
+    lines = [line.strip() for line in screen.splitlines()]
+    if not any('OpenAI Codex' in line for line in lines):
+        return False
+    return not any(line.startswith('•') for line in lines) and sum(line.startswith('›') for line in lines) <= 1
+
+
+def codex_metrics(config, reported_usage, model='', effort='', credits=None):
+    """Rings for a Codex tab. Allowances are account-wide, so a tab that has not reported yet reuses the last report seen;
+    the context figure falls back to the terminal footer ("Context 97% left") until the first turn is recorded."""
+    context, windows, reported = reported_usage or ({}, [], None)
+    inherited = False
+    if windows:
+        saved = json.dumps({'windows': windows, 'reported_at': reported})
+        if (str(RATES_FILE), saved) != LAST_RATES[0] or not RATES_FILE.exists():  # rewrite if the file moved or was deleted
+            try:
+                RATES_FILE.parent.mkdir(parents=True, exist_ok=True)
+                RATES_FILE.write_text(saved)
+                LAST_RATES[0] = (str(RATES_FILE), saved)
+            except OSError:
+                pass
+    else:
+        try:
+            saved = json.loads(RATES_FILE.read_text())
+            windows, reported, inherited = saved['windows'], saved.get('reported_at'), True
+        except (OSError, ValueError, KeyError, TypeError):
+            windows, reported = recent_rates()
+            inherited = bool(windows)
+    try:
+        screen = capture(config)
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        screen = ''
+    shown = footer.codex_screen(screen)
+    if fresh_codex_screen(screen):
+        context = {}  # /clear leaves the previous rollout in place until the next turn.
+    if not model or model == shown.get('model'):
+        effort = effort or shown.get('effort', '')
+    model = model or shown.get('model', '')
+    if context.get('percent') is None:
+        context = shown.get('context', context)
+    if not windows:
+        windows = shown.get('windows', [])
+    report = usage(context, windows, reported)
+    report.update(model=model, effort=effort, credits=credits if credits is not None else shown.get('credits'))
+    if inherited:
+        stamp = reported
+        try:
+            stamp = datetime.fromisoformat(str(reported).replace('Z', '+00:00')).timestamp()
+        except ValueError:
+            pass
+        report.update(allowance_inherited=any(report[key] for key in ('five_hour', 'weekly')), allowance_reported_at=stamp)
+    return report
+
+
+def snapshot(config=None):
+    config = config or settings()
+    if config.get('agent') == 'claude':
+        terminal_replies.capture_banner(config, lambda entry: capture_screen(entry, 2000))  # the banner scrolls away in a long session
+        data = claude_snapshot(config, display_text)
+        data = dict(data, messages=terminal_replies.merge(config, data['messages']))
+        return dict(data, thread=config['thread'], agent='claude', writable=config['writable'], session=config['id'])
+    if config.get('agent') == 'antigravity' and config.get('transcript'):
+        terminal_replies.capture_banner(config, capture)
+        data = antigravity_snapshot(config, display_text, records, usage)
+        shown = antigravity_model(config, data.get('usage'))
+        if shown:
+            windows = [dict(w, active=window_active(w['label'], shown)) for w in data['usage']['windows']]
+            data = dict(data, usage=dict(usage(data['usage']['context'], windows, data['usage']['reported_at']), model=shown))
+        return dict(data, messages=terminal_replies.merge(config, data['messages'])) if isinstance(data.get('messages'), list) else data
+    if config.get('agent') in ('shell', 'antigravity') or config.get('ambiguous'):
+        return {'messages': [], 'thread': None, 'agent': config['agent'], 'busy': False,
+                'writable': False, 'session': config['id'], 'usage': usage(),
+                'unsupported': ('Multiple Codex sessions share this directory; their conversation mapping is ambiguous. Use Termius until each is mapped explicitly.'
+                                if config.get('ambiguous') else ''
+                                if config.get('agent') == 'shell' else 'This session does not expose a supported chat transcript. Use Termius for this session.')}
+    terminal_replies.capture_banner(config, capture)
+    path = Path(config['transcript'])
+    metrics = usage()
+    if not path.is_file():
+        metrics = codex_metrics(config, None)
+        return {'messages': terminal_replies.merge(config, merge_quota_notices(dict(config, agent='codex'), [])), 'busy': False, 'thread': config['thread'], 'usage': metrics, 'footer': footer.codex(metrics),
+                'agent': 'codex', 'writable': config.get('writable', True), 'session': config.get('id')}
+    state = history.read(path, codex_state, codex_consume)
+    messages, busy = state['messages'], state['busy']
+    try:
+        cleared = fresh_codex_screen(capture(config))
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        cleared = False
+    if cleared:  # /clear starts a new conversation that has no history file yet; the old one must not show through
+        messages, busy = [], False
+    metrics = codex_metrics(config, state['usage'], state.get('model', ''), state.get('effort', ''), state.get('credits'))
+    return {'messages': terminal_replies.merge(config, merge_quota_notices(dict(config, agent='codex'), activity.group_actions(activity.merge(list(messages))))), 'dropped': state['dropped'], 'busy': busy, 'thread': config['thread'], 'usage': metrics,
+            'agent': 'codex', 'writable': config.get('writable', True), 'session': config.get('id'), 'footer': footer.codex(metrics)}
+
+
+def submit(message, config=None):
+    config = config or settings()
+    if not config.get('writable', True):
+        raise RuntimeError('Messaging is unavailable for this session. Use Termius.')
+    with SEND_LOCK:
+        terminal_submit(config, message)
+
+
+DEFAULT_WINDOW = 150
+MAX_WINDOW = 2000
+
+
+def window_limit(query):
+    try:
+        return max(20, min(int(query.get('limit', [DEFAULT_WINDOW])[0]), MAX_WINDOW))
+    except ValueError:
+        return DEFAULT_WINDOW
+
+
+def chat_payload(config, shell_mode=False, limit=DEFAULT_WINDOW, preview=False):
+    """One chat view: the latest `limit` messages plus how many older ones were left out."""
+    before = change_signature(config) if preview else None
+    shell = config['agent'] == 'shell' and shell_mode
+    state = {'state': 'Shell', 'approval': None} if shell else live_status(config)
+    data = shell_snapshot(config) if shell else snapshot(config)
+    if not shell and isinstance(data.get('messages'), list):
+        data = dict(data, messages=shell_log.merge(config['id'], data['messages']))
+    if data.get('busy') and state['state'] == 'Idle':
+        state['state'] = 'Working'
+    if not (config['agent'] == 'claude' and plan_menu(state.get('approval') or state.get('attention'))):
+        data.pop('plan', None)
+    ask = data.pop('ask', None) if isinstance(data, dict) else None
+    if ask and state.get('attention') and not state['attention'].get('options'):
+        # The screen shows only the bottom of a tall question: show the whole question from the transcript.
+        state = dict(state, attention=dict(state['attention'], ask=ask))
+    messages = data.get('messages')
+    earlier = max(0, len(messages) - limit) if isinstance(messages, list) else 0
+    dropped = data.pop('dropped', 0) if isinstance(data, dict) else 0
+    if earlier:
+        data = dict(data, messages=messages[-limit:])
+    result = dict(data, earlier=earlier + dropped, limit=limit, max_limit=MAX_WINDOW, **state)
+    if preview and config['agent'] == 'claude' and state['state'] == 'Working':
+        try:
+            screen, width = reply_preview.sample(config)
+            text = reply_preview.extract(screen, width, messages or [])
+        except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+            text = None
+        # Do not pair an old transcript snapshot with a block that just committed.
+        if text and before == change_signature(config):
+            result['preview'] = {'text': text}
+    return result
+
+
+def find_messages(messages, query, limit=60):
+    """Messages whose text holds every word of the query (any case), newest first. `from_end` is the chat window
+    needed to show the message (1 = the newest), so the UI can load it and scroll to it."""
+    words = query.lower().split()
+    if not words or not isinstance(messages, list):
+        return {'matches': [], 'total': 0}
+    found = []
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        text = str(message.get('text') or '')
+        lower = text.lower()
+        if all(word in lower for word in words):
+            at = lower.find(words[0])
+            start = max(0, at - 60)
+            snippet = ' '.join(text[start:at + len(words[0]) + 120].split())
+            found.append({'id': message.get('id'), 'role': message.get('role'), 'kind': message.get('kind'), 'time': message.get('time'),
+                          'from_end': len(messages) - index, 'snippet': ('…' if start else '') + snippet})
+    return {'matches': found[:limit], 'total': len(found)}
+
+
+def search_payload(config, query, shell_mode=False):
+    shell = config['agent'] == 'shell' and shell_mode
+    data = shell_snapshot(config) if shell else snapshot(config)
+    messages = data.get('messages')
+    if not shell and isinstance(messages, list):
+        messages = shell_log.merge(config['id'], messages)
+    return dict(find_messages(messages, query), max_limit=MAX_WINDOW)
+
+
+def change_signature(config):
+    """Cheap fingerprint of everything a chat view is built from: history file and agent status file; no tmux subprocess."""
+    parts = []
+    for path in (config.get('transcript'), config.get('registry')):
+        try:
+            info = os.stat(path)
+            parts.append((info.st_ino, info.st_mtime_ns, info.st_size))
+        except (OSError, TypeError):
+            parts.append(None)
+    return tuple(parts)
+
+
+CHAT_UI_ROOT = Path(os.environ.get('TMUX_CHAT_DIST', str(Path(__file__).resolve().parent.parent / 'ui' / 'dist')))
+CHAT_UI_TYPES = {'.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png',
+                 '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.ico': 'image/x-icon', '.woff2': 'font/woff2'}
+
+
+class Handler(BaseHTTPRequestHandler):
+    timeout = 60  # a client that stalls mid-request must not hold a thread forever
+
+    def respond(self, status, body, content_type='application/json', cache='no-store'):
+        data = body if isinstance(body, bytes) else body.encode() if isinstance(body, str) else json.dumps(body).encode()
+        if self.command in ('POST', 'DELETE') and status < 300 and self.path.split('?', 1)[0] in TMUX_WRITES:
+            forget_sessions()
+        self.send_response(status)
+        self.send_header('Content-Type', content_type + '; charset=utf-8')
+        self.send_header('Content-Length', str(len(data)))
+        self.send_header('Cache-Control', cache)
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.end_headers()
+        self.wfile.write(data)
+
+    def send_file(self, path, kind):
+        """A media file with Range support, so a phone video can seek without loading the whole file."""
+        size = path.stat().st_size
+        try:
+            span = media_files.byte_range(self.headers.get('Range'), size)
+        except ValueError:
+            self.send_response(416)
+            self.send_header('Content-Range', 'bytes */%d' % size)
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+            return
+        start, end = span or (0, size - 1)
+        self.send_response(206 if span else 200)
+        self.send_header('Content-Type', kind)
+        self.send_header('Content-Length', str(max(0, end - start + 1)))
+        self.send_header('Accept-Ranges', 'bytes')
+        if span:
+            self.send_header('Content-Range', 'bytes %d-%d/%d' % (start, end, size))
+        self.send_header('Cache-Control', 'private, no-cache')
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('Content-Disposition', 'inline')
+        if kind == media_files.TEXT:
+            self.send_header('Content-Security-Policy', 'sandbox')
+        self.end_headers()
+        with open(path, 'rb') as stream:
+            stream.seek(start)
+            left = end - start + 1
+            try:
+                while left > 0 and (chunk := stream.read(min(left, 262144))):
+                    self.wfile.write(chunk)
+                    left -= len(chunk)
+            except (BrokenPipeError, ConnectionResetError):  # the player stopped or seeked
+                pass
+
+    def stream_chat(self, identifier, shell_mode, limit=DEFAULT_WINDOW, lifetime=600, preview=False):
+        """Server-sent events: push a fresh chat payload whenever something the chat view depends on changes."""
+        config = choose(identifier)
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('X-Accel-Buffering', 'no')
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        self.close_connection = True
+        watched = config.get('id')
+        with WATCHING_LOCK:
+            WATCHING[watched] = WATCHING.get(watched, 0) + 1
+        started = discovered = full = wrote = time.monotonic()
+        signature = last_body = screen = None
+        sampled = 0.0
+        working = False
+        try:
+            self.wfile.write(b'retry: 2000\n\n')
+            while time.monotonic() - started < lifetime:
+                now = time.monotonic()
+                try:
+                    if now - discovered >= 2:
+                        config, discovered = choose(identifier), now
+                    current = change_signature(config)
+                    screen_changed = False
+                    if now - sampled >= (.3 if working else 1):
+                        latest = reply_preview.sample(config)[0] if preview and working and config['agent'] == 'claude' else capture(config)
+                        screen_changed, screen, sampled = latest != screen, latest, now
+                    if current != signature or screen_changed or now - full >= 5:
+                        signature, full = current, now
+                        payload = chat_payload(config, shell_mode, limit, preview=True) if preview else chat_payload(config, shell_mode, limit)
+                        working = payload.get('state') == 'Working'
+                        body = json.dumps(payload)
+                        if body != last_body:
+                            last_body = body
+                            self.wfile.write(('data: ' + body + '\n\n').encode())
+                            wrote = now
+                except (OSError, ValueError, KeyError, sqlite3.Error, subprocess.SubprocessError) as exc:
+                    if isinstance(exc, (BrokenPipeError, ConnectionResetError)):
+                        raise
+                    self.wfile.write(b'event: unavailable\ndata: {}\n\n')
+                    wrote = now
+                    time.sleep(1)
+                if now - wrote >= KEEPALIVE:  # a named event: the page counts it as proof the stream is alive (comments are invisible to it)
+                    self.wfile.write(b'event: idle\ndata: {}\n\n')
+                    wrote = now
+                self.wfile.flush()
+                time.sleep(.1)  # stat is cheap; pane reads have a separate bounded cadence
+        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+            return
+        finally:
+            with WATCHING_LOCK:
+                WATCHING[watched] = max(0, WATCHING.get(watched, 1) - 1)
+
+    def deny(self):
+        """Answer and return True when the request is not signed in."""
+        if auth.signed_in(self.headers.get('Cookie')) or auth.tailscale_signed_in(self.headers.get('Tailscale-User-Login'), self.client_address[0]):
+            return False
+        if self.command == 'GET' and not self.path.startswith('/mobile/api/'):
+            self.send_response(302)
+            self.send_header('Location', '/mobile/login')
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+        else:
+            self.respond(401, {'error': 'Sign in required.'})
+        return True
+
+    def login(self, error=''):
+        self.respond(200 if not error else 401, auth.LOGIN_PAGE.replace('__ERROR__', error), 'text/html')
+
+    def do_login(self):
+        if not auth.same_origin(self.headers.get('Origin', ''), self.headers.get('Host', '')):
+            self.respond(403, {'error': 'Reload the page and try again.'})
+            return
+        try:
+            size = int(self.headers.get('Content-Length', '0') or 0)
+        except ValueError:
+            size = 0
+        if not 0 < size <= 1024:
+            self.respond(400, {'error': 'Invalid request.'})
+            return
+        candidate = parse_qs(self.rfile.read(size).decode('utf-8', 'ignore')).get('token', [''])[0]
+        outcome = auth.attempt(auth.client_id(self.client_address[0], self.headers.get('X-Forwarded-For')), candidate)
+        if outcome == 'ok':
+            secure = self.headers.get('X-Forwarded-Proto') == 'https' or self.headers.get('Origin', '').startswith('https://')
+            self.send_response(303)
+            self.send_header('Set-Cookie', auth.cookie_header(secure))
+            self.send_header('Location', '/chat/')  # the tmux-chat UI is the default; the old UI stays at /mobile/chat/
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+        else:
+            self.login('Too many attempts. Try again in a few minutes.' if outcome == 'blocked' else 'That token is not right.')
+
+    def proxy_terminal(self):
+        """Pass /terminal/live/ (ttyd, the full interactive terminal) through to the local ttyd, WebSocket included, after sign-in."""
+        origin = self.headers.get('Origin')
+        if origin and not auth.same_origin(origin, self.headers.get('Host', '')):
+            self.respond(403, {'error': 'Reload the page and try again.'})
+            return
+        try:
+            upstream = socket.create_connection(('127.0.0.1', TTYD_PORT), timeout=5)
+        except OSError:
+            self.respond(503, {'error': 'The live terminal is not running. Start ttyd (see the README) to use Interact.'})
+            return
+        upgrading = 'upgrade' in self.headers.get('Connection', '').lower()
+        lines = ['%s %s HTTP/1.1' % (self.command, self.path)]
+        lines += ['%s: %s' % (key, value) for key, value in self.headers.items()
+                  if key.lower() not in ('cookie', 'connection') or (key.lower() == 'connection' and upgrading)]
+        if not upgrading:
+            lines.append('Connection: close')
+        with upstream:
+            upstream.sendall(('\r\n'.join(lines) + '\r\n\r\n').encode())
+            upstream.settimeout(None)
+            pair = {self.connection: upstream, upstream: self.connection}
+            try:
+                while True:
+                    ready, _, _ = select.select(list(pair), [], [], 600)
+                    if not ready:
+                        return
+                    for source in ready:
+                        data = source.recv(65536)
+                        if not data:
+                            return
+                        pair[source].sendall(data)
+            except OSError:
+                return
+
+    def serve_chat_ui(self, path):
+        """Serve the Tether UI from CHAT_UI_ROOT; API requests still need the sign-in cookie."""
+        root = CHAT_UI_ROOT.resolve()
+        target = (root / unquote(path[len('/chat/'):])).resolve()
+        if root not in target.parents and target != root:
+            self.respond(404, {'error': 'Not found'})
+            return
+        if not target.is_file():
+            target = root / 'index.html'  # single-page app: unknown paths load the app
+        if not target.is_file():
+            self.respond(404, {'error': 'The chat UI is not built yet.'})
+            return
+        kind = CHAT_UI_TYPES.get(target.suffix, 'application/octet-stream')
+        cache = 'max-age=31536000, immutable' if target.parent.name == 'assets' else 'no-cache'
+        self.respond(200, target.read_bytes(), kind, cache)
+
+    def do_GET(self):
+        path = self.path.split('?', 1)[0]
+        if path in ('/chat', '/', '/mobile', '/mobile/'):  # old home-screen icons open /mobile/: send them to the new UI
+            self.send_response(301)
+            self.send_header('Location', '/chat/')
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+            return
+        if path.startswith('/chat/'):
+            self.serve_chat_ui(path)
+            return
+        if path.startswith('/terminal/live/'):
+            if not self.deny():
+                self.proxy_terminal()
+            return
+        if path == '/mobile/login':
+            if auth.tailscale_signed_in(self.headers.get('Tailscale-User-Login'), self.client_address[0]):
+                self.send_response(302)  # already signed in by Tailscale: skip the token page
+                self.send_header('Location', '/chat/')
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+            else:
+                self.login()
+            return
+        if path not in ('/mobile/manifest.webmanifest', '/mobile/icon-192.png', '/mobile/icon-512.png', '/mobile/apple-touch-icon.png') and self.deny():
+            return
+        try:
+            if path in ('/mobile/terminal/', '/mobile/terminal'):
+                self.respond(200, TERMINAL_ASSETS['html'], 'text/html')
+            elif path == '/mobile/termius.js':
+                self.respond(200, TERMINAL_ASSETS['js'], 'text/javascript')
+            elif path in ('/mobile/chat/', '/mobile/chat'):
+                self.respond(200, UI_ASSETS['index.html'], 'text/html')
+            elif path == '/mobile/app.js':
+                self.respond(200, UI_ASSETS['app.js'], 'text/javascript')
+            elif path.startswith('/mobile/vendor/') and '/mobile/' + path.rsplit('/', 1)[1] in STATIC_ASSETS:
+                self.respond(200, STATIC_ASSETS['/mobile/' + path.rsplit('/', 1)[1]], 'text/javascript', 'max-age=86400')
+            elif path == '/mobile/sw.js':  # no cache: browsers must see service-worker updates
+                self.respond(200, STATIC_ASSETS[path], 'text/javascript')
+            elif path == '/mobile/manifest.webmanifest':
+                self.respond(200, STATIC_ASSETS[path], 'application/manifest+json', 'max-age=86400')
+            elif path in ('/mobile/icon-192.png', '/mobile/icon-512.png', '/mobile/apple-touch-icon.png'):
+                self.respond(200, STATIC_ASSETS[path], 'image/png', 'max-age=86400')
+            elif path == '/mobile/api/shortcuts':
+                self.respond(200, {'shortcuts': shortcuts.load()})
+            elif path == '/mobile/api/prefs':
+                self.respond(200, prefs_sync.load())
+            elif path == '/mobile/api/codex-provider':
+                self.respond(200, codex_provider.status())
+            elif path == '/mobile/api/update': self.respond(200, updates.payload())
+            elif path == '/mobile/api/host':
+                self.respond(200, {'name': socket.gethostname().split('.')[0], 'resources': host_stats.enabled(), 'terminal': TTYD_PORT > 0})
+            elif path == '/mobile/api/host-stats':
+                result = host_stats.payload()
+                self.respond(200, result) if result is not None else self.respond(404, {'error': 'Host resources are disabled.'})
+            elif path == '/mobile/api/foundry-spend':
+                self.respond(200, foundry_spend.report(codex_provider.status()['model']))
+            elif path in ('/mobile/api/catalog', '/mobile/api/files'):
+                query = parse_qs(urlsplit(self.path).query)
+                config = choose(query.get('session', [None])[0])
+                folder = tab_folder(config)
+                if path == '/mobile/api/catalog':
+                    self.respond(200, catalog.catalog(config['agent'], folder, config.get('transcript')))
+                else:
+                    self.respond(200, {'files': catalog.find_files(folder, query.get('q', [''])[0][:200])})
+            elif path == '/mobile/api/footer':
+                config = choose(parse_qs(urlsplit(self.path).query).get('session', [None])[0])
+                result = footer.parse(capture(config, styled=True)) if config['agent'] == 'claude' else {}
+                if config['agent'] == 'codex' and not config.get('ambiguous'):
+                    state = history.read(config['transcript'], codex_state, codex_consume)
+                    result = footer.codex(codex_metrics(config, state['usage'], state['model'], state.get('effort', ''), state.get('credits')))
+                if result.get('heads_up'):
+                    result['heads_up'] = footer.card_note(result['heads_up'], config.get('thread'))
+                self.respond(200, result)
+            elif path == '/mobile/api/shell-output':
+                query = parse_qs(urlsplit(self.path).query)
+                config = choose(query.get('session', [None])[0])
+                try:
+                    self.respond(200, live_state.shell_output(config.get('thread') if config['agent'] == 'claude' else None, query.get('task', [None])[0]))
+                except ValueError as exc:
+                    self.respond(400, {'error': str(exc)})
+            elif path == '/mobile/api/live':
+                config = choose(parse_qs(urlsplit(self.path).query).get('session', [None])[0])
+                self.respond(200, live_state.for_thread(config.get('thread')) if config['agent'] == 'claude' else {'goal': None, 'tasks': []})
+            elif path == '/mobile/api/accounts':
+                try:
+                    self.respond(200, saved_accounts.listing())
+                except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as exc:
+                    self.respond(502, {'error': str(exc) if isinstance(exc, RuntimeError) else 'Could not read saved accounts.'})
+            elif path == '/mobile/api/login/state':
+                try:
+                    self.respond(200, login_flow.runner.state(parse_qs(urlsplit(self.path).query).get('agent', [None])[0]))
+                except ValueError as exc:
+                    self.respond(400, {'error': str(exc)})
+            elif path == '/mobile/api/usage':
+                # Only the sheet's Refresh starts a Codex check (at most one per 30 s); the 60 s sidebar poll reuses its result.
+                self.respond(200, usage_summary(live_age=30 if parse_qs(urlsplit(self.path).query).get('live') == ['1'] else float('inf')))
+            elif path == '/mobile/api/history':
+                query = parse_qs(urlsplit(self.path).query)
+                try:
+                    limit = int(query.get('limit', [30])[0])
+                    if not 1 <= limit <= 100:
+                        raise ValueError('Invalid limit.')
+                except ValueError:
+                    self.respond(400, {'error': 'Use a limit from 1 to 100.'})
+                    return
+                live = {entry.get('thread') for entry in sessions()}
+                chats = [dict(id=chat['id'], title=chat['title'], dir=home_path(chat['cwd']) or None,
+                              time=chat['time'], live=chat['id'] in live) for chat in history.recent_chats(limit)]
+                self.respond(200, {'chats': chats})
+            elif path == '/mobile/api/push/config':
+                self.respond(200, {'supported': push.available(), 'publicKey': push.vapid_keys()[1] if push.available() else None, 'muted': push.muted()})
+            elif path == '/mobile/api/search':
+                query = parse_qs(urlsplit(self.path).query)
+                config = choose(query.get('session', [None])[0])
+                self.respond(200, search_payload(config, query.get('q', [''])[0][:200], query.get('mode') == ['shell']))
+            elif path == '/mobile/api/file':
+                query = parse_qs(urlsplit(self.path).query)
+                config = choose(query.get('session', [None])[0])
+                try:
+                    found, kind = media_files.resolve(query.get('path', [''])[0], tab_folder(config))
+                except ValueError as exc:
+                    self.respond(404, {'error': str(exc)})
+                    return
+                self.send_file(found, kind)
+            elif path in ('/mobile/api/repo/changes', '/mobile/api/repo/diff', '/mobile/api/repo/tree'):
+                # The Changes and Files side panels. folder: the panel's folder (~/x); without it, the tab's own folder.
+                query = parse_qs(urlsplit(self.path).query)
+                folder = query.get('folder', [''])[0] or tab_folder(choose(query.get('session', [None])[0]))
+                try:
+                    if path == '/mobile/api/repo/changes':
+                        self.respond(200, repo_panel.changes(folder))
+                    elif path == '/mobile/api/repo/diff':
+                        self.respond(200, repo_panel.diff(folder, query.get('repo', ['.'])[0], query.get('path', [''])[0]))
+                    else:
+                        self.respond(200, repo_panel.listing(folder, query.get('path', [''])[0]))
+                except ValueError as exc:
+                    self.respond(404, {'error': str(exc)})
+            elif path.startswith(files.PREFIX):
+                files.serve_get(self, path, files_sessions)
+            elif path == '/mobile/api/tool-image':
+                query = parse_qs(urlsplit(self.path).query)
+                config = choose(query.get('session', [None])[0])
+                try:
+                    kind, data = tool_details.image(config, query.get('id', [''])[0], int(query.get('n', ['0'])[0]))
+                except ValueError as exc:
+                    self.respond(404, {'error': str(exc)})
+                    return
+                # The image of a finished tool call never changes; the browser may keep it.
+                self.respond(200, data, kind, 'private, max-age=86400')
+            elif path == '/mobile/api/tool':
+                query = parse_qs(urlsplit(self.path).query)
+                config = choose(query.get('session', [None])[0])
+                self.respond(200, tool_details.lookup(config, query.get('id', [''])[0]))
+            elif path == '/mobile/api/chat':
+                query = parse_qs(urlsplit(self.path).query)
+                config = choose(query.get('session', [None])[0])
+                if query.get('watch') == ['1']:
+                    with WATCHING_LOCK:
+                        WATCHED[config['id']] = time.monotonic()
+                self.respond(200, chat_payload(config, query.get('mode') == ['shell'], window_limit(query), preview=query.get('preview') == ['1'] and query.get('watch') == ['1']))
+            elif path == '/mobile/api/screen':
+                query = parse_qs(urlsplit(self.path).query)
+                config = choose(query.get('session', [None])[0])
+                try:
+                    lines = int(query.get('lines', [80])[0])
+                except ValueError:
+                    lines = 80
+                self.respond(200, {'text': capture_screen(config, lines), 'session': config['id'], 'agent': config['agent']})
+            elif browser_api.handles(path):
+                browser_api.get(self)
+            elif projects_api.handles(path):
+                projects_api.get(self)
+            elif path == '/mobile/api/stream':
+                query = parse_qs(urlsplit(self.path).query)
+                self.stream_chat(query.get('session', [None])[0], query.get('mode') == ['shell'], window_limit(query), preview=query.get('preview') == ['1'])
+            elif path == '/mobile/api/sessions':
+                self.respond(200, {'sessions': [session_row(entry) for entry in sessions()], 'default_thread': settings()['thread']})
+            elif path == '/mobile/api/tmux-sessions':
+                result = subprocess.run([paths.TMUX, 'list-sessions', '-F', '#{session_id}\t#{session_name}\t#{session_windows}'],
+                                        capture_output=True, text=True, timeout=5)
+                if result.returncode:
+                    self.respond(200, {'sessions': []})
+                else:
+                    active = [line.split('\t', 2) for line in result.stdout.splitlines()]
+                    self.respond(200, {'sessions': [{'id': item[0], 'name': item[1], 'windows': int(item[2])}
+                                                     for item in active if len(item) == 3 and re.fullmatch(r'\$[0-9]+', item[0]) and item[1] != side_shells.SESSION]})
+            else:
+                self.respond(404, {'error': 'Not found'})
+        except (OSError, ValueError, subprocess.TimeoutExpired, subprocess.CalledProcessError):
+            self.respond(503, {'error': 'The conversation is currently unavailable.'})
+
+    def do_POST(self):
+        if self.path == '/mobile/login':
+            self.do_login()
+            return
+        if self.path.startswith(files.PREFIX):  # the Files explorer: same sign-in and CSRF checks as below
+            if not self.deny():
+                if auth.same_origin(self.headers.get('Origin', ''), self.headers.get('Host', '')) and self.headers.get('X-Codex-Mobile') == '1':
+                    files.serve_post(self, self.path)
+                else:
+                    self.close_connection = True
+                    self.respond(403, {'error': 'Reload the page and try again.'})
+            return
+        if self.path not in ('/mobile/api/message', '/mobile/api/approval', '/mobile/api/menu', '/mobile/api/start', '/mobile/api/session', '/mobile/api/tmux-sessions', '/mobile/api/key', '/mobile/api/clear-draft', '/mobile/api/unqueue', '/mobile/api/mode', '/mobile/api/type',
+                         '/mobile/api/push/subscribe', '/mobile/api/push/unsubscribe', '/mobile/api/push/test', '/mobile/api/push/mute', '/mobile/api/shortcuts', '/mobile/api/prefs', '/mobile/api/codex-provider', '/mobile/api/model-options', '/mobile/api/model', '/mobile/api/rename', '/mobile/api/merge', '/mobile/api/shell', '/mobile/api/upload', '/mobile/api/transcribe', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/switch') and not browser_api.handles(self.path) and not projects_api.handles(self.path):
+            self.respond(404, {'error': 'Not found'})
+            return
+        # Reject unauthenticated and cross-origin submissions.
+        if self.deny():
+            return
+        origin = self.headers.get('Origin', '')
+        host = self.headers.get('Host', '')
+        if not auth.same_origin(origin, host) or self.headers.get('X-Codex-Mobile') != '1':
+            self.respond(403, {'error': 'Reload the page and try again.'})
+            return
+        if browser_api.handles(self.path):
+            browser_api.post(self)
+            return
+        if projects_api.handles(self.path):
+            projects_api.post(self)
+            return
+        if self.path == '/mobile/api/upload':
+            self.do_upload()
+            return
+        if self.path == '/mobile/api/transcribe':
+            self.do_transcribe()
+            return
+        try:
+            size = int(self.headers.get('Content-Length', '0'))
+            if not 0 < size <= (262144 if self.path in ('/mobile/api/shortcuts', '/mobile/api/prefs') else 65536):
+                self.respond(413, {'error': 'Message is too large.'})
+                return
+            body = json.loads(self.rfile.read(size))
+            message = body.get('message') if isinstance(body, dict) else None
+            if not isinstance(body, dict):
+                raise ValueError('Invalid request.')
+            if self.path == '/mobile/api/message' and (not isinstance(message, str) or not message.strip()):
+                self.respond(400, {'error': 'Enter a message first.'})
+                return
+            if self.path == '/mobile/api/accounts/switch':
+                self.respond(200, saved_accounts.switch(body.get('agent'), body.get('number')))
+                return
+            if self.path.startswith('/mobile/api/login/'):
+                action, agent = self.path.rsplit('/', 1)[1], body.get('agent')
+                if action == 'start':
+                    result = login_flow.runner.start(agent, body.get('method'), body.get('email'))
+                elif action == 'code':
+                    result = login_flow.runner.code(agent, body.get('code'))
+                else:
+                    result = login_flow.runner.cancel(agent)
+                self.respond(200, result)
+                return
+            if self.path == '/mobile/api/prefs':
+                try:
+                    self.respond(200, prefs_sync.save(body.get('changes')))
+                except ValueError as exc:
+                    self.respond(400, {'error': str(exc)})
+                return
+            if self.path == '/mobile/api/codex-provider':
+                try:
+                    self.respond(200, codex_provider.choose(body.get('provider')))
+                except ValueError as exc:
+                    self.respond(400, {'error': str(exc)})
+                return
+            if self.path == '/mobile/api/shortcuts':
+                try:
+                    self.respond(200, {'shortcuts': shortcuts.save(body.get('shortcuts'))})
+                except ValueError as exc:
+                    self.respond(400, {'error': str(exc)})
+                return
+            if self.path == '/mobile/api/stop-task':
+                config = choose(body.get('session'))
+                if config['agent'] != 'claude':
+                    raise ValueError('Select a Claude conversation.')
+                self.respond(200, live_state.stop_task(config.get('thread'), body.get('task')))
+                return
+            if self.path == '/mobile/api/shell':
+                command = body.get('command')
+                if not isinstance(command, str):
+                    raise ValueError('Type a command after the !.')
+                config = choose(body.get('session'))
+                start = agent_folder(config)
+                result = shell_log.run(config['id'], command, start, agent_folder(config), str(config.get('process_start')))
+                self.respond(200, {'accepted': True, 'cwd': shell_log.short(shell_log.current(config['id'], start) or '')})
+                return
+            if self.path == '/mobile/api/rename':
+                pane, name = body.get('pane'), body.get('name')
+                if not isinstance(pane, str) or not re.fullmatch(r'%[0-9]+', pane):
+                    self.respond(400, {'error': 'Select an active chat tab.'})
+                    return
+                if not valid_name(name):
+                    self.respond(400, {'error': NAME_HELP})
+                    return
+                with SEND_LOCK:
+                    result = subprocess.run([paths.TMUX, 'rename-session', '-t', pane, name], capture_output=True, text=True, timeout=5)
+                if result.returncode:
+                    self.respond(409, {'error': 'That name is already used.' if 'duplicate' in result.stderr else 'Could not rename the session.'})
+                    return
+                with SEND_LOCK:
+                    note = name_together(pane, name, from_session=True)
+                self.respond(200, {'session': pane, 'name': name, **({'note': note} if note else {})})
+                return
+            if self.path == '/mobile/api/merge':  # sidebar drag and drop: merge sessions, move or break out a pane
+                with SEND_LOCK:
+                    moved = tmux_merge.merge(body.get('kind'), body.get('source'), body.get('target'), keep=body.get('keep'))
+                self.respond(200, moved)
+                return
+            if self.path == '/mobile/api/session':
+                with SEND_LOCK:
+                    pane = create_session(body.get('name'), str(paths.HOME))
+                self.respond(200, {'session': pane, 'label': body['name']})
+                return
+            if self.path == '/mobile/api/tmux-sessions':
+                with SEND_LOCK:
+                    pane = create_session(body.get('name'), str(paths.HOME))
+                    result = subprocess.run([paths.TMUX, 'display-message', '-p', '-t', pane, '#{session_id}'],
+                                            check=True, capture_output=True, text=True, timeout=5)
+                self.respond(201, {'session': result.stdout.strip(), 'name': body['name']})
+                return
+            if self.path == '/mobile/api/pane-name':
+                pane, name = body.get('pane'), body.get('name')
+                if not isinstance(pane, str) or not re.fullmatch(r'%[0-9]+', pane):
+                    raise ValueError('Select a pane.')
+                if not isinstance(name, str) or len(name.strip()) > 40 or any(ord(c) < 32 or ord(c) == 127 for c in name):
+                    raise ValueError('Use up to 40 characters for the pane name.')
+                name = name.strip()
+                # The time lets the newest name win against a later /rename in Claude or Codex (agents.list_panes).
+                command = (['set-option', '-p', '-t', pane, '@chat_name', name, ';', 'set-option', '-p', '-t', pane, '@chat_name_at', str(int(time.time() * 1000))]
+                           if name else ['set-option', '-p', '-t', pane, '-u', '@chat_name', ';', 'set-option', '-p', '-t', pane, '-u', '@chat_name_at'])
+                with SEND_LOCK:
+                    result = subprocess.run([paths.TMUX, *command], capture_output=True, text=True, timeout=5)
+                    if result.returncode:
+                        raise RuntimeError('Could not rename the pane. It may have closed.')
+                    note = name_together(pane, name, from_session=False)
+                self.respond(200, {'pane': pane, 'name': name, **({'note': note} if note else {})})
+                return
+            if self.path == '/mobile/api/side-shell':
+                # A plain shell in the pane's folder, in Tether's own tmux session. pane: the shell the panel shows now.
+                # folder: a Files explorer path ("Terminal here"); it must be a folder inside the files root, not a secret one.
+                shell, new, folder = body.get('pane'), body.get('new') is True, body.get('folder')
+                program = body.get('program')
+                if program is not None and (program != 'btop' or not host_stats.enabled() or TTYD_PORT <= 0):
+                    raise ValueError('Host terminal is unavailable.')
+                if shell is not None and not (isinstance(shell, str) and side_shells.PANE.fullmatch(shell)):
+                    raise ValueError('Select a shell.')
+                folder = str(paths.HOME) if program else side_shells.folder_in_root(folder) if folder is not None else agent_folder(choose(body.get('session')))
+                with SEND_LOCK:
+                    pane = side_shells.open_shell(folder, shell, new, program=program, compact=body.get('compact') is True)
+                self.respond(200, {'pane': pane})
+                return
+            if self.path == '/mobile/api/side-shell/end':
+                with SEND_LOCK:
+                    side_shells.end_shell(body.get('pane'))
+                self.respond(200, {'ended': True})
+                return
+            if self.path == '/mobile/api/split':
+                pane, direction = body.get('session'), body.get('direction')
+                if not isinstance(pane, str) or not re.fullmatch(r'%[0-9]+', pane) or direction not in ('right', 'down'):
+                    raise ValueError('Select a pane and split right or down.')
+                choose(pane)
+                with SEND_LOCK:
+                    result = subprocess.run([paths.TMUX, 'split-window', '-t', pane, '-h' if direction == 'right' else '-v',
+                                             '-c', '#{pane_current_path}', '-P', '-F', '#{pane_id}'],
+                                            capture_output=True, text=True, timeout=5)
+                if result.returncode:
+                    raise RuntimeError(result.stderr.strip() or 'Could not split the pane.')
+                if not re.fullmatch(r'%[0-9]+', result.stdout.strip()):
+                    raise RuntimeError('Pane creation could not be confirmed.')
+                self.respond(201, {'pane': result.stdout.strip()})
+                return
+            if self.path == '/mobile/api/fork':
+                pane = body.get('session')
+                if not isinstance(pane, str) or not re.fullmatch(r'%[0-9]+', pane):
+                    raise ValueError('Select a chat to copy.')
+                entries = sessions()
+                entry = next((item for item in entries if item['id'] == pane), None)
+                if entry is None:
+                    raise ValueError('That session has ended. Select another tab.')
+                folder = agent_folder(entry)
+                with SEND_LOCK:
+                    new_pane, name = fork_chat(entry, entries, folder if folder and os.path.isdir(folder) else str(paths.HOME))
+                self.respond(201, {'pane': new_pane, 'name': name})
+                return
+            if self.path == '/mobile/api/resume':
+                chat = history.find_chat(body.get('id'))
+                if chat is None:
+                    self.respond(404, {'error': 'Chat not found.'})
+                    return
+                cwd = chat['cwd'] if chat['cwd'] and os.path.isdir(chat['cwd']) else str(paths.HOME)
+                with SEND_LOCK:
+                    try:
+                        pane = resume_session(body.get('name'), cwd, body['id'], run=subprocess.run)
+                    except RuntimeError as exc:
+                        if 'already exists' not in str(exc):
+                            raise
+                        self.respond(409, {'error': str(exc)})
+                        return
+                    result = subprocess.run([paths.TMUX, 'display-message', '-p', '-t', pane, '#{session_id}'],
+                                            check=True, capture_output=True, text=True, timeout=5)
+                self.respond(201, {'session': result.stdout.strip(), 'pane': pane, 'name': body['name']})
+                return
+            if self.path == '/mobile/api/push/mute':
+                self.respond(200, {'muted': push.set_muted(body.get('session'), body.get('muted'))})
+                return
+            if self.path.startswith('/mobile/api/push/'):
+                if not push.available():
+                    raise RuntimeError('Push notifications are not installed on the server.')
+                if self.path.endswith('/subscribe'):
+                    push.subscribe(body.get('subscription'))
+                elif self.path.endswith('/unsubscribe'):
+                    if isinstance(body.get('endpoint'), str):
+                        push.unsubscribe(body['endpoint'])
+                else:
+                    delivered = push.send_all({'title': 'Tether', 'body': 'Notifications are working.', 'tag': 'test', 'url': '/mobile/'})
+                    self.respond(200, {'accepted': True, 'delivered': delivered})
+                    return
+                self.respond(200, {'accepted': True})
+                return
+            config = choose(body.get('session'))
+            if body.get('thread') != config.get('thread'):
+                self.respond(409, {'error': 'This session changed conversations. Reload its tab before sending.'})
+                return
+            if self.path == '/mobile/api/message' and config['agent'] == 'shell' and body.get('mode') == 'shell':
+                with SEND_LOCK:
+                    shell_submit(config, message.strip())
+                self.respond(200, {'accepted': True, 'delivery': 'shell'})
+                return
+            if self.path == '/mobile/api/start':
+                # New Codex panes use the chosen provider: `codex -p foundry` for Azure Foundry, plain `codex` for the plan.
+                profile = codex_provider.launch_profile() if body.get('agent') == 'codex' else None
+                with SEND_LOCK:
+                    start_agent(config, body.get('agent'), profile=profile)
+                self.respond(200, {'accepted': True})
+                return
+            if not config.get('writable'):
+                raise RuntimeError('Messaging is unavailable for this session.')
+            if self.path in ('/mobile/api/model-options', '/mobile/api/model'):
+                with SEND_LOCK:
+                    if self.path == '/mobile/api/model-options':
+                        result = model_picker.options(config)
+                    else:
+                        model, effort = body.get('model'), body.get('effort')
+                        if not isinstance(model, str) or not model or not (effort is None or isinstance(effort, str)):
+                            raise ValueError('Choose a model first.')
+                        result = model_picker.apply(config, model, effort or None)
+                self.respond(200, result)
+                return
+            if self.path == '/mobile/api/mode':
+                if config['agent'] != 'claude':
+                    raise ValueError('Modes are for Claude sessions.')
+                with SEND_LOCK:
+                    verify(config)
+                    result = footer.set_mode(lambda: footer.parse(capture(config, styled=True)),
+                                             lambda: subprocess.run([paths.TMUX, 'send-keys', '-t', config['id'], 'BTab'], check=True, capture_output=True, timeout=5),
+                                             body.get('mode'))
+                self.respond(200, result)
+                return
+            if self.path == '/mobile/api/key':
+                key = body.get('key')
+                if key not in ('C-c', 'Up', 'Down', 'Left', 'Right', 'Enter', 'Escape', 'Tab', 'BTab', 'Space', 'y', 'n', *'0123456789'):
+                    self.respond(400, {'error': 'Invalid key.'})
+                    return
+                with SEND_LOCK:
+                    if body.get('card') is True and config['agent'] == 'claude' and key in '0123456789':
+                        card_key(config, key)
+                    else:
+                        verify(config)
+                        subprocess.run([paths.TMUX, 'send-keys', '-t', config['id'], key],
+                                       check=True, capture_output=True, timeout=5)
+                self.respond(200, {'accepted': True})
+                return
+            if self.path == '/mobile/api/menu':
+                choice, label, answer = body.get('choice'), body.get('label'), body.get('answer')
+                if (not isinstance(choice, int) or isinstance(choice, bool) or not (label is None or isinstance(label, str))
+                        or not (answer is None or isinstance(answer, str) and answer.strip())):
+                    raise ValueError('Choose an option first.')
+                if answer is not None and any(ord(c) < 32 and c not in '\n\t' or ord(c) == 127 for c in answer):
+                    raise ValueError('The answer contains terminal control characters.')
+                with SEND_LOCK:
+                    menu_choose(config, choice, label=label, answer=answer)
+                self.respond(200, {'accepted': True})
+                return
+            if self.path == '/mobile/api/type':
+                with SEND_LOCK:
+                    type_text(config, body.get('text'), enter=body.get('enter') is True)
+                self.respond(200, {'accepted': True})
+                return
+            if self.path == '/mobile/api/unqueue':
+                with SEND_LOCK:
+                    text = unqueue(config)
+                self.respond(200, {'text': text})
+                return
+            if self.path == '/mobile/api/clear-draft':
+                with SEND_LOCK:
+                    terminal_clear_draft(config)
+                self.respond(200, {'accepted': True})
+                return
+            if self.path == '/mobile/api/approval':
+                with SEND_LOCK:
+                    respond_approval(config, body.get('approval'), body.get('action'), choice=body.get('choice'), feedback=body.get('feedback'))
+                self.respond(200, {'accepted': True})
+            else:
+                state = live_status(config)['state']
+                if config['agent'] == 'codex' and re.match(r'/ls(\s|$)', message.strip()):
+                    message = '!' + message.strip()[1:]   # Codex has no /ls; "!ls" runs it in the shell
+                wants_reply = (config['agent'] == 'codex' and state != 'Working'  # while it works, new lines are its answer, not the command's
+                               and message.strip().startswith('/') and message.strip() != '/model')
+                before = capture(config) if wants_reply else ''
+                note = '' if message.strip().startswith(('/', '!')) else shell_log.folder_note(config['id'], agent_folder(config))
+                submit(note + message.strip(), config)
+                if wants_reply:  # Codex answers its slash commands on the terminal only
+                    threading.Thread(target=terminal_replies.record, args=(config, before, capture), daemon=True).start()
+                self.respond(200, {'accepted': True, 'delivery': 'queued' if state == 'Working' else 'submitted'})
+        except (ValueError, UnicodeError) as exc:
+            self.respond(400, {'error': str(exc) if self.path in ('/mobile/api/session', '/mobile/api/merge', '/mobile/api/model', '/mobile/api/shell', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/mode', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/menu', '/mobile/api/push/mute', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/switch') else 'Invalid message.'})
+        except (OSError, RuntimeError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
+            # The journal keeps why a send was refused; the access log shows only "503".
+            print(f'{self.path} refused: {type(exc).__name__}: {str(exc)[:200]}', file=sys.stderr, flush=True)
+            self.respond(503, {'error': str(exc) if isinstance(exc, RuntimeError)
+                               else 'Could not confirm delivery. Check the terminal before retrying.',
+                               'draft': isinstance(exc, DraftError)})
+
+    def do_upload(self):
+        """A raw file body for one session; the path of the saved copy goes back so the page can put it in the message."""
+        try:
+            size = int(self.headers.get('Content-Length', '0'))
+            if not 0 < size <= uploads.LIMIT:
+                self.close_connection = True
+                self.respond(413, {'error': 'That file is empty or too large (the limit is %d MB).' % (uploads.LIMIT // 1024 // 1024)})
+                return
+            config = choose(self.headers.get('X-Session'))
+            if (self.headers.get('X-Thread') or None) != (config.get('thread') or None):  # tmux-chat sends '' for no thread
+                self.respond(409, {'error': 'This session changed conversations. Reload its tab before attaching.'})
+                return
+            if not config.get('writable') or config['agent'] == 'shell':
+                raise RuntimeError('Attachments need a running agent in this session.')
+            data = self.rfile.read(size)
+            target = uploads.save(unquote(self.headers.get('X-Filename', '')), data)
+            self.respond(200, {'path': str(target), 'name': target.name, 'size': len(data)})
+        except (ValueError, UnicodeError) as exc:
+            self.respond(400, {'error': str(exc)})
+        except (OSError, RuntimeError) as exc:
+            self.respond(503, {'error': str(exc) if isinstance(exc, RuntimeError) else 'Could not save that file.'})
+
+    def do_transcribe(self):
+        """A raw audio body from the mic button; the text goes back for the draft. Nothing is typed into a pane."""
+        try:
+            size = int(self.headers.get('Content-Length', '0'))
+            if not 0 < size <= transcribe.LIMIT:
+                self.close_connection = True
+                self.respond(413, {'error': 'The recording is empty or too long.'})
+                return
+            audio = self.rfile.read(size)
+            self.respond(200, transcribe.transcribe(audio, self.headers.get('Content-Type', ''), live=self.headers.get('X-Live') == '1', recording=self.headers.get('X-Recording', '')))
+        except ValueError as exc:
+            self.respond(400, {'error': str(exc)})
+        except RuntimeError as exc:
+            self.respond(503, {'error': str(exc)})
+
+    def do_DELETE(self):
+        if self.path not in ('/mobile/api/tmux-sessions', '/mobile/api/session'):
+            self.respond(404, {'error': 'Not found'})
+            return
+        if self.deny():
+            return
+        origin = self.headers.get('Origin', '')
+        host = self.headers.get('Host', '')
+        if not auth.same_origin(origin, host) or self.headers.get('X-Codex-Mobile') != '1':
+            self.respond(403, {'error': 'Reload the page and try again.'})
+            return
+        try:
+            size = int(self.headers.get('Content-Length', '0'))
+            if not 0 < size <= 4096:
+                self.respond(413, {'error': 'Invalid request.'})
+                return
+            body = json.loads(self.rfile.read(size))
+            if self.path == '/mobile/api/session':
+                pane = body.get('pane') if isinstance(body, dict) else None
+                if not isinstance(pane, str) or not re.fullmatch(r'%[0-9]+', pane):
+                    self.respond(400, {'error': 'Select an active chat tab.'})
+                    return
+                with SEND_LOCK:
+                    active_panes = subprocess.run([paths.TMUX, 'list-panes', '-a', '-F', '#{pane_id}'],
+                                                  check=True, capture_output=True, text=True, timeout=5).stdout.splitlines()
+                    if pane not in active_panes:
+                        self.respond(404, {'error': 'That chat tab has already ended.'})
+                        return
+                    subprocess.run([paths.TMUX, 'kill-pane', '-t', pane], check=True,
+                                   capture_output=True, timeout=5)
+                self.respond(200, {'closed': pane})
+                return
+            identifier = body.get('session') if isinstance(body, dict) else None
+            if not isinstance(identifier, str) or not re.fullmatch(r'\$[0-9]+', identifier):
+                self.respond(400, {'error': 'Select an active tmux session.'})
+                return
+            with SEND_LOCK:
+                active = subprocess.run([paths.TMUX, 'list-sessions', '-F', '#{session_id}'],
+                                        check=True, capture_output=True, text=True, timeout=5).stdout.splitlines()
+                if identifier not in active:
+                    self.respond(404, {'error': 'That tmux session has already ended.'})
+                    return
+                subprocess.run([paths.TMUX, 'kill-session', '-t', identifier], check=True,
+                               capture_output=True, timeout=5)
+            self.respond(200, {'closed': identifier})
+        except (ValueError, UnicodeError):
+            self.respond(400, {'error': 'Invalid request.'})
+        except (OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError):
+            self.respond(503, {'error': 'Could not close the tmux session.'})
+
+
+if __name__ == '__main__':
+    paths.SCOPE_TMUX = bool(os.environ.get('INVOCATION_ID'))
+    # A tmux server that this service starts takes its default-shell from $SHELL. systemd gives /bin/bash, so new panes
+    # ran bash without the user's zsh setup (the claude/codex project launchers). Use the account's login shell.
+    os.environ['SHELL'] = shell_log.login_shell()
+    host = os.environ.get('MOBILE_TMUX_HOST', '127.0.0.1')
+    port = int(os.environ.get('MOBILE_TMUX_PORT', '7683'))
+    auth.check_startup(host)
+    if auth.MODE == 'token':
+        print('Mobile Tmux listening on http://%s:%d/mobile/ -- sign in with the token in %s' % (host, port, auth.TOKEN_FILE), flush=True)
+        auth.token()
+    threading.Thread(target=monitor_notices, daemon=True).start()
+    ThreadingHTTPServer((host, port), Handler).serve_forever()
