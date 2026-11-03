@@ -44,6 +44,12 @@ COMMIT_AFTER = 4.0  # seconds of audio not yet converted by the accurate model b
 KEEP_TAIL = 2.5  # never commit a word that ends in the last seconds: the user may be mid-word
 PAUSE = 0.15  # seconds of quiet between two words that make a good place to cut
 RECORDING_ID = re.compile(r'[A-Za-z0-9-]{8,64}')
+# Guards for the accurate model. One temperature: the default retries each 30 s window at up to six temperatures,
+# and under load that ran one final pass for 175 s (3 Nov 2026) while every later recording waited for FINAL_LOCK.
+MAX_TOKENS = 224  # per 30 s window (Whisper's limit is 448 with the prompt); fast speech needs about 150
+FINAL_BUDGET = float(os.environ.get('TETHER_WHISPER_FINAL_BUDGET', '20'))  # seconds; then the fast model converts the rest
+WAITING = [0]  # final passes waiting or running; a background pass stops at its next segment so they go first
+WAITING_LOCK = threading.Lock()
 
 
 class Recording:
@@ -75,12 +81,53 @@ def join(*parts):
     return ' '.join(part.strip() for part in parts if part.strip())
 
 
-def accurate(samples, before='', words=False):
-    """The accurate model's segments. before: the text so far, so the model keeps the same style across parts."""
+def accurate(samples, before='', words=False, until=None, stop=None):
+    """The accurate model's segments and where it stopped: (segments, None) when it converted everything, else
+    (segments, seconds converted). before: the text so far, so the model keeps the same style across parts.
+    until: a time.monotonic() deadline, also for the wait on FINAL_LOCK. stop: returns True when a final pass waits.
+    The checks run between segments; the token cap bounds the time of one 30 s window."""
     prompt = join(PROMPT, before[-200:])
-    with FINAL_LOCK:
-        segments, _ = MODEL.transcribe(samples, language=LANGUAGE, initial_prompt=prompt, vad_filter=True, beam_size=BEAM, word_timestamps=words)
-        return list(segments)
+    if not FINAL_LOCK.acquire(timeout=max(0.0, until - time.monotonic()) if until else -1):
+        return [], 0.0
+    try:
+        segments, _ = MODEL.transcribe(samples, language=LANGUAGE, initial_prompt=prompt, vad_filter=True, beam_size=BEAM, word_timestamps=words,
+                                       temperature=0.0, condition_on_previous_text=False, max_new_tokens=MAX_TOKENS)
+        found = []
+        for segment in segments:
+            found.append(segment)
+            if (until and time.monotonic() > until) or (stop and stop()):
+                return found, segment.end
+        return found, None
+    finally:
+        FINAL_LOCK.release()
+
+
+def quick(samples):
+    """The fast model's text: live previews, and the rest of a final pass that ran out of time."""
+    with LIVE_LOCK:
+        segments, _ = LIVE_MODEL.transcribe(samples, initial_prompt=PROMPT, vad_filter=True, beam_size=1, temperature=0.0,
+                                            condition_on_previous_text=False, without_timestamps=True, max_new_tokens=128)
+        return join(*(segment.text for segment in segments))
+
+
+def final(samples, before=''):
+    """The accurate text of samples within FINAL_BUDGET seconds; the fast model converts what is left after that."""
+    with WAITING_LOCK:
+        WAITING[0] += 1
+    try:
+        segments, cut = accurate(samples, before, until=time.monotonic() + FINAL_BUDGET)
+    finally:
+        with WAITING_LOCK:
+            WAITING[0] -= 1
+    text = join(*(segment.text for segment in segments))
+    if cut is None:
+        return text
+    print('final over budget: accurate upto=%.1fs of %.1fs, fast model does the rest' % (cut, len(samples) / RATE), file=sys.stderr, flush=True)
+    return join(text, quick(samples[int(cut * RATE):]))
+
+
+def final_waits():
+    return WAITING[0] > 0
 
 
 def settled(segments, cut):
@@ -105,7 +152,10 @@ def commit(item, samples):
     try:
         start, text = item.done
         length = len(samples) / RATE
-        found = settled(accurate(samples[int(start * RATE):], text, words=True), length - KEEP_TAIL - start)
+        if final_waits():
+            return
+        segments, cut = accurate(samples[int(start * RATE):], text, words=True, stop=final_waits)
+        found = settled(segments, min(length - KEEP_TAIL - start, cut if cut is not None else length))
         if found:
             item.done = (start + found[1], join(text, found[0]))
             print('commit audio=%.1fs upto=%.1fs' % (length, item.done[0]), file=sys.stderr, flush=True)
@@ -129,25 +179,27 @@ def transcribe(audio, live=False, key=None):
             start, text = item.done
             if length - start - KEEP_TAIL >= COMMIT_AFTER and length - item.tried >= 5 and not item.lock.locked():
                 threading.Thread(target=commit, args=(item, samples), daemon=True).start()
-            with LIVE_LOCK:
-                segments, _ = LIVE_MODEL.transcribe(samples[int(start * RATE):], initial_prompt=PROMPT, vad_filter=True, beam_size=1, temperature=0.0,
-                                                    condition_on_previous_text=False, without_timestamps=True, max_new_tokens=128)
-                return join(text, *(segment.text for segment in segments)), length
+            return join(text, quick(samples[int(start * RATE):])), length
         start, text = 0.0, ''
         if item:
-            with item.lock:  # wait for a background pass that is still running
-                start, text = item.done
+            with WAITING_LOCK:
+                WAITING[0] += 1  # the background pass stops at its next segment
+            try:
+                with item.lock:  # wait for a background pass that is still running
+                    start, text = item.done
+            finally:
+                with WAITING_LOCK:
+                    WAITING[0] -= 1
             with RECORDINGS_LOCK:
                 RECORDINGS.pop(key, None)
-        return join(text, *(segment.text for segment in accurate(samples[int(start * RATE):], text))), length
+        return join(text, final(samples[int(start * RATE):], text)), length
     if live:
         with LIVE_LOCK:
             segments, info = LIVE_MODEL.transcribe(io.BytesIO(audio), initial_prompt=PROMPT, vad_filter=True, beam_size=1, temperature=0.0,
                                                    condition_on_previous_text=False, without_timestamps=True, max_new_tokens=128)
             return ' '.join(segment.text.strip() for segment in segments).strip(), info.duration
-    with FINAL_LOCK:
-        segments, info = MODEL.transcribe(io.BytesIO(audio), language=LANGUAGE, initial_prompt=PROMPT, vad_filter=True, beam_size=BEAM)
-        return ' '.join(segment.text.strip() for segment in segments).strip(), info.duration
+    samples = decode_audio(io.BytesIO(audio), sampling_rate=RATE)
+    return final(samples), len(samples) / RATE
 
 
 class Handler(BaseHTTPRequestHandler):

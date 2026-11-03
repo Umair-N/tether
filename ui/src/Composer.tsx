@@ -198,35 +198,39 @@ export function Composer({ api, pane, thread, disabled, onSend, error, errorActi
       const audio = new Blob(chunks, { type: active.mimeType || type || 'audio/webm' })
       if (!heard) { setDraft(base); finish(base); return }
       if (Date.now() - started < 600 || !audio.size) { setDraft(base); setSpeechError('Tap the mic, speak, then tap stop.'); finish(base); return }
-      void transcribeAudio(audio, base, recording).then(text => {
+      void transcribeAudio(audio, base, recording).then(({ text, ok }) => {
         finish(text)
-        // Send at once; submit still waits for this final text.
-        if (pause && text.trim() && text !== base) form.current?.requestSubmit()
+        // Send at once; submit still waits for this final text. Rough text after a failure waits for the person to check it.
+        if (pause && ok && text.trim() && text !== base) form.current?.requestSubmit()
       })
     }
     const pause = handsFree ? watchForPause(stream, () => { if (active.state !== 'inactive') active.stop() }) : null
     recorder.current = active
     active.start(1000); setSeconds(0); setListening(true)
   }
-  // Returns the new draft.
-  async function transcribeAudio(audio: Blob, base: string, recording: string): Promise<string> {
+  // Returns the new draft; ok is false when the accurate text did not come and the box keeps the rough live text.
+  // The server answers within about 25 s (transcribe_worker.py FINAL_BUDGET); 60 s means something is wrong.
+  async function transcribeAudio(audio: Blob, base: string, recording: string): Promise<{ text: string; ok: boolean }> {
     setTranscribing(true)
     const cancel = new AbortController()
     converting.current = cancel
+    let late = false
+    const limit = window.setTimeout(() => { late = true; cancel.abort() }, 60000)
     try {
       const response = await fetch('/mobile/api/transcribe', { method: 'POST', body: audio, credentials: 'same-origin', signal: cancel.signal, headers: { 'X-Codex-Mobile': '1', 'X-Recording': recording, 'Content-Type': audio.type } })
       if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('Sign in again, then try the mic.')
       const data = await response.json() as { text?: string; error?: string }
       if (!response.ok) throw new Error(data.error || 'Voice-to-text failed.')
       const text = (data.text ?? '').trim()
-      if (!text) { setDraft(base); setSpeechError('No speech heard. Tap the mic and speak.'); return base }
+      if (!text) { setDraft(base); setSpeechError('No speech heard. Tap the mic and speak.'); return { text: base, ok: true } }
       const next = `${base}${base ? ' ' : ''}${text}`
       setDraft(next)
-      return next
+      return { text: next, ok: true }
     } catch (failure) {
-      if (!cancel.signal.aborted) setSpeechError(errorText(failure))
-      return draftNow.current
-    } finally { converting.current = null; setTranscribing(false); textarea.current?.focus() }
+      if (late) setSpeechError('Voice-to-text took too long. The box has the rough text: check it, then send.')
+      else if (!cancel.signal.aborted) setSpeechError(`${errorText(failure)} The box has the rough text: check it, then send.`)
+      return { text: draftNow.current, ok: false }
+    } finally { window.clearTimeout(limit); converting.current = null; setTranscribing(false); textarea.current?.focus() }
   }
   const canRecord = typeof MediaRecorder !== 'undefined' && !!navigator.mediaDevices?.getUserMedia
   async function submit(event: React.FormEvent) {

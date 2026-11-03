@@ -24,7 +24,8 @@ def transcribe(audio, content_type, live=False, recording=''):
         headers['X-Recording'] = recording  # lets the worker reuse text it already converted (transcribe_worker.py)
     request = urllib.request.Request(URL + ('?live=1' if live else ''), data=audio, method='POST', headers=headers)
     try:
-        with urllib.request.urlopen(request, timeout=10 if live else 120) as response:
+        # A final answers within about 25 s (transcribe_worker.py FINAL_BUDGET).
+        with urllib.request.urlopen(request, timeout=10 if live else 60) as response:
             reply = json.loads(response.read())
             if isinstance(reply.get('text'), str):
                 reply['text'] = tidy(reply['text'])
