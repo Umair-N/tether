@@ -15,8 +15,8 @@ import { Elapsed } from './Notices'
 
 
 
-export function ChoiceDock({ approval, attention, plan, agent, disabled, onChoose, onKey, onType }: { plan?: ChatData['plan']; approval: Approval | null; attention: Attention | null; agent: string; disabled: boolean
-  onChoose: (kind: 'approval' | 'menu', option: Choice, approval: Approval | null, feedback?: string) => Promise<void>; onKey: (key: string) => void; onType?: (text: string) => Promise<boolean> }) {
+export function ChoiceDock({ approval, attention, plan, agent, disabled, onChoose, onKey, onType, onFocusReply }: { plan?: ChatData['plan']; approval: Approval | null; attention: Attention | null; agent: string; disabled: boolean
+  onChoose: (kind: 'approval' | 'menu', option: Choice, approval: Approval | null, feedback?: string) => Promise<void>; onKey: (key: string) => void; onType?: (text: string) => Promise<boolean>; onFocusReply?: () => void }) {
   const [feedback, setFeedback] = useState('')
   const [code, setCode] = useState('')
   const [sending, setSending] = useState(false)
@@ -34,7 +34,7 @@ export function ChoiceDock({ approval, attention, plan, agent, disabled, onChoos
   const text = approval ? approval.text : attention?.question || attention?.text || ''
   const root = useRef<HTMLElement>(null)
   // The message box of this pane: the desktop workspace can show several.
-  const focusBox = () => root.current?.closest('.chat-panel')?.querySelector<HTMLTextAreaElement>('.composer textarea')?.focus()
+  const focusBox = () => { if (onFocusReply) onFocusReply(); else root.current?.closest('.chat-panel')?.querySelector<HTMLTextAreaElement>('.composer textarea')?.focus() }
   // "Chat about this" closes the question so the user can talk it through: put them in the message box after it.
   const chat = (option: Choice) => !approval && option.text === 'Chat about this'
   const pick = async (option: Choice) => {

@@ -13,8 +13,10 @@
 .side-pin-edit { min-height: 32px; padding: 0 10px; border-radius: 8px; color: var(--pin); font-size: 13px; font-weight: 600; }
 .side-pin-pop .side-pin-needs { color: var(--attention); font-weight: 500; }
 .side-pin-list { list-style: none; margin: 0; }
-.side-pin-row { display: flex; align-items: center; border-radius: 10px; }
-.side-pin-row.selected, .side-pin-row:hover { background: var(--hover); }
+.side-pin-row { border-radius: 10px; }
+.side-pin-row-head { display: flex; align-items: center; gap: 4px; border-radius: 10px; }
+.side-pin-row.selected > .side-pin-row-head, .side-pin-row-head:hover { background: var(--hover); }
+.side-pin-row.expanded { background: color-mix(in srgb, var(--hover) 55%, transparent); }
 .side-pin-open { display: flex; flex: 1; min-width: 0; align-items: center; gap: 10px; padding: 8px 10px; min-height: 54px; text-align: left; border-radius: 10px; }
 .side-pin-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
 .side-pin-text strong, .side-pin-edit-body strong { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
@@ -23,6 +25,40 @@
 .side-pin-line { display: flex; align-items: baseline; gap: 8px; }
 .side-pin-line strong { flex: 1; }
 .side-pin-text .side-pin-time { flex: none; font-size: 11px; font-variant-numeric: tabular-nums; }
+.side-pin-action { flex: none; margin-right: 8px; }
+.side-pin-answer { min-height: 30px; padding: 0 10px; border-radius: 999px; background: var(--attention); color: var(--surface); font-size: 12.5px; font-weight: 600; }
+.side-pin-answer[aria-expanded="true"] { background: none; color: var(--attention); box-shadow: inset 0 0 0 1px var(--attention); }
+.side-pin-reply { width: 36px; height: 36px; min-height: 36px; display: grid; place-items: center; border-radius: 9px; color: var(--muted); }
+.side-pin-reply:hover { background: var(--hover); color: var(--text); }
+.side-pin-reply[aria-expanded="true"] { color: var(--pin); background: var(--hover); }
+.side-pin-quick { padding: 2px 10px 10px 28px; font-size: 13px; animation: side-pin-reply-open .2s ease-out; }
+.side-pin-quick-controls { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; min-inline-size: 0; }
+.side-pin-quick p { margin: 0; overflow-wrap: anywhere; }
+.side-pin-quick .choice-dock { margin: 0; border-radius: 9px; box-shadow: none; }
+.side-pin-quick .choice-head { min-height: 36px; gap: 8px; padding: 6px 10px; font-size: 13px; }
+.side-pin-quick .choice-text, .side-pin-quick .ask-card, .side-pin-quick .panel-pre { margin: 0 10px 8px; font-size: 12px; }
+.side-pin-quick .choice-text.mono { padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+.side-pin-quick .choice-options button { min-height: 40px; gap: 10px; padding: 8px 10px; font-size: 13px; }
+.side-pin-quick .choice-options button:last-child { border-bottom: 0; }
+.side-pin-quick .choice-options button:hover:not(:disabled) { background: var(--hover); }
+.side-pin-quick .choice-options small { font-size: 12px; }
+.side-pin-quick .choice-number { width: 18px; height: 18px; border-radius: 5px; font-size: 11px; }
+.side-pin-quick .choice-options .accept .choice-number { background: var(--pin); color: var(--surface); }
+.side-pin-quick .choice-keys { gap: 4px; padding: 8px 10px; }
+.side-pin-quick .choice-keys button { min-width: 32px; min-height: 32px; padding: 0 8px; font-size: 12px; }
+.side-pin-quick .login-card { margin: 0 10px 8px; font-size: 12px; }
+.side-pin-plan { display: grid; gap: 8px; justify-items: start; }
+.side-pin-plan .primary { min-height: 36px; padding: 6px 12px; font-size: 13px; }
+.side-pin-reply-field { display: flex; align-items: end; gap: 6px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 4px 4px 4px 10px; }
+.side-pin-reply-field:focus-within { border-color: var(--pin); }
+.side-pin-reply-field textarea { flex: 1; min-width: 0; border: 0; background: none; color: var(--text); font-size: 13px; line-height: 20px; resize: none; padding: 6px 0; max-height: 92px; }
+.side-pin-reply-field textarea:focus-visible { outline: none; }
+.side-pin-send { width: 32px; height: 32px; min-height: 32px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--accent-text); flex: none; }
+.side-pin-quick-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+.side-pin-quick-foot button { flex: none; min-height: 28px; padding: 4px 2px; background: none; border: 0; color: var(--pin); font-size: 12px; font-weight: 500; }
+.side-pin-quick .side-pin-reply-error { margin-top: 8px; color: var(--error); }
+.side-pin-announcement { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+@keyframes side-pin-reply-open { from { opacity: 0; translate: 0 -4px; } }
 .agent-pop-foot.side-pin-foot { justify-content: space-between; flex: none; padding: 6px 8px 8px; }
 .side-pin-foot button { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 10px; border-radius: 8px; font-size: 13px; font-weight: 500; color: var(--text); }
 .side-pin-search { display: flex; align-items: center; gap: 8px; margin: 0 10px 6px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); }
@@ -50,4 +86,5 @@
 .pinned-strip-note.add { color: var(--muted); }
 .pinned-strip .icon-button { width: 32px; height: 32px; min-height: 32px; flex: none; padding: 8px; color: var(--pin); }
 .pinned-strip input { flex: 1; min-width: 0; font-size: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--pin); border-radius: 6px; padding: 4px 8px; }
-@media (prefers-reduced-motion: reduce) { .side-pin-count { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .side-pin-count, .side-pin-quick { animation: none; } }
+.side-pin-quick-foot button:hover { background: none; text-decoration: underline; text-underline-offset: 2px; }

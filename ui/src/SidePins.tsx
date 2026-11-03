@@ -1,15 +1,17 @@
-import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, GripVertical, Pin, PinOff, Plus, Search, X } from 'lucide-react'
-import type { Pane } from './api'
+import { useEffect, useId, useRef, useState } from 'react'
+import { ArrowLeft, GripVertical, MessageCircle, Pin, PinOff, Plus, Search, X } from 'lucide-react'
+import type { Api, Pane } from './api'
 import type { SidePin } from './prefs'
 import { agentNames, agoSeconds, dot, needsYou, paneTitle, status, unreadPanes } from './Sidebar'
 import type { Session } from './Sidebar'
 import { Elapsed } from './Notices'
 import { useDockedBubble } from './dockedBubble'
+import { QuickReply } from './QuickReply'
 import './SidePins.css'
 
 type PinnedChat = { pin: SidePin; pane: Pane; session: Session }
 interface Props {
+  api: Api
   pins: SidePin[]
   sessions: Session[]
   seen: Record<string, number>
@@ -19,13 +21,19 @@ interface Props {
   onUnpin: (pane: string) => void
   onNote: (pane: string, note: string) => void
   onMove: (pane: string, to: string) => void
+  onUpdate: () => void
 }
 
-// The row leaves space beside its open button for a trailing action.
-function PinnedRow({ pin, pane, session, seen, selected, onOpen }: PinnedChat & Pick<Props, 'seen' | 'selected' | 'onOpen'>) {
+function PinnedRow({ pin, pane, session, seen, selected, onOpen, api, expanded, focus, onToggle, onSuccess }: PinnedChat & Pick<Props, 'seen' | 'selected' | 'onOpen' | 'api'> & {
+  expanded: boolean; focus: boolean; onToggle: () => void; onSuccess: (answered: boolean) => void
+}) {
   const needs = needsYou(pane.state)
   const ago = pane.finished ? agoSeconds(pane.finished) : ''
-  return <li className={`side-pin-row ${pane.id === selected ? 'selected' : ''}`}>
+  const panelId = useId()
+  const action = useRef<HTMLButtonElement>(null)
+  const writable = pane.agent !== 'shell' && pane.writable !== false
+  return <li className={`side-pin-row ${pane.id === selected ? 'selected' : ''} ${expanded && writable ? 'expanded' : ''}`}>
+    <div className="side-pin-row-head">
     <button type="button" className="side-pin-open" aria-current={pane.id === selected ? 'page' : undefined} onClick={() => onOpen(pane)}>
       {dot(status([pane], seen, selected))}
       <span className="side-pin-text">
@@ -35,16 +43,34 @@ function PinnedRow({ pin, pane, session, seen, selected, onOpen }: PinnedChat & 
           : <small>{pin.note && <><span className="side-pin-note">{pin.note}</span> · </>}{session.name} · {agentNames[pane.agent]}</small>}
       </span>
     </button>
+    {writable && <button ref={action} type="button" className={`side-pin-action ${needs ? 'side-pin-answer' : 'side-pin-reply'}`} aria-expanded={expanded} aria-controls={panelId}
+      aria-label={needs ? undefined : `Quick reply to ${paneTitle(pane)}`} title={needs ? undefined : 'Quick reply'} onClick={onToggle}>
+      {needs ? 'Answer' : <MessageCircle size={17} />}
+    </button>}
+    </div>
+    {expanded && writable && <QuickReply api={api} pane={pane} id={panelId} focus={focus} onOpen={() => onOpen(pane)} onSuccess={answered => {
+      const returnFocus = action.current?.getAttribute('aria-expanded') === 'true'
+      onSuccess(answered)
+      if (returnFocus) requestAnimationFrame(() => action.current?.focus())
+    }} />}
   </li>
 }
 
-export function SidePins({ pins, sessions, seen, selected, onOpen, onPin, onUnpin, onNote, onMove }: Props) {
+export function SidePins({ api, pins, sessions, seen, selected, onOpen, onPin, onUnpin, onNote, onMove, onUpdate }: Props) {
   const [view, setView] = useState<'list' | 'picker' | 'edit'>('list')
+  const [reply, setReply] = useState<{ pane: string; focus: boolean } | null>(null)
+  const [announcement, setAnnouncement] = useState('')
   const [query, setQuery] = useState('')
   const edit = useRef<HTMLButtonElement>(null)
   const back = () => { setView('list'); requestAnimationFrame(() => edit.current?.focus()) }
   const { place, docked, dragging, open, closing, button, pop, shape, popStyle, close, down, move, up, click } = useDockedBubble('tether.pin-bubble.v1', { side: 'right', y: 0.62 }, () => {
-    if (view === 'list') return false
+    if (view === 'list') {
+      if (!reply) return false
+      const action = list.current?.querySelector<HTMLButtonElement>('.side-pin-action[aria-expanded="true"]')
+      setReply(null)
+      requestAnimationFrame(() => action?.focus())
+      return true
+    }
     back()
     return true
   })
@@ -96,7 +122,11 @@ export function SidePins({ pins, sessions, seen, selected, onOpen, onPin, onUnpi
   return <>
     <button ref={button} type="button" className={`agent-bubble side-pin-bubble ${waiting ? 'attention' : unreadCount ? 'unread' : ''} ${place.side} ${docked ? 'docked' : ''} ${dragging ? 'dragging' : ''} ${open ? 'open' : ''}`} style={shape}
       aria-label={label} title={label} aria-haspopup="dialog" aria-expanded={open}
-      onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onClick={event => click(event, () => { setView('list'); setQuery('') })}>
+      onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onClick={event => click(event, () => {
+        setView('list'); setQuery(''); setAnnouncement('')
+        const first = live.find(({ pane }) => pane.writable !== false && needsYou(pane.state))
+        setReply(first ? { pane: first.pane.id, focus: false } : null)
+      })}>
       <span key={docked ? 'tab' : 'bubble'} className="side-pin-count" aria-hidden="true"><Pin size={docked ? 13 : 16} /><span>{waiting || live.length}</span></span>
     </button>
     {open && <div ref={pop} className={`agent-pop side-pin-pop ${closing ? 'closing' : ''}`} style={popStyle} role="dialog" aria-label="Pinned chats" tabIndex={-1}>
@@ -104,7 +134,7 @@ export function SidePins({ pins, sessions, seen, selected, onOpen, onPin, onUnpi
         {view === 'picker' && <button type="button" className="icon-button" aria-label="Back" onClick={() => { back(); pop.current?.focus() }}><ArrowLeft size={18} /></button>}
         <span><strong>{view === 'picker' ? 'Pin a chat' : 'Pinned'}</strong><small>{view === 'edit' ? 'Drag to reorder. Notes show in the list and the chat.' : view === 'picker' ? `${rest.length} not pinned`
           : waiting || unreadCount ? <>{waiting > 0 && <span className="side-pin-needs">{waiting} needs you</span>}{waiting > 0 && unreadCount > 0 && ' · '}{unreadCount > 0 && `${unreadCount} unread`}</> : `${live.length} chats`}</small></span>
-        {view !== 'picker' && <button ref={edit} type="button" className="side-pin-edit" onClick={() => setView(view === 'edit' ? 'list' : 'edit')}>{view === 'edit' ? 'Done' : 'Edit'}</button>}
+        {view !== 'picker' && <button ref={edit} type="button" className="side-pin-edit" onClick={() => { setReply(null); setView(view === 'edit' ? 'list' : 'edit') }}>{view === 'edit' ? 'Done' : 'Edit'}</button>}
         <button type="button" className="icon-button" aria-label="Close pinned chats" onClick={() => close()}><X size={18} /></button>
       </header>
       {view === 'picker' && <label className="side-pin-search"><Search size={16} /><input ref={input} aria-label="Search chats to pin" placeholder="Search chats" value={query} onChange={event => setQuery(event.target.value)} /></label>}
@@ -122,13 +152,20 @@ export function SidePins({ pins, sessions, seen, selected, onOpen, onPin, onUnpi
             }}><GripVertical size={14} /></button>
           <span className="side-pin-edit-body"><strong>{paneTitle(pane)}</strong><input maxLength={60} placeholder="Add a note" aria-label={`Note for ${paneTitle(pane)}`} value={pin.note ?? ''} onChange={event => onNote(pane.id, event.target.value)} onBlur={event => onNote(pane.id, event.target.value.trim())} /></span>
           <button type="button" className="icon-button" aria-label={`Unpin ${paneTitle(pane)}`} onClick={() => { if (live.length < 2) close(false); onUnpin(pane.id) }}><PinOff size={16} /></button>
-        </li>) : live.map(chat => <PinnedRow key={chat.pane.id} {...chat} seen={seen} selected={selected} onOpen={pane => { onOpen(pane); close(false) }} />)}
+        </li>) : live.map(chat => <PinnedRow key={chat.pane.id} {...chat} api={api} seen={seen} selected={selected} expanded={reply?.pane === chat.pane.id} focus={reply?.focus ?? false}
+          onToggle={() => { setAnnouncement(''); setReply(current => current?.pane === chat.pane.id ? null : { pane: chat.pane.id, focus: true }) }}
+          onSuccess={answered => {
+            setReply(current => current?.pane === chat.pane.id ? null : current)
+            onUpdate()
+            setAnnouncement(`${answered ? 'Answered' : 'Sent to'} ${paneTitle(chat.pane)}`)
+          }} onOpen={pane => { onOpen(pane); close(false) }} />)}
         {view === 'picker' && !matching.length && <li className="side-pin-empty">No other chats match.</li>}
       </ul>
       {view === 'list' && <footer className="agent-pop-foot side-pin-foot">
-        <button type="button" onClick={() => { setQuery(''); setView('picker') }}><Plus size={16} />Pin a chat</button>
+        <button type="button" onClick={() => { setReply(null); setQuery(''); setView('picker') }}><Plus size={16} />Pin a chat</button>
         {current && <button type="button" disabled={full} title={full ? 'Up to 40 chats can be pinned.' : undefined} onClick={() => onPin(current.pane.id)}><Pin size={16} />Pin this chat</button>}
       </footer>}
+      <div className="side-pin-announcement" aria-live="polite" aria-atomic="true">{announcement}</div>
     </div>}
   </>
 }
