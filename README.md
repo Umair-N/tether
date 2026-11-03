@@ -4,6 +4,8 @@ Tether is a chat UI for coding agents in tmux: Claude Code, Codex, and Antigravi
 Run agents on your Linux machine, then read their chat, approve requests, answer questions, and send instructions from any browser: desktop, tablet, or phone.
 The agent stays in tmux when you leave your desk.
 
+![Tether demo: a live agent turn, split view, the built-in browser, and Friday Live mode](docs/tether-demo.gif)
+
 - Read chat from the agent's transcript, with tool actions collapsed.
 - Answer approval and folder-trust prompts with their real options.
 - Switch between agent sessions and shell tabs.
