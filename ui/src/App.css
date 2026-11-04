@@ -43,7 +43,7 @@
   background: var(--surface); color: var(--text); border: 1px solid var(--line);
   box-shadow: 0 1px 2px rgb(0 0 0 / .08), 0 6px 18px rgb(0 0 0 / .14); touch-action: none; user-select: none; -webkit-user-select: none; cursor: grab;
   --spring: cubic-bezier(.32, .72, 0, 1);
-  transition: transform .34s var(--spring), width .34s var(--spring), height .34s var(--spring), border-radius .34s var(--spring),
+  transition: transform .28s var(--spring), width .28s var(--spring), height .28s var(--spring), border-radius .28s var(--spring),
     background-color .2s ease, color .2s ease, border-color .2s ease, box-shadow .2s ease, scale .15s ease; }
 /* Docked: a D-shaped tab, flat side on the screen edge. The ::before widens the touch area to 44px. */
 .agent-bubble.docked { box-shadow: 0 1px 2px rgb(0 0 0 / .06), 0 4px 12px rgb(0 0 0 / .12); }
@@ -56,9 +56,11 @@
 .agent-bubble.docked.right .agent-bubble-count, .agent-bubble.docked.right > svg { translate: 2px 0; }
 .agent-bubble.docked.working { border-color: var(--accent); color: var(--accent); }
 .agent-bubble.docked.working .agent-bubble-count { color: var(--accent); }
-.agent-bubble.docked.attention { background: var(--attention); border-color: var(--attention); animation: tab-call 2.2s ease-out infinite; }
+.agent-bubble.docked.attention { background: var(--attention); border-color: var(--attention); }
+/* The call pulse: a copy of the tab grows and fades behind it (transform and opacity only, no repaint). */
+.agent-bubble.docked.attention::after { content: ''; position: absolute; inset: 0; z-index: -1; border-radius: inherit; background: var(--attention); pointer-events: none; animation: tab-call 2.2s cubic-bezier(.23, 1, .32, 1) infinite; }
 .agent-bubble.docked.attention .agent-bubble-count { color: var(--surface); }
-@keyframes tab-call { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--attention) 50%, transparent); } 70%, 100% { box-shadow: 0 0 0 10px transparent; } }
+@keyframes tab-call { 0% { opacity: .5; transform: scale(1); } 70%, 100% { opacity: 0; transform: scale(1.3, 1.25); } }
 .agent-bubble.dragging { transition: width .2s var(--spring), height .2s var(--spring), border-radius .2s var(--spring), box-shadow .2s ease, scale .15s ease; cursor: grabbing; scale: 1.08; box-shadow: 0 2px 4px rgb(0 0 0 / .1), 0 14px 32px rgb(0 0 0 / .22); }
 .agent-bubble:active:not(.dragging) { scale: .94; }
 .agent-bubble:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
@@ -67,12 +69,13 @@
 .agent-bubble-ring { position: absolute; inset: -1px; border-radius: 50%; border: 2px solid transparent; pointer-events: none; }
 .agent-bubble.idle { color: var(--muted); }
 .agent-bubble.working .agent-bubble-ring { border-color: var(--accent); border-right-color: transparent; animation: spin 1.4s linear infinite; }
-.agent-bubble.attention .agent-bubble-ring { border-color: var(--attention); animation: bubble-call 1.8s ease-out infinite; }
-@keyframes bubble-call { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--attention) 45%, transparent); } 100% { box-shadow: 0 0 0 12px transparent; } }
+.agent-bubble.attention .agent-bubble-ring { border-color: var(--attention); }
+.agent-bubble.attention .agent-bubble-ring::after { content: ''; position: absolute; inset: -3px; border-radius: 50%; border: 2px solid var(--attention); animation: bubble-call 1.8s cubic-bezier(.23, 1, .32, 1) infinite; }
+@keyframes bubble-call { 0% { opacity: .45; transform: scale(1); } 100% { opacity: 0; transform: scale(1.45); } }
 .agent-pop { position: fixed; z-index: 41; display: flex; flex-direction: column; overflow: hidden; border-radius: 14px; background: var(--surface); border: 1px solid var(--line);
-  box-shadow: 0 2px 6px rgb(0 0 0 / .08), 0 18px 48px rgb(0 0 0 / .22); animation: pop-in .22s cubic-bezier(.32, .72, 0, 1) .06s backwards; outline: none; }
-.agent-pop.closing { animation: pop-out .14s ease-in forwards; }
-@keyframes pop-in { from { opacity: 0; transform: scale(.88); } to { opacity: 1; transform: scale(1); } }
+  box-shadow: 0 2px 6px rgb(0 0 0 / .08), 0 18px 48px rgb(0 0 0 / .22); animation: pop-in .2s cubic-bezier(.23, 1, .32, 1) .06s backwards; outline: none; }
+.agent-pop.closing { animation: pop-out .14s cubic-bezier(.23, 1, .32, 1) forwards; }
+@keyframes pop-in { from { opacity: 0; transform: scale(.95); } to { opacity: 1; transform: scale(1); } }
 @keyframes pop-out { to { opacity: 0; transform: scale(.94); } }
 .agent-pop-head { display: flex; align-items: center; gap: 8px; padding: 10px 6px 6px 14px; }
 .agent-pop-head > span { display: flex; flex-direction: column; flex: 1; min-width: 0; }
@@ -161,7 +164,8 @@ label.broadcast-row:hover { background: var(--hover); }
 @media (prefers-reduced-motion: reduce) {
   .agent-bubble { transition: none; }
   .agent-bubble-counts, .agent-bubble > svg { animation: none; }
-  .agent-bubble.working .agent-bubble-ring, .agent-bubble.attention .agent-bubble-ring, .agent-bubble.docked.attention { animation: none; }
+  .agent-bubble.working .agent-bubble-ring { animation: none; }
+  .agent-bubble.attention .agent-bubble-ring::after, .agent-bubble.docked.attention::after { display: none; }
   .agent-pop { animation-name: fade-in; }
   .agent-pop.closing { animation-name: fade-out; }
 }
@@ -287,8 +291,13 @@ label.broadcast-row:hover { background: var(--hover); }
 /* Pane tabs under the chat header: one tab per tmux pane, + splits. */
 .pane-tabs { display: flex; gap: 4px; overflow-x: auto; padding: 6px max(12px, env(safe-area-inset-left)); border-bottom: 1px solid var(--line); scrollbar-width: none; }
 .pane-tabs button { display: flex; align-items: center; gap: 6px; flex-shrink: 0; min-height: 36px; padding: 0 12px; border-radius: 18px; font-size: 13px; color: var(--muted); border: 1px solid transparent; }
-.pane-tabs button.active { background: var(--surface); border-color: var(--line); color: var(--text); font-weight: 500; }
+.pane-tabs button.active { background: var(--surface); border-color: var(--line); color: var(--text); }
 .pane-tabs .tab-add { padding: 0 10px; }
+.pane-tabs { position: relative; }
+.pane-tabs button { position: relative; }
+.pane-tab-pill { position: absolute; left: 0; top: 0; border-radius: 18px; background: var(--surface); border: 1px solid var(--line); pointer-events: none; }
+.pane-tabs:not(.has-pill) .pane-tab-pill { display: none; }
+.pane-tabs.has-pill button.active { background: transparent; border-color: transparent; }
 /* Agent session names can be long (reviewer-esef-phase-1-3-…): one line, cut with an ellipsis. */
 .pane-tab-name { max-width: 18ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Composer + menu and stop button */
@@ -542,11 +551,12 @@ dialog::backdrop { background: #11110e66; }
 .compact-row pre { white-space: pre-wrap; max-height: 60dvh; font-family: inherit; font-size: 13px; line-height: 1.5; }
 
 /* After a swipe, the new pane slides in from the side it came from. */
-.arrive-next { animation: arrive-next .18s ease-out; }
-.arrive-previous { animation: arrive-previous .18s ease-out; }
-@keyframes arrive-next { from { transform: translateX(24px); opacity: .4; } }
-@keyframes arrive-previous { from { transform: translateX(-24px); opacity: .4; } }
-@media (prefers-reduced-motion: reduce) { .arrive-next, .arrive-previous { animation: none; } }
+/* A side swipe drags the page (chat + footer) and the next-door page (.chat-peek, waiting just off screen) together. */
+.chat-pager { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-x: clip; }
+.chat-page { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.chat-peek { position: absolute; inset: 0; display: flex; flex-direction: column; pointer-events: none; }
+.chat-peek-dock { display: contents; }
+.chat-peek * { animation: none; }
 
 /* Sent while the agent works: shown until the transcript has it. */
 .pending-message { display: flex; flex-direction: column; gap: 6px; opacity: .75; }
@@ -591,7 +601,7 @@ dialog::backdrop { background: #11110e66; }
 
 /* Sidebar row swipe: Pin and Delete sit under the row; a left swipe slides the row aside. */
 .swipe-row { position: relative; overflow: hidden; border-radius: 9px; }
-.swipe-row > .session-row { position: relative; z-index: 1; background: var(--sidebar); transition: transform .2s ease; }
+.swipe-row > .session-row { position: relative; z-index: 1; background: var(--sidebar); transition: transform .2s cubic-bezier(.23, 1, .32, 1); }
 .swipe-row > .session-row.selected { background: linear-gradient(var(--hover), var(--hover)), var(--sidebar); }
 .swipe-row.swiped > .session-row { transform: translateX(-228px); }
 .swipe-actions { position: absolute; inset: 0 0 0 auto; display: flex; width: 228px; visibility: hidden; }
@@ -1065,6 +1075,7 @@ button.live-chip:active { background: var(--line); }
 .workspace .chat-title > div { flex: 0 1 auto; min-width: 0; }
 .workspace .pane-tabs { padding: 4px 12px; }
 .workspace .pane-tabs button { min-height: 28px; padding: 0 10px; border-radius: 14px; font-size: 12.5px; }
+.workspace .pane-tab-pill { border-radius: 14px; }
 .workspace .chat-header[draggable="true"] { cursor: grab; }
 .workspace .chat-header[draggable="true"] :is(button, kbd) { cursor: pointer; }
 @container (max-width: 560px) {
@@ -1238,13 +1249,16 @@ button.live-chip:active { background: var(--line); }
 
 /* The end of a turn this page watched: a check, then it goes away. */
 .done-line { align-items: center; }
-.done-check { display: inline-grid; place-items: center; width: 16px; height: 16px; flex: none; border-radius: 50%; background: var(--accent); color: var(--accent-text); animation: done-pop .32s cubic-bezier(.2, .9, .3, 1.3); }
+.done-check { display: inline-grid; place-items: center; width: 16px; height: 16px; flex: none; border-radius: 50%; background: var(--accent); color: var(--accent-text); animation: done-pop .2s cubic-bezier(.23, 1, .32, 1); }
 .done-line strong { font-weight: 500; }
-@keyframes done-pop { from { transform: scale(.4); } }
+@keyframes done-pop { from { opacity: 0; transform: scale(.9); } }
 
 /* New messages settle in. Only movement: a message is fully visible even when the animation never runs. */
-.messages > [data-msg-id]:last-child, .messages > div:last-child > [data-msg-id], .messages > .user-message:last-child { animation: message-in .22s ease-out; }
+.messages > [data-msg-id]:last-child, .messages > div:last-child > [data-msg-id], .messages > .user-message:last-child { animation: message-in .22s cubic-bezier(.23, 1, .32, 1); }
 @keyframes message-in { from { transform: translateY(6px); } }
+/* A pane that just opened shows its messages in place. A 0s duration ends the animation at once; the later change
+   back to .22s does not restart it, so only messages that come after this moment settle in. */
+.thread.opening .messages > [data-msg-id]:last-child, .thread.opening .messages > div:last-child > [data-msg-id], .thread.opening .messages > .user-message:last-child { animation-duration: 0s; }
 
 @media (prefers-reduced-motion: reduce) {
   .composer { transition: none; }

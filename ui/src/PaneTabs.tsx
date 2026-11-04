@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
 import { Plus } from 'lucide-react'
 import type { Pane } from './api'
 import { AgentIcon, needsYou, paneTitle, shownIndex } from './Sidebar'
@@ -21,6 +21,45 @@ interface Props {
   onSplit: (direction: 'right') => void
   onReorder: (ids: string[]) => void
 }
+// One shared pill marks the active tab. A side swipe on the chat slides it toward the next tab with the finger.
+const SLIDE_CURVE = 'cubic-bezier(.2,.8,.2,1)'
+const scrollBySession = new Map<string, number>()  // the strip remounts with each pane: keep its scroll place
+const swipeScroll = new WeakMap<HTMLElement, number>()  // strip scroll when the swipe started
+const scrollTween = new WeakMap<HTMLElement, number>()
+
+/** Place the pill `progress` (0..1) of the way from the active tab to the tab `toId`. `ms` animates the move. */
+export function movePill(strip: HTMLElement | null, toId: string | null, progress: number, ms = 0) {
+  const pill = strip?.querySelector<HTMLElement>('.pane-tab-pill')
+  const from = strip?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+  if (!strip || !pill || !from) return
+  const to = toId ? strip.querySelector<HTMLElement>(`[data-pane="${CSS.escape(toId)}"]`) : null
+  const p = to ? Math.min(1, Math.max(0, progress)) : 0
+  const end = to ?? from
+  pill.style.transition = ms ? `transform ${ms}ms ${SLIDE_CURVE}, width ${ms}ms ${SLIDE_CURVE}` : ''
+  pill.style.transform = `translate(${from.offsetLeft + (end.offsetLeft - from.offsetLeft) * p}px, ${from.offsetTop}px)`
+  pill.style.width = `${from.offsetWidth + (end.offsetWidth - from.offsetWidth) * p}px`
+  pill.style.height = `${from.offsetHeight}px`
+  // Scroll the strip with the same progress, so a target tab off screen comes into view.
+  cancelAnimationFrame(scrollTween.get(strip) ?? 0)
+  let base = swipeScroll.get(strip)
+  if (!p) { if (base !== undefined) { swipeScroll.delete(strip); scrollTo(strip, base, ms) } return }
+  if (base === undefined) { base = strip.scrollLeft; swipeScroll.set(strip, base) }
+  const pad = 12, view = strip.clientWidth
+  const goal = end.offsetLeft - pad < base ? end.offsetLeft - pad : end.offsetLeft + end.offsetWidth + pad > base + view ? end.offsetLeft + end.offsetWidth + pad - view : base
+  scrollTo(strip, base + (goal - base) * p, ms)
+}
+// A scroll that follows the same curve and time as the pill (smooth scrolling has its own timing).
+function scrollTo(strip: HTMLElement, left: number, ms: number) {
+  if (!ms) { strip.scrollLeft = left; return }
+  const start = strip.scrollLeft, began = performance.now()
+  const step = (now: number) => {
+    const t = Math.min(1, (now - began) / ms), eased = 1 - Math.pow(1 - t, 3)
+    strip.scrollLeft = start + (left - start) * eased
+    if (t < 1) scrollTween.set(strip, requestAnimationFrame(step))
+  }
+  scrollTween.set(strip, requestAnimationFrame(step))
+}
+
 interface Drag { id: string; startX: number; startY: number; lifted: boolean; moved: boolean; touch: boolean; timer: number; centers: { id: string; x: number }[] }
 const HOLD_MS = 350
 
@@ -36,6 +75,20 @@ export const PaneTabs = forwardRef<HTMLDivElement, Props>(function PaneTabs({ se
   const setPreview = (next: string[] | null) => { previewNow.current = next; setPreviewState(next) }
   const [dragging, setDragging] = useState<string | null>(null)
   const ids = session.panes.map(item => item.id)
+  const order = ids.join()
+  // Before paint: restore the strip scroll and put the pill on the active tab. Tab sizes change with names and state dots.
+  useLayoutEffect(() => {
+    const box = strip.current
+    if (!box) return
+    box.scrollLeft = scrollBySession.get(session.id) ?? 0
+    const save = () => scrollBySession.set(session.id, box.scrollLeft)
+    const place = () => { if (swipeScroll.get(box) === undefined) movePill(box, null, 0) }
+    place()
+    const observer = new ResizeObserver(place)
+    for (const tab of box.querySelectorAll('[role="tab"]')) observer.observe(tab)
+    box.addEventListener('scroll', save, { passive: true })
+    return () => { observer.disconnect(); box.removeEventListener('scroll', save) }
+  }, [session.id, pane.id, order])
   const latest = useRef({ ids, onReorder, onPaneActions })
   latest.current = { ids, onReorder, onPaneActions }
 
@@ -134,7 +187,9 @@ export const PaneTabs = forwardRef<HTMLDivElement, Props>(function PaneTabs({ se
 
   const byId = new Map(session.panes.map(item => [item.id, item]))
   const shown = preview ? preview.map(id => byId.get(id)).filter((item): item is Pane => !!item) : session.panes
-  return <div className="pane-tabs" ref={strip} role="tablist" aria-label={`Panes of ${session.name}`}>
+  // While tabs are reordered, each tab draws its own highlight again.
+  return <div className={preview ? 'pane-tabs' : 'pane-tabs has-pill'} ref={strip} role="tablist" aria-label={`Panes of ${session.name}`}>
+    <span className="pane-tab-pill" aria-hidden="true" />
     {shown.map(item => <button key={item.id} data-pane={item.id} role="tab" aria-selected={item.id === pane.id} className={[item.id === pane.id ? 'active' : '', dragging === item.id ? 'dragging' : ''].filter(Boolean).join(' ')}
       onClick={() => { if (!suppressClick.current) onOpenPane(item) }}
       // A touch long press is handled above (drag, or actions on release). A right-click still opens the actions.

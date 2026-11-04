@@ -18,15 +18,13 @@
   padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
   padding-block: calc(12px + env(safe-area-inset-top, 0px)) calc(18px + env(safe-area-inset-bottom, 0px)); }
 
-/* Bottom light: grows with the voice level (--level, 0..1, set by the orb loop). */
+/* Bottom light: grows with the voice level. The orb loop sets its transform and opacity each frame. */
 .live-aurora { position: absolute; inset: auto 0 0 0; height: 46%; pointer-events: none; z-index: 0;
   background: radial-gradient(60% 70% at 50% 100%, color-mix(in oklab, var(--live-you) 45%, transparent), transparent 70%),
               radial-gradient(35% 45% at 25% 100%, color-mix(in oklab, var(--live-you) 25%, transparent), transparent 70%),
               radial-gradient(35% 45% at 78% 100%, color-mix(in oklab, var(--live-agent) 25%, transparent), transparent 70%);
-  transform-origin: 50% 100%; transform: scaleY(calc(.45 + var(--level, 0) * .9)); opacity: calc(.3 + var(--level, 0) * .6);
-  transition: transform .12s linear, opacity .2s linear; filter: blur(8px); }
+  transform-origin: 50% 100%; transform: scaleY(.45); opacity: .3; }
 .live[data-phase="speaking"] .live-aurora { --live-you: var(--live-agent); }
-.live[data-phase="paused"] .live-aurora { opacity: .15; }
 
 .live-top { position: relative; z-index: 3; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .live-tag { display: inline-flex; align-items: center; gap: 8px; margin-right: auto; font-family: var(--live-mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
@@ -60,7 +58,7 @@ button.live-chip:hover { background: var(--hover); }
 .live-words { position: relative; z-index: 2; display: grid; align-content: end; gap: 12px; justify-self: center; width: 100%; max-width: 34em; min-height: 9.5em; padding-bottom: 14px; }
 .live-words p { margin: 0; }
 .live-said { font-family: var(--live-display); font-style: italic; font-weight: 300; font-size: clamp(20px, 5vw, 30px); line-height: 1.22; text-wrap: balance; color: var(--muted); }
-.live-reply { font-size: clamp(16px, 3.9vw, 19px); line-height: 1.5; color: var(--text); animation: live-in .35s cubic-bezier(.2, .7, .2, 1) both; }
+.live-reply { font-size: clamp(16px, 3.9vw, 19px); line-height: 1.5; color: var(--text); animation: live-in .25s cubic-bezier(.23, 1, .32, 1) both; }
 .live-who { display: block; margin-bottom: 4px; font-family: var(--live-mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--live-agent); }
 .live-problem { font-size: 14px; color: var(--error); }
 @keyframes live-in { from { opacity: 0; transform: translateY(.35em); } to { opacity: 1; transform: none; } }
@@ -99,5 +97,4 @@ button.live-chip:hover { background: var(--hover); }
 @media (max-height: 640px) { .live-words { min-height: 7em; } .live-orb { width: min(54vw, 36vh); } }
 @media (prefers-reduced-motion: reduce) {
   .live-reply { animation: none; }
-  .live-aurora { transition: none; transform: scaleY(.7); }
 }

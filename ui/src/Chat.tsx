@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ArrowDown, ArrowLeftRight, Blocks, GitFork, Check, ChevronDown, ChevronRight, Clock3, Columns2, CornerDownRight, Gauge, Info, Layers, Maximize2, Menu, MessageSquare, Minimize2, MoreHorizontal, PanelTop, Pencil, Pin, PinOff, RefreshCw, RotateCcw, Rows2, Search, Settings2, ShieldAlert, SquareTerminal, Target, Terminal, WifiOff, X } from 'lucide-react'
 import { AssistantRuntimeProvider, ThreadPrimitive, useExternalStoreRuntime } from '@assistant-ui/react'
 import { ApiError, canFork, creditsLabel, errorText, usageLabel } from './api'
@@ -19,7 +19,7 @@ import { speak, stopSpeaking } from './speech'
 import type { TextFile } from './TextViewer'
 import type { ToolSummary } from './api'
 import { StatusStack } from './StatusStack'
-import { PaneTabs } from './PaneTabs'
+import { PaneTabs, movePill } from './PaneTabs'
 import { Elapsed, NoticeStack, formatElapsed } from './Notices'
 import type { NoticeVariant } from './Notices'
 import { State } from './NewSession'
@@ -42,7 +42,80 @@ function PinMark({ pin }: { pin: SidePinControls }) {
   return <><span className="header-separator">·</span><span className="pin-mark" title={`Pinned chat ${pin.index + 1} of ${pin.total}${pin.note ? `: ${pin.note}` : ''}`}><Pin size={12} aria-hidden="true" /><span className="pin-mark-place">{place}</span>{pin.note && <span className="pin-mark-note">{pin.note}</span>}</span></>
 }
 
-let swipeDirection: '' | 'next' | 'previous' = ''
+// The last chat data of each pane, so a pane switch shows the conversation at once and refreshes it after.
+// The panes next to the open one load in the background, so the first swipe to them is instant too.
+const chatCache = new Map<string, ChatData>()
+const prefetching = new Set<string>()
+// Claude's bottom strip (model, effort, mode, chips) per pane, so a pane switch shows the right footer at once.
+const footerCache = new Map<string, Footer>()
+const cacheFooter = (id: string, footer: Footer) => {
+  footerCache.delete(id); footerCache.set(id, footer)
+  if (footerCache.size > 24) footerCache.delete(footerCache.keys().next().value as string)
+}
+const cacheChat = (id: string, data: ChatData) => {
+  chatCache.delete(id); chatCache.set(id, data)
+  if (chatCache.size > 24) chatCache.delete(chatCache.keys().next().value as string)
+}
+// The replies that end a turn get the copy and read-aloud actions.
+function turnEndsOf(messages: ChatMessage[], working: boolean) {
+  const ends = new Set<string>()
+  let open = working
+  for (let at = messages.length - 1; at >= 0; at--) {
+    const item = messages[at]
+    if (item.role === 'user' && !item.kind) { open = false; continue }
+    if (item.kind === 'notice' || item.kind === 'terminal') continue
+    if (!open && item.role === 'assistant' && !item.kind) ends.add(item.id)
+    open = true
+  }
+  return ends
+}
+// A still copy of each pane's footer (status cards, work line, message box), taken when the pane closes.
+// A swipe shows it under the next-door chat, so the footer slides in with its own height and the layout does not jump.
+const dockSnapshot = new Map<string, string>()
+function dockHtml(page: HTMLElement | null, composerOnly = false) {
+  const thread = page?.querySelector(':scope > .thread')
+  let html = ''
+  for (let node = thread?.nextElementSibling; node; node = node.nextElementSibling) {
+    if (node.tagName === 'DIALOG' || (composerOnly && !node.classList.contains('composer-area'))) continue
+    const copy = node.cloneNode(true) as HTMLElement
+    copy.querySelectorAll('dialog, [role="menu"]').forEach(item => item.remove())
+    copy.querySelectorAll('[id]').forEach(item => item.removeAttribute('id'))
+    const boxes = node.querySelectorAll('textarea'), copies = copy.querySelectorAll('textarea')
+    boxes.forEach((box, at) => { if (copies[at]) copies[at].textContent = box.value })
+    html += copy.outerHTML
+  }
+  return html
+}
+function saveDock(id: string, page: HTMLElement | null) {
+  if (!page) return
+  const html = dockHtml(page)
+  dockSnapshot.delete(id); dockSnapshot.set(id, html)
+  if (dockSnapshot.size > 24) dockSnapshot.delete(dockSnapshot.keys().next().value!)
+}
+// A still copy of a next-door pane's chat, from the cache. It waits just off screen on its side (side 1 = right,
+// -1 = left), at the place the real chat opens, so a side swipe drags both chats together like photos in a gallery.
+const ChatPeek = memo(function ChatPeek({ id, data, api, side, peekRef }: { id: string; data: ChatData | undefined; api: Api; side: 1 | -1; peekRef: React.RefObject<HTMLDivElement | null> }) {
+  const messages = useMemo(() => data?.messages ?? [], [data?.messages])
+  const ends = useMemo(() => turnEndsOf(messages, data?.state === 'Working'), [messages, data?.state])
+  const runtime = useExternalStoreRuntime({ messages, convertMessage, isRunning: data?.state === 'Working', onNew: async () => {} })
+  // Messages render a moment after the data; keep the place the real chat will open at while the content grows.
+  const scroller = useRef<HTMLDivElement>(null)
+  const dock = useRef<HTMLDivElement>(null)
+  // The footer copy is plain HTML, set outside React (Chat fills in a stand-in when the pane has none yet).
+  useLayoutEffect(() => { if (dock.current) dock.current.innerHTML = dockSnapshot.get(id) ?? '' }, [id, data])
+  useLayoutEffect(() => {
+    const view = scroller.current
+    if (!view) return
+    const place = () => { const saved = scrollByPane.get(id); view.scrollTop = saved && !saved.bottom ? saved.top : view.scrollHeight }
+    place()
+    const observer = new ResizeObserver(place)
+    if (view.firstElementChild) observer.observe(view.firstElementChild)
+    return () => observer.disconnect()
+  }, [id, messages])
+  return <div className="chat-peek" ref={peekRef} aria-hidden="true" inert style={{ transform: `translateX(${side * 100}%)` }}><div className="thread"><div className="chat-scroll" ref={scroller}><div className="messages">
+    <AssistantRuntimeProvider runtime={runtime}><ThreadPrimitive.Messages>{({ message }) => <Message api={api} session={id} actions={ends.has(message.id)} tools={message.metadata.custom.tools as ToolSummary[] | undefined} id={message.id} role={message.role} kind={message.metadata.custom.kind} title={message.metadata.custom.title ? String(message.metadata.custom.title) : undefined} count={message.metadata.custom.count} text={String(message.metadata.custom.text ?? '')} time={String(message.metadata.custom.time ?? '')} />}</ThreadPrimitive.Messages></AssistantRuntimeProvider>
+  </div></div></div><div className="chat-peek-dock" ref={dock} /></div>
+})
 // Where each pane was scrolled, so switching panes and coming back lands at the same place.
 const scrollByPane = new Map<string, { top: number; limit: number; bottom: boolean }>()
 // Messages sent while the agent works wait in its input queue and reach the transcript only when it takes them.
@@ -92,7 +165,8 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
   const [limit, setLimit] = useState(() => scrollByPane.get(pane.id)?.limit ?? 40)
   const chatQuery = `session=${encodeURIComponent(pane.id)}&limit=${limit}&preview=${liveReplyPreview ? 1 : 0}${pane.agent === 'shell' ? '&mode=shell' : ''}`
   const fetchChat = useCallback((signal: AbortSignal) => api<ChatData>(`chat?${chatQuery}${document.visibilityState === 'visible' ? '&watch=1' : ''}`, undefined, signal), [api, chatQuery])
-  const { data, error, loading, refresh } = usePolling(fetchChat, 1500, `stream?${chatQuery}`)
+  const { data, error, loading, refresh } = usePolling(fetchChat, 1500, `stream?${chatQuery}`, chatCache.get(pane.id))
+  useEffect(() => { if (data) cacheChat(pane.id, data) }, [pane.id, data])
   const preview = useSteadyPreview(liveReplyPreview ? data?.preview?.text : undefined)
   // Connection state for the banner: the browser's offline flag, plus failed chat reads while a chat is already on screen.
   const [offline, setOffline] = useState(() => !navigator.onLine)
@@ -121,8 +195,37 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
   const setTerm = (on: boolean) => { if (on) { terminalPanes.add(pane.id); restore.current = scrollByPane.get(pane.id) ?? null } else terminalPanes.delete(pane.id); setTermState(on) }
   const [jump, setJump] = useState(false)
   const viewport = useRef<HTMLDivElement>(null)
-  const swipe = useRef<{ x: number; y: number; at: number } | null>(null)
+  const page = useRef<HTMLDivElement>(null)  // everything under the tabs: it slides as one card on a side swipe
+  useLayoutEffect(() => { const element = page.current, id = pane.id; return () => saveDock(id, element) }, [pane.id])
+  // A side swipe on the chat: 'wait' until the finger shows a direction, then 'drag' moves the chat with the finger.
+  const swipe = useRef<{ x: number; y: number; mode: 'wait' | 'drag'; lastX: number; lastAt: number; speed: number } | null>(null)
+  const leaving = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // For a moment after a pane opens, the messages already there do not play the "new message" settle-in.
+  const [opening, setOpening] = useState(true)
+  useEffect(() => { const timer = setTimeout(() => setOpening(false), 400); return () => clearTimeout(timer) }, [])
+  useEffect(() => () => { if (leaving.current) clearTimeout(leaving.current) }, [])
   const panes = session?.panes ?? []
+  const ready = data !== undefined
+  const [, setPrefetched] = useState(0)
+  const peekNext = useRef<HTMLDivElement>(null), peekPrevious = useRef<HTMLDivElement>(null)
+  const paneIndex = panes.findIndex(item => item.id === pane.id)
+  const nextPane = paneIndex >= 0 ? panes[paneIndex + 1] : undefined, previousPane = paneIndex > 0 ? panes[paneIndex - 1] : undefined
+  useEffect(() => {
+    const list = session?.panes ?? []
+    if (!ready) return
+    const index = list.findIndex(item => item.id === pane.id)
+    for (const near of [list[index + 1], list[index - 1]]) {
+      if (!near) continue
+      if (near.agent === 'claude' && !footerCache.has(near.id) && !prefetching.has(`footer:${near.id}`)) {
+        prefetching.add(`footer:${near.id}`)
+        api<Footer>(`footer?session=${encodeURIComponent(near.id)}`).then(result => { if (!footerCache.has(near.id)) cacheFooter(near.id, result) }, () => {}).finally(() => prefetching.delete(`footer:${near.id}`))
+      }
+      if (chatCache.has(near.id) || prefetching.has(near.id)) continue
+      prefetching.add(near.id)
+      const query = `session=${encodeURIComponent(near.id)}&limit=${scrollByPane.get(near.id)?.limit ?? 40}&preview=${liveReplyPreview ? 1 : 0}${near.agent === 'shell' ? '&mode=shell' : ''}`
+      api<ChatData>(`chat?${query}`).then(result => { if (!chatCache.has(near.id)) { cacheChat(near.id, result); setPrefetched(count => count + 1) } }).catch(() => {}).finally(() => prefetching.delete(near.id))
+    }
+  }, [ready, pane.id, session?.panes, api, liveReplyPreview])
   // Swipe left or right on the chat to go to the next or previous pane. A swipe that starts on something that scrolls
   // sideways (a wide table or code block) scrolls it instead, and a swipe from the screen edge stays Android's back gesture.
   const swipeStart = (event: React.TouchEvent) => {
@@ -136,7 +239,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
       if (node.scrollWidth > node.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(node).overflowX)) return
     }
     if (window.getSelection()?.toString()) return
-    swipe.current = { x: touch.clientX, y: touch.clientY, at: Date.now() }
+    swipe.current = { x: touch.clientX, y: touch.clientY, mode: 'wait', lastX: touch.clientX, lastAt: performance.now(), speed: 0 }
   }
   // Pull down at the top of the chat to load earlier messages.
   const pull = useRef<number | null>(null)
@@ -151,22 +254,75 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     if (pull.current !== null && pulled >= 70) loadEarlier()
     pull.current = null; setPulled(0)
   }
+  const reduceMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  // Where the chat goes next: the pane on that side, the sidebar (right swipe on the first pane), or nothing.
+  const swipeTarget = (dx: number) => {
+    const index = panes.findIndex(item => item.id === pane.id)
+    const next = panes[index + (dx < 0 ? 1 : -1)]
+    return next ? next : dx > 0 && index <= 0 ? 'menu' as const : null
+  }
+  const tabs = useRef<HTMLDivElement>(null)
+  // `ms` animates the move; 0 follows the finger. The tab pill slides the same share of the way.
+  const moveChat = (x: number, ms = 0) => {
+    const element = page.current
+    if (!element) return
+    const transition = ms ? `transform ${ms}ms cubic-bezier(.2,.8,.2,1)` : ''
+    const target = x ? swipeTarget(x) : null
+    movePill(tabs.current, target && target !== 'menu' ? target.id : null, Math.abs(x) / (element.clientWidth || window.innerWidth), ms)
+    element.style.transition = transition
+    element.style.transform = x ? `translateX(${x}px)` : ''
+    for (const [peek, side] of [[peekNext.current, 100], [peekPrevious.current, -100]] as const) {
+      if (!peek) continue
+      peek.style.transition = transition
+      peek.style.transform = `translateX(calc(${side}% + ${x}px))`
+    }
+  }
+  const swipeMove = (event: React.TouchEvent) => {
+    const start = swipe.current
+    if (!start || event.touches.length !== 1) return
+    const touch = event.touches[0]
+    const dx = touch.clientX - start.x, dy = touch.clientY - start.y
+    if (start.mode === 'wait') {
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return
+      if (Math.abs(dx) < Math.abs(dy) * 1.5) { swipe.current = null; return }  // a scroll, not a swipe
+      start.mode = 'drag'; pull.current = null; setPulled(0)
+      // A next-door pane not seen yet has no footer copy: show this pane's message box as a stand-in.
+      for (const peek of [peekNext.current, peekPrevious.current]) {
+        const dock = peek?.querySelector<HTMLElement>('.chat-peek-dock')
+        if (dock && !dock.childElementCount) dock.innerHTML = dockHtml(page.current, true)
+      }
+    }
+    const now = performance.now()
+    if (now > start.lastAt) start.speed = start.speed * 0.4 + ((touch.clientX - start.lastX) / (now - start.lastAt)) * 0.6
+    start.lastX = touch.clientX; start.lastAt = now
+    const target = swipeTarget(dx)
+    // With a pane on that side the chat follows the finger; at the end of the row it resists.
+    moveChat(target && target !== 'menu' ? dx : dx * 0.25)
+  }
   const swipeEnd = (event: React.TouchEvent) => {
     pullEnd()
     const start = swipe.current
     swipe.current = null
-    if (!start || Date.now() - start.at > 700) return
-    const touch = event.changedTouches[0]
-    const dx = touch.clientX - start.x, dy = touch.clientY - start.y
-    if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 2) return
-    const index = panes.findIndex(item => item.id === pane.id)
-    const next = panes[index + (dx < 0 ? 1 : -1)]
-    if (!next) { if (dx > 0 && index <= 0) onMenu(); return }  // right swipe on the first pane opens the sidebar
-    swipeDirection = dx < 0 ? 'next' : 'previous'
-    onOpenPane(next)
+    if (!start || start.mode !== 'drag') return
+    const dx = event.changedTouches[0].clientX - start.x
+    const width = viewport.current?.clientWidth || window.innerWidth
+    const fling = Math.abs(start.speed) > 0.35 && Math.sign(start.speed) === Math.sign(dx) && Math.abs(dx) > 40
+    const target = Math.abs(dx) > width * 0.3 || fling ? swipeTarget(dx) : null
+    if (!target || target === 'menu') {
+      moveChat(0, reduceMotion() ? 0 : 220)
+      if (target === 'menu') onMenu()
+      return
+    }
+    if (reduceMotion()) { onOpenPane(target); return }
+    // Finish at the finger's speed: a fast fling ends sooner, a slow drag eases in.
+    const time = Math.round(Math.min(280, Math.max(140, (width - Math.abs(dx)) / Math.max(Math.abs(start.speed), 1.2))))
+    moveChat(Math.sign(dx) * width, time)
+    leaving.current = setTimeout(() => onOpenPane(target), time)
   }
-  const [arrival] = useState(() => { const value = swipeDirection; swipeDirection = ''; return value })
-  const tabs = useRef<HTMLDivElement>(null)
+  const swipeCancel = () => {
+    if (swipe.current?.mode === 'drag') moveChat(0, reduceMotion() ? 0 : 220)
+    swipe.current = null; pull.current = null; setPulled(0)
+  }
   useEffect(() => { tabs.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ inline: 'nearest', block: 'nearest' }) }, [pane.id])
   const content = useRef<HTMLDivElement>(null)
   const restore = useRef(scrollByPane.get(pane.id) ?? null)
@@ -188,8 +344,9 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
   const [listenRequest, setListenRequest] = useState(0)
   const lastReply = useMemo(() => [...messages].reverse().find(message => message.role === 'assistant' && !message.kind), [messages])
   const readUpTo = useRef<string | null | undefined>(undefined)
+  const cachedAtOpen = useRef(chatCache.get(pane.id))
   useEffect(() => {
-    if (!data) return
+    if (!data || data === cachedAtOpen.current) return  // saved data is not "there when the chat opens"; wait for fresh data
     if (readUpTo.current === undefined || !readAloud) { readUpTo.current = lastReply?.id ?? null; return }
     if (state === 'Working' || !lastReply || lastReply.id === readUpTo.current) return
     readUpTo.current = lastReply.id
@@ -330,7 +487,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     setLimit(value => value + 40)
   }
   // Claude's bottom strip, read every 5 seconds while this page is visible.
-  const [claudeFooter, setFooter] = useState<Footer>({})
+  const [claudeFooter, setFooter] = useState<Footer>(() => footerCache.get(pane.id) ?? {})
   const footer = activePane.agent === 'codex' ? data?.footer ?? {} : claudeFooter
   const [usageSheet, setUsageSheet] = useState(false)
   const [planSheet, setPlanSheet] = useState(false)
@@ -363,7 +520,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
   useEffect(() => {
     if (activePane.agent !== 'claude') return
     let live = true
-    const read = () => { if (document.visibilityState === 'visible') api<Footer>(`footer?session=${encodeURIComponent(pane.id)}`).then(result => { if (live) setFooter(result) }, () => {}) }
+    const read = () => { if (document.visibilityState === 'visible') api<Footer>(`footer?session=${encodeURIComponent(pane.id)}`).then(result => { cacheFooter(pane.id, result); if (live) setFooter(result) }, () => {}) }
     readFooter.current = read
     read()
     const timer = setInterval(read, 5000)
@@ -411,18 +568,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     try { await write('start', { session: pane.id, thread: data?.thread ?? null, agent }) } finally { setActing(false) }
   }
   // Copy, read aloud and share belong to a finished reply: only the last text of each turn gets them, and not while the agent still works.
-  const turnEnds = useMemo(() => {
-    const ends = new Set<string>()
-    let open = state === 'Working'
-    for (let at = messages.length - 1; at >= 0; at--) {
-      const item = messages[at]
-      if (item.role === 'user' && !item.kind) { open = false; continue }
-      if (item.kind === 'notice' || item.kind === 'terminal') continue
-      if (!open && item.role === 'assistant' && !item.kind) ends.add(item.id)
-      open = true
-    }
-    return ends
-  }, [messages, state])
+  const turnEnds = useMemo(() => turnEndsOf(messages, state === 'Working'), [messages, state])
   const runtime = useExternalStoreRuntime({ messages, convertMessage, isRunning: state === 'Working', onNew: async message => { await send(message.content.filter(part => part.type === 'text').map(part => part.text).join('\n')) } })
   // When this phone first saw the pane working. Claude prints its own timer in the spinner detail.
   const [workingSince, setWorkingSince] = useState<{ pane: string; at: number } | null>(null)
@@ -469,7 +615,8 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     {session && session.panes.length > 1 && <PaneTabs ref={tabs} session={session} pane={pane} onOpenPane={onOpenPane} onPaneActions={onPaneActions} onSplit={onSplit} onReorder={onReorder} />}
     {term ? <LiveTerminal paneId={activePane.id} onChat={() => setTerm(false)} /> : <>
     {(offline || (error && data)) && <div className="reconnect-banner" role="status"><WifiOff size={15} /><span>{offline ? 'You are offline. Tether reconnects when the network is back.' : `Cannot reach ${host}. Reconnecting…`}</span><button type="button" onClick={() => void refresh()}>Retry now</button></div>}
-    <ThreadPrimitive.Root className={arrival ? `thread arrive-${arrival}` : 'thread'}><div className="chat-scroll" ref={viewport} onTouchStart={swipeStart} onTouchMove={pullMove} onTouchEnd={swipeEnd} onTouchCancel={() => { swipe.current = null; pull.current = null; setPulled(0) }} onScroll={() => {
+    <div className="chat-pager"><div className="chat-page" ref={page}>
+    <ThreadPrimitive.Root className={opening ? 'thread opening' : 'thread'}><div className="chat-scroll" ref={viewport} onTouchStart={swipeStart} onTouchMove={event => { pullMove(event); swipeMove(event) }} onTouchEnd={swipeEnd} onTouchCancel={swipeCancel} onScroll={() => {
       const view = viewport.current
       if (view && hold.current && Date.now() < hold.current.until && Math.abs(view.scrollTop - hold.current.top) > 2) return
       if (view) { hold.current = null; sticky.current = view.scrollHeight - view.scrollTop - view.clientHeight < 90; setJump(!sticky.current); scrollByPane.set(pane.id, { top: view.scrollTop, limit, bottom: sticky.current }) }
@@ -528,6 +675,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
       {activePane.agent === 'claude' && footer.status && <span className="mode-container"><button type="button" className="pill" aria-label={`Mode: ${MODES[currentMode]}. Change mode`} aria-expanded={modeMenu} disabled={!writable || !!modeBusy} onClick={() => setModeMenu(!modeMenu)}><Gauge size={13} />{modeBusy ? `${MODES[modeBusy]}…` : MODES[currentMode]}</button>
         {modeMenu && <div className="attach-menu mode-menu" role="menu">{Object.entries(MODES).map(([key, label]) => <button key={key} role="menuitemradio" aria-checked={key === currentMode} type="button" onClick={() => void chooseMode(key)}>{label}{key === currentMode && <Check size={16} />}</button>)}</div>}</span>}
     </span>} api={api} pane={activePane} thread={data?.thread ?? null} disabled={!data || !writable} onSend={send} error={sendError} errorAction={draftBlocked ? <button type="button" disabled={acting} onClick={() => void clearAgentInput()}>Clear {agentNames[activePane.agent]}’s input</button> : null} draft={draft} setDraft={setDraft} working={state === 'Working'} onStop={() => void sendKey(activePane.agent === 'shell' ? 'C-c' : 'Escape')} micOk={micOk} chime={chime} handsFree={handsFree && readAloud} listenRequest={listenRequest} sent={sentPrompts} onTools={() => setTools(true)} hint={ownAnswer ? `Answer ${agentNames[activePane.agent]}’s question` : undefined} />
+    </div>{nextPane && <ChatPeek id={nextPane.id} data={chatCache.get(nextPane.id)} api={api} side={1} peekRef={peekNext} />}{previousPane && <ChatPeek id={previousPane.id} data={chatCache.get(previousPane.id)} api={api} side={-1} peekRef={peekPrevious} />}</div>
     </>}
     <ImageViewer image={opened} close={() => setOpened(null)} onShow={showInFiles(opened && !opened.error ? opened.name : null, () => setOpened(null))} />
     <TextViewer file={textFile} close={() => setTextFile(null)} onShow={showInFiles(textFile?.path ?? null, () => setTextFile(null))} />

@@ -3,10 +3,11 @@ import type { RefObject } from 'react'
 import { errorText } from './api'
 
 // One request at a time. Abort obsolete requests and pause polling in hidden tabs.
-export function usePolling<T>(fetcher: (signal: AbortSignal) => Promise<T>, interval: number, streamPath?: string) {
-  const [data, setData] = useState<T>()
+// `initial` shows saved data at once (no loading state) while the first fetch runs.
+export function usePolling<T>(fetcher: (signal: AbortSignal) => Promise<T>, interval: number, streamPath?: string, initial?: T) {
+  const [data, setData] = useState<T | undefined>(initial)
   const [error, setError] = useState('')
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(initial === undefined)
   const active = useRef<AbortController | null>(null)
   const refresh = useCallback(async () => {
     active.current?.abort()

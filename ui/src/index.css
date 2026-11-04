@@ -79,5 +79,5 @@ button.primary:not(:disabled):hover, a.primary:hover { background: #b65333; }
 .error { color: var(--error); }
 .muted { color: var(--muted); font-size: 14px; }
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation: none !important; scroll-behavior: auto !important; transition: none !important; }
+  *, *::before, *::after { scroll-behavior: auto !important; }
 }

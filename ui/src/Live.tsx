@@ -278,6 +278,7 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
       return [r1, g1, b1].map(v => Math.round((v + m) * 255))
     }
     let width = 0, height = 0, smooth = 0, frame = 0
+    let aurora: HTMLElement | null = null
     const size = () => { const box = element.getBoundingClientRect(), ratio = Math.min(devicePixelRatio || 1, 2); width = element.width = Math.round(box.width * ratio); height = element.height = Math.round(box.height * ratio) }
     const observer = new ResizeObserver(size)
     observer.observe(element)
@@ -318,7 +319,13 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
       else if (state === 'paused') wanted = 0.02
       if (state === 'listening' && watches.current.size) wanted = Math.max(wanted, 0.1 + 0.04 * Math.sin(t * 2))
       smooth += (wanted - smooth) * (reduced ? 1 : 0.18)
-      element.parentElement?.parentElement?.parentElement?.style.setProperty('--level', reduced ? '0.4' : smooth.toFixed(3))
+      // Set the light's own transform: a CSS variable on an ancestor would restyle the whole Live screen each frame.
+      aurora ??= element.closest('.live')?.querySelector<HTMLElement>('.live-aurora') ?? null
+      if (aurora) {
+        const glow = reduced ? 0.4 : smooth
+        aurora.style.transform = `scaleY(${(0.45 + glow * 0.9).toFixed(3)})`
+        aurora.style.opacity = state === 'paused' ? '0.15' : (0.3 + glow * 0.6).toFixed(3)
+      }
       const [first, next] = state === 'speaking' ? [color.agent, color.you] : live.current.approval ? [color.ask, color.you] : [color.you, color.agent]
       for (let i = 0; i < 3; i++) { current[i] += (first[i] - current[i]) * 0.06; second[i] += (next[i] - second[i]) * 0.06 }
       context.clearRect(0, 0, width, height)
