@@ -5,6 +5,7 @@ import time
 from urllib.parse import parse_qs, urlsplit
 
 import browser
+import browser_cdp
 
 PREFIX = '/mobile/api/browser/'
 FRAME_INTERVAL = 1 / 15  # at most 15 frames a second per viewer
@@ -16,13 +17,15 @@ def handles(path):
     return path.startswith(PREFIX)
 
 
-def get(handler, the_browser=None):
+def get(handler, the_browser=None, the_proxy=None):
     the_browser = the_browser or browser.BROWSER
     parts = urlsplit(handler.path)
     query = parse_qs(parts.query)
     name = parts.path[len(PREFIX):]
     try:
-        if name == 'tabs':
+        if name == 'agents':
+            handler.respond(200, _proxy(the_proxy).state())
+        elif name == 'tabs':
             handler.respond(200, the_browser.list_tabs())
         elif name == 'stream':
             stream(handler, the_browser, query.get('tab', [''])[0], _int(query, 'w', 1280), _int(query, 'h', 800))
@@ -34,7 +37,7 @@ def get(handler, the_browser=None):
         handler.respond(400, {'error': str(exc)})
 
 
-def post(handler, the_browser=None):
+def post(handler, the_browser=None, the_proxy=None):
     the_browser = the_browser or browser.BROWSER
     name = handler.path.split('?', 1)[0][len(PREFIX):]
     try:
@@ -46,9 +49,13 @@ def post(handler, the_browser=None):
         if not isinstance(body, dict):
             raise ValueError('Invalid request.')
         tab = body.get('tab')
-        if name not in ('new',) and not isinstance(tab, str):
+        if name not in ('new', 'agents', 'ask/dismiss') and not isinstance(tab, str):
             raise ValueError('Choose a tab.')
-        if name == 'new':
+        if name == 'agents':
+            result = _proxy(the_proxy).set_enabled(body.get('enabled'))
+        elif name == 'ask/dismiss':
+            result = _proxy(the_proxy).dismiss(body.get('id'))
+        elif name == 'new':
             result = the_browser.new_tab(body.get('url') or 'about:blank', body.get('mode') or 'private')
         elif name == 'close':
             result = the_browser.close_tab(tab)
@@ -68,6 +75,13 @@ def post(handler, the_browser=None):
         handler.respond(503, {'error': str(exc)})
     except (ValueError, UnicodeError) as exc:
         handler.respond(400, {'error': str(exc) or 'Invalid request.'})
+
+
+def _proxy(the_proxy):
+    proxy = the_proxy or browser_cdp.PROXY
+    if proxy is None:
+        raise browser.BrowserError('Agent browser is unavailable.')
+    return proxy
 
 
 def stream(handler, the_browser, target, width, height):

@@ -112,22 +112,39 @@ class Connection:
         self.lock = threading.Lock()
         self.next_id = 0
         self.waiting = {}
+        self.sinks = {}
         self.closed = False
         self.reader = threading.Thread(target=self._read, daemon=True, name='browser-cdp-reader')
         self.reader.start()
 
     def call(self, method, params=None, session=None, timeout=CALL_TIMEOUT):
         """Send one command and wait for its result. Raises BrowserError on a protocol error or a closed browser."""
+        slot = {'event': threading.Event()}
+        def reply(message):
+            slot.update(message)
+            slot['event'].set()
+        message = {'method': method, 'params': params or {}}
+        if session:
+            message['sessionId'] = session
+        ident = self.forward(message, reply)
+        if not slot['event'].wait(timeout):
+            with self.lock:
+                self.waiting.pop(ident, None)
+            raise BrowserError('The browser did not answer (%s).' % method)
+        if 'error' in slot:
+            raise BrowserError(str(slot['error'].get('message') or 'The browser refused %s.' % method))
+        return slot.get('result') or {}
+
+    def forward(self, message, reply):
+        """Assign a pipe-global id and deliver the raw reply to a callback on the reader thread.
+        Callbacks and session sinks must not wait for CDP replies or take Browser.lock."""
         with self.lock:
             if self.closed:
                 raise BrowserError('The browser stopped.')
             self.next_id += 1
             ident = self.next_id
-            slot = {'event': threading.Event()}
-            self.waiting[ident] = slot
-            message = {'id': ident, 'method': method, 'params': params or {}}
-            if session:
-                message['sessionId'] = session
+            self.waiting[ident] = reply
+            message = dict(message, id=ident)
             data = json.dumps(message).encode() + b'\0'
             try:
                 while data:
@@ -135,12 +152,14 @@ class Connection:
             except OSError:
                 self.waiting.pop(ident, None)
                 raise BrowserError('The browser stopped.')
-        if not slot['event'].wait(timeout):
-            self.waiting.pop(ident, None)
-            raise BrowserError('The browser did not answer (%s).' % method)
-        if 'error' in slot:
-            raise BrowserError(str(slot['error'].get('message') or 'The browser refused %s.' % method))
-        return slot.get('result') or {}
+        return ident
+
+    def register_sink(self, session, sink):
+        # Dict operations are atomic, as for waiting.pop below. The reader must never wait on a pipe writer.
+        self.sinks[session] = sink
+
+    def unregister_sink(self, session):
+        self.sinks.pop(session, None)
 
     def send(self, method, params=None, session=None):
         """Fire and forget (screencast acks, input moves): errors are ignored."""
@@ -174,15 +193,17 @@ class Connection:
         except ValueError:
             return
         if 'id' in message:
-            slot = self.waiting.pop(message['id'], None)
-            if slot is not None:
-                if 'error' in message:
-                    slot['error'] = message['error']
-                else:
-                    slot['result'] = message.get('result')
-                slot['event'].set()
+            reply = self.waiting.pop(message['id'], None)
+            if reply is not None:
+                try:
+                    reply(message)
+                except Exception:
+                    pass
         elif 'method' in message:
             try:
+                sink = self.sinks.get(message.get('sessionId'))
+                if sink:
+                    sink(message)
                 self.on_event(message['method'], message.get('params') or {}, message.get('sessionId'))
             except Exception:  # an event handler bug must not kill the reader
                 pass
@@ -193,9 +214,12 @@ class Connection:
                 return
             self.closed = True
             pending, self.waiting = self.waiting, {}
-        for slot in pending.values():
-            slot['error'] = {'message': 'The browser stopped.'}
-            slot['event'].set()
+            self.sinks = {}
+        for ident, reply in pending.items():
+            try:
+                reply({'id': ident, 'error': {'code': -32000, 'message': 'The browser stopped.'}})
+            except Exception:
+                pass
         for fd in (self.read_fd, self.write_fd):
             try:
                 os.close(fd)
@@ -245,9 +269,10 @@ def launch(chrome, profile, extra=()):
 
 
 class Tab:
-    def __init__(self, target, session, mode='saved', context=None):
+    def __init__(self, target, session, mode='saved', context=None, owner=None):
         self.target, self.session = target, session
         self.mode, self.context = mode, context  # private tabs own an in-memory browser context
+        self.owner = owner
         self.url, self.title = 'about:blank', ''
         self.preset = 'desktop'
         self.size = DESKTOP
@@ -262,8 +287,11 @@ class Tab:
     def row(self):
         preset = PRESETS[self.preset]
         width, height = self.size if self.preset == 'desktop' else (preset['width'], preset['height'])
-        return {'id': self.target, 'url': self.url, 'title': self.title, 'preset': self.preset, 'mode': self.mode,
-                'width': width, 'height': height, 'touch': preset['mobile']}
+        row = {'id': self.target, 'url': self.url, 'title': self.title, 'preset': self.preset, 'mode': self.mode,
+               'width': width, 'height': height, 'touch': preset['mobile']}
+        if self.mode == 'agent':
+            row['owner'] = self.owner or {'pane': None}
+        return row
 
 
 class Browser:
@@ -279,6 +307,8 @@ class Browser:
         self.by_session = {}
         self.version = 0
         self.user_agent = ''
+        self.product = ''
+        self.agent_proxy = None
         self.used = clock()
         self.watcher = None
 
@@ -303,6 +333,9 @@ class Browser:
             self.conn = Connection(read_fd, write_fd, self._event, self._closed)
             try:
                 version = self.conn.call('Browser.getVersion', timeout=30)
+                self.product = str(version.get('product') or '')
+                if self.agent_proxy:
+                    self.agent_proxy.version_checked(self.product)
                 self.user_agent = str(version.get('userAgent') or '').replace('HeadlessChrome', 'Chrome')
                 self.conn.call('Browser.setDownloadBehavior', {'behavior': 'deny'})
                 self.conn.call('Target.setDiscoverTargets', {'discover': True})
@@ -318,6 +351,8 @@ class Browser:
     def stop(self):
         """Close the browser this server started (its own process group only)."""
         with self.lock:
+            if self.agent_proxy:
+                self.agent_proxy.browser_stopped()
             conn, pid = self.conn, self.pid
             self.conn = self.pid = None
             if conn and not conn.closed:
@@ -337,6 +372,8 @@ class Browser:
         self._bump()
 
     def _closed(self):
+        if self.agent_proxy:
+            self.agent_proxy.browser_stopped()
         threading.Thread(target=self._after_close, daemon=True).start()
 
     def _after_close(self):
@@ -353,7 +390,7 @@ class Browser:
             with self.lock:
                 if not self.running():
                     return
-                busy = any(tab.viewers for tab in self.tabs.values())
+                busy = any(tab.viewers for tab in self.tabs.values()) or bool(self.agent_proxy and self.agent_proxy.busy())
                 if busy:
                     self.touch()
                 elif self.clock() - self.used > IDLE_SECONDS:
@@ -364,15 +401,17 @@ class Browser:
     def _bump(self):
         self.version += 1
 
-    def _adopt(self, target, info=None, mode='saved', context=None):
+    def _adopt(self, target, info=None, mode='saved', context=None, owner=None):
         session = self.conn.call('Target.attachToTarget', {'targetId': target, 'flatten': True})['sessionId']
-        tab = Tab(target, session, mode, context)
+        tab = Tab(target, session, mode, context, owner)
         if info:
             tab.url, tab.title = info.get('url') or tab.url, info.get('title') or ''
         self.tabs[target], self.by_session[session] = tab, tab
         self.order.append(target)
         self.conn.call('Page.enable', session=session)
         self._apply_preset(tab, 'desktop')
+        if mode == 'agent':
+            self._agent_size(tab)
         self._bump()
         return tab
 
@@ -422,7 +461,7 @@ class Browser:
             raise ValueError('Unknown tab mode.')
         self.ensure()
         with self.lock:
-            if len(self.order) >= MAX_TABS:
+            if self._user_tab_count() >= MAX_TABS:
                 raise BrowserError('Close a tab first (the limit is %d).' % MAX_TABS)
             tab = self._create(url, mode)
             return tab.row()
@@ -440,7 +479,7 @@ class Browser:
     def _forget(self, tab):
         self.tabs.pop(tab.target, None)
         self.by_session.pop(tab.session, None)
-        if tab.context and self.running() and not any(other.context == tab.context for other in self.tabs.values()):
+        if tab.mode != 'agent' and tab.context and self.running() and not any(other.context == tab.context for other in self.tabs.values()):
             self.conn.send('Target.disposeBrowserContext', {'browserContextId': tab.context})  # drop its cookies now
         if tab.target in self.order:
             self.order.remove(tab.target)
@@ -505,6 +544,8 @@ class Browser:
         self.ensure()
         with self.lock:
             tab = self.tab(target)
+            if tab.mode == 'agent':
+                raise ValueError("The agent controls this tab's size.")
             self._apply_preset(tab, preset, width, height)
             with tab.changed:
                 tab.frame = None  # a frame at the old size would map clicks wrongly; first_frame takes a new one
@@ -513,6 +554,8 @@ class Browser:
             return tab.row()
 
     def _apply_preset(self, tab, preset, width=None, height=None):
+        if tab.mode == 'agent':
+            return
         spec = PRESETS[preset]
         session = tab.session
         if preset == 'desktop':
@@ -575,6 +618,8 @@ class Browser:
                 self.conn.send('Page.stopScreencast', session=tab.session)
 
     def _start_cast(self, tab, size):
+        if tab.mode == 'agent':
+            self._agent_size(tab)
         tab.casting = size
         self.conn.call('Page.startScreencast', {'format': 'jpeg', 'quality': QUALITY, 'maxWidth': size[0], 'maxHeight': size[1],
                                                 'everyNthFrame': 1}, tab.session)
@@ -610,6 +655,14 @@ class Browser:
         """True when the frame has the tab's viewport size. Otherwise apply the device again and return False.
         Chromium 147: after a reload or navigation under phone emulation, the screencast captures the whole window
         (1280 wide) while the page still lays out at 412. Applying the preset again restores the emulated capture."""
+        if tab.mode == 'agent':
+            metadata = frame[1] or {}
+            if metadata.get('deviceWidth') and metadata.get('deviceHeight'):
+                size = (metadata['deviceWidth'], metadata['deviceHeight'])
+                if tab.size != size:
+                    tab.size = size
+                    self._bump()
+            return True
         width = (frame[1] or {}).get('deviceWidth')
         if not frame[3] or not width or abs(width - tab.row()['width']) <= 1:
             return True
@@ -628,6 +681,8 @@ class Browser:
         frame = self.wait_frame(tab, 0, wait)
         if frame is not None or tab.target not in self.tabs:
             return frame
+        if tab.mode == 'agent':
+            self._agent_size(tab)
         row = tab.row()  # the emulated viewport; layout metrics can report the window size under phone emulation
         shot = self.conn.call('Page.captureScreenshot', {'format': 'jpeg', 'quality': QUALITY}, tab.session).get('data') or ''
         with tab.changed:
@@ -638,6 +693,8 @@ class Browser:
             return tab.frame
 
     def _event(self, method, params, session):
+        if self.agent_proxy and not session:
+            self.agent_proxy.target_event(method, params)
         tab = self.by_session.get(session) if session else None
         if method == 'Page.screencastFrame' and tab is not None:
             with tab.changed:
@@ -657,16 +714,36 @@ class Browser:
         elif method == 'Target.targetCreated':
             info = params.get('targetInfo') or {}
             # A page opened by window.open or target=_blank: show it as a tab.
-            if info.get('type') == 'page' and info.get('openerId') and info['targetId'] not in self.tabs:
+            if (info.get('type') == 'page' and info.get('openerId') and info['targetId'] not in self.tabs
+                    and not (self.agent_proxy and self.agent_proxy.owns_context(info.get('browserContextId')))):
                 threading.Thread(target=self._adopt_popup, args=(info,), daemon=True).start()
 
     def _adopt_popup(self, info):
         with self.lock:
-            if self.running() and info['targetId'] not in self.tabs and len(self.order) < MAX_TABS:
+            if self.running() and info['targetId'] not in self.tabs and self._user_tab_count() < MAX_TABS:
                 context = info.get('browserContextId')
                 private = context and any(tab.context == context for tab in self.tabs.values())
                 try:  # a popup shares its opener's cookies, so it keeps the opener's mode
                     self._adopt(info['targetId'], info, 'private' if private else 'saved', context if private else None)
+                except BrowserError:
+                    pass
+
+    def _user_tab_count(self):
+        return sum(tab.mode != 'agent' for tab in self.tabs.values())
+
+    def _agent_size(self, tab):
+        metrics = self.conn.call('Page.getLayoutMetrics', session=tab.session)
+        viewport = metrics.get('cssVisualViewport') or metrics.get('cssLayoutViewport') or {}
+        if viewport.get('clientWidth') and viewport.get('clientHeight'):
+            tab.size = (viewport['clientWidth'], viewport['clientHeight'])
+
+    def adopt_agent(self, info, client):
+        """Attach a panel session on a worker; the agent retains its own viewport and context."""
+        with self.lock:
+            if (self.running() and not client.closed and info['targetId'] not in self.tabs
+                    and info['targetId'] in client.targets):
+                try:
+                    self._adopt(info['targetId'], info, 'agent', info.get('browserContextId'), {'pane': client.pane})
                 except BrowserError:
                     pass
 
