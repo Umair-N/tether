@@ -47,6 +47,7 @@ import live_mode
 import shell_log
 import terminal_replies
 import reply_preview
+import bang_run
 import uploads
 import media_files
 import repo_panel
@@ -776,10 +777,15 @@ def chat_payload(config, shell_mode=False, limit=DEFAULT_WINDOW, preview=False):
     if earlier:
         data = dict(data, messages=messages[-limit:])
     result = dict(data, earlier=earlier + dropped, limit=limit, max_limit=MAX_WINDOW, **state)
-    if preview and config['agent'] == 'claude' and state['state'] == 'Working':
+    if config['agent'] == 'claude' and state['state'] == 'Working':
+        text = None
         try:
             screen, width = reply_preview.sample(config)
-            text = reply_preview.extract(screen, width, messages or [])
+            bang = bang_run.extract(screen)
+            if bang is not None:
+                result['bang'] = bang
+            if preview:
+                text = reply_preview.extract(screen, width, messages or [])
         except (OSError, ValueError, KeyError, subprocess.SubprocessError):
             text = None
         # Do not pair an old transcript snapshot with a block that just committed.

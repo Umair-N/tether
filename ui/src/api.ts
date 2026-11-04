@@ -35,6 +35,8 @@ export interface ChatMessage {
 }
 export interface ChatData {
   preview?: { text: string }
+  // A `!` shell command that is still running in Claude Code, read from the screen (the transcript gets it only at the end).
+  bang?: { command: string; output: string; seconds: number | null }
   messages: ChatMessage[]
   busy: boolean
   thread: string | null

@@ -1481,3 +1481,7 @@ button.live-chip:active { background: var(--line); }
 .notification-delivery legend { padding: 0; font-size: 13px; line-height: 1.4; }
 .notification-delivery .segmented { margin-top: 8px; }
 .notification-delivery fieldset:disabled { opacity: .5; }
+/* A running `!` command: its live output from the screen, until the transcript has the result. */
+.bang-run > small { display: flex; align-items: center; gap: 6px; color: var(--muted); font: 12px/1.5 var(--font-sans, system-ui); margin-bottom: 6px; }
+.bang-run .bang-stop { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; width: auto; height: 28px; padding: 0 10px; border-radius: 999px; color: var(--text); font-size: 12px; font-weight: 600; }
+.bang-run pre { margin: 0; max-height: 40dvh; white-space: pre-wrap; overflow-wrap: anywhere; }

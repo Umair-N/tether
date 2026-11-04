@@ -103,11 +103,15 @@ class PayloadPreviewTests(unittest.TestCase):
         self.assertNotIn('preview', committed)
         self.assertEqual(committed['messages'][-1]['text'], 'New text.')
 
-    def test_disabled_or_idle_never_captures(self):
-        for options in ({'enabled': False}, {'state': 'Idle'}):
-            data, count = self.payload(**options)
-            self.assertNotIn('preview', data)
-            self.assertEqual(count, 0)
+    def test_idle_never_captures(self):
+        data, count = self.payload(state='Idle')
+        self.assertNotIn('preview', data)
+        self.assertEqual(count, 0)
+
+    def test_disabled_preview_still_samples_once_for_bang_commands(self):
+        data, count = self.payload(enabled=False)
+        self.assertNotIn('preview', data)
+        self.assertEqual(count, 1)
 
     def test_change_during_snapshot_suppresses_preview(self):
         data, _ = self.payload(signatures=[(1,), (2,)])
