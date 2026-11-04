@@ -164,14 +164,27 @@ It uses `~/.local/share/tether/friday-models/Qwen3.5-2B-Q4_K_M.gguf` and the bin
 Summaries try the local model, then Claude Haiku, then two sentences from the reply.
 Set `TETHER_LLM_URL` on the Tether server to override the local URL.
 
-Copy the unit, then enable and start it:
+Copy the units, then enable and start them:
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp server/deploy/tether-llm.service ~/.config/systemd/user/
+cp server/deploy/tether-llm.service server/deploy/tether-friday.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now tether-llm.service
+systemctl --user enable --now tether-llm.service tether-friday.service
 ```
+
+The optional Kokoro worker uses `server/tts_worker.py` and `tether-tts.service` as the fallback voice path.
+Friday uses `server/friday_agent.py` in `~/.local/share/tether/friday-venv` (Pipecat 1.15.0).
+Its models live in `~/.local/share/tether/friday-models`: Parakeet v3, Smart Turn v3.2, Qwen3.5-2B, and the Pocket TTS cache in `hf/`.
+Friday uses Pocket TTS's `alba` voice with offline Hugging Face access.
+
+The two Friday units are `tether-friday.service` (worker, loopback port 7686) and `tether-llm.service` (llama-server, loopback port 7687).
+The unit files live in `server/deploy/`. They require the prepared venv and models; the installer does not install these units.
+`TETHER_FRIDAY_PORT`, `TETHER_LLM_URL`, and `TETHER_FRIDAY_MODELS` override the worker defaults.
+`TETHER_FRIDAY_URL` sets the server's signaling proxy destination.
+
+The browser reaches the worker's WebRTC ports directly through host candidates, such as the host's Tailscale IP.
+UDP must be open between the browser and the host. The HTTP proxy carries signaling, while WebRTC carries audio and RTVI messages.
 
 ## Host resources
 
