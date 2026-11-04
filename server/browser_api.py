@@ -5,24 +5,29 @@ import time
 from urllib.parse import parse_qs, urlsplit
 
 import browser
+import browser_cdp
+import agent_browser_setup
 
 PREFIX = '/mobile/api/browser/'
 FRAME_INTERVAL = 1 / 15  # at most 15 frames a second per viewer
 STREAM_LIFETIME = 600
 KEEPALIVE = 15
+POST_NAMES = {'new', 'close', 'navigate', 'history', 'input', 'device', 'agents', 'agents/setup', 'ask/dismiss'}
 
 
 def handles(path):
     return path.startswith(PREFIX)
 
 
-def get(handler, the_browser=None):
+def get(handler, the_browser=None, the_proxy=None, the_setup=None):
     the_browser = the_browser or browser.BROWSER
     parts = urlsplit(handler.path)
     query = parse_qs(parts.query)
     name = parts.path[len(PREFIX):]
     try:
-        if name == 'tabs':
+        if name == 'agents':
+            handler.respond(200, _agent_state(_proxy(the_proxy), the_setup))
+        elif name == 'tabs':
             handler.respond(200, the_browser.list_tabs())
         elif name == 'stream':
             stream(handler, the_browser, query.get('tab', [''])[0], _int(query, 'w', 1280), _int(query, 'h', 800))
@@ -34,9 +39,13 @@ def get(handler, the_browser=None):
         handler.respond(400, {'error': str(exc)})
 
 
-def post(handler, the_browser=None):
+def post(handler, the_browser=None, the_proxy=None, the_setup=None):
     the_browser = the_browser or browser.BROWSER
+    the_setup = the_setup or agent_browser_setup
     name = handler.path.split('?', 1)[0][len(PREFIX):]
+    if name not in POST_NAMES:
+        handler.respond(404, {'error': 'Not found'})
+        return
     try:
         size = int(handler.headers.get('Content-Length', '0') or 0)
         if not 0 < size <= 262144:
@@ -46,9 +55,25 @@ def post(handler, the_browser=None):
         if not isinstance(body, dict):
             raise ValueError('Invalid request.')
         tab = body.get('tab')
-        if name not in ('new',) and not isinstance(tab, str):
+        if name not in ('new', 'agents', 'agents/setup', 'ask/dismiss') and not isinstance(tab, str):
             raise ValueError('Choose a tab.')
-        if name == 'new':
+        if name == 'agents':
+            proxy = _proxy(the_proxy)
+            result = _agent_state(proxy, the_setup, proxy.set_enabled(body.get('enabled')))
+        elif name == 'agents/setup':
+            agent = body.get('agent')
+            if agent not in ('claude', 'codex'):
+                raise ValueError('Choose Claude or Codex.')
+            proxy = _proxy(the_proxy)
+            try:
+                (the_setup.fix_claude if agent == 'claude' else the_setup.fix_codex)()
+            except (OSError, UnicodeError):
+                raise ValueError('Could not update the agent settings.') from None
+            result = _agent_state(proxy, the_setup)
+        elif name == 'ask/dismiss':
+            proxy = _proxy(the_proxy)
+            result = _agent_state(proxy, the_setup, proxy.dismiss(body.get('id')))
+        elif name == 'new':
             result = the_browser.new_tab(body.get('url') or 'about:blank', body.get('mode') or 'private')
         elif name == 'close':
             result = the_browser.close_tab(tab)
@@ -68,6 +93,21 @@ def post(handler, the_browser=None):
         handler.respond(503, {'error': str(exc)})
     except (ValueError, UnicodeError) as exc:
         handler.respond(400, {'error': str(exc) or 'Invalid request.'})
+
+
+def _proxy(the_proxy):
+    proxy = the_proxy or browser_cdp.PROXY
+    if proxy is None:
+        raise browser.BrowserError('Agent browser is unavailable.')
+    return proxy
+
+
+def _agent_state(proxy, the_setup=None, state=None):
+    the_setup = the_setup or agent_browser_setup
+    result = dict(proxy.state() if state is None else state)
+    result['setup'] = the_setup.status()
+    result['stale'] = the_setup.stale_panes(proxy.url) if result['enabled'] and result['available'] else []
+    return result
 
 
 def stream(handler, the_browser, target, width, height):

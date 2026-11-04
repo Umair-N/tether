@@ -13,6 +13,7 @@ import claude_hooks
 import footer
 import paths
 import server
+from agent_browser_cli import note
 
 
 class HookTests(unittest.TestCase):
@@ -342,6 +343,35 @@ class HookTests(unittest.TestCase):
         self.assertEqual((run.returncode, run.stdout, run.stderr), (0, '', ''))
         target.write_text('broken')
         self.assertEqual(self.read(), self.screen)
+
+    def test_shared_browser_context_only_after_session_start_capture(self):
+        for event in claude_hooks.EVENTS:
+            for enabled in (False, True):
+                with self.subTest(event=event, enabled=enabled):
+                    env = dict(os.environ, TETHER_CDP_URL='ws://127.0.0.1:1/cdp/x' if enabled else '')
+                    payload = {'session_id': 'abc123', 'hook_event_name': event}
+                    run = subprocess.run([sys.executable, claude_hooks.__file__], input=json.dumps(payload),
+                                         text=True, capture_output=True, env=env, timeout=2)
+                    self.assertEqual((run.returncode, run.stderr), (0, ''))
+                    if event == 'SessionStart' and enabled:
+                        self.assertEqual(len(run.stdout.splitlines()), 1)
+                        self.assertEqual(json.loads(run.stdout), {'hookSpecificOutput': {
+                            'hookEventName': 'SessionStart', 'additionalContext': note()}})
+                        state = json.loads((self.cache / 'hooks/abc123.json').read_text())
+                        self.assertFalse(state['busy'])
+                    else:
+                        self.assertEqual(run.stdout, '')
+
+    def test_shared_browser_hook_errors_are_quiet(self):
+        blocked = self.cache / 'blocked'
+        blocked.write_text('not a directory')
+        for payload in ('invalid JSON', 'null', '[]',
+                        '{"session_id":"../bad","hook_event_name":"SessionStart"}',
+                        '{"session_id":"abc123","hook_event_name":"SessionStart"}'):
+            run = subprocess.run([sys.executable, claude_hooks.__file__], input=payload, text=True, capture_output=True,
+                                 env=dict(os.environ, TETHER_CDP_URL='ws://127.0.0.1:1/cdp/x',
+                                          MOBILE_TMUX_CACHE=str(blocked)), timeout=2)
+            self.assertEqual((run.returncode, run.stdout, run.stderr), (0, '', ''))
 
     def test_footer_endpoint_uses_hook_script_samples(self):
         handler = server.Handler.__new__(server.Handler)
