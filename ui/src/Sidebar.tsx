@@ -1,5 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
-import { Archive, ArchiveRestore, Asterisk, BarChart3, BookMarked, BookOpen, Bug, Cpu, Database, FileText, FlaskConical, GitBranch, Globe, LayoutDashboard, MessageSquare, Mic, Palette, Rocket, Server, Shield, Sparkles, Wrench, Zap, ChevronRight, Code2, GripVertical, Layers, History, Pin, PinOff, Plus, RefreshCw, Search, Settings, Terminal, Trash2, X } from 'lucide-react'
+import { Archive, ArchiveRestore, Asterisk, BarChart3, BookMarked, BookOpen, Bug, Cpu, Database, FileText, FlaskConical, GitBranch, Globe, LayoutDashboard, MessageSquare, MessagesSquare, Mic, Palette, Rocket, Server, Shield, Sparkles, Wrench, Zap, ChevronRight, Code2, GripVertical, Layers, History, Pin, PinOff, Plus, RefreshCw, Search, Settings, Terminal, Trash2, X } from 'lucide-react'
 import { KeepChoice, keepNeeded } from './Project'
 import type { Keep, ProjectMark, ProjectMarks } from './Project'
 import type { Agent, Api, HistoryData, Pane, PastChat, UsageData, UsageReport, UsageWindow } from './api'
@@ -186,12 +186,14 @@ interface Props {
   drag?: boolean
   /** Desktop workspace: ⌘K opens the command menu, so the key hint opens it too. */
   onCommandMenu?: () => void
+  /** Opens the "Message sessions" box. Absent when no agent pane takes input. */
+  onMessageAll?: () => void
   /** Sessions whose project gives agents context, and panes that started with an older version. */
   marks?: ProjectMarks
   onMarks?: () => void
 }
 
-export function Sidebar({ api, sessions, selected, prefs, update, loading, error, onRetry, onOpen, onNew, onActions, onPaneActions, onPastChat, onSettings, onClose, slots, drag, onCommandMenu, marks, onMarks }: Props) {
+export function Sidebar({ api, sessions, selected, prefs, update, loading, error, onRetry, onOpen, onNew, onActions, onPaneActions, onPastChat, onSettings, onClose, slots, drag, onCommandMenu, onMessageAll, marks, onMarks }: Props) {
   const host = useHost()
   const [query, setQuery] = useState('')
   const [reorder, setReorder] = useState<Section | null>(null)
@@ -321,7 +323,7 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
   return <div className={`sidebar-inner ${ghost ? 'touch-carrying' : ''}`} ref={root}>
     <div className="sidebar-top">
       <div className="sidebar-brand"><img src="/chat/icon.svg" alt="" width="22" height="22" />Tether</div>
-      <span className="sidebar-top-actions"><button className="icon-button" aria-label="New session" title="New session" onClick={onNew}><Plus size={20} /></button>
+      <span className="sidebar-top-actions">{onMessageAll && <button className="icon-button" aria-label="Message all sessions" title="Message all sessions" onClick={onMessageAll}><MessagesSquare size={19} /></button>}<button className="icon-button" aria-label="New session" title="New session" onClick={onNew}><Plus size={20} /></button>
       {onClose && <button className="icon-button" aria-label="Close sessions" onClick={onClose}><X size={20} /></button>}</span>
     </div>
     <label className="sidebar-search"><Search size={16} aria-hidden="true" /><input type="search" placeholder="Search" aria-label="Search sessions" aria-keyshortcuts={onCommandMenu ? undefined : 'Control+K Meta+K'} value={query} onChange={event => setQuery(event.target.value)} onKeyDown={searchKeys} />{onCommandMenu

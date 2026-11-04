@@ -1,5 +1,5 @@
-import { useRef, useState } from 'react'
-import { Check, ChevronDown, Send } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Check, ChevronDown, Search, Send } from 'lucide-react'
 import { errorText } from './api'
 import type { Api, BroadcastResult, BroadcastRow, Pane } from './api'
 import { anchorOf, useModal, usePopover } from './hooks'
@@ -17,11 +17,42 @@ const BROADCAST_TIMEOUT = 180000  // the server types into each pane in turn
 
 const broadcastPanes = (sessions: Session[]) => sessions.flatMap(session => session.panes
   .filter(pane => pane.agent !== 'shell' && pane.writable).map(pane => ({ pane, session })))
+type Item = ReturnType<typeof broadcastPanes>[number]
+
+// With many panes (50 and more), both lists get a search field. Below this count it is only clutter.
+const SEARCH_FROM = 8
+// Every word must be in the pane name, session name, agent or folder. Plain substrings: a filter must be predictable.
+const shownBy = (query: string) => {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean)
+  return ({ pane, session }: Item) => {
+    const text = `${paneTitle(pane)} ${session.name} ${agentNames[pane.agent]} ${pane.dir ?? ''}`.toLowerCase()
+    return words.every(word => text.includes(word))
+  }
+}
+
+// Escape in a search field clears it first; a second Escape closes the sheet or menu.
+function SearchField({ value, onChange, label, autoFocus }: { value: string; onChange: (value: string) => void; label: string; autoFocus?: boolean }) {
+  const input = useRef<HTMLInputElement>(null)
+  // After the dialog's own focus step, which takes the first button.
+  useEffect(() => { if (!autoFocus) return; const frame = requestAnimationFrame(() => input.current?.focus()); return () => cancelAnimationFrame(frame) }, [autoFocus])
+  return <label className="list-search"><Search size={15} aria-hidden="true" />
+    <input ref={input} type="search" value={value} aria-label={label} placeholder={label} enterKeyHint="search"
+      onChange={event => onChange(event.target.value)}
+      onKeyDown={event => {
+        if (event.key === 'Enter') event.preventDefault()
+        if (event.key === 'Escape' && value) { event.preventDefault(); event.stopPropagation(); onChange('') }
+      }} />
+  </label>
+}
 
 function ViaMenu({ at, via, claudes, onPick, onClose }: { at: Anchor; via: Via; claudes: { pane: Pane; session: Session }[]; onPick: (via: Via) => void; onClose: () => void }) {
   const modal = useModal(true, onClose)
   const popover = usePopover(modal.ref, at, onClose)
   const pick = (next: Via) => { onPick(next); onClose() }
+  const [query, setQuery] = useState('')
+  const shown = claudes.filter(shownBy(query))
+  // A phone keyboard would cover the menu; focus the field only with a mouse or trackpad.
+  const fine = typeof matchMedia === 'function' && matchMedia('(pointer: fine)').matches
   // React bubbles a nested dialog's cancel (Escape) to the Agents sheet; keep it here so only the menu closes.
   return <dialog {...modal} {...popover} onCancel={event => { event.stopPropagation(); modal.onCancel(event) }} className="sheet popover via-menu" aria-label="Send via">
     <div className="action-list">
@@ -29,10 +60,13 @@ function ViaMenu({ at, via, claudes, onPick, onClose }: { at: Anchor; via: Via; 
       <button type="button" onClick={() => pick({ kind: 'direct' })}><span className="via-check">{via.kind === 'direct' && <Check />}</span>Direct<small>Tether types it</small></button>
       <hr />
       <p className="action-label">Claude master: it delivers with peer messaging</p>
-      {claudes.map(({ pane, session }) => <button type="button" key={pane.id} onClick={() => pick({ kind: 'claude', master: pane.id })}>
-        <span className="via-check">{via.kind === 'claude' && via.master === pane.id && <Check />}</span>{paneTitle(pane)}<small>{session.name}</small>
+      {claudes.length >= SEARCH_FROM && <SearchField value={query} onChange={setQuery} label="Find a Claude pane" autoFocus={fine} />}
+      {shown.map(({ pane, session }) => <button type="button" className="via-pane" key={pane.id} onClick={() => pick({ kind: 'claude', master: pane.id })}>
+        <span className="via-check">{via.kind === 'claude' && via.master === pane.id && <Check />}</span>
+        <span className="broadcast-name"><strong>{paneTitle(pane)}</strong><small>{session.name}</small></span>
       </button>)}
       {!claudes.length && <p className="hint via-none">No Claude pane is open.</p>}
+      {!!claudes.length && !shown.length && <p className="hint via-none">No Claude pane matches.</p>}
     </div>
   </dialog>
 }
@@ -62,11 +96,22 @@ export function Broadcast({ api, sessions, onDone }: { api: Api; sessions: Sessi
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const [result, setResult] = useState<BroadcastResult | null>(null)
+  const [query, setQuery] = useState('')
   const field = useRef<HTMLTextAreaElement>(null)
   const claudes = panes.filter(item => item.pane.agent === 'claude')
   const master = via.kind === 'claude' ? panes.find(item => item.pane.id === via.master)?.pane : undefined
   const targets = panes.filter(item => picked.has(item.pane.id) && item.pane.id !== master?.id)
   const toggle = (id: string) => setPicked(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next })
+  const setMany = (ids: string[], on: boolean) => setPicked(current => { const next = new Set(current); for (const id of ids) if (on) next.add(id); else next.delete(id); return next })
+  const shown = panes.filter(shownBy(query))
+  const shownIds = shown.filter(item => item.pane.id !== master?.id).map(item => item.pane.id)
+  // Group by session in the sidebar's order, so 50 panes read as a few named blocks.
+  const groups: { session: Session; items: Item[] }[] = []
+  for (const item of shown) {
+    const last = groups[groups.length - 1]
+    if (last?.session.id === item.session.id) last.items.push(item); else groups.push({ session: item.session, items: [item] })
+  }
+  const grouped = groups.length > 1
   const blocked = !text.trim() ? '' : !targets.length ? 'Choose at least one pane.' : via.kind === 'claude' && !master ? 'The master pane has ended. Choose another.' : ''
   async function send(event: React.SyntheticEvent) {
     event.preventDefault()
@@ -80,22 +125,35 @@ export function Broadcast({ api, sessions, onDone }: { api: Api; sessions: Sessi
   }
   if (result) return <Results result={result} onAgain={() => { setResult(null); setTimeout(() => field.current?.focus()) }} onDone={onDone} />
   return <form className="broadcast" onSubmit={event => void send(event)}>
+    {panes.length >= SEARCH_FROM && <SearchField value={query} onChange={setQuery} label="Filter panes" />}
     <div className="broadcast-bar">
-      <span className="broadcast-count">{targets.length} of {panes.length - (master ? 1 : 0)} selected</span>
-      <button type="button" className="link-button" disabled={pending} onClick={() => setPicked(new Set(panes.map(item => item.pane.id)))}>Select all</button>
-      <button type="button" className="link-button" disabled={pending} onClick={() => setPicked(new Set())}>None</button>
+      <span className="broadcast-count">{targets.length} of {panes.length - (master ? 1 : 0)} selected{query && ` · ${shown.length} shown`}</span>
+      <button type="button" className="link-button" disabled={pending || !shownIds.length} onClick={() => setMany(shownIds, true)}>{query ? 'Select shown' : 'Select all'}</button>
+      <button type="button" className="link-button" disabled={pending || !shownIds.length} onClick={() => setMany(shownIds, false)}>{query ? 'Clear shown' : 'None'}</button>
     </div>
-    {panes.length
-      ? <ul className="broadcast-list" aria-label="Panes to message">{panes.map(({ pane, session }) => {
-          const isMaster = pane.id === master?.id
-          return <li key={pane.id}><label className={`broadcast-row ${isMaster ? 'is-master' : ''}`}>
-            <input type="checkbox" checked={!isMaster && picked.has(pane.id)} disabled={pending || isMaster} onChange={() => toggle(pane.id)} />
-            <AgentIcon agent={pane.agent} icon={pane.pane_icon} size={16} />
-            <span className="broadcast-name"><strong>{paneTitle(pane)}</strong><small>{session.name} · {agentNames[pane.agent]}</small></span>
-            <small className={`broadcast-state state-${pane.state === 'Approval' || pane.state === 'Input needed' ? 'waits' : pane.state.toLowerCase()}`}>{isMaster ? 'Master' : STATE_LABEL[pane.state] ?? pane.state}</small>
-          </label></li>
-        })}</ul>
-      : <p className="group-empty">No agent pane is open.</p>}
+    {!panes.length ? <p className="group-empty">No agent pane is open.</p>
+      : !shown.length ? <p className="group-empty">No pane matches “{query.trim()}”.</p>
+      : <ul className="broadcast-list" aria-label="Panes to message">{groups.map(({ session, items }) => {
+          const ids = items.filter(item => item.pane.id !== master?.id).map(item => item.pane.id)
+          const on = ids.filter(id => picked.has(id)).length
+          return <li key={session.id} className="broadcast-group">
+            {grouped && <label className="broadcast-group-head">
+              <input type="checkbox" checked={!!ids.length && on === ids.length} disabled={pending || !ids.length}
+                ref={box => { if (box) box.indeterminate = on > 0 && on < ids.length }}
+                aria-label={`All panes in ${session.name}`} onChange={() => setMany(ids, on < ids.length)} />
+              <span>{session.name}</span><small>{on}/{ids.length}</small>
+            </label>}
+            <ul>{items.map(({ pane }) => {
+              const isMaster = pane.id === master?.id
+              return <li key={pane.id}><label className={`broadcast-row ${isMaster ? 'is-master' : ''}`}>
+                <input type="checkbox" checked={!isMaster && picked.has(pane.id)} disabled={pending || isMaster} onChange={() => toggle(pane.id)} />
+                <AgentIcon agent={pane.agent} icon={pane.pane_icon} size={16} />
+                <span className="broadcast-name"><strong>{paneTitle(pane)}</strong><small>{grouped ? agentNames[pane.agent] : `${session.name} · ${agentNames[pane.agent]}`}</small></span>
+                <small className={`broadcast-state state-${pane.state === 'Approval' || pane.state === 'Input needed' ? 'waits' : pane.state.toLowerCase()}`}>{isMaster ? 'Master' : STATE_LABEL[pane.state] ?? pane.state}</small>
+              </label></li>
+            })}</ul>
+          </li>
+        })}</ul>}
     <p className="hint broadcast-rules">Working agents get the text while they work. Panes that wait on an approval or a question are skipped.</p>
     <label className="visually-hidden" htmlFor="broadcast-text">Message</label>
     <textarea id="broadcast-text" ref={field} rows={3} value={text} maxLength={20000} disabled={pending} placeholder="Message to the selected panes"

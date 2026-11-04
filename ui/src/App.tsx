@@ -75,7 +75,8 @@ function App() {
   // Home-screen shortcuts open /chat/?go=attention|new|usage (manifest.webmanifest).
   const [go, setGo] = useState(() => new URL(location.href).searchParams.get('go'))
   // The Agents page (Active and Unread tabs). Tether's summary notification opens it with /chat/?go=agents.
-  const [agentsPage, setAgentsPage] = useState(false)
+  // 'message' opens it on the "Message sessions" box (sidebar button, command menu).
+  const [agentsPage, setAgentsPage] = useState<false | 'list' | 'message'>(false)
   const markRead = useCallback((ids: string[]) => {
     const now = Date.now() / 1000
     update(current => ({ seen: { ...current.seen, ...Object.fromEntries(ids.map(id => [id, now])) } }))
@@ -292,7 +293,7 @@ function App() {
     if (go === 'new') setNewSession(true)
     else if (go === 'usage') setPlanSheet(true)
     else if (go === 'agents') {
-      setDrawer(false); setAgentsPage(true)
+      setDrawer(false); setAgentsPage('list')
       void navigator.serviceWorker?.getRegistration('/chat/').then(async registration => (await registration?.getNotifications({ tag: 'tether-summary' }))?.forEach(item => item.close())).catch(() => {})
     }
     else if (go === 'attention') {
@@ -475,7 +476,8 @@ function App() {
     if (live) openPane(live)
     else { setDrawer(false); setResume(chat) }
   }
-  const sidebarProps = { api, sessions, marks, onMarks: loadMarks, selected: pane?.id, slots: multi ? view?.slots : undefined, drag: !!view, prefs, update, loading, error, onRetry: () => void refresh(), onOpen: openPane, onNew: () => { setDrawer(false); setNewSession(true) }, onActions: (item: Session, remove?: boolean, at?: Anchor) => { if (remove) setDrawer(false); setMenuAt(view ? at : undefined); setActionsDelete(!!remove); setActions(item.id) }, onPaneActions: (item: Pane, at?: Anchor) => { setDrawer(false); setMenuAt(view ? at : undefined); setPaneActions(item.id) }, onPastChat: pickPastChat, onSettings: () => { setDrawer(false); setSettings(true) }, onCommandMenu: view ? () => setMenu('commands') : undefined }
+  const canMessage = sessions.some(item => item.panes.some(p => p.agent !== 'shell' && p.writable))
+  const sidebarProps = { api, sessions, marks, onMarks: loadMarks, selected: pane?.id, slots: multi ? view?.slots : undefined, drag: !!view, prefs, update, loading, error, onRetry: () => void refresh(), onOpen: openPane, onNew: () => { setDrawer(false); setNewSession(true) }, onActions: (item: Session, remove?: boolean, at?: Anchor) => { if (remove) setDrawer(false); setMenuAt(view ? at : undefined); setActionsDelete(!!remove); setActions(item.id) }, onPaneActions: (item: Pane, at?: Anchor) => { setDrawer(false); setMenuAt(view ? at : undefined); setPaneActions(item.id) }, onPastChat: pickPastChat, onSettings: () => { setDrawer(false); setSettings(true) }, onCommandMenu: view ? () => setMenu('commands') : undefined, onMessageAll: canMessage ? () => { setDrawer(false); setAgentsPage('message') } : undefined }
   // The command menu runs the same actions as the keys. A command shows only when it would do something now.
   const commands: Command[] = view ? [
     ...(slotPanes.length < 3 ? [{ label: 'Split right', key: '⌘\\', run: () => setCount(Math.max(2, slotPanes.length + 1) as DesktopLayout['count']) }] : []),
@@ -490,6 +492,8 @@ function App() {
     { label: desk.sidebar ? 'Hide the sidebar' : 'Show the sidebar', key: '⌘B', run: () => setDesk({ sidebar: !desk.sidebar }) },
     { label: 'Keyboard shortcuts', key: '?', run: () => setMenu('shortcuts') },
     { label: 'Plan usage', run: () => setPlanSheet(true) },
+    { label: 'Agents page', run: () => setAgentsPage('list') },
+    ...(canMessage ? [{ label: 'Message all sessions', run: () => setAgentsPage('message') }] : []),
     { label: `${ASSISTANT} Live mode: talk hands-free`, run: () => setLive(true) },
   ] : []
   const running = runningPanes(sessions).length
@@ -521,7 +525,7 @@ function App() {
         choosePhoneScreen('chats', setScreen)
         setNotice(paths.length === 1 ? `Added ${paths[0]} to the message.` : `Added ${paths.length} paths to the message.`)
       } : undefined} />}
-    {prefs.agentBubble && sessions.some(item => item.panes.some(p => p.agent !== 'shell')) && <AgentBubble sessions={sessions} seen={prefs.seen} selected={pane?.id} onOpen={openPane} onMarkRead={markRead} onPage={() => setAgentsPage(true)} onHide={() => { update(() => ({ agentBubble: false })); setNotice('Agents bubble hidden. Turn it on in Settings › Chat.') }} />}
+    {prefs.agentBubble && sessions.some(item => item.panes.some(p => p.agent !== 'shell')) && <AgentBubble sessions={sessions} seen={prefs.seen} selected={pane?.id} onOpen={openPane} onMarkRead={markRead} onPage={() => setAgentsPage('list')} onHide={() => { update(() => ({ agentBubble: false })); setNotice('Agents bubble hidden. Turn it on in Settings › Chat.') }} />}
     {livePins.length > 0 && <SidePins api={api} pins={prefs.sidePins} sessions={sessions} seen={prefs.seen} selected={pane?.id} onOpen={openPane} onPin={pinPane} onUnpin={unpinPane} onNote={notePin} onMove={movePin} onUpdate={() => void refresh()} />}
     {!wide && <PhoneTabs screen={screen} onScreen={next => choosePhoneScreen(next, setScreen)} setScreen={setScreen} terminals={!!pane} onLive={() => setLive(true)} />}
     {liveMode && <Live api={api} panes={panes} selected={pane} commands={commands.filter(item => !item.label.includes('Live mode'))} onClose={() => setLive(false)} />}
@@ -540,7 +544,7 @@ function App() {
     {planSheet && <PlanUsage api={api} onClose={() => setPlanSheet(false)} />}
     {view && menu === 'commands' && <CommandMenu sessions={sortByPrefs(sessions, prefs.order).filter(item => !isArchived(item, prefs.archived))} seen={prefs.seen} selected={pane?.id} slots={multi ? view.slots : []} commands={commands} onPane={openPane} onSession={showSession} onClose={() => setMenu(null)} />}
     {view && menu === 'shortcuts' && <Shortcuts onClose={() => setMenu(null)} />}
-    {agentsPage && <AgentsPage api={api} sessions={sessions} seen={prefs.seen} selected={pane?.id} onOpen={openPane} onMarkRead={markRead} onClose={() => setAgentsPage(false)} />}
+    {agentsPage && <AgentsPage api={api} sessions={sessions} seen={prefs.seen} selected={pane?.id} onOpen={openPane} onMarkRead={markRead} startMessaging={agentsPage === 'message'} onClose={() => setAgentsPage(false)} />}
     {view && !files && <StatusBar panes={panes} loading={loading} error={error} />}
     {updated && <div className="update-banner" role="status"><span>A new version of Tether is ready.</span><button type="button" onClick={reload}>Reload</button></div>}
   </main>
