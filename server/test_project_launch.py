@@ -13,6 +13,7 @@ from unittest import mock
 import paths
 import project_launch
 import projects
+from agent_browser_cli import NOTE
 
 HERE = Path(__file__).resolve().parent
 PID = 'a1b2c3d4e5f6'
@@ -27,7 +28,7 @@ class UnitTests(unittest.TestCase):
             patch = mock.patch.object(paths, name, value)
             patch.start()
             self.addCleanup(patch.stop)
-        patch = mock.patch.dict(os.environ, {'TMUX': '', 'TMUX_PANE': '', 'CODEX_HOME': ''})
+        patch = mock.patch.dict(os.environ, {'TMUX': '', 'TMUX_PANE': '', 'CODEX_HOME': '', 'TETHER_CDP_URL': '', 'TETHER_LAUNCH': ''})
         patch.start()
         self.addCleanup(patch.stop)
 
@@ -83,6 +84,64 @@ class UnitTests(unittest.TestCase):
         self.assertEqual(data['hookEventName'], 'SessionStart')
         self.assertIn('Use pnpm.', data['additionalContext'])
 
+    def test_codex_browser_note_with_and_without_project(self):
+        for pid in (None, PID):
+            for enabled in (False, True):
+                with self.subTest(pid=pid, enabled=enabled), mock.patch.dict(os.environ, TETHER_CDP_URL='ws://127.0.0.1:1/cdp/x' if enabled else ''):
+                    args = project_launch.codex_args(pid, ['resume', '--last'])
+                    if not pid and not enabled:
+                        self.assertEqual(args, ['resume', '--last'])
+                        continue
+                    text = tomllib.loads(args[1])['developer_instructions']
+                    self.assertEqual(NOTE in text, enabled)
+                    if pid:
+                        self.assertIn('## Notes', text)
+                        if enabled:
+                            self.assertTrue(text.endswith('\n\n' + NOTE))
+                    else:
+                        self.assertEqual(text, NOTE)
+
+    def test_codex_browser_keeps_plain_commands_and_own_instructions(self):
+        with mock.patch.dict(os.environ, TETHER_CDP_URL='ws://127.0.0.1:1/cdp/x'):
+            self.test_codex_plain_cases()
+
+    def test_codex_browser_env_preserves_configured_names(self):
+        paths.CODEX.mkdir()
+        (paths.CODEX / 'config.toml').write_text('''
+[mcp_servers."browser.tool"]
+command = "npx"
+args = ["@playwright/mcp"]
+env_vars = ["USER_TOKEN", {name = "REMOTE_TOKEN", source = "remote"}]
+[mcp_servers.direct]
+command = "playwright-mcp"
+env_vars = ["PLAYWRIGHT_MCP_CDP_ENDPOINT"]
+[mcp_servers.other]
+command = "other"
+[mcp_servers.http]
+url = "https://example.test/playwright"
+''')
+        with mock.patch.dict(os.environ, TETHER_CDP_URL='ws://127.0.0.1:1/cdp/x'):
+            args = project_launch.codex_args(None, [])
+        self.assertEqual(len(args), 4)
+        config = tomllib.loads(args[3])
+        self.assertEqual(config['mcp_servers']['browser.tool']['env_vars'],
+                         ['USER_TOKEN', {'name': 'REMOTE_TOKEN', 'source': 'remote'}, 'PLAYWRIGHT_MCP_CDP_ENDPOINT'])
+        with mock.patch.dict(os.environ, TETHER_CDP_URL=''):
+            self.assertEqual(project_launch.codex_args(None, []), [])
+
+    def test_codex_launch_without_project_and_fail_open(self):
+        with mock.patch.dict(os.environ, TETHER_CDP_URL='ws://127.0.0.1:1/cdp/x'), \
+                mock.patch.object(project_launch.shutil, 'which', return_value='/fake/codex'), \
+                mock.patch.object(project_launch, 'current_project', return_value=None), \
+                mock.patch.object(project_launch.os, 'execv') as execute:
+            project_launch.launch('codex', ['resume'])
+            self.assertEqual(tomllib.loads(execute.call_args.args[1][2])['developer_instructions'], NOTE)
+            os.environ.pop('TETHER_LAUNCH')
+            with mock.patch.object(project_launch, 'codex_browser_env_args', side_effect=ValueError('bad config')), \
+                    mock.patch.object(project_launch.sys, 'stderr'):
+                project_launch.launch('codex', ['resume'])
+            execute.assert_called_with('/fake/codex', ['codex', 'resume'])
+
 
 @unittest.skipUnless(shutil.which('tmux'), 'needs tmux')
 class WrapperTests(unittest.TestCase):
@@ -100,7 +159,7 @@ class WrapperTests(unittest.TestCase):
                             f'open({str(self.temp / "argv")!r}, "a").write(json.dumps([sys.argv[0]] + sys.argv[1:] + [os.environ.get("TETHER_LAUNCH", "")]) + "\\n")\n')
             fake.chmod(0o755)
         self.socket = str(self.temp / 'tmux.sock')
-        self.env = {key: value for key, value in os.environ.items() if key not in ('TMUX', 'TMUX_PANE', 'TETHER_LAUNCH', 'INVOCATION_ID')}
+        self.env = {key: value for key, value in os.environ.items() if key not in ('TMUX', 'TMUX_PANE', 'TETHER_LAUNCH', 'INVOCATION_ID', 'TETHER_CDP_URL')}
         self.env.update(PATH=f'{bin_dir}:{os.environ["PATH"]}', TETHER_HOME=str(self.temp / 'tether'), CODEX_HOME=str(self.temp / 'codex'), SHELL='/bin/sh')
         self.tmux('new-session', '-d', '-s', 'proj', '-x', '120', '-y', '30', '/bin/sh')  # not a login shell: /etc/profile would reset PATH
         self.addCleanup(self.tmux, 'kill-server')

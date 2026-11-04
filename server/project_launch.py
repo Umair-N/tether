@@ -97,10 +97,47 @@ def codex_has_own_instructions():
 def codex_args(pid, args):
     if any(arg in CODEX_PLAIN or 'developer_instructions' in arg for arg in args) or codex_has_own_instructions():
         return args
-    import projects
-    text = projects.render(pid, 'codex')
-    record_revision(pid)
+    text = ''
+    if pid:
+        import projects
+        text = projects.render(pid, 'codex')
+        record_revision(pid)
+    if os.environ.get('TETHER_CDP_URL'):
+        from agent_browser_cli import NOTE
+        text = text + '\n\n' + NOTE if text else NOTE
+        args = [*codex_browser_env_args(), *args]
     return ['-c', 'developer_instructions=' + toml_string(text), *args] if text else args
+
+
+def codex_browser_env_args():
+    """Codex filters stdio MCP environments; allow the shared CDP endpoint."""
+    try:
+        import tomllib
+    except ImportError:
+        return []  # Python 3.10 cannot read TOML without a third-party dependency.
+    import paths
+    try:
+        config = tomllib.loads((Path(os.environ.get('CODEX_HOME') or paths.CODEX) / 'config.toml').read_text())
+    except FileNotFoundError:
+        return []
+    overrides = []
+    for name, server in config.get('mcp_servers', {}).items():
+        if not server.get('command'):
+            continue
+        if not any('playwright' in str(value).lower() for value in [server['command'], *server.get('args', [])]):
+            continue
+        env_vars = list(server.get('env_vars', []))
+        variable = 'PLAYWRIGHT_MCP_CDP_ENDPOINT'
+        if variable in env_vars or any(isinstance(value, dict) and value.get('name') == variable
+                                      and value.get('source', 'local') == 'local' for value in env_vars):
+            continue
+        env_vars.append(variable)
+        # Preserve both plain names and Codex's {name, source} entries.
+        values = [toml_string(value) if isinstance(value, str) else
+                  '{' + ', '.join(toml_string(key) + ' = ' + toml_string(val) for key, val in value.items()) + '}'
+                  for value in env_vars]
+        overrides.extend(['-c', 'mcp_servers.' + toml_string(name) + '.env_vars=[' + ', '.join(values) + ']'])
+    return overrides
 
 
 def launch(agent, args):
@@ -113,7 +150,7 @@ def launch(agent, args):
         try:
             sys.path.insert(0, str(HERE))
             pid = current_project()
-            if pid:
+            if pid or agent == 'codex':
                 final = (claude_args if agent == 'claude' else codex_args)(pid, list(args))
         except Exception as exc:  # noqa: BLE001 - any failure: start the plain agent
             print(f'tether-{agent}: project not loaded ({exc.__class__.__name__}). Starting plain {agent}.', file=sys.stderr)
