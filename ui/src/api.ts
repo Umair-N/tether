@@ -57,6 +57,12 @@ export interface ChatData {
 export interface Choice { id: number; text: string; detail?: string; selected?: boolean; free?: boolean }
 export interface Approval { id: string | null; text: string; actionable: boolean; options?: Choice[] }
 export interface AskQuestion { question: string; header: string; multi: boolean; options: { label: string; description: string }[] }
+/** Original hook questions use Claude's multiSelect field, unlike transcript AskQuestion. */
+export interface AskBridgeQuestion { question: string; header: string; multiSelect?: boolean; options: { label: string; description?: string; preview?: string }[] }
+export interface AskBridge { id: string; nonce: string; questions: AskBridgeQuestion[]; expires: number }
+/** null hands the question back to the native terminal. A retry must reuse the exact request. */
+export interface AskAnswerRequest { session: string; id: string; nonce: string; answers: Record<string, string | string[]> | null; requestId: string }
+export interface AskAnswerResult { status: 'submitted' | 'handoff' }
 /** ask: Claude's open question from the transcript, when the pane is too short to show all of it. */
 export interface PickerItem { text: string; selected: boolean }
 /** A key that a read-only panel's own footer offers. The server keeps the real key; the browser sends only the id. */
@@ -73,7 +79,7 @@ export interface ChoiceState {
   hints: string[]
 }
 export interface Attention { id: string; text: string; reason: 'menu' | 'prompt' | 'no-input-box' | 'panel' | 'picker' | 'info';
-  promptId?: string; revision?: string; requiresResponse?: boolean; body?: string; hints?: string[]; actions?: PromptAction[]; title?: string; subtitle?: string; items?: PickerItem[]; more_above?: number; more_below?: number; hint?: string; question?: string; options?: Choice[]; choice?: ChoiceState; ask?: { id: string; questions: AskQuestion[] }; login?: { url: string; code: boolean; user_code?: string; message?: string } }
+  promptId?: string; revision?: string; requiresResponse?: boolean; body?: string; hints?: string[]; actions?: PromptAction[]; title?: string; subtitle?: string; items?: PickerItem[]; more_above?: number; more_below?: number; hint?: string; question?: string; options?: Choice[]; choice?: ChoiceState; ask?: { id: string; questions: AskQuestion[] }; askBridge?: AskBridge; login?: { url: string; code: boolean; user_code?: string; message?: string } }
 export interface PastChat { id: string; title: string; dir: string | null; time: string; live: boolean }
 export interface HistoryData { chats: PastChat[] }
 export interface UsageWindow { label: string; percent: number; resets_at: number | null }

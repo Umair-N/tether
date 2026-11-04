@@ -218,6 +218,10 @@ def overlay(config, result, now=None, screen_read_at=None):
     """Keep the existing footer schema and screen fields outside hook coverage."""
     if config.get('agent') != 'claude' or config.get('ambiguous') or not valid_session(config.get('thread')):
         return result
+    import ask_bridge
+    bridge_waiting = ask_bridge.enabled() and ask_bridge.pending.attention(config)
+    if bridge_waiting:
+        result = dict(result, spinner=None, running=None)
     import paths
     now = time.time() if now is None else now
     try:
@@ -244,7 +248,7 @@ def overlay(config, result, now=None, screen_read_at=None):
         if lifecycle_fresh:
             merged['spinner'] = None
             merged['running'] = None
-            if state.get('busy') and not state.get('waiting'):
+            if state.get('busy') and not state.get('waiting') and not bridge_waiting:
                 merged['spinner'] = {'verb': 'Working…', 'detail': elapsed(state.get('started', reported), now)}
                 if tools:
                     tool = max(tools.values(), key=lambda item: item['started'])

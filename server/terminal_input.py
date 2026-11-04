@@ -627,6 +627,9 @@ def live_status(entry, run=subprocess.run):
     screen = prompt_actions.plain(styled_screen)
     login_screen = login_capture(entry, screen, run)
     status = _live_status(entry, run, screen, login_screen=login_screen, styled_screen=styled_screen)
+    if entry['agent'] == 'claude':
+        import ask_bridge
+        status = ask_bridge.overlay(entry, status)
     progress = login_progress(entry, login_screen)
     if progress:
         status['login_result'] = progress

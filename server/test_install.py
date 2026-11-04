@@ -448,6 +448,43 @@ class InstallTests(unittest.TestCase):
         self.apply(self.plan('--uninstall'))
         self.assertEqual(json.loads(settings.read_text()), original)
 
+    def test_ask_bridge_is_opt_in_separate_and_removed_when_disabled(self):
+        settings = self.home / '.claude/settings.json'
+        settings.parent.mkdir()
+        self.assertFalse(self.plan()['options']['ask_bridge'])
+        off = self.plan('--hooks')
+        self.apply(off)
+        original = json.loads(settings.read_text())
+        self.assertFalse(any(group.get('matcher') == 'AskUserQuestion'
+                             for group in original['hooks']['PreToolUse']))
+        on = self.plan('--ask-bridge')
+        self.apply(on)
+        data = json.loads(settings.read_text())
+        bridge = data['hooks']['PreToolUse'][-1]
+        self.assertEqual(bridge['matcher'], 'AskUserQuestion')
+        self.assertEqual(bridge['hooks'][0]['timeout'], 600)
+        self.assertTrue(self.plan()['options']['ask_bridge'])
+        self.assertEqual(data['hooks']['PreToolUse'][:-1], original['hooks']['PreToolUse'])
+        for event, groups in original['hooks'].items():
+            for group in groups:
+                self.assertEqual(group['hooks'][0].get('timeout'), None if event == 'SubagentStop' else 1)
+        first = settings.read_text()
+        self.apply(self.plan('--ask-bridge'))
+        self.assertEqual(settings.read_text(), first)
+        self.apply(self.plan('--no-ask-bridge'))
+        self.assertEqual(json.loads(settings.read_text()), original)
+        self.assertFalse(self.plan()['options']['ask_bridge'])
+
+    def test_ask_bridge_independent_of_passive_hooks_and_uninstall(self):
+        settings = self.home / '.claude/settings.json'
+        settings.parent.mkdir()
+        self.apply(self.plan('--ask-bridge'))
+        data = json.loads(settings.read_text())
+        self.assertEqual(list(data['hooks']), ['PreToolUse'])
+        self.assertEqual(len(data['hooks']['PreToolUse']), 1)
+        self.apply(self.plan('--uninstall'))
+        self.assertEqual(json.loads(settings.read_text()), {'hooks': {}})
+
     def test_claude_hooks_preserve_malformed_configuration(self):
         settings = self.home / '.claude/settings.json'
         settings.parent.mkdir()
