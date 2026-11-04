@@ -1,17 +1,33 @@
 import { useEffect, useRef, useState } from 'react'
 import { FolderOpen, X } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import type { Components } from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { useModal } from './hooks'
 import { useHost } from './host'
 
 export type TextFile = { path: string; url: string; line?: number }
 const MAX_LINES = 20000
+const isMarkdown = (path: string) => /\.(md|markdown)$/i.test(path)
+
+// Preview of a Markdown file. Raw HTML in the file is dropped. Web links open in a new tab; other links and images show as text,
+// because a relative path would resolve against Tether's own URL.
+const DOC: Components = {
+  a: ({ href = '', children }) => /^(https?|mailto):/i.test(href)
+    ? <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>
+    : <span className="doc-link" title={href}>{children}</span>,
+  img: ({ alt, src }) => <span className="doc-image" title={typeof src === 'string' ? src : undefined}>{alt || 'Image'}</span>,
+  table: props => <div className="doc-table"><table {...props} /></div>,
+}
 
 // Read-only view of a source or log file an agent named. It opens at the named line and marks it.
 /** onShow: a "Show in Files" button (a chat on desktop). */
 export function TextViewer({ file, close, onShow }: { file: TextFile | null; close: () => void; onShow?: () => void }) {
   const host = useHost()
   const modal = useModal(!!file, close)
-  const [state, setState] = useState<{ url: string; lines?: string[]; error?: string; unreachable?: boolean } | null>(null)
+  const [state, setState] = useState<{ url: string; text?: string; lines?: string[]; error?: string; unreachable?: boolean } | null>(null)
+  // The view each file opens in: Preview for Markdown, Source when a line is named or the file is not Markdown.
+  const [chosen, setChosen] = useState<{ url: string; preview: boolean } | null>(null)
   const body = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!file) return
@@ -21,7 +37,7 @@ export function TextViewer({ file, close, onShow }: { file: TextFile | null; clo
         if (!response.ok) throw new Error(((await response.json().catch(() => null)) as { error?: string } | null)?.error ?? 'Tether cannot open this file.')
         return response.text()
       })
-      .then(text => setState({ url: file.url, lines: text.replace(/\n$/, '').split('\n') }),
+      .then(text => setState({ url: file.url, text, lines: text.replace(/\n$/, '').split('\n') }),
         failure => { if (!abort.signal.aborted) setState({ url: file.url, ...(failure instanceof TypeError ? { unreachable: true } : { error: String(failure.message) }) }) })
     return () => abort.abort()
   }, [file])
@@ -31,23 +47,30 @@ export function TextViewer({ file, close, onShow }: { file: TextFile | null; clo
   // A huge file shows a window of lines around the target.
   const first = lines.length > MAX_LINES ? Math.max(0, Math.min((target ?? 1) - 1 - MAX_LINES / 2, lines.length - MAX_LINES)) : 0
   const shown = lines.slice(first, first + MAX_LINES)
+  const markdown = !!file && isMarkdown(file.path)
+  const preview = markdown && (file && chosen?.url === file.url ? chosen.preview : !file?.line)
   useEffect(() => {
-    if (!current?.lines) return
+    if (!current?.lines || preview) { body.current?.scrollTo(0, 0); return }
     const row = target ? body.current?.querySelector(`[data-line="${target}"]`) : null
     if (row) row.scrollIntoView({ block: 'center' })
     else body.current?.scrollTo(0, 0)
-  }, [current, target])
+  }, [current, target, preview])
   const name = file?.path.split('/').pop() || file?.path
   return <dialog {...modal} className="text-viewer" aria-labelledby="text-viewer-title">{file && <>
     <div className="text-viewer-head">
       <div className="text-viewer-title"><h2 id="text-viewer-title">{name}{target ? <span>:{target}</span> : null}</h2><p title={file.path}>{file.path}</p></div>
+      {markdown && <div className="view-switch" role="group" aria-label="View">
+        {(['Preview', 'Source'] as const).map(view => <button key={view} type="button" aria-pressed={preview === (view === 'Preview')}
+          onClick={() => setChosen({ url: file.url, preview: view === 'Preview' })}>{view}</button>)}
+      </div>}
       {onShow && <button type="button" className="viewer-files" onClick={onShow}><FolderOpen size={15} aria-hidden="true" />Show in Files</button>}
       <button type="button" className="icon-button" aria-label="Close" onClick={close}><X /></button>
     </div>
     <div className="text-viewer-body" ref={body} tabIndex={0} aria-label={`Contents of ${name}`}>
       {current?.error || current?.unreachable ? <p className="text-viewer-note" role="alert">{current.unreachable ? `Cannot reach ${host}.` : current.error}</p>
         : !current ? <p className="text-viewer-note">Loading…</p>
-        : <pre style={{ '--gutter': `${String(first + shown.length).length + 1}ch` } as React.CSSProperties}>{first > 0 && <span className="text-viewer-skip">{first} lines above not shown</span>}
+        : preview ? <article className="text-viewer-doc"><ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml components={DOC}>{current.text}</ReactMarkdown></article>
+        : <pre className="text-viewer-source" style={{ '--gutter': `${String(first + shown.length).length + 1}ch` } as React.CSSProperties}>{first > 0 && <span className="text-viewer-skip">{first} lines above not shown</span>}
           {shown.map((text, at) => <span key={at} data-line={first + at + 1} className={first + at + 1 === target ? 'marked' : undefined}>{text || ' '}</span>)}
           {first + shown.length < lines.length && <span className="text-viewer-skip">{lines.length - first - shown.length} lines below not shown</span>}</pre>}
     </div>
