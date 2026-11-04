@@ -6,7 +6,8 @@ The pane's size goes to the page in the terminal title ("tether-pane 80x24"), so
 The mouse wheel scrolls back through the pane's tmux history, like copy mode in the whole-window view. A key goes back to the bottom.
 With zoom (attach.py "z%7"), the pane swaps into a private window in the same session.
 A placeholder keeps its home slot, size and focus; other panes never resize. The control client always ignores size.
-Views share the private window with manual sizing; the latest resize wins. The last owner swaps the pane home.
+Views share the private window with manual sizing; the latest resize wins, with a 100x30 floor.
+The last owner swaps the pane home.
 Locked leases and durable state repair killed views at startup, discovery or the next zoom, including old resize state."""
 from contextlib import contextmanager
 import fcntl
@@ -23,6 +24,7 @@ import time
 import tty
 import uuid
 import paths
+from window_size import MIN_AGENT_COLS, MIN_AGENT_ROWS
 
 FRAME = 0.05     # seconds between redraws while the pane prints
 IDLE = 0.5       # seconds between checks for a phone resize when nothing happens
@@ -238,6 +240,8 @@ def zoom_enter(pane):
                 zoom_command(state, 'set-option', '-w', '-t', window, '@tether_zoom', '1').check_returncode()
                 zoom_command(state, 'set-option', '-p', '-t', state['placeholder'], '@zoom_for', pane).check_returncode()
                 zoom_command(state, 'set-option', '-w', '-t', window, 'window-size', 'manual').check_returncode()
+                zoom_command(state, 'resize-window', '-t', window, '-x', str(MIN_AGENT_COLS),
+                             '-y', str(MIN_AGENT_ROWS)).check_returncode()
                 zoom_command(state, 'swap-pane', '-dZ', '-s', pane, '-t', state['placeholder']).check_returncode()
         return folder, window, lease
     except BaseException:
@@ -252,10 +256,12 @@ def zoom_enter(pane):
 
 
 def zoom_resize(view, width, height):
+    """Size only the private window; the page fits or scrolls the full pane width from its title."""
     folder, window, _ = view
     with zoom_lock(folder):
         state = json.loads((folder / 'state.json').read_text())
-        zoom_command(state, 'resize-window', '-t', window, '-x', str(width), '-y', str(height)).check_returncode()
+        zoom_command(state, 'resize-window', '-t', window, '-x', str(max(width, MIN_AGENT_COLS)),
+                     '-y', str(max(height, MIN_AGENT_ROWS))).check_returncode()
 
 
 def zoom_leave(view):

@@ -16,6 +16,8 @@ import time
 import paths
 
 FLOOR = (120, 40)
+MIN_AGENT_COLS = 100
+MIN_AGENT_ROWS = 30
 REGISTRY = '@tether_agent_panes'
 CONTROL = '@tether_control_sizes'
 OWNED = '@tether_window_size'

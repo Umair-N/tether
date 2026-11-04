@@ -97,6 +97,8 @@ class IsolatedZoom(unittest.TestCase):
         self.addCleanup(self.folder.cleanup)
         self.socket = str(Path(self.folder.name) / 's')
         self.env = {key: value for key, value in os.environ.items() if key not in ('TMUX', 'TMUX_PANE')}
+        self.env.update(HOME=self.folder.name, CLAUDE_CONFIG_DIR=self.folder.name + '/claude',
+                        CODEX_HOME=self.folder.name + '/codex')
         self.binary = shutil.which('tmux')
         self.tmux('new-session', '-d', '-s', 'zoom-test', '-x', '120', '-y', '40').check_returncode()
         self.addCleanup(self.tmux, 'kill-server')
@@ -138,6 +140,75 @@ class IsolatedZoom(unittest.TestCase):
         return self.tmux('list-panes', '-t', self.home, '-F',
                          '#{pane_id} #{pane_index} #{pane_width} #{pane_height} #{pane_active}').stdout
 
+    def repair_from_fresh_process(self):
+        code = '''
+import subprocess, sys
+from pathlib import Path
+import pane_view
+binary, socket, cache = sys.argv[1:]
+pane_view.tmux = lambda *args: subprocess.run(
+    [binary, '-S', socket, *args], capture_output=True, text=True, timeout=5)
+pane_view.paths.CACHE = Path(cache)
+pane_view.zoom_repair_all()
+'''
+        subprocess.run([sys.executable, '-c', code, self.binary, self.socket, str(pane_view.paths.CACHE)],
+                       cwd=Path(__file__).parent, env=self.env, stdin=subprocess.DEVNULL,
+                       capture_output=True, timeout=10, check=True)
+
+    def test_five_narrow_panes_restore_exactly_after_exit_or_restart(self):
+        program = 'timeout 120 tail -f /dev/null </dev/null'
+        self.home, self.pane = self.tmux('new-window', '-d', '-t', 'zoom-test:', '-n', 'arranged',
+                                        '-P', '-F', '#{window_id} #{pane_id}', program).stdout.split()
+        right = self.pane
+        panes = [right]
+        for width in (105, 91, 46, 22):
+            result = self.tmux('split-window', '-h', '-t', right, '-l', str(width), '-P', '-F', '#{pane_id}', program)
+            result.check_returncode()
+            right = result.stdout.strip()
+            panes.append(right)
+        self.assertEqual(self.tmux('list-panes', '-t', self.home, '-F', '#{pane_width}').stdout.split(),
+                         ['14', '13', '44', '23', '22'])
+        self.tmux('select-window', '-t', self.home).check_returncode()
+        self.tmux('set-option', '-w', '-t', self.home, '@home_option', 'keep').check_returncode()
+        for index, pane in enumerate(panes):
+            self.tmux('select-pane', '-t', pane, '-T', f'title {index}').check_returncode()
+            for option, value in (('@chat_name', f'chat {index}'), ('@chat_name_at', '123'),
+                                  ('@chat_icon', 'terminal'), ('@custom', 'keep')):
+                self.tmux('set-option', '-p', '-t', pane, option, value).check_returncode()
+        def names():
+            return (self.tmux('display-message', '-p', '-t', self.home,
+                              '#{session_id} #{session_name} #{window_name} #{window_active}').stdout,
+                    self.tmux('show-options', '-w', '-t', self.home).stdout,
+                    [self.tmux('display-message', '-p', '-t', p, '#{pane_id} #{pane_title}').stdout +
+                     self.tmux('show-options', '-p', '-t', p).stdout for p in panes])
+        for active in (self.pane, panes[-1]):
+            for restart in (False, True):
+                with self.subTest(active=active, restart=restart):
+                    self.tmux('select-pane', '-t', active).check_returncode()
+                    before, labels = self.home_layout(), names()
+                    layout = self.tmux('display-message', '-p', '-t', self.home, '#{window_layout}').stdout
+                    view = pane_view.zoom_enter(self.pane)
+                    self.addCleanup(pane_view.zoom_leave, view)
+                    self.assertEqual(self.dimensions(), '100 30')
+                    state = json.loads((view[0] / 'state.json').read_text())
+                    for width, height, expected in ((40, 20, '100 30'), (150, 20, '150 30'),
+                                                    (40, 60, '100 60'), (40, 20, '100 30')):
+                        pane_view.zoom_resize(view, width, height)
+                        self.assertEqual(self.dimensions(), expected)
+                        self.assertEqual(self.home_layout().replace(state['placeholder'], self.pane), before)
+                    if restart:
+                        self.repair_from_fresh_process()  # A server restart preserves a live view's lease.
+                        self.assertEqual(self.dimensions(), '100 30')
+                        view[2].close()  # The browser/ttyd owner then disappears.
+                        self.repair_from_fresh_process()
+                    else:
+                        pane_view.zoom_leave(view)
+                    self.assertEqual(self.home_layout(), before)
+                    self.assertEqual(names(), labels)
+                    self.assertEqual(self.tmux('display-message', '-p', '-t', self.home,
+                                              '#{window_layout}').stdout, layout)
+                    self.assertFalse((view[0] / 'state.json').exists())
+
     def test_other_panes_and_home_slot_focus_stay_exact(self):
         for zoomed in (False, True):
             for active_target in (self.pane, self.other):
@@ -155,7 +226,7 @@ class IsolatedZoom(unittest.TestCase):
                     self.assertEqual(self.home_layout().replace(state['placeholder'], self.pane), before)
                     self.assertEqual(self.tmux('display-message', '-p', '-t', self.home,
                                               '#{window_zoomed_flag} #{window_active}').stdout, flags)
-                    self.assertEqual(self.dimensions(), '50 20')
+                    self.assertEqual(self.dimensions(), '100 30')
                     pane_view.zoom_leave(view)
                     self.assertEqual(self.home_layout(), before)
                     self.assertEqual(self.tmux('display-message', '-p', '-t', self.home,
@@ -173,11 +244,11 @@ class IsolatedZoom(unittest.TestCase):
         self.addCleanup(pane_view.zoom_leave, second)
         self.assertEqual(first[:2], second[:2])
         self.assertEqual(len(self.tmux('list-windows', '-t', 'zoom-test', '-F', '#{window_id}').stdout.split()), 2)
-        pane_view.zoom_resize(second, 65, 25)
-        self.assertEqual(self.dimensions(), '65 25')
+        pane_view.zoom_resize(second, 140, 50)
+        self.assertEqual(self.dimensions(), '140 50')
         pane_view.zoom_repair_all()  # Discovery must not disturb live owners.
         pane_view.zoom_leave(first)
-        self.assertEqual(self.dimensions(), '65 25')
+        self.assertEqual(self.dimensions(), '140 50')
         pane_view.zoom_leave(second)
         self.assertEqual(self.home_layout(), before)
 
@@ -204,7 +275,7 @@ pane_view.zoom_leave(view)
         try:
             self.assertTrue(select.select([process.stdout], [], [], 5)[0], 'Zoom child did not start')
             self.assertEqual(process.stdout.readline(), b'ready\n')
-            self.assertEqual(self.dimensions(), '50 20')
+            self.assertEqual(self.dimensions(), '100 30')
             if while_live:
                 while_live()
             process.kill()
@@ -223,7 +294,7 @@ pane_view.zoom_leave(view)
         view, = views
         self.addCleanup(pane_view.zoom_leave, view)
         pane_view.zoom_repair_all()
-        self.assertEqual(self.dimensions(), '50 20')
+        self.assertEqual(self.dimensions(), '100 30')
         pane_view.zoom_leave(view)
         self.assertEqual(self.home_layout(), before)
 
@@ -236,8 +307,8 @@ pane_view.zoom_leave(view)
         self.addCleanup(pane_view.zoom_leave, second)
         self.assertNotEqual(first[:2], second[:2])
         pane_view.zoom_resize(first, 50, 20)
-        pane_view.zoom_resize(second, 65, 25)
-        self.assertEqual(self.dimensions(), '50 20')
+        pane_view.zoom_resize(second, 140, 50)
+        self.assertEqual(self.dimensions(), '100 30')
         pane_view.zoom_leave(second)
         pane_view.zoom_leave(first)
         self.assertEqual(self.home_layout(), before)
@@ -370,14 +441,25 @@ pane_view.zoom_leave(view)
         self.assertEqual(self.home_layout(), before)
 
     def test_control_client_ignores_size_for_whole_zoom(self):
-        before = self.home_layout()
         client = subprocess.Popen([self.binary, '-S', self.socket, '-C', 'attach-session', '-f', 'ignore-size', '-t', 'zoom-test'],
                                   env=self.env, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
+            # Establish the fake client's size before arranging the fixture. Explicit
+            # refresh-client -C can resize windows even with ignore-size; run() never sends it.
+            client.stdin.write(b'refresh-client -C 40,20\nwait-for -S sized\n')
+            client.stdin.flush()
+            self.tmux('wait-for', 'sized').check_returncode()
+            self.assertEqual(self.tmux('list-clients', '-F', '#{client_width}').stdout.strip(), '40')
+            self.tmux('resize-window', '-t', self.home, '-x', '120', '-y', '40').check_returncode()
+            before = self.home_layout()
             view = pane_view.zoom_enter(self.pane)
             self.addCleanup(pane_view.zoom_leave, view)
-            pane_view.zoom_resize(view, 50, 20)
+            pane_view.zoom_resize(view, 40, 20)
             self.assertIn('ignore-size', self.tmux('list-clients', '-F', '#{client_flags}').stdout)
+            for aggressive in ('on', 'off'):
+                self.tmux('set-option', '-w', '-t', view[1], 'aggressive-resize', aggressive).check_returncode()
+                self.assertEqual(self.dimensions(), '100 30')
+                self.assertEqual(self.tmux('show-options', '-wv', '-t', view[1], 'window-size').stdout.strip(), 'manual')
             state = json.loads((view[0] / 'state.json').read_text())
             self.assertEqual(self.home_layout().replace(state['placeholder'], self.pane), before)
             pane_view.zoom_leave(view)
