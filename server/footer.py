@@ -71,28 +71,45 @@ def codex(report):
     return result
 
 
+def input_anchor(plain):
+    """Require both borders so a sent ❯ message or a picker is not an input box."""
+    for at in range(len(plain) - 1, 0, -1):
+        border = plain[at - 1].strip()
+        if not plain[at].startswith('❯') or not border.startswith('─') and not border.endswith('─'):
+            continue
+        if not any(RULE.match(line.strip()) for line in plain[at + 1:]):
+            continue
+        if PICKER_ROW.match(plain[at]) and any(PICKER_KEYS.search(line) for line in plain[at:]):
+            return None
+        return at
+    return None
+
+
+def notice_line(line):
+    """Known notices can sit closer to the left edge in narrow panes."""
+    return line.startswith(' ' * 4) and bool(line.startswith(' ' * 12) or UPDATE.search(line) or GOAL.search(line)
+        or '/effort' in line or re.search(r'\d+% until auto|new task\? /clear|/clear to save', line))
+
+
 def parse(styled):
     lines = [line.rstrip() for line in styled.splitlines()]
     plain = [ANSI_SGR.sub('', line) for line in lines]
     # Claude's input box: a ❯ line right under a rule. A sent message in the chat history also starts with ❯, but has no rule above it.
     # When a dialog (a permission prompt) replaces the input box, no line qualifies, and the dialog is not read as the footer.
-    prompts = [i for i, line in enumerate(plain) if line.startswith('❯') and i and RULE.match(plain[i - 1])]
+    at = input_anchor(plain)
     result = {'suggestion': '', 'notices': [], 'effort': '', 'mode': '', 'status': '', 'agents': [], 'update': '',
-              'goal': '', 'tasks': [], 'ide': '', 'spinner': None, 'running': None, 'denied': None, 'heads_up': None}
-    if not prompts:
-        return result
-    at = prompts[-1]
-    # A picker (AskUserQuestion, /model) marks its cursor row with ❯ too. Its rows and key hints are not the footer.
-    if PICKER_ROW.match(plain[at]) and any(PICKER_KEYS.search(line) for line in plain[at:]):
+              'goal': '', 'tasks': [], 'ide': '', 'spinner': None, 'running': None, 'denied': None, 'heads_up': None,
+              'observed': at is not None}
+    if at is None:
         return result
     text = dim_prompt_text('\n'.join(lines[at:at + 1]))
     if text and text != 'Press up to edit queued messages' and not text.startswith('Try '):
         result['suggestion'] = text
     # Right-aligned lines just above the top rule: notices and the effort badge.
-    top = at - 1 if at and RULE.match(plain[at - 1]) else at
+    top = at - 1
     above = []
     for line in reversed(plain[max(0, top - 4):top]):
-        if not line.strip() or not line.startswith(' ' * 12):
+        if not line.strip() or not notice_line(line):
             break
         above.insert(0, line.strip())
     for item in above:
@@ -104,7 +121,7 @@ def parse(styled):
             result['notices'] += [part.strip() for chunk in re.split(r'\s{3,}', item) for part in re.split(r' · (?=[^\x00-\x7f])', chunk) if part.strip()]
     # Under the bottom rule: status line, mode line, agents.
     below = plain[at + 1:]
-    while below and not RULE.match(below[0]):
+    while below and not RULE.match(below[0].strip()):
         below = below[1:]
     for line in below[1:]:
         stripped = line.strip()
@@ -173,6 +190,36 @@ def set_mode(read, press, target, sleep=time.sleep, tries=6):
     raise RuntimeError(f'{target.capitalize()} mode is not offered in this session. Modes found: {", ".join(seen)}.')
 
 
+def card_actions(lines, start):
+    """Read every adjacent action row, including continuations of a wrapped label."""
+    choices, end = [], start
+    while end < len(lines):
+        row = lines[end]
+        if re.match(r'\s*\d:\s', row):
+            choices += [(key, label.strip()) for key, label in CHOICE.findall(row.strip())]
+        elif choices and row.startswith('  ') and row.strip() and not notice_line(row):
+            key, label = choices[-1]
+            choices[-1] = (key, label + row.strip())
+        else:
+            break
+        end += 1
+    return choices, end
+
+
+def action_prefix(choices, state):
+    # Ignore spaces at physical wraps; only the final visible label may be truncated.
+    expected = CARD_KEYS[state]
+    if not choices or len(choices) > len(expected):
+        return False
+    for index, ((key, label), (wanted_key, wanted_label)) in enumerate(zip(choices, expected)):
+        label = re.sub(r'\s+', '', label).removesuffix('…')
+        wanted_label = re.sub(r'\s+', '', wanted_label)
+        if key != wanted_key or not label or (wanted_label != label and
+                (index != len(choices) - 1 or not wanted_label.startswith(label))):
+            return False
+    return True
+
+
 def heads_up(lines):
     """One ✦ card from Claude Code's suggestion feature, in any state:
     offer (Learn more / Knew this already / Dismiss), making ("Making your page…", no keys), ready (a page link),
@@ -185,14 +232,14 @@ def heads_up(lines):
         lines = lines[:1]
     for offset, follow in enumerate(lines[1:], 1):
         if re.match(r'\s*\d:\s', follow):
-            options = [{'key': key, 'label': label.strip()} for key, label in CHOICE.findall(follow.strip())]
-            end = offset + 1
+            choices, end = card_actions(lines, offset)
+            options = [{'key': key, 'label': label} for key, label in choices]
             break
-        found = MORE.match(follow)
+        found = UP_MORE.match(follow) or MORE.match(follow)
         if found:
             more, end = int(found[1]), offset + 1
             break
-        if follow.startswith(' ' * 12) or (follow.strip() and not follow.startswith('  ')):
+        if notice_line(follow) or (follow.strip() and not follow.startswith('  ')):
             end = offset
             break
         if not follow.strip():
@@ -205,11 +252,21 @@ def heads_up(lines):
         else:
             (detail if in_detail else body).append(follow.strip())
     rest = lines[end:]
-    if any(line.strip() and not line.startswith(' ' * 12) and not MORE.match(line) for line in rest):
+    if any(line.strip() and not notice_line(line) and not MORE.match(line) and not UP_MORE.match(line) for line in rest):
         return None
+    scroll = next((UP_MORE.match(line) or MORE.match(line) for line in rest if UP_MORE.match(line) or MORE.match(line)), None)
+    if scroll:
+        more = int(scroll[1])
     head = ' '.join([title] + body)
     state = ('making' if head.startswith(('Making your page', 'One moment')) else 'ready' if head.startswith('Learning page ready')
              else 'failed' if head.startswith(('Couldn', 'Not published')) else 'explained' if detail else 'offer')
+    if options and state in CARD_KEYS:
+        choices = [(option['key'], option['label']) for option in options]
+        if state == 'offer' and action_prefix(choices, 'explained'):
+            state = 'explained'
+        if not action_prefix(choices, state):
+            return None
+        options = [{'key': key, 'label': label} for key, label in CARD_KEYS[state]]
     if not options and more and state in CARD_KEYS:
         options = [{'key': key, 'label': label} for key, label in CARD_KEYS[state]]
     link = URL.search(' '.join([head] + detail))
@@ -236,12 +293,14 @@ def transcript(plain, result):
         if denied:
             reason = next((more.strip()[len('Reason:'):].strip() for more in lines[index + 1:index + 3] if more.strip().startswith('Reason:')), '')
             result['denied'] = {'text': denied[0], 'reason': reason}
+    # Card headlines can remain visible above a long explanation. Tools still use only the last 40 rows.
+    for index, line in enumerate(plain):
         if HEADS_UP.match(line):
-            card = heads_up(lines[index:])
+            card = heads_up(plain[index:])
             if card:
                 result['heads_up'] = card
     if not result['heads_up']:
-        result['heads_up'] = clipped_card(lines)
+        result['heads_up'] = clipped_card(plain)
     # A finished run leaves no spinner with an ellipsis, so a stale "Running" line is dropped with it.
     if not result['spinner']:
         result['running'] = None
@@ -302,19 +361,27 @@ def clipped_card(lines):
     """An explained ✦ card taller than the screen: Claude Code scrolls it, so the ✦ headline is gone and a
     "↑ N more" line sits under the keys. Keep the visible part; card_note adds the full text from the store."""
     # Right-aligned notices ("2% until auto-compact") can sit between the card and the input box.
-    rows = [line for line in lines if line.strip() and not line.startswith(' ' * 12)]
+    rows = [(at, line) for at, line in enumerate(lines) if line.strip() and not notice_line(line)]
     if not rows:
         return None
     last = len(rows) - 1
-    above = UP_MORE.match(rows[last])
-    keys = rows[last - 1] if above else rows[last]
-    choices = CHOICE.findall(keys.strip()) if re.match(r'\s*\d:\s', keys) else []
-    # A narrow pane drops the keys that do not fit ("0: Dismiss"), so the visible keys need only start the list.
-    expected = CARD_KEYS['explained']
-    if len(choices) < 2 or [label.strip() for _, label in choices] != [label for _, label in expected[:len(choices)]]:
+    above = UP_MORE.match(rows[last][1])
+    tail = rows[last][0] if above else len(lines)
+    end = next((at for at, row in reversed(rows[:last] if above else rows) if re.match(r'\s*\d:\s', row)), None)
+    if end is None:
         return None
-    choices = expected
-    end = lines.index(keys)
+    # Walk back to the first row of the same action block.
+    while end and lines[end - 1].strip() and lines[end - 1].startswith('  ') and not notice_line(lines[end - 1]):
+        end -= 1
+    while end < tail and not re.match(r'\s*\d:\s', lines[end]):
+        end += 1
+    choices, after = card_actions(lines, end)
+    if any(line.strip() and not notice_line(line) for line in lines[after:tail]):
+        return None
+    # A narrow pane drops the keys that do not fit ("0: Dismiss"), so the visible keys need only start the list.
+    if not action_prefix(choices, 'explained'):
+        return None
+    choices = CARD_KEYS['explained']
     start = end
     while start and not (lines[start - 1].strip() and not lines[start - 1].startswith('  ')):
         start -= 1
@@ -337,10 +404,17 @@ def clipped_card(lines):
 CARD_STORE = Path.home() / '.claude' / 'plugins' / 'store'
 
 
-def card_note(card, thread, store=None):
+def card_note(card, thread, store=None, *, screen=''):
     """Add the full explanation of an explained ✦ card, from Claude Code's own store (read-only), and the note that
     "Chat in main session" would put in the input box: the screen shows only part of a long explanation."""
-    if not card or card.get('state') != 'explained' or not thread:
+    fragment = False
+    if not card and screen:
+        plain = [ANSI_SGR.sub('', line).rstrip() for line in screen.splitlines()]
+        at = input_anchor(plain)
+        rows = [row for row in plain[:at - 1] if row.strip() and not notice_line(row)] if at is not None else []
+        fragment = bool(rows and (UP_MORE.match(rows[-1]) or (re.match(r'^\s*1:\s+U', rows[-1])
+            and action_prefix(CHOICE.findall(rows[-1].strip()), 'explained'))))
+    if not thread or (not card and not fragment) or (card and card.get('state') != 'explained'):
         return card
     for path in sorted((store or CARD_STORE).glob('cc-plugin-you-should-know_*.json')):
         try:
@@ -352,6 +426,9 @@ def card_note(card, thread, store=None):
         if not isinstance(view, dict) or view.get('kind') != 'explained' or not isinstance(view.get('text'), str):
             continue
         line = view.get('line') or ''
+        if not card:
+            card = {'text': 'Heads up', 'state': 'explained', 'detail': [], 'url': None, 'more': 0,
+                    'options': [{'key': key, 'label': label} for key, label in CARD_KEYS['explained']], 'clipped': True}
         if card.get('clipped'):
             card = dict(card, text=f"{entry.get('tag') or 'Heads up'} · {line}")
         elif line[:40] not in card['text']:

@@ -47,8 +47,9 @@ function PinMark({ pin }: { pin: SidePinControls }) {
 // The panes next to the open one load in the background, so the first swipe to them is instant too.
 const chatCache = new Map<string, ChatData>()
 const prefetching = new Set<string>()
-// Claude's bottom strip (model, effort, mode, chips) per pane, so a pane switch shows the right footer at once.
+// Claude's bottom strip belongs to one conversation in one pane.
 const footerCache = new Map<string, Footer>()
+const footerKey = (id: string, thread: string | null) => JSON.stringify([id, thread])
 const cacheFooter = (id: string, footer: Footer) => {
   footerCache.delete(id); footerCache.set(id, footer)
   if (footerCache.size > 24) footerCache.delete(footerCache.keys().next().value as string)
@@ -219,9 +220,10 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     const index = list.findIndex(item => item.id === pane.id)
     for (const near of [list[index + 1], list[index - 1]]) {
       if (!near) continue
-      if (near.agent === 'claude' && !footerCache.has(near.id) && !prefetching.has(`footer:${near.id}`)) {
-        prefetching.add(`footer:${near.id}`)
-        api<Footer>(`footer?session=${encodeURIComponent(near.id)}`).then(result => { if (!footerCache.has(near.id)) cacheFooter(near.id, result) }, () => {}).finally(() => prefetching.delete(`footer:${near.id}`))
+      const key = footerKey(near.id, near.thread)
+      if (near.agent === 'claude' && !footerCache.has(key) && !prefetching.has(`footer:${key}`)) {
+        prefetching.add(`footer:${key}`)
+        api<Footer>(`footer?session=${encodeURIComponent(near.id)}`).then(result => { if (result.observed !== false && !footerCache.has(key)) cacheFooter(key, result) }, () => {}).finally(() => prefetching.delete(`footer:${key}`))
       }
       if (chatCache.has(near.id) || prefetching.has(near.id)) continue
       prefetching.add(near.id)
@@ -495,8 +497,9 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     setLimit(value => value + 40)
   }
   // Claude's bottom strip, read every 5 seconds while this page is visible.
-  const [claudeFooter, setFooter] = useState<Footer>(() => footerCache.get(pane.id) ?? {})
-  const footer = activePane.agent === 'codex' ? data?.footer ?? {} : claudeFooter
+  const footerId = footerKey(pane.id, data ? data.thread : pane.thread)
+  const [claudeFooter, setFooter] = useState<{ key: string; value: Footer }>(() => ({ key: footerId, value: footerCache.get(footerId) ?? {} }))
+  const footer = activePane.agent === 'codex' ? data?.footer ?? {} : claudeFooter.key === footerId ? claudeFooter.value : footerCache.get(footerId) ?? {}
   const [usageSheet, setUsageSheet] = useState(false)
   const [planSheet, setPlanSheet] = useState(false)
   const [modelSheet, setModelSheet] = useState(false)
@@ -525,15 +528,43 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     return () => { close(); window.dispatchEvent(new CustomEvent('tether:open-files', { detail: { path: full.slice(0, full.lastIndexOf('/')) || '/', select: full } })) }
   }
   const readFooter = useRef<() => void>(() => {})
+  const footerReads = useRef({ requested: 0, applied: 0 })
+  const footerReread = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
     if (activePane.agent !== 'claude') return
     let live = true
-    const read = () => { if (document.visibilityState === 'visible') api<Footer>(`footer?session=${encodeURIComponent(pane.id)}`).then(result => { cacheFooter(pane.id, result); if (live) setFooter(result) }, () => {}) }
+    const read = () => {
+      if (!live || document.visibilityState !== 'visible') return
+      const sequence = ++footerReads.current.requested
+      api<Footer>(`footer?session=${encodeURIComponent(pane.id)}`).then(result => {
+        if (!live || sequence < footerReads.current.applied) return
+        footerReads.current.applied = sequence
+        // No input box on screen (a dialog, a redraw): keep the chips, but not a card whose keys could reach the dialog.
+        const next = result.observed === false ? { ...(footerCache.get(footerId) ?? {}), heads_up: null, suggestion: '' } : result
+        cacheFooter(footerId, next)
+        setFooter({ key: footerId, value: next })
+      }, () => {})
+    }
     readFooter.current = read
     read()
     const timer = setInterval(read, 5000)
-    return () => { live = false; clearInterval(timer) }
-  }, [api, pane.id, activePane.agent, state])
+    return () => {
+      live = false; clearInterval(timer)
+      readFooter.current = () => {}
+      if (footerReread.current !== null) clearTimeout(footerReread.current)
+      footerReread.current = null
+    }
+  }, [api, pane.id, activePane.agent, state, footerId])
+  async function headsUpKey(key: string) {
+    const read = readFooter.current
+    const ok = await sendKey(key, true)
+    if (read === readFooter.current) {
+      read()
+      if (footerReread.current !== null) clearTimeout(footerReread.current)
+      footerReread.current = setTimeout(read, 700)
+    }
+    if (!ok) { cardError.current = true; throw new Error('not taken') }
+  }
   const model = activePane.agent === 'codex' ? footer.model : footer.status?.split('|')[0].trim()
   const context = footer.context ? String(Math.round(footer.context.percent)) : /ctx\s+(\d+)%/.exec(footer.status ?? '')?.[1]
   const currentMode = modeBusy || modeKey(footer.mode)
@@ -654,7 +685,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     {tools && <Tools api={api} pane={activePane} onClose={() => setTools(false)} onPick={text => { setDraft(text); setTools(false) }} />}
     <StatusStack priorityKey={data?.approval ? `approval:${(data.approval as Approval).id}` : data?.attention ? `attention:${data.attention.id}` : data?.plan ? `plan:${data.plan.id}` : footer.heads_up ? 'heads' : browserAsk ? `browser-ask:${browserAsk.id}` : ''} chips={(footer.goal || !!footer.tasks?.length || (footer.suggestion && !draft.trim() && state !== 'Working')) ? <>{(footer.goal || !!footer.tasks?.length) ? <div className="live-chips">{footer.goal && <button type="button" className="live-chip" aria-haspopup="dialog" onClick={() => setLiveSheet('goal')}><Target size={14} />Goal active{footer.goal !== 'active' ? ` · ${footer.goal}` : ''}<ChevronRight size={13} /></button>}{footer.tasks?.map(task => <button type="button" key={task} className="live-chip" aria-haspopup="dialog" onClick={() => setLiveSheet('tasks')}><Layers size={14} />{taskLabel(task)}<ChevronRight size={13} /></button>)}</div> : null}{(footer.suggestion && !draft.trim() && state !== 'Working' ? <button type="button" className="prompt-suggestion" title="Use this suggested prompt" onClick={() => setDraft(footer.suggestion ?? '')}><CornerDownRight size={15} /><span>{footer.suggestion}</span></button> : null)}</> : null} items={[
       { id: 'action', label: data?.plan ? 'Review plan' : data?.approval ? `${agentNames[activePane.agent]} needs permission` : data?.attention?.reason === 'panel' ? `${agentNames[activePane.agent]} panel open` : `${agentNames[activePane.agent]} needs attention`, active: !!(data?.approval || data?.attention || data?.plan), content: <>{data && (data.approval != null || data.attention || data.plan) && <ChoiceDock key={(data.approval as Approval | null)?.id ?? data.attention?.id ?? 'choice'} approval={data.approval as Approval | null} attention={data.attention ?? null} plan={data.plan} agent={agentNames[activePane.agent]} disabled={!writable || acting} onChoose={choose} onKey={key => void sendKey(key)} onType={text => write('type', { session: activePane.id, thread: data?.thread ?? null, text, enter: true })} />}</> },
-      { id: 'heads', label: '✦ Heads up', active: !!footer.heads_up, content: <>{footer.heads_up && <HeadsUp card={footer.heads_up} disabled={!writable || acting} onKey={key => sendKey(key, true).then(ok => { readFooter.current(); setTimeout(() => readFooter.current(), 700); if (!ok) { cardError.current = true; throw new Error('not taken') } })} onChat={note => { setDraft(note); requestAnimationFrame(() => { const box = panelRef.current?.querySelector<HTMLTextAreaElement>('.composer textarea'); box?.focus(); box?.setSelectionRange(box.value.length, box.value.length) }) }} />}</> },
+      { id: 'heads', label: '✦ Heads up', active: !!footer.heads_up, content: <>{footer.heads_up && <HeadsUp card={footer.heads_up} disabled={!writable || acting} onKey={headsUpKey} onChat={note => { setDraft(note); requestAnimationFrame(() => { const box = panelRef.current?.querySelector<HTMLTextAreaElement>('.composer textarea'); box?.focus(); box?.setSelectionRange(box.value.length, box.value.length) }) }} />}</> },
       { id: 'agents', label: `${background.length} agents running`, active: background.length > 0, content: <>{background.length > 0 && <div className="agents-strip"><ul>{background.map((agent, index) => <li key={index}><strong>{agent.name}</strong><span>{agent.task}</span><small>{agent.detail}</small></li>)}</ul></div>}</> },
       { id: 'queue', label: `${queued.length} queued${queued.some(item => item.failed) ? ' · Not sent' : ''}`, active: queued.length > 0, content: <>      {queued.map(item => item.failed ? <div key={item.id} className="user-message pending-message failed-message"><span>{item.text}</span><small role="alert">{item.offline ? <><WifiOff size={12} />Not sent</> : <span className="failed-reason">Not sent: {item.failed}</span>}
         <button type="button" className="failed-action" disabled={retrying !== null || !writable} onClick={() => void retry(item)}><RotateCcw size={13} />{retrying === item.id ? 'Sending…' : 'Retry'}</button>

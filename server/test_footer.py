@@ -199,6 +199,131 @@ class FooterTests(unittest.TestCase):
 
 
 
+class HeadsUpRegressionTests(unittest.TestCase):
+    """Small, public-text copies of the captured and synthetic footer shapes."""
+
+    def test_named_input_border_requires_a_bottom_rule(self):
+        for border in (' Feature tethe… ─', ' skills investigat… ─', '── app-for-tmux ─'):
+            with self.subTest(border=border):
+                capture = '\n'.join([border, '❯', '─' * 17, '  Opus 5.5 | c…', '  ⏵⏵ auto mode'])
+                self.assertEqual(footer.parse(capture)['status'], 'Opus 5.5 | c…')
+                self.assertEqual(footer.parse(capture.replace('─' * 17, 'plain reply'))['status'], '')
+        self.assertEqual(footer.parse('A transcript mentions ─ in a sentence\n❯ sent text\nplain reply')['status'], '')
+        picker = screen('❯', below='  Old model') + '\n' + screen('❯ 1. Pick', below='Enter to select · ↑/↓ to navigate')
+        self.assertIs(footer.parse(picker)['observed'], False)
+
+    def test_observed_distinguishes_missing_input_from_empty_footer(self):
+        result = footer.parse('✦ Heads up · Check one build.\n  1: Understood\n↑ 17 more')
+        self.assertIs(result.get('observed'), False)
+        self.assertIsNone(result['heads_up'])
+        self.assertEqual(result['notices'], [])
+        self.assertIs(footer.parse(screen('❯'))['observed'], True)
+
+    def test_adjacent_actions_and_wrapped_labels_fill_all_state_keys(self):
+        for headline in ('✦ Heads up · Check one build.\n\n  - Check one build.\n', '  - Check one build.\n'):
+            for actions in ('  1: Understood   2: Chat in main session\n  0: Dismiss',
+                            '  1: Unde\n  rstood', '  1: Understood',
+                            '  1: Understood   2: Chat in main\n  session\n  0: Dismiss'):
+                with self.subTest(headline=headline, actions=actions):
+                    card = footer.parse(screen('❯', headline + '\n' + actions + '\n↑ 108 more · ↓ 6…'))['heads_up']
+                    self.assertIsNotNone(card)
+                    self.assertEqual(card['state'], 'explained')
+                    self.assertEqual([(item['key'], item['label']) for item in card['options']], footer.CARD_KEYS['explained'])
+                    self.assertEqual(card['more'], 108)
+        for state, headline in (('offer', '✦ Heads up · Check one build.'), ('ready', '✦ Learning page ready')):
+            actions = '\n'.join(f'  {key}: {label}' for key, label in footer.CARD_KEYS[state][:2])
+            card = footer.parse(screen('❯', headline + '\n' + actions))['heads_up']
+            self.assertEqual(card['state'], state)
+            self.assertEqual([(item['key'], item['label']) for item in card['options']], footer.CARD_KEYS[state])
+        self.assertIsNone(footer.parse(screen('❯', '  - Reply.\n  1: Yes\n  2: No\n↑ 5 more'))['heads_up'])
+
+    def test_visible_headline_outside_40_lines_keeps_card_and_bounded_tools(self):
+        above = ['● Running tests · 2s', '  ⎿  $ npm test', '✻ Working… (2s · ↓ 3 tokens)',
+                 '✦ Heads up · Check one build.', '']
+        above += [f'  - Detail {index:02d}.' for index in range(42)] + ['↓ 17 more']
+        result = footer.parse(screen('❯', '\n'.join(above)))
+        self.assertIsNotNone(result['heads_up'])
+        self.assertEqual(result['heads_up']['text'], 'Heads up · Check one build.')
+        self.assertEqual((result['heads_up']['state'], result['heads_up']['more']), ('explained', 17))
+        self.assertIsNone(result['spinner'])
+        self.assertIsNone(result['running'])
+
+    def test_short_indented_notices_keep_full_and_clipped_cards(self):
+        for headline in ('✦ Heads up · Check one build.\n\n', ''):
+            for indent in (4, 7, 10, 12, 57):
+                with self.subTest(headline=headline, indent=indent):
+                    rows = headline + '  - Check one build.\n\n  1: Understood\n↑ 17 more\n'
+                    notice = 'new task? /clear to save 150.8k tokens'
+                    result = footer.parse(screen('❯', rows + ' ' * indent + notice))
+                    self.assertIsNotNone(result['heads_up'])
+                    self.assertEqual(result['notices'], [notice])
+        rows = '✦ Heads up · Check one build.\n  1: Learn more\n    Unrelated output'
+        self.assertIsNone(footer.parse(screen('❯', rows))['heads_up'])
+
+    def stored_fragment(self, kind='explained', thread='thread-1', capture=None):
+        if capture is None:
+            capture = screen('❯', '    detail.  [-]\n\n↑ 108 more · ↓ 6…')
+        with tempfile.TemporaryDirectory() as folder:
+            store = Path(folder)
+            path = store / 'cc-plugin-you-should-know_builtin-test.json'
+            content = json.dumps({'sessions': [{'id': thread, 'tag': 'Heads up',
+                'view': {'kind': kind, 'line': 'Check one build.', 'text': '* Check the build.'}}]})
+            path.write_text(content)
+            handler = server.Handler.__new__(server.Handler)
+            handler.path = '/mobile/api/footer?session=%25fixture'
+            handler.deny = lambda: False
+            replies = []
+            handler.respond = lambda status, data: replies.append((status, data))
+            with patch.object(server, 'choose', return_value={'agent': 'claude', 'id': '%fixture', 'thread': 'thread-1'}), \
+                    patch.object(server, 'capture', return_value=capture) as read, \
+                    patch.object(server.claude_hooks, 'overlay', side_effect=lambda config, result, **kwargs: result), \
+                    patch.object(footer, 'CARD_STORE', store):
+                handler.do_GET()
+            read.assert_called_once()
+            self.assertEqual(path.read_text(), content, 'Store recovery must stay read-only')
+            self.assertEqual(replies[0][0], 200)
+            return replies[0][1]['heads_up']
+
+    def test_current_explained_store_restores_only_a_visible_fragment(self):
+        for fragment in ('    detail.  [-]\n\n↑ 108 more · ↓ 6…', '  1: U…'):
+            with self.subTest(fragment=fragment):
+                card = self.stored_fragment(capture=screen('❯', fragment))
+                self.assertIsNotNone(card)
+                self.assertEqual((card['state'], card['text'], card['full']), ('explained', 'Heads up · Check one build.', '* Check the build.'))
+                self.assertEqual([item['key'] for item in card['options']], ['1', '2', '0'])
+        self.assertIsNone(self.stored_fragment(capture=screen('❯', '● Done.')))
+        self.assertIsNone(self.stored_fragment(capture=screen('❯', '  1: U…\n● Later reply.')))
+        self.assertIsNone(self.stored_fragment(capture=screen('❯', '  1: Undo the change')))
+        self.assertIsNone(self.stored_fragment(capture='  1: U…\n↑ 17 more'))
+
+    def test_dismissed_or_other_kind_store_entry_never_restores(self):
+        for kind in ('dismissed', 'offer', 'making', 'ready'):
+            with self.subTest(kind=kind):
+                self.assertIsNone(self.stored_fragment(kind=kind))
+
+    def test_other_thread_store_entry_never_restores(self):
+        self.assertIsNone(self.stored_fragment(thread='other-thread'))
+
+    def test_offer_at_80_columns_still_parses(self):
+        capture = screen('❯', '✦ Heads up · Check one build.\n  1: Learn more   2: Knew this already   0: Dismiss')
+        card = footer.parse(capture)['heads_up']
+        self.assertEqual((card['state'], card['text']), ('offer', 'Heads up · Check one build.'))
+        self.assertEqual([item['key'] for item in card['options']], ['1', '2', '0'])
+
+    def test_named_border_full_footer_preserves_all_fields(self):
+        rows = '\n'.join(['✦ Heads up · Check one build.', '  1: Learn more   2: Knew this already   0: Dismiss',
+                          '            ◎ /goal active (10h)', '            2% until auto-compact'])
+        capture = screen('❯', rows, '  Opus 5.5 | ctx 16%\n  ⏵⏵ auto mode on · 1 monitor\n  ● main\n  ◯ helper  Check build  1m')
+        result = footer.parse(capture.replace('─' * 80, ' Feature investigation for the selected session ─', 1))
+        for key in ('goal', 'notices', 'status', 'agents', 'heads_up', 'tasks', 'mode'):
+            with self.subTest(key=key):
+                self.assertEqual(result[key], footer.parse(capture)[key])
+        self.assertEqual(result['goal'], '10h')
+        self.assertEqual(result['notices'], ['2% until auto-compact'])
+        self.assertEqual(len(result['agents']), 2)
+        self.assertIs(result['observed'], True)
+
+
 class CodexFooterTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()

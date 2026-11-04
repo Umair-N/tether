@@ -91,7 +91,10 @@ export async function request<T>(path: string, body?: unknown, signal?: AbortSig
     body: body === undefined ? undefined : JSON.stringify(body),
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout),
   })
-  const data = await response.json().catch(() => ({}))
+  const data = await response.json().catch(error => {
+    if (response.ok && path.split('?')[0] === 'footer') throw error
+    return {}
+  })
   if (!response.ok) throw new ApiError(response.status, data.error || `Request failed (${response.status}). Please try again.`, data.draft === true)
   return data as T
 }
@@ -113,7 +116,7 @@ export interface FooterTask { id: string; type?: string; status?: string; descri
 export const usageLabel = (label: string) => ({ '5h': '5-hour', '168h': 'Weekly', '7d': 'Weekly' })[label] ?? label
 export const creditsLabel = (credits?: Footer['credits']) => credits?.unlimited ? 'Unlimited' : credits?.balance != null ? String(credits.balance) : ''
 // The strip under Claude's input box: its suggested next prompt, notices, mode, status line and background agents.
-export interface Footer { suggestion?: string; notices?: string[]; effort?: string; mode?: string; status?: string; agents?: FooterAgent[]; update?: string
+export interface Footer { observed?: boolean; suggestion?: string; notices?: string[]; effort?: string; mode?: string; status?: string; agents?: FooterAgent[]; update?: string
   model?: string; context?: { percent: number; tokens?: number | null; limit?: number | null }; windows?: UsageWindow[]
   credits?: { balance?: string | number | null; unlimited?: boolean; has_credits?: boolean }
   goal?: string; tasks?: string[]; task_details?: FooterTask[]; ide?: string
