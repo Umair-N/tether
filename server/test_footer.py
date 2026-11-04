@@ -20,6 +20,65 @@ def screen(prompt, above='', below=''):
 
 
 class FooterTests(unittest.TestCase):
+    def test_wrapped_paste_notice_at_phone_and_desktop_widths(self):
+        for width, hint in ((30, ['paste again to', 'expand']),
+                            (44, ['paste again to', 'expand']),
+                            (80, ['paste again to', 'expand']),
+                            (80, ['paste again to expand'])):
+            for context in ([], ['5% until auto-compact']):
+                with self.subTest(width=width, context=context):
+                    rows = [text.rjust(width - 8) for text in context]
+                    rows += [text.rjust(width - 9) for text in hint]
+                    capture = '\n'.join(rows + ['─' * width, '❯ [Pasted text #1 +20 lines]', '─' * width])
+                    self.assertEqual(footer.parse(capture)['notices'], context + ['paste again to expand'])
+
+    def test_short_indented_notice_continuations(self):
+        for width in (30, 44, 80):
+            with self.subTest(width=width):
+                # The continuation has fewer than 12 spaces in a 30-column pane.
+                rows = ['✔ Update installed ·', '/restart to apply']
+                capture = '\n'.join(text.rjust(width - 2) for text in rows)
+                result = footer.parse(screen('❯', capture).replace('─' * 80, '─' * width))
+                self.assertEqual(result['notices'], ['✔ Update installed · /restart to apply'])
+                self.assertEqual(result['update'], '✔ Update installed · /restart to apply')
+
+    def test_notice_boundaries_and_wrapped_effort(self):
+        rows = ['5% until auto-compact', 'paste again to', 'expand', '◐ medium ·', '/effort']
+        result = footer.parse(screen('❯', '\n'.join(' ' * 15 + text for text in rows)))
+        self.assertEqual(result['notices'], ['5% until auto-compact', 'paste again to expand'])
+        self.assertEqual(result['effort'], 'medium')
+        for first, second in (('All done.', 'paste again to expand'),
+                              ('First phrase ·', 'another notice'),
+                              ('some hint', '5% until auto-compact'),
+                              ('some hint', '✔ Update installed · /restart'),
+                              ('some hint', '◎ /goal active (10h)'),
+                              ('some hint', '⚠ Context low'),
+                              ('new task? /clear to save 150.8k tokens', 'paste again to expand')):
+            with self.subTest(first=first, second=second):
+                result = footer.parse(screen('❯', ' ' * 15 + first + '\n' + ' ' * 15 + second))
+                self.assertEqual(result['notices'], [first] if second.startswith('◎') else [first, second])
+
+    def test_wrapped_context_and_clear_notices(self):
+        for width in (30, 44, 80):
+            with self.subTest(width=width):
+                rows = ['5% until', 'auto-compact', 'new task? /clear to', 'save 150.8k tokens']
+                capture = '\n'.join(text.rjust(width - 2) for text in rows)
+                result = footer.parse(screen('❯', capture).replace('─' * 80, '─' * width))
+                self.assertEqual(result['notices'], ['5% until auto-compact', 'new task? /clear to save 150.8k tokens'])
+
+    def test_join_precedes_splitting_notices_on_the_same_row(self):
+        rows = ['5% until auto-compact   paste again to', 'expand']
+        result = footer.parse(screen('❯', '\n'.join(' ' * 15 + text for text in rows)))
+        self.assertEqual(result['notices'], ['5% until auto-compact', 'paste again to expand'])
+
+    def test_notice_style_changes_prevent_joining(self):
+        for style in ('\x1b[22m', '\x1b[38;5;2m', '\x1b[38;2;2;0;2m'):
+            with self.subTest(style=style):
+                rows = '\x1b[2m' + ' ' * 15 + 'some hint\n' + style + ' ' * 15 + 'another notice\x1b[0m'
+                self.assertEqual(footer.parse(screen('❯', rows))['notices'], ['some hint', 'another notice'])
+        rows = '\x1b[2;38;5;2m' + ' ' * 15 + 'paste again to\n' + ' ' * 15 + 'expand\x1b[0m'
+        self.assertEqual(footer.parse(screen('❯', rows))['notices'], ['paste again to expand'])
+
     def test_question_picker_is_not_the_footer(self):
         # AskUserQuestion: the cursor row starts with ❯ like the input box. The model pill showed "4. Chat about this".
         screen = '\n'.join(['● Merge now?', '', '  1. Merge now', '  2. Wait', '❯ 3. 344', '', '─' * 40, '  4. Chat about this', '',

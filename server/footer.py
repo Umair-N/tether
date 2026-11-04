@@ -87,8 +87,51 @@ def input_anchor(plain):
 
 def notice_line(line):
     """Known notices can sit closer to the left edge in narrow panes."""
-    return line.startswith(' ' * 4) and bool(line.startswith(' ' * 12) or UPDATE.search(line) or GOAL.search(line)
-        or '/effort' in line or re.search(r'\d+% until auto|new task\? /clear|/clear to save', line))
+    return line.startswith(' ') and bool(line.startswith(' ' * 12) or UPDATE.search(line) or GOAL.search(line)
+        or '/effort' in line or re.search(r'\d+% until\b|new task\? /clear|/clear to save|paste again to', line))
+
+
+def notice_continuation(previous, text):
+    """A lowercase wrap continues an unfinished phrase, never a complete notice."""
+    if text.startswith('/effort') and EFFORT.search(previous) and '/effort' not in previous:
+        return True
+    if text.startswith('/restart') and UPDATE.search(previous) and previous.endswith('·'):
+        return True
+    return bool(text[:1].islower() and not re.search(
+        r'[.!?…:;·]$|(?:until auto-compact|context used|tokens|/effort|paste again to expand|'
+        r'/restart(?: to apply)?|Restart to (?:apply|update))$', previous))
+
+
+def notice_styles(lines):
+    """First/last text colour and faint state per row; SGR state crosses rows."""
+    dim, colour = False, None
+    styles = []
+    for line in lines:
+        row = []
+        for part in re.split(r'(\x1b\[[0-9;]*m)', line):
+            if not ANSI_SGR.fullmatch(part):
+                if part.strip():
+                    row.append((dim, colour))
+                continue
+            codes = [int(code or 0) for code in part[2:-1].split(';')]
+            at = 0
+            while at < len(codes):
+                code = codes[at]
+                if code in (38, 48, 58) and at + 1 < len(codes):
+                    count = 2 if codes[at + 1] == 5 else 4 if codes[at + 1] == 2 else 0
+                    if code == 38:
+                        colour = tuple(codes[at:at + count + 1])
+                    at += count + 1
+                    continue
+                if code == 0:
+                    dim, colour = False, None
+                elif code in (2, 22):
+                    dim = code == 2
+                elif code == 39 or 30 <= code <= 37 or 90 <= code <= 97:
+                    colour = None if code == 39 else (code,)
+                at += 1
+        styles.append((row[0], row[-1]) if row else (None, None))
+    return styles
 
 
 def parse(styled):
@@ -107,11 +150,23 @@ def parse(styled):
         result['suggestion'] = text
     # Right-aligned lines just above the top rule: notices and the effort badge.
     top = at - 1
+    start = top
+    while start and plain[start - 1].startswith(' ') and plain[start - 1].strip():
+        start -= 1
+    styles = notice_styles(lines[:top])
     above = []
-    for line in reversed(plain[max(0, top - 4):top]):
-        if not line.strip() or not notice_line(line):
-            break
-        above.insert(0, line.strip())
+    notice_start = top
+    for index in range(start, top):
+        line, text = plain[index], plain[index].strip()
+        if above and notice_continuation(above[-1], text) and styles[index - 1][1] == styles[index][0]:
+            above[-1] += ' ' + text
+        elif notice_line(line):
+            if not above:
+                notice_start = index
+            above.append(text)
+        else:
+            above = []
+            notice_start = top
     for item in above:
         effort = EFFORT.search(item)
         if effort and '/effort' in item:
@@ -148,7 +203,7 @@ def parse(styled):
     if goal:
         result['goal'] = goal[1] or 'active'
         result['notices'] = [item for item in result['notices'] if not GOAL.search(item)]
-    transcript(plain[:top], result)
+    transcript(plain[:notice_start], result)
     for item in result['notices'] + [result['status'], result['mode']]:
         if UPDATE.search(item):
             result['update'] = item
