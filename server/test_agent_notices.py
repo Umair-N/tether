@@ -294,7 +294,7 @@ class EffortParsingTests(unittest.TestCase):
         bar = '  Effort  ◂     {}\n               low    medium\n'
         self.assertEqual(model_picker.slider_level((bar.format('◉────────○─────')).splitlines()), 'low')
         self.assertEqual(model_picker.slider_level((bar.format('●━━━━━━━━◉─────')).splitlines()), 'medium')
-        self.assertEqual(model_picker.slider_level((bar.format('●━━━━━━━━●━━━━━')).splitlines()), 'high')
+        self.assertIsNone(model_picker.slider_level((bar.format('●━━━━━━━━●━━━━━')).splitlines()))
 
     def test_claude_effort_line_wrapped_on_a_narrow_pane(self):
         import model_picker

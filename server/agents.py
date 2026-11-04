@@ -51,7 +51,7 @@ FOOTER_PATH = re.compile(r'·\s+(~(?:/[^\s·]*)?|/[^\s·]+)\s+·')
 def footer_cwd(run, pane):
     """The working directory Codex shows in its footer line (it changes with /cd; the tmux pane's path does not)."""
     try:
-        screen = run([paths.TMUX, 'capture-pane', '-p', '-t', pane, '-S', '-6'], capture_output=True, text=True, timeout=5).stdout
+        screen = run([paths.TMUX, 'capture-pane', '-p', '-J', '-t', pane, '-S', '-6'], capture_output=True, text=True, timeout=5).stdout
     except Exception:
         return None
     for line in reversed(screen.splitlines()):

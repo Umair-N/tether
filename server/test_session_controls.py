@@ -1488,7 +1488,7 @@ class SmallPanePromptTests(unittest.TestCase):
                 run, calls = self.run_pane()
                 with self.assertRaises(terminal.PaneTooSmall) as caught:
                     terminal.prompt_draft({'id': '%1', 'agent': agent}, run)
-                self.assertEqual(str(caught.exception), terminal.SIZE_FIXING)
+                self.assertEqual(str(caught.exception), terminal.SIZE_HELP)
                 self.assertEqual([argv[1] for argv in calls],
                                  ['capture-pane', 'display-message', 'list-windows', 'capture-pane'])
 
@@ -1511,6 +1511,13 @@ class SmallPanePromptTests(unittest.TestCase):
                 apply.assert_called_once_with(run)
                 self.assertFalse({'send-keys', 'paste-buffer'} & {a[1] for a in calls})
 
+    def test_visible_draft_in_a_short_pane_is_preserved_without_resizing(self):
+        for agent, marker in (('claude', '❯'), ('codex', '›'), ('antigravity', '>')):
+            with self.subTest(agent=agent):
+                run, calls = self.run_pane(screen=marker + ' existing draft\n────\n')
+                self.assertEqual(terminal.prompt_draft({'id': '%1', 'agent': agent}, run), ['existing draft'])
+                self.assertEqual([argv[1] for argv in calls], ['capture-pane'])
+
     def test_tall_pane_keeps_generic_error_at_threshold(self):
         for agent, name in (('claude', 'Claude'), ('codex', 'Codex'), ('antigravity', 'Antigravity')):
             with self.subTest(agent=agent):
@@ -1528,10 +1535,10 @@ class SmallPanePromptTests(unittest.TestCase):
                 self.assertFalse(any(terminal.prompt_draft({'id': '%1', 'agent': agent}, run)))
                 self.assertEqual([argv[1] for argv in calls], ['capture-pane'])
 
-    def test_split_pane_reports_tether_repair(self):
+    def test_split_pane_reports_size_help(self):
         run, _ = self.run_pane(window_height=24, clients='')
         self.assertEqual(terminal.small_pane_reason({'id': '%1', 'agent': 'claude'}, run),
-                         terminal.SIZE_FIXING)
+                         terminal.SIZE_HELP)
 
     def test_size_query_errors_fall_back_to_generic_error(self):
         entry = {'id': '%1', 'agent': 'claude'}
@@ -1597,7 +1604,7 @@ class SmallPanePromptTests(unittest.TestCase):
                               "printf 'output without a prompt\\n'; exec sleep 60"],
                              check=True, capture_output=True, text=True, timeout=5)
                 reason = terminal.small_pane_reason({'id': result.stdout.strip(), 'agent': 'claude'}, run)
-                self.assertEqual(reason, terminal.SIZE_FIXING)
+                self.assertEqual(reason, terminal.SIZE_HELP)
             finally:
                 run([paths.TMUX, 'kill-server'], capture_output=True, timeout=5)
 

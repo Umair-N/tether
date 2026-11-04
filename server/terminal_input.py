@@ -116,18 +116,38 @@ def capture_screen(entry, lines=80, run=subprocess.run):
 
 COUNTDOWN = re.compile(r'(block\s+this\s+request\s+in\s+)(?:\d+[:hms.]?\s?)+', re.I)
 DIALOG_FRAME = re.compile(r'^\s*(?:[─━═╌╍┄┅\-_]{3,}|Do you want to proceed\?)\s*$')
+APPROVAL_QUESTION = re.compile(
+    r'^(?:Claude has written up a plan.*Would you like to proceed|Ready to code\?|Quick safety check|'
+    r'Run this command\?|Would you like to \w+|Do you want to (?:proceed|allow|approve|make this edit|create)|'
+    r'Do you trust|Trust this (?:folder|directory|project)|Allow access to|Allow this|'
+    r'trust.{0,100}(?:folder|directory|project)|(?:folder|directory|project).{0,100}trust)', re.I)
+
+
+def joined_lines(lines):
+    """Fold physical rows for phrase detection; keep the original rows for identities and labels."""
+    return ' '.join(line.strip() for line in lines)
 
 
 def approval(screen):
     # Expose the native chooser; every submitted choice requires an explicit
     # user selection tied to this exact request. Never auto-accept a default.
-    lines = screen.splitlines()
-    questions = [i for i, line in enumerate(lines) if re.search(
-        r'^\s*(?:[│┃╭╰┌└]\s*)?(?:Claude has written up a plan.*Would you like to proceed|Ready to code\?|Quick safety check|Run this command\?|Would you like to \w+|Do you want to (?:proceed|allow|approve|make this edit|create)|Do you trust|Trust this (?:folder|directory|project)|Allow access to|Allow this|(?:trust.{0,100}(?:folder|directory|project)|(?:folder|directory|project).{0,100}trust))', line, re.I)]
+    lines = ANSI_SGR.sub('', screen).splitlines()
+    questions = []
+    for i, line in enumerate(lines):
+        if not line.strip() or RULE_LINE.match(line) or NUMBERED_ITEM.match(line):
+            continue
+        paragraph = []
+        for row in lines[i:i + 8]:
+            if not row.strip() or RULE_LINE.match(row) or NUMBERED_ITEM.match(row):
+                break
+            paragraph.append(re.sub(r'^\s*[│┃╭╰┌└]\s*', '', row))
+        if APPROVAL_QUESTION.search(joined_lines(paragraph)):
+            questions.append((i, joined_lines(paragraph)))
     if not questions:
         return None
-    start = questions[-1]
-    trust = bool(re.search(r'Quick safety check|trust.*(?:folder|directory|project)|(?:folder|directory|project).*trust', lines[start], re.I))
+    start, question = questions[-1]
+    trust = bool(re.search(r'Quick safety check|trust.*(?:folder|directory|project)|(?:folder|directory|project).*trust',
+                           question, re.I))
     choices = []
     choice_numbers = []
     for i, line in enumerate(lines[start + 1:], start + 1):
@@ -142,25 +162,38 @@ def approval(screen):
     if not choices or not any(re.match(reject, c[2], re.I) for c in choices):
         return None
     selected = next((i for i, c in enumerate(choices) if c[1]), None)
-    once = next((i for i, c in enumerate(choices) if re.match(r'Yes\b', c[2], re.I)
-                 and not re.search(r'always|don.t ask|remember', c[2], re.I)), None)
     # Fingerprint includes the visible tool request, independent of cursor position.
     preceding = [i for i in range(start) if re.search(r'^\s*(?:Requesting permission for:|Command|\$ )', lines[i])]
     # Claude draws its dialog under a full rule: start there, so chat history above the dialog stays out of the card.
     tops = [i for i in range(max(0, start - 15), start) if re.match(r'^\s*\u2500{10,}\s*$', lines[i])]
     begin = preceding[-1] if preceding else tops[-1] + 1 if tops else max(0, start - 15)
-    full_text = '\n'.join(lines[begin:choices[-1][0] + 1]).strip()
     # The card shows the request, not the dialog frame: drop rule lines and the generic question (the card title says it).
     shown = [line for line in lines[begin:choices[0][0]] if not DIALOG_FRAME.match(line)]
     text = re.sub(r'\n{3,}', '\n\n', '\n'.join(shown)).strip()
     options = []
     numbers = []
+    last = choices[-1][0] + 1
     for index, (line, _, label) in enumerate(choices):
         number = choice_numbers[index]
         numbers.append(number)
-        end = choices[index + 1][0] if index + 1 < len(choices) else line + 1
-        continuation = [part.strip() for part in lines[line + 1:end] if part.strip()]
+        end = choices[index + 1][0] if index + 1 < len(choices) else len(lines)
+        continuation = []
+        for at in range(line + 1, end):
+            part = lines[at]
+            if not part.strip() or RULE_LINE.match(part) or INPUT_HINT.search(part) or re.match(r'^\s*(?:Enter|Esc)\b', part, re.I):
+                break
+            continuation.append(part.strip())
+            if index == len(choices) - 1:
+                last = at + 1
         options.append({'id': number, 'text': ' '.join([label, *continuation])})
+    if any(re.match(r'^\s*[>❯›](?:\s|$)', line) and not NUMBERED_ITEM.match(line)
+           or CHAT_LINE.match(line) for line in lines[last:]):
+        return None  # a new input box or agent response makes the old chooser history
+    # Only a complete, known one-time label can back the legacy "approve once"
+    # action. A cut "Yes, and don't ask again" must never become an implicit Yes.
+    once = next((i for i, option in enumerate(options) if re.fullmatch(
+        r'Yes(?:,\s*(?:proceed|allow once|allow this (?:time|request)))?(?:\s*\(y\))?\.?', option['text'], re.I)), None)
+    full_text = '\n'.join(lines[begin:last]).strip()
     canonical = re.sub(r'(?m)^\s*[>❯›]?\s*(\d+)\.\s+', r'\1. ', full_text)
     if trust:
         canonical = re.sub(r'(?m)^[ \t]*[>❯›]?[ \t]*((?:Yes|No|Trust|Don.t trust|Do not trust|Exit)\b[^?\n]*)$', r'\1', full_text)
@@ -168,7 +201,7 @@ def approval(screen):
     # The time changes each second, so it stays out of the id: otherwise every tap would find a "changed" approval.
     canonical = COUNTDOWN.sub(r'\1-', canonical)
     return {'id': hashlib.sha256(canonical.encode()).hexdigest(), 'text': text,
-            'actionable': selected is not None, 'options': options,
+            'actionable': sum(c[1] for c in choices) == 1 and numbers == list(range(1, len(numbers) + 1)), 'options': options,
             '_numbers': numbers,
             '_selected': selected, '_once': once,
             '_reject': next(i for i, c in enumerate(choices) if re.match(reject, c[2], re.I))}
@@ -208,9 +241,9 @@ def cursor_in_menu(tail, marker):
     return True
 # Claude's /usage, /status, /config and /stats share one Settings dialog. /usage grows past a short pane once its scan ends,
 # and then its "Esc to cancel" footer is off screen: the tab row at its top still shows it.
-SETTINGS_TABS = re.compile(r'^\s*Settings\s+Status\s+Config\s+Usage\b')
+SETTINGS_TABS = re.compile(r'^\s*Settings\s+Status\b')
 INPUT_HINT = re.compile(r'esc Close|↑/↓ Scroll|Enter to (?:select|confirm|continue)|↑/?↓ (?:to )?(?:navigate|select)|enter Select|Esc to cancel|press enter|press any key|'
-                        r'\(y/n\)|\[y/n\]|\(yes/no\)', re.I)
+                        r'Keyboard:|\(y/n\)|\[y/n\]|\(yes/no\)', re.I)
 
 
 RULE_LINE = re.compile(r'^[\s─━│┃╭╮╰╯┌┐└┘├┤┬┴┼═║-]*$')
@@ -221,14 +254,14 @@ PICKER_HINT = re.compile(r'^Enter to .+[·•].*\bEsc to \S', re.I)
 
 def cursor_picker(screen):
     """Read an unnumbered cursor picker, bounded by its header and Enter/Esc footer."""
-    lines = screen.rstrip().splitlines()
+    lines = ANSI_SGR.sub('', screen).rstrip().splitlines()
     # A narrow pane can wrap the footer. Stop as soon as both key instructions appear.
     hint = None
     for index in range(len(lines) - 1, -1, -1):
-        if not re.match(r'^\s*Enter to\b', lines[index], re.I):
+        if not re.match(r'^\s*Enter\b', lines[index], re.I):
             continue
-        for end in range(index + 1, min(index + 3, len(lines)) + 1):
-            text = ' '.join(line.strip() for line in lines[index:end])
+        for end in range(index + 1, min(index + 6, len(lines)) + 1):
+            text = joined_lines(lines[index:end])
             if PICKER_HINT.search(text):
                 hint = (index, end, text)
                 break
@@ -341,6 +374,7 @@ def menu_choose(entry, choice, label=None, answer=None, run=subprocess.run, slee
     until it is on the chosen row (checking the screen after each press), then Enter. answer: text for the own-answer row;
     its old text is removed first."""
     def press(*keys):
+        require_pane_space(entry, run)
         run([paths.TMUX, 'send-keys', '-t', entry['id'], *keys], check=True, capture_output=True, timeout=5)
 
     def look():
@@ -349,6 +383,7 @@ def menu_choose(entry, choice, label=None, answer=None, run=subprocess.run, slee
             raise RuntimeError('The question is no longer open.')
         return menu['options']
     verify(entry, run)
+    require_pane_space(entry, run)
     options = look()
     target = next((i for i, option in enumerate(options) if option['id'] == choice), None)
     if target is None:
@@ -361,6 +396,9 @@ def menu_choose(entry, choice, label=None, answer=None, run=subprocess.run, slee
     if label is not None and not free and options[target]['text'] != label:
         raise RuntimeError('The question changed. Reload and review it again.')
     for _ in range(len(options) * 2 + 2):
+        target = next((i for i, option in enumerate(options) if option['id'] == choice), None)
+        if target is None or label is not None and not free and options[target]['text'] != label:
+            raise RuntimeError('The question changed. Reload and review it again.')
         at = next((i for i, option in enumerate(options) if option['selected']), None)
         if at is None:
             raise RuntimeError('Could not find the cursor in the question. Open the terminal to answer it.')
@@ -406,7 +444,7 @@ def login_link(lines):
             url += more.strip()
         host = urlsplit(url).hostname or ''
         if host == 'auth.openai.com' or (host in LOGIN_HOSTS and '/oauth/' in url):
-            code = any(re.search(r'paste code|authentication code|enter (?:the )?code', other, re.I) for other in lines[index:])
+            code = bool(re.search(r'paste code|authentication code|enter (?:the )?code', joined_lines(lines[index:]), re.I))
             return {'url': url, 'code': code}
     return None
 
@@ -432,7 +470,7 @@ def attention(entry, screen, working, now=None):
         reason = 'menu'
     elif entry['agent'] == 'claude' and (picker := cursor_picker(screen)):
         reason, tail = 'picker', picker['text'].splitlines()
-    elif any(INPUT_HINT.search(line) for line in lines[-8:]):
+    elif INPUT_HINT.search(joined_lines(lines[-8:])):
         reason = 'prompt'
     elif marker and not working and lines and not any(line.startswith(marker) for line in lines[-15:]):
         reason = 'no-input-box'
@@ -638,13 +676,14 @@ class DraftError(RuntimeError):
 
 
 class PaneTooSmall(RuntimeError):
-    """The pane is too short to show the agent input box."""
+    """The pane cannot show enough of the input or control to act safely."""
 
 
-# Claude needs two rules, the prompt and a status line, plus room for wrapped hints
-# and spacing. Eight rows is a diagnostic threshold. A visible marker always wins.
+# A visible, readable input always wins. Complex controls need room for labels
+# and hints; missing inputs use the same read-only size diagnosis.
 MIN_INPUT_ROWS = 8
-SIZE_FIXING = 'Tether is fixing the terminal size. Send again in a moment.'
+MIN_INPUT_COLS = 40
+SIZE_HELP = 'This pane is too small to read safely. Zoom it in Terminals, or make it at least 40 columns by 8 rows, then try again.'
 
 
 def small_pane_reason(entry, run=subprocess.run):
@@ -658,15 +697,24 @@ def small_pane_reason(entry, run=subprocess.run):
             return None
         pw, ph, ww, wh, session, window, sizing = result.stdout.rstrip('\n').split('\t')
         pw, ph, ww, wh = map(int, (pw, ph, ww, wh))
-        if min(pw, ph, ww, wh) <= 0 or not session or not sizing or ph >= MIN_INPUT_ROWS:
+        if min(pw, ph, ww, wh) <= 0 or not session or not sizing or (ph >= MIN_INPUT_ROWS and pw >= MIN_INPUT_COLS):
             return None
-    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError, AttributeError):
         return None
-    return SIZE_FIXING
+    return SIZE_HELP
+
+
+def require_pane_space(entry, run=subprocess.run):
+    """Refuse controls whose labels can be clipped by a narrow split; a wrong key press is worse than a refusal."""
+    reason = small_pane_reason(entry, run)
+    if reason:
+        raise PaneTooSmall(reason)
 
 
 def prompt_draft(entry, run=subprocess.run, *, _size_retry=True):
-    screen = capture(entry, run)
+    # One styled snapshot binds text and attributes to the same screen redraw.
+    styled = capture(entry, run, styled=True)
+    screen = ANSI_SGR.sub('', styled)
     if approval(screen):
         raise RuntimeError('Respond to the pending approval before sending a message.')
     if entry['agent'] == 'claude' and (picker := cursor_picker(screen)):
@@ -676,40 +724,36 @@ def prompt_draft(entry, run=subprocess.run, *, _size_retry=True):
     prompts = [i for i, line in enumerate(lines) if line.startswith(marker)]
     if not prompts:
         if not _size_retry:
-            raise PaneTooSmall(SIZE_FIXING)
+            raise PaneTooSmall(SIZE_HELP)
         reason = small_pane_reason(entry, run)
         if reason:
-            if _size_retry:
-                window_size.apply(run)
-                time.sleep(.1)  # Let the agent redraw its input after SIGWINCH.
-                return prompt_draft(entry, run, _size_retry=False)
-            raise PaneTooSmall(reason)
+            # Tether owns agent window sizes (window_size.py); a small client may have shrunk this one.
+            window_size.apply(run)
+            time.sleep(.1)  # Let the agent redraw its input after SIGWINCH.
+            return prompt_draft(entry, run, _size_retry=False)
         name = {'claude': 'Claude', 'codex': 'Codex', 'antigravity': 'Antigravity'}[entry['agent']]
         raise RuntimeError(f'Cannot find the {name} input box on screen. '
                            'Open the pane in Terminals to see what it shows.')
     start = prompts[-1]
-    if re.match(r'\s*\d+[.)]\s', lines[start][1:]) and menu_question(lines[start:]):
+    if (re.match(r'\s*\d+[.)]\s', lines[start][1:]) and menu_question(lines[start:])
+            or re.match(r'^[>❯›]\s+\S', lines[start]) and INPUT_HINT.search(joined_lines(lines[start + 1:]))):
         # Codex marks the chosen row of a menu ("› 1. Review hooks") the same way as its input line.
         name = {'claude': 'Claude', 'codex': 'Codex', 'antigravity': 'Antigravity'}[entry['agent']]
         raise RuntimeError(f'{name} is asking you to pick an option. Answer it above, then send again.')
     draft = [lines[start][1:].strip()]
-    for line in lines[start + 1:]:
-        if line.startswith('─') or (entry['agent'] == 'codex' and not line.strip()):
+    end = start + 1
+    for line in lines[end:]:
+        if line.lstrip().startswith('─') or (entry['agent'] == 'codex' and not line.strip()):
             break
         draft.append(line.strip())
-    if entry['agent'] == 'codex' and draft == ['Ask Codex to do anything']:
-        draft = []
-    if entry['agent'] == 'claude' and draft == ['Press up to edit queued messages']:
-        draft = []
-    # Claude renders placeholders and prompt suggestions ("Try ...", "push it") dimmed; typed text is not dim.
-    if any(draft) and entry['agent'] == 'claude':
-        if dim_prompt_text(capture(entry, run, styled=True)) == draft[0] and len(draft) == 1:
-            draft = []
-    if len(draft) == 1 and entry['agent'] == 'antigravity' and AGY_MODE_HINT.search(draft[0]):
-        # Antigravity fills the empty box with a mode hint ("Auto mode: ... (shift+tab to cycle)") in its hint colour,
-        # and the mode changes it; typed text is never drawn in that colour.
-        if hint_prompt_text(capture(entry, run, styled=True), '>') == draft[0]:
-            draft = []
+        end += 1
+    colour = 109 if entry['agent'] == 'antigravity' else None
+    if any(draft) and placeholder_text(styled, marker, start=start, end=end, colour=colour) is not None:
+        return []
+    # Older unstyled captures have no attributes. Retain only their exact known hints.
+    if not ANSI_SGR.search(styled) and ((entry['agent'] == 'codex' and draft == ['Ask Codex to do anything'])
+                                      or (entry['agent'] == 'claude' and draft == ['Press up to edit queued messages'])):
+        return []
     return draft
 
 
@@ -717,44 +761,62 @@ ANSI_SGR = re.compile(r'\x1b\[[0-9;]*m')
 AGY_MODE_HINT = re.compile(r'\bmode\b.*(?:\(shift\+tab to cycle\)|\.\.\.|…)\s*$', re.I)  # a narrow pane cuts the hint short
 
 
-def hint_prompt_text(styled, marker):
-    """Text of the last input line when all of it is in Antigravity's hint colour (256-colour 109), else ''."""
-    candidates = [line for line in styled.splitlines() if ANSI_SGR.sub('', line).startswith(marker)]
-    if not candidates:
-        return ''
-    line = candidates[-1]
-    hint = False
-    start = line.index(marker) + 1
-    for part in re.split(r'(\x1b\[[0-9;]*m)', line[start:]):
+def placeholder_text(styled, marker, *, start=None, end=None, colour=None):
+    """Input text only if every non-space character is faint or in the known hint colour.
+
+    SGR state crosses rows. Extended colour parameters are data, not attributes:
+    the 2 in 38;2;r;g;b does not mean faint, and a zero colour does not reset it.
+    None means at least one character is typed text, or no input marker exists.
+    """
+    rows, dim, foreground = [[]], False, None
+    for part in re.split(r'(\x1b\[[0-9;]*m)', styled):
         if ANSI_SGR.fullmatch(part):
-            codes = [int(code or 0) for code in part[2:-1].split(';') if code.isdigit() or code == '']
-            if codes[:3] == [38, 5, 109]:
-                hint = True
-            elif 0 in codes or 39 in codes or codes[:2] == [38, 5] or codes[:1] == [38]:
-                hint = False
-        elif part.strip() and not hint:
-            return ''
-    return ANSI_SGR.sub('', line)[1:].strip()
+            codes = [int(code or 0) for code in part[2:-1].split(';')]
+            at = 0
+            while at < len(codes):
+                code = codes[at]
+                if code in (38, 48, 58) and at + 1 < len(codes):
+                    count = 2 if codes[at + 1] == 5 else 4 if codes[at + 1] == 2 else 0
+                    if code == 38:
+                        foreground = codes[at + 2] if count == 2 and at + 2 < len(codes) else None
+                    at += count + 1
+                    continue
+                if code == 0:
+                    dim, foreground = False, None
+                elif code == 2:
+                    dim = True
+                elif code == 22:
+                    dim = False
+                elif code == 39 or 30 <= code <= 37 or 90 <= code <= 97:
+                    foreground = None
+                at += 1
+        else:
+            for char in part:
+                if char == '\n':
+                    rows.append([])
+                else:
+                    rows[-1].append((char, dim or colour is not None and foreground == colour))
+    if start is None:
+        candidates = [i for i, row in enumerate(rows) if row and row[0][0] == marker]
+        if not candidates:
+            return None
+        start = candidates[-1]
+    result = []
+    for i in range(start, end if end is not None else start + 1):
+        row = rows[i][1:] if i == start else rows[i]
+        if any(not char.isspace() and not hint for char, hint in row):
+            return None
+        result.append(''.join(char for char, _ in row).strip())
+    return '\n'.join(result)
+
+
+def hint_prompt_text(styled, marker):
+    return placeholder_text(styled, marker, colour=109) or ''
 
 
 def dim_prompt_text(styled):
     """Text of Claude's input line when every visible character is dimmed (a placeholder or suggested reply)."""
-    candidates = [line for line in styled.splitlines() if ANSI_SGR.sub('', line).startswith('❯')]
-    if not candidates:
-        return ''
-    line = candidates[-1]
-    text = ANSI_SGR.sub('', line)[1:].strip()
-    dim = False
-    for part in re.split(r'(\x1b\[[0-9;]*m)', line[line.index('❯') + 1:]):
-        if ANSI_SGR.fullmatch(part):
-            for code in [int(code or 0) for code in part[2:-1].split(';')]:
-                if code in (0, 22):
-                    dim = False
-                elif code == 2:
-                    dim = True
-        elif part.strip() and not dim:
-            return ''
-    return text
+    return placeholder_text(styled, '❯') or ''
 
 
 def suggestion(entry, run=subprocess.run):
@@ -771,11 +833,20 @@ def close_agy_panel(entry, run=subprocess.run):
     if entry.get('agent') != 'antigravity':
         return
     for _ in range(3):
-        if not AGY_PANEL.search('\n'.join(capture(entry, run).splitlines()[-40:])):
+        screen = capture(entry, run)
+        lines = screen.splitlines()
+        if not AGY_PANEL.search(joined_lines(lines[-40:])):
+            return
+        # Panel hints quoted in chat history must not send Esc into a live draft
+        # or a chooser. The real information panels replace the input box.
+        if approval(screen) or any(CURSOR_ITEM.match(line) for line in lines[-30:]):
+            return
+        if any(line.startswith('>') and i and lines[i - 1].lstrip().startswith('─')
+               and any(row.lstrip().startswith('─') for row in lines[i + 1:]) for i, line in enumerate(lines)):
             return
         run([paths.TMUX, 'send-keys', '-t', entry['id'], 'Escape'], check=True, capture_output=True, timeout=5)
         time.sleep(.5)
-    if AGY_PANEL.search('\n'.join(capture(entry, run).splitlines()[-40:])):
+    if AGY_PANEL.search(joined_lines(capture(entry, run).splitlines()[-40:])):
         raise RuntimeError('An Antigravity panel is open. Close it in Termius, then send again.')
 
 
@@ -789,8 +860,10 @@ def close_info_panel(entry, run=subprocess.run):
         return False
     screen = capture(entry, run)
     lines = screen.rstrip().splitlines()
-    panel = any(PANEL_CLOSE.search(line) for line in lines[-8:]) or any(SETTINGS_TABS.match(line) for line in lines)
-    if approval(screen) or cursor_picker(screen) or not panel or any(CURSOR_ITEM.match(line) for line in lines[-30:]):
+    footer = joined_lines(lines[-8:])
+    panel = PANEL_CLOSE.search(footer) or any(SETTINGS_TABS.match(line) for line in lines)
+    partial_picker = re.search(r'\bEnter\s+to\b', footer, re.I) and any(PICKER_CURSOR.match(line) for line in lines[-30:])
+    if approval(screen) or cursor_picker(screen) or partial_picker or not panel or any(CURSOR_ITEM.match(line) for line in lines[-30:]):
         return False
     run([paths.TMUX, 'send-keys', '-t', entry['id'], 'Escape'], check=True, capture_output=True, timeout=5)
     time.sleep(.4)
@@ -845,6 +918,7 @@ def card_key(entry, key, run=subprocess.run, sleep=time.sleep):
     blocks every later send. So: refuse when the box has text. If the digit lands as text, remove it, focus the card with
     Ctrl+X Tab (Claude's abovePrompt:focus key) and press it once more. If it lands as text again, remove it and give up."""
     verify(entry, run)
+    require_pane_space(entry, run)
     draft = [line for line in prompt_draft(entry, run) if line]
     if draft:
         raise DraftError(f'Claude’s input box has text (“{" ".join(draft)[:40]}”). Clear it, then tap again.')
@@ -894,20 +968,22 @@ def unqueue(entry, run=subprocess.run, sleep=time.sleep, *, _size_retry=True):
     if entry.get('agent') != 'claude':
         raise ValueError('Only Claude queues can be cancelled from here.')
     verify(entry, run)
-    lines = capture(entry, run).splitlines()
+    require_pane_space(entry, run)
+    styled = capture(entry, run, styled=True)
+    lines = ANSI_SGR.sub('', styled).splitlines()
     prompts = [line for line in lines if line.startswith('❯')]
     if not prompts:
         if not _size_retry:
-            raise PaneTooSmall(SIZE_FIXING)
+            raise PaneTooSmall(SIZE_HELP)
         reason = small_pane_reason(entry, run)
         if reason:
-            if _size_retry:
-                window_size.apply(run)
-                sleep(.1)
-                return unqueue(entry, run, sleep, _size_retry=False)
-            raise PaneTooSmall(reason)
+            window_size.apply(run)
+            sleep(.1)
+            return unqueue(entry, run, sleep, _size_retry=False)
     if not prompts or QUEUE_HINT not in prompts[-1]:
         raise RuntimeError('Nothing is queued. Claude may already have taken the message.')
+    if ANSI_SGR.search(styled) and placeholder_text(styled, '❯') != prompts[-1][1:].strip():
+        raise DraftError('There is an unsent draft in the agent input. Clear it, then send again.')
     run([paths.TMUX, 'send-keys', '-t', entry['id'], 'Up'], check=True, capture_output=True, timeout=5)
     for _ in range(10):
         sleep(.15)
@@ -931,7 +1007,7 @@ def confirm_delivery(entry, sent, run):
         screen = capture_screen(entry, 200, run)
         # Taken if the text is on screen (the pane can cut or rewrap it, so only its start is compared), or if the agent is
         # visibly busy: a message sent while it works may be queued out of sight.
-        if sent[:15] in ''.join(screen.split()) or re.search(r'esc to cancel|Loading\.\.\.|Working', '\n'.join(screen.splitlines()[-8:])):
+        if sent[:15] in ''.join(screen.split()) or re.search(r'esc to cancel|Loading\.\.\.|Working', joined_lines(screen.splitlines()[-8:])):
             return
     raise RuntimeError('Antigravity did not take the message. Send it again.')
 
@@ -981,6 +1057,9 @@ def submit(entry, message, run=subprocess.run):
             # Agents mark the highlighted row of a picker (/model ...) like the input line. If the box no longer holds the
             # text we sent, a menu opened: pressing Enter again would choose an item for the user.
             if '\n' not in message.strip() and not ''.join(' '.join(draft).split()).startswith(sent[:30]):
+                reason = small_pane_reason(entry, run)
+                if reason:
+                    raise PaneTooSmall(reason)
                 return
         raise DraftError('The message reached the agent input but was not submitted. Clear it, then send again.')
     finally:
@@ -1009,6 +1088,7 @@ def respond_approval(entry, identifier, action=None, run=subprocess.run, choice=
     if choice is None and action not in ('approve', 'reject'):
         raise ValueError('Invalid approval action.')
     verify(entry, run)
+    require_pane_space(entry, run)
     pending = approval(capture(entry, run))
     if not pending or pending['id'] != identifier or not pending['actionable']:
         raise RuntimeError('The approval changed. Reload and review it again.')
@@ -1030,6 +1110,7 @@ def respond_approval(entry, identifier, action=None, run=subprocess.run, choice=
     expected = pending['_selected']
     for _ in range(abs(delta)):
         verify(entry, run)
+        require_pane_space(entry, run)
         current = approval(capture(entry, run))
         if not current or current['id'] != identifier:
             raise RuntimeError('The approval changed. Review it again.')
@@ -1046,6 +1127,7 @@ def respond_approval(entry, identifier, action=None, run=subprocess.run, choice=
                 raise RuntimeError('Could not confirm the approval selection. Check Termius.')
             time.sleep(.03)
     verify(entry, run)
+    require_pane_space(entry, run)
     current = approval(capture(entry, run))
     if not current or current['id'] != identifier or current['_selected'] != target:
         raise RuntimeError('Could not confirm the selected approval choice. Review it in Termius.')
