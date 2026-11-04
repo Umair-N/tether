@@ -559,28 +559,6 @@ class InstallTests(unittest.TestCase):
             self.assertEqual(parsed['options']['port'], self.port)
             self.assertFalse((self.home / '.config').exists())
 
-    def test_browser_cli_plan_apply_and_repeat(self):
-        spec = importlib.util.spec_from_file_location('deploy_installer', installer.ROOT / 'server/deploy/install.py')
-        deploy = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(deploy)
-        (self.repo / 'server').mkdir()
-        shutil.copy2(installer.ROOT / 'server/agent_browser_cli.py', self.repo / 'server/agent_browser_cli.py')
-        target = self.home / '.local/bin/tether-browser'
-        for _ in range(2):
-            plan = deploy.add_browser_cli(self.plan(), home=self.home)
-            command = next(command for command in plan['commands'] if str(target) in command)
-            self.assertIn('agent_browser_cli.py', command[-1])
-            if not target.exists():
-                self.assertFalse(target.parent.exists())
-            self.apply(plan)
-            self.assertEqual(target.stat().st_mode & 0o777, 0o755)
-            run = subprocess.run([str(target), 'status'], capture_output=True, text=True, timeout=5,
-                                 env=dict(os.environ, TETHER_CDP_URL=''))
-            self.assertEqual((run.returncode, run.stdout, run.stderr),
-                             (1, 'Tether shared browser is not available in this shell.\n', ''))
-        uninstall = self.plan('--uninstall')
-        self.assertEqual(deploy.add_browser_cli(uninstall, home=self.home), uninstall)
-
     def test_cli_apply_json_stays_parseable_and_reuses_saved_options(self):
         script = self.repo / 'install.py'
         shutil.copy2(installer.ROOT / 'install.py', script)

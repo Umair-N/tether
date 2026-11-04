@@ -13,7 +13,7 @@ from unittest import mock
 import paths
 import project_launch
 import projects
-from agent_browser_cli import NOTE
+from agent_browser_cli import note
 
 HERE = Path(__file__).resolve().parent
 PID = 'a1b2c3d4e5f6'
@@ -93,13 +93,13 @@ class UnitTests(unittest.TestCase):
                         self.assertEqual(args, ['resume', '--last'])
                         continue
                     text = tomllib.loads(args[1])['developer_instructions']
-                    self.assertEqual(NOTE in text, enabled)
+                    self.assertEqual(note() in text, enabled)
                     if pid:
                         self.assertIn('## Notes', text)
                         if enabled:
-                            self.assertTrue(text.endswith('\n\n' + NOTE))
+                            self.assertTrue(text.endswith('\n\n' + note()))
                     else:
-                        self.assertEqual(text, NOTE)
+                        self.assertEqual(text, note())
 
     def test_codex_browser_keeps_plain_commands_and_own_instructions(self):
         with mock.patch.dict(os.environ, TETHER_CDP_URL='ws://127.0.0.1:1/cdp/x'):
@@ -135,7 +135,7 @@ url = "https://example.test/playwright"
                 mock.patch.object(project_launch, 'current_project', return_value=None), \
                 mock.patch.object(project_launch.os, 'execv') as execute:
             project_launch.launch('codex', ['resume'])
-            self.assertEqual(tomllib.loads(execute.call_args.args[1][2])['developer_instructions'], NOTE)
+            self.assertEqual(tomllib.loads(execute.call_args.args[1][2])['developer_instructions'], note())
             os.environ.pop('TETHER_LAUNCH')
             with mock.patch.object(project_launch, 'codex_browser_env_args', side_effect=ValueError('bad config')), \
                     mock.patch.object(project_launch.sys, 'stderr'):

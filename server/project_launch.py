@@ -103,8 +103,8 @@ def codex_args(pid, args):
         text = projects.render(pid, 'codex')
         record_revision(pid)
     if os.environ.get('TETHER_CDP_URL'):
-        from agent_browser_cli import NOTE
-        text = text + '\n\n' + NOTE if text else NOTE
+        from agent_browser_cli import note
+        text = text + '\n\n' + note() if text else note()
         args = [*codex_browser_env_args(), *args]
     return ['-c', 'developer_instructions=' + toml_string(text), *args] if text else args
 

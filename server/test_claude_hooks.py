@@ -13,7 +13,7 @@ import claude_hooks
 import footer
 import paths
 import server
-from agent_browser_cli import NOTE
+from agent_browser_cli import note
 
 
 class HookTests(unittest.TestCase):
@@ -356,7 +356,7 @@ class HookTests(unittest.TestCase):
                     if event == 'SessionStart' and enabled:
                         self.assertEqual(len(run.stdout.splitlines()), 1)
                         self.assertEqual(json.loads(run.stdout), {'hookSpecificOutput': {
-                            'hookEventName': 'SessionStart', 'additionalContext': NOTE}})
+                            'hookEventName': 'SessionStart', 'additionalContext': note()}})
                         state = json.loads((self.cache / 'hooks/abc123.json').read_text())
                         self.assertFalse(state['busy'])
                     else:

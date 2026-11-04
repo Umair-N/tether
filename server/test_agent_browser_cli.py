@@ -3,6 +3,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import threading
@@ -10,6 +11,25 @@ import unittest
 from unittest import mock
 
 import agent_browser_cli
+
+
+class NoteTests(unittest.TestCase):
+    def test_note_contains_absolute_ask_command(self):
+        text = agent_browser_cli.note()
+        command = text.rsplit('`', 2)[1]
+        self.assertEqual(shlex.split(command),
+                         [sys.executable, str(Path(agent_browser_cli.__file__).resolve()), 'ask', '<what you need>'])
+        self.assertEqual(len(command.splitlines()), 1)
+        self.assertTrue(Path(shlex.split(command)[1]).is_absolute())
+
+    def test_note_quotes_runtime_paths(self):
+        script = Path("/install path/user's tether/server/agent_browser_cli.py")
+        executable = "/python path/user's python"
+        with mock.patch.object(agent_browser_cli, '__file__', str(script)), \
+                mock.patch.object(agent_browser_cli.sys, 'executable', executable):
+            command = agent_browser_cli.note().rsplit('`', 2)[1]
+        self.assertEqual(shlex.split(command), [executable, str(script), 'ask', '<what you need>'])
+        self.assertEqual(len(command.splitlines()), 1)
 
 
 class CliTests(unittest.TestCase):

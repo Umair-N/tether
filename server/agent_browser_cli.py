@@ -3,18 +3,22 @@
 import json
 import os
 import re
+import shlex
 import sys
+from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 
-NOTE = '''## Tether shared browser
+def note():
+    command = shlex.join([sys.executable, str(Path(__file__).resolve())]) + ' ask "<what you need>"'
+    return f'''## Tether shared browser
 Tether runs one shared browser that the user can watch from desktop or phone.
 - Playwright MCP already uses it. Do not pass --isolated or launch another browser.
 - In scripts, connect instead of launching: Node `chromium.connectOverCDP(process.env.TETHER_CDP_URL)`, Python `p.chromium.connect_over_cdp(os.environ["TETHER_CDP_URL"])`. Use `browser.contexts[0]`. You get a private context; the user's logins are not in it.
 - Limit: 3 tabs. Close tabs you no longer need.
-- If you need the user in the browser (2FA code, captcha, a password you must not see), run `tether-browser ask "<what you need>"`, then wait for the user to reply in chat.'''
+- If you need the user in the browser (2FA code, captcha, a password you must not see), run `{command}`, then wait for the user to reply in chat.'''
 
 
 def endpoint(cdp, action):
