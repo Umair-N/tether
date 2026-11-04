@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import unittest
+import urllib.error
 from unittest.mock import Mock, patch
 
 import live_mode
@@ -74,6 +75,56 @@ class SummaryTests(unittest.TestCase):
         live_mode.CACHE.clear()
         self.addCleanup(live_mode.CACHE.clear)
         self.text = 'Tests pass for Tether version 2. There are 19 fixes. ' + 'More background detail. ' * 20
+        self.urlopen = self.enterContext(patch('urllib.request.urlopen', side_effect=urllib.error.URLError('down')))
+
+    def local_reply(self, content):
+        self.urlopen.side_effect = None
+        response = self.urlopen.return_value.__enter__.return_value
+        response.read.return_value = json.dumps({'choices': [{'message': {'content': content}}]}).encode()
+
+    def test_local_llm_success_uses_messages_options_url_and_cache(self):
+        self.local_reply('Tether version 2 passes all 19 tests. Ready to ship.')
+        run = Mock(side_effect=AssertionError('No Claude call'))
+        with patch.dict(os.environ, TETHER_LLM_URL='http://127.0.0.1:7697/'):
+            spoken = live_mode.summary(self.text, run=run)
+        self.assertEqual(spoken, 'Tether version 2 passes all 19 tests. Ready to ship.')
+        request = self.urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, 'http://127.0.0.1:7697/v1/chat/completions')
+        self.assertEqual(request.get_method(), 'POST')
+        self.assertEqual(request.get_header('Content-type'), 'application/json')
+        self.assertEqual(json.loads(request.data), {
+            'messages': [{'role': 'system', 'content': live_mode.PROMPT.split('\n\nAgent reply:', 1)[0]},
+                         {'role': 'user', 'content': self.text}],
+            'temperature': 0.2, 'max_tokens': 120, 'chat_template_kwargs': {'enable_thinking': False}})
+        self.assertEqual(self.urlopen.call_args.kwargs['timeout'], 8)
+        self.assertEqual(live_mode.summary(self.text, run=run), spoken)
+        self.urlopen.assert_called_once()
+        run.assert_not_called()
+
+    def test_summary_strips_think_blocks_and_needs_you_from_every_source(self):
+        output = '<think>Secret reasoning.\nMore thoughts.</think>\n**Tests pass.**\nnEeDs YoU: no\nReady to ship.\nNeeds you: yes'
+        expected = 'Tests pass. Ready to ship.'
+        run = Mock(return_value=Mock(returncode=0, stdout=output))
+        self.assertEqual(live_mode.summary(output, run=run), expected)
+        self.urlopen.assert_not_called()
+        self.local_reply(output)
+        self.assertEqual(live_mode.summary(self.text, run=run), expected)
+        run.assert_not_called()
+        live_mode.CACHE.clear()
+        self.urlopen.side_effect = urllib.error.URLError('down')
+        self.assertEqual(live_mode.summary(self.text, run=run), expected)
+        run.assert_called_once()
+
+    def test_bad_local_responses_fall_back_to_claude(self):
+        run = Mock(return_value=Mock(returncode=0, stdout='Claude summary.'))
+        for body in (b'not json', b'{}', b'{"choices":[]}', b'{"choices":[{"message":{"content":null}}]}'):
+            live_mode.CACHE.clear()
+            self.local_reply('')
+            self.urlopen.return_value.__enter__.return_value.read.return_value = body
+            self.assertEqual(live_mode.summary(self.text, run=run), 'Claude summary.')
+        live_mode.CACHE.clear()
+        self.local_reply('<think>Only thoughts.</think>\nNeeds you: no')
+        self.assertEqual(live_mode.summary(self.text, run=run), 'Claude summary.')
 
     def test_short_plain_text_passes_through_without_claude(self):
         run = Mock(side_effect=AssertionError('No Claude call'))
@@ -81,6 +132,7 @@ class SummaryTests(unittest.TestCase):
                          'Tether passes all 19 tests. Ready to ship.')
         self.assertEqual(live_mode.summary('x' * 240, run=run), 'x' * 240)
         run.assert_not_called()
+        self.urlopen.assert_not_called()
 
     def test_claude_success_uses_pane_icons_flags_and_environment(self):
         run = Mock(return_value=Mock(returncode=0, stdout='Tether version 2 passes all 19 tests. The fixes are ready.'))

@@ -15,11 +15,14 @@ def tidy(text):
 URL = os.environ.get('MOBILE_TMUX_TRANSCRIBE_URL', 'http://127.0.0.1:7684/transcribe')
 
 
-def transcribe(audio, content_type, live=False, recording=''):
-    """live=True asks for quick rough text while the user still speaks. Return the worker's reply ({'text': ...}). Raises RuntimeError with a message for the page."""
+def transcribe(audio, content_type, live=False, recording='', phrase=False):
+    """live=True asks for rough text; phrase=True asks for accurate text without a second VAD.
+    Return the worker's reply ({'text': ...}). Raises RuntimeError with a message for the page."""
     if not content_type.startswith('audio/'):
         raise ValueError('Send an audio recording.')
     headers = {'Content-Type': content_type}
+    if phrase:
+        headers['X-Live-Phrase'] = '1'
     if re.fullmatch(r'[A-Za-z0-9-]{8,64}', recording or ''):
         headers['X-Recording'] = recording  # lets the worker reuse text it already converted (transcribe_worker.py)
     request = urllib.request.Request(URL + ('?live=1' if live else ''), data=audio, method='POST', headers=headers)

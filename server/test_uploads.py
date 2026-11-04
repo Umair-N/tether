@@ -140,10 +140,10 @@ class TranscribeEndpointTests(unittest.TestCase):
     def test_the_text_comes_back_from_the_worker(self):
         with patch.object(transcribe, 'transcribe', return_value={'text': 'hello tmux'}) as worker:
             self.assertEqual(self.post(b'opus'), (200, {'text': 'hello tmux'}))
-        worker.assert_called_once_with(b'opus', 'audio/webm;codecs=opus', live=False, recording='')
+        worker.assert_called_once_with(b'opus', 'audio/webm;codecs=opus', live=False, recording='', phrase=False)
         with patch.object(transcribe, 'transcribe', return_value={'text': 'hel'}) as worker:
             self.assertEqual(self.post(b'op', **{'X-Live': '1', 'X-Recording': 'rec-12345678'}), (200, {'text': 'hel'}))
-        worker.assert_called_once_with(b'op', 'audio/webm;codecs=opus', live=True, recording='rec-12345678')
+        worker.assert_called_once_with(b'op', 'audio/webm;codecs=opus', live=True, recording='rec-12345678', phrase=False)
 
     def test_it_needs_the_same_origin_audio_and_a_size_limit(self):
         self.assertEqual(self.post(Origin='http://evil.test')[0], 403)

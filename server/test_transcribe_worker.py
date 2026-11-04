@@ -1,4 +1,5 @@
 import sys
+import io
 import types
 import unittest
 from types import SimpleNamespace as NS
@@ -115,6 +116,67 @@ class FinalPassTest(unittest.TestCase):
             worker.commit(item, [0.0] * (20 * worker.RATE))
         self.assertEqual(item.done[1], 'one')  # cut in the pause before "two"; "later" was never reached
         self.assertAlmostEqual(item.done[0], 1.25)
+
+
+class PhraseTest(unittest.TestCase):
+    def request(self, phrase='1', path='/transcribe'):
+        value = worker.Handler.__new__(worker.Handler)
+        value.path = path
+        value.headers = {'Content-Length': '1', 'X-Live-Phrase': phrase, 'X-Recording': 'recording-123'}
+        value.rfile = io.BytesIO(b'x')
+        value.respond = mock.Mock()
+        return value
+
+    def test_phrase_uses_whole_clip_and_own_lock_without_vad_or_recording_reuse(self):
+        samples = [0.0] * worker.RATE
+        model = mock.Mock()
+        def segments():
+            self.assertTrue(worker.PHRASE_LOCK.locked())
+            yield segment(' soft words', 1.0)
+        model.transcribe.return_value = (segments(), None)
+        with mock.patch.object(worker, 'MODEL', model), \
+                mock.patch.object(worker, 'decode_audio', return_value=samples), \
+                mock.patch.object(worker, 'FINAL_LOCK') as final_lock, \
+                mock.patch.object(worker, 'recording') as recording, \
+                mock.patch.object(worker, 'quick') as quick:
+            value = self.request(path='/transcribe?live=1')
+            worker.Handler.do_POST(value)
+        self.assertEqual(value.respond.call_args.args[0], 200)
+        self.assertEqual(value.respond.call_args.args[1]['text'], 'soft words')
+        model.transcribe.assert_called_once_with(samples, language=worker.LANGUAGE, initial_prompt=worker.PROMPT,
+                                                vad_filter=False, beam_size=worker.BEAM, word_timestamps=False,
+                                                temperature=0.0, condition_on_previous_text=False, max_new_tokens=worker.MAX_TOKENS)
+        final_lock.acquire.assert_not_called()
+        final_lock.release.assert_not_called()
+        recording.assert_not_called()
+        quick.assert_not_called()
+        self.assertFalse(worker.PHRASE_LOCK.locked())
+
+    def test_duration_limit_rejects_over_30_seconds_before_model_call(self):
+        with mock.patch.object(worker, 'MODEL') as model, mock.patch.object(worker, 'decode_audio') as decode:
+            decode.return_value = [0.0] * (30 * worker.RATE + 1)
+            value = self.request()
+            worker.Handler.do_POST(value)
+            self.assertEqual(value.respond.call_args.args[0], 413)
+            model.transcribe.assert_not_called()
+            decode.return_value = [0.0] * (30 * worker.RATE)
+            model.transcribe.return_value = (iter([segment(' allowed', 30.0)]), None)
+            self.assertEqual(worker.transcribe(b'x', phrase=True), ('allowed', 30.0))
+
+    def test_phrase_releases_lock_after_model_error(self):
+        with mock.patch.object(worker, 'MODEL') as model, \
+                mock.patch.object(worker, 'decode_audio', return_value=[0.0]):
+            model.transcribe.side_effect = RuntimeError('bad audio')
+            value = self.request()
+            worker.Handler.do_POST(value)
+        self.assertEqual(value.respond.call_args.args[0], 400)
+        self.assertFalse(worker.PHRASE_LOCK.locked())
+
+    def test_only_header_value_one_selects_phrase_path(self):
+        for phrase in ('', '0', 'true'):
+            with mock.patch.object(worker, 'transcribe', return_value=('hi', 1.0)) as transcribe:
+                worker.Handler.do_POST(self.request(phrase=phrase))
+            transcribe.assert_called_once_with(b'x', live=False, key='recording-123', phrase=False)
 
 
 if __name__ == '__main__':

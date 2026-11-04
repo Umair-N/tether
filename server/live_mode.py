@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import threading
+import urllib.request
 
 import paths
 
@@ -43,6 +44,12 @@ def _clip(text, limit=240):
 
 def _sentences(text):
     return _clip(' '.join(re.split(r'(?<=[.!?])\s+', text)[:2]))
+
+
+def _summary_plain(text):
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.S | re.I)
+    text = re.sub(r'^\s*Needs you:.*$', '', text, flags=re.M | re.I)
+    return plain(text)
 
 
 def brief(sessions):
@@ -93,7 +100,7 @@ def brief(sessions):
 
 
 def summary(text, pane=None, run=subprocess.run):
-    """Ask Haiku for long replies; fall back to two plain sentences."""
+    """Ask the local LLM for long replies, then Haiku; fall back to two plain sentences."""
     if not isinstance(text, str) or not text.strip():
         raise ValueError('Send an agent reply.')
     key = hashlib.sha256(text.encode()).hexdigest()
@@ -101,10 +108,25 @@ def summary(text, pane=None, run=subprocess.run):
         if key in CACHE:
             CACHE.move_to_end(key)
             return CACHE[key]
-    cleaned = plain(text)
+    cleaned = _summary_plain(text)
     spoken = cleaned
+    local = ''
     if len(cleaned) > 240:
         spoken = _sentences(cleaned)
+        try:
+            url = os.environ.get('TETHER_LLM_URL', 'http://127.0.0.1:7687').rstrip('/')
+            body = {'messages': [{'role': 'system', 'content': PROMPT.split('\n\nAgent reply:', 1)[0]},
+                                 {'role': 'user', 'content': text}],
+                    'temperature': 0.2, 'max_tokens': 120, 'chat_template_kwargs': {'enable_thinking': False}}
+            request = urllib.request.Request(url + '/v1/chat/completions', data=json.dumps(body).encode(),
+                                             headers={'Content-Type': 'application/json'}, method='POST')
+            with urllib.request.urlopen(request, timeout=8) as response:
+                local = _summary_plain(json.loads(response.read())['choices'][0]['message']['content'])
+            if local:
+                spoken = _sentences(local)
+        except (OSError, ValueError, KeyError, IndexError, TypeError):
+            pass
+    if len(cleaned) > 240 and not local:
         env = dict(os.environ, ENABLE_CLAUDEAI_MCP_SERVERS='false', CLAUDE_CODE_AUTO_CONNECT_IDE='0')
         env.pop('TMUX', None)
         env.pop('TMUX_PANE', None)
@@ -114,8 +136,8 @@ def summary(text, pane=None, run=subprocess.run):
                           '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}'],
                          cwd=str(paths.HOME), env=env, capture_output=True, text=True, timeout=20,
                          stdin=subprocess.DEVNULL)
-            if result.returncode == 0 and plain(result.stdout):
-                spoken = _sentences(plain(result.stdout))
+            if result.returncode == 0 and _summary_plain(result.stdout):
+                spoken = _sentences(_summary_plain(result.stdout))
         except (OSError, subprocess.SubprocessError):
             pass
     with CACHE_LOCK:
