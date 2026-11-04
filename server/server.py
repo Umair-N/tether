@@ -1099,13 +1099,14 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/mobile/api/footer':
                 config = choose(parse_qs(urlsplit(self.path).query).get('session', [None])[0])
                 screen_read_at = time.time()  # before capture: hooks during the read still win
-                result = footer.parse(capture(config, styled=True)) if config['agent'] == 'claude' else {}
+                screen = capture(config, styled=True) if config['agent'] == 'claude' else ''
+                result = footer.parse(screen) if config['agent'] == 'claude' else {}
                 result = claude_hooks.overlay(config, result, screen_read_at=screen_read_at)
                 if config['agent'] == 'codex' and not config.get('ambiguous'):
                     state = history.read(config['transcript'], codex_state, codex_consume)
                     result = footer.codex(codex_metrics(config, state['usage'], state['model'], state.get('effort', ''), state.get('credits')))
-                if result.get('heads_up'):
-                    result['heads_up'] = footer.card_note(result['heads_up'], config.get('thread'))
+                if config['agent'] == 'claude' and not config.get('ambiguous'):
+                    result['heads_up'] = footer.card_note(result.get('heads_up'), config.get('thread'), screen=screen)
                 self.respond(200, result)
             elif path == '/mobile/api/shell-output':
                 query = parse_qs(urlsplit(self.path).query)
