@@ -27,8 +27,15 @@ switch, extract, download = bootstrap.switch, bootstrap.extract, bootstrap.downl
 release_files = bootstrap.release_files
 
 
-def run(command):
-    subprocess.run(command, check=True, timeout=600)
+def run(command, quiet=False):
+    if not quiet:
+        subprocess.run(command, check=True, timeout=600)
+        return
+    # Hide the long plan on success; show it when the command fails. Warnings stay on stderr.
+    result = subprocess.run(command, stdout=subprocess.PIPE, text=True, timeout=600)
+    if result.returncode:
+        sys.stdout.write(result.stdout)
+        raise subprocess.CalledProcessError(result.returncode, command)
 
 
 def restart(state):
@@ -119,7 +126,7 @@ def migrate(args, root, state_file, state):
     target = bootstrap.stage(args, root, reuse=True)
     try:
         switch(link, target)
-        run([sys.executable, str(link / 'install.py'), '--apply', '--json', '--no-build-ui', '--defer-restart'])
+        run([sys.executable, str(link / 'install.py'), '--apply', '--json', '--no-build-ui', '--defer-restart'], quiet=True)
         new_state = json.loads(state_file.read_text())
         restart(new_state)
         if not healthy(new_state['options']['port'], host=new_state['options'].get('host', '127.0.0.1')):

@@ -289,11 +289,11 @@ class ReleaseInstallTests(unittest.TestCase):
         before = cli.snapshot(self.state)
         real_run = cli.run
 
-        def fail(command):
+        def fail(command, quiet=False):
             if '--apply' in command:
                 self.state.write_text('{}')
                 raise RuntimeError('installer failed')
-            real_run(command)
+            real_run(command, quiet)
 
         with mock.patch.object(cli, 'run', side_effect=fail):
             self.assertEqual(self.invoke('migrate', *args), 1)
