@@ -38,6 +38,7 @@ BEAM = int(os.environ.get('MOBILE_TMUX_WHISPER_BEAM', '1'))
 MODEL = WhisperModel(os.environ.get('MOBILE_TMUX_WHISPER_MODEL', 'small'), device='cpu', compute_type='int8', cpu_threads=THREADS)
 LIVE_MODEL = WhisperModel(os.environ.get('MOBILE_TMUX_WHISPER_LIVE_MODEL', 'base.en'), device='cpu', compute_type='int8', cpu_threads=THREADS)
 FINAL_LOCK = threading.Lock()
+PHRASE_LOCK = threading.Lock()
 LIVE_LOCK = threading.Lock()
 RATE = 16000
 COMMIT_AFTER = 4.0  # seconds of audio not yet converted by the accurate model before a background pass starts
@@ -64,6 +65,10 @@ RECORDINGS = {}
 RECORDINGS_LOCK = threading.Lock()
 
 
+class PhraseTooLong(ValueError):
+    pass
+
+
 def recording(key, create=True):
     with RECORDINGS_LOCK:
         now = time.monotonic()
@@ -81,16 +86,18 @@ def join(*parts):
     return ' '.join(part.strip() for part in parts if part.strip())
 
 
-def accurate(samples, before='', words=False, until=None, stop=None):
+def accurate(samples, before='', words=False, until=None, stop=None, phrase=False):
     """The accurate model's segments and where it stopped: (segments, None) when it converted everything, else
     (segments, seconds converted). before: the text so far, so the model keeps the same style across parts.
     until: a time.monotonic() deadline, also for the wait on FINAL_LOCK. stop: returns True when a final pass waits.
-    The checks run between segments; the token cap bounds the time of one 30 s window."""
+    The checks run between segments; the token cap bounds the time of one 30 s window.
+    phrase=True uses PHRASE_LOCK and skips VAD: the browser already cut the phrase."""
     prompt = join(PROMPT, before[-200:])
-    if not FINAL_LOCK.acquire(timeout=max(0.0, until - time.monotonic()) if until else -1):
+    lock = PHRASE_LOCK if phrase else FINAL_LOCK
+    if not lock.acquire(timeout=max(0.0, until - time.monotonic()) if until else -1):
         return [], 0.0
     try:
-        segments, _ = MODEL.transcribe(samples, language=LANGUAGE, initial_prompt=prompt, vad_filter=True, beam_size=BEAM, word_timestamps=words,
+        segments, _ = MODEL.transcribe(samples, language=LANGUAGE, initial_prompt=prompt, vad_filter=not phrase, beam_size=BEAM, word_timestamps=words,
                                        temperature=0.0, condition_on_previous_text=False, max_new_tokens=MAX_TOKENS)
         found = []
         for segment in segments:
@@ -99,7 +106,7 @@ def accurate(samples, before='', words=False, until=None, stop=None):
                 return found, segment.end
         return found, None
     finally:
-        FINAL_LOCK.release()
+        lock.release()
 
 
 def quick(samples):
@@ -167,10 +174,18 @@ def commit(item, samples):
         item.lock.release()
 
 
-def transcribe(audio, live=False, key=None):
+def transcribe(audio, live=False, key=None, phrase=False):
     """live=True: quick rough text while the user speaks (fast model, greedy). Otherwise the accurate final text.
     Live passes use one temperature and a token cap: without them, mic noise can send the model into retry loops (34 s seen).
-    key: the recording's X-Recording id. With it, the accurate text of finished sentences is reused (see the docstring at the top)."""
+    key: the recording's X-Recording id. With it, the accurate text of finished sentences is reused (see the docstring at the top).
+    phrase=True converts the whole clip, at most 30 seconds, without recording reuse or the composer queue."""
+    if phrase:
+        samples = decode_audio(io.BytesIO(audio), sampling_rate=RATE)
+        length = len(samples) / RATE
+        if length > 30:
+            raise PhraseTooLong('Live phrases must be 30 seconds or shorter.')
+        segments, _ = accurate(samples, phrase=True)
+        return join(*(segment.text for segment in segments)), length
     if key:
         samples = decode_audio(io.BytesIO(audio), sampling_rate=RATE)
         length = len(samples) / RATE
@@ -220,10 +235,14 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(413, {'error': 'The recording is empty or too long.'})
             return
         started = time.monotonic()
+        phrase = self.headers.get('X-Live-Phrase') == '1'
         key = self.headers.get('X-Recording', '')
         key = key if RECORDING_ID.fullmatch(key) else None
         try:
-            text, duration = transcribe(self.rfile.read(size), live=self.path.endswith('?live=1'), key=key)
+            text, duration = transcribe(self.rfile.read(size), live=self.path.endswith('?live=1'), key=key, phrase=phrase)
+        except PhraseTooLong as exc:
+            self.respond(413, {'error': str(exc)})
+            return
         except Exception as exc:  # bad or unsupported audio
             self.respond(400, {'error': 'Could not read that recording (%s).' % type(exc).__name__})
             return

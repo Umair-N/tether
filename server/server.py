@@ -1634,7 +1634,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(413, {'error': 'The recording is empty or too long.'})
                 return
             audio = self.rfile.read(size)
-            self.respond(200, transcribe.transcribe(audio, self.headers.get('Content-Type', ''), live=self.headers.get('X-Live') == '1', recording=self.headers.get('X-Recording', '')))
+            self.respond(200, transcribe.transcribe(audio, self.headers.get('Content-Type', ''), live=self.headers.get('X-Live') == '1', recording=self.headers.get('X-Recording', ''), phrase=self.headers.get('X-Live-Phrase') == '1'))
         except ValueError as exc:
             self.respond(400, {'error': str(exc)})
         except RuntimeError as exc:

@@ -156,6 +156,23 @@ For advanced service settings, add `Environment=NAME=value` to a systemd user ov
 | `MOBILE_TMUX_TMUX` | Found on `PATH` | Path to the tmux executable. |
 | `TMUX_CHAT_DIST` | `<repo>/ui/dist` | Override the React UI build folder. |
 
+## Live mode workers
+
+Live mode uses the Whisper worker for transcription and [`tether-tts.service`](server/deploy/tether-tts.service) for natural speech.
+[`tether-llm.service`](server/deploy/tether-llm.service) runs llama-server on `127.0.0.1:7687` for local summaries.
+It uses `~/.local/share/tether/friday-models/Qwen3.5-2B-Q4_K_M.gguf` and the binary in `~/.local/share/tether/llama/`.
+Summaries try the local model, then Claude Haiku, then two sentences from the reply.
+Set `TETHER_LLM_URL` on the Tether server to override the local URL.
+
+Copy the unit, then enable and start it:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp server/deploy/tether-llm.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now tether-llm.service
+```
+
 ## Host resources
 
 Enable `--resources` in the installer, or set `TETHER_RESOURCES=1` for manual startup.
