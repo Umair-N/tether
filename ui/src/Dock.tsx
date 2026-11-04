@@ -2,12 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Search, Clock3, Check, Terminal, X, RefreshCw, Gauge, SquareTerminal, Layers } from 'lucide-react'
 import { TextMessagePartProvider } from '@assistant-ui/react'
 import { errorText } from './api'
-import type { Api, Approval, Attention, ChatData, Choice, Footer, FooterTask, LiveState, Pane } from './api'
+import type { Api, Approval, Attention, ChatData, Choice, Footer, FooterTask, LiveState, Pane, PromptAction } from './api'
 import { useModal, usePolling } from './hooks'
 import { agentNames } from './Sidebar'
 import { Linked, PanelText, PanelPre, CopyButton, Markdown } from './Messages'
 import { Elapsed } from './Notices'
 import { LoginLink } from './LoginLink'
+import './InfoPanel.css'
 
 
 
@@ -16,8 +17,35 @@ import { LoginLink } from './LoginLink'
 
 
 
-export function ChoiceDock({ approval, attention, plan, agent, disabled, onChoose, onKey, onType, onFocusReply }: { plan?: ChatData['plan']; approval: Approval | null; attention: Attention | null; agent: string; disabled: boolean
-  onChoose: (kind: 'approval' | 'menu', option: Choice, approval: Approval | null, feedback?: string) => Promise<void>; onKey: (key: string) => void; onType?: (text: string, loginUrl?: string) => Promise<boolean>; onFocusReply?: () => void }) {
+// A read-only panel such as Codex analytics. Its buttons are the keys its own footer offers, checked by the server before each one.
+// The text stays exactly as the terminal shows it (tables and bars keep their columns); the card scrolls it, the buttons scroll the agent.
+function InfoPanel({ info, disabled, onAction }: { info: Attention; disabled: boolean; onAction?: (action: PromptAction) => Promise<string | null> }) {
+  const [busy, setBusy] = useState('')
+  const [failed, setFailed] = useState('')
+  useEffect(() => { setFailed('') }, [info.revision])
+  const actions = info.actions ?? []
+  const press = async (action: PromptAction) => {
+    if (!onAction || busy) return
+    setBusy(action.id); setFailed('')
+    try { setFailed(await onAction(action) ?? '') } finally { setBusy('') }
+  }
+  const blocked = actions.filter(action => !action.enabled && action.disabledReason)
+  const reasons = [...new Set(blocked.map(action => action.disabledReason!))]
+  return <div className="info-card">
+    <pre className="panel-pre info-body" tabIndex={0} aria-label="Panel text">{(info.body ?? info.text).replace(/\s+$/, '')}</pre>
+    {!!actions.length && <div className="info-actions" role="group" aria-label="Panel keys">
+      {actions.map(action => <button key={action.id} type="button" disabled={disabled || !action.enabled || !onAction || !!busy} aria-busy={busy === action.id || undefined}
+        title={action.enabled ? undefined : action.disabledReason} onClick={() => void press(action)}>
+        <span>{busy === action.id ? 'Sending…' : action.label}</span><kbd>{action.key}</kbd></button>)}
+    </div>}
+    {reasons.map(reason => <p key={reason} className="info-note">{reason}</p>)}
+    {!actions.some(action => action.enabled) && <p className="info-note">This panel has no keys that Tether can send safely. Use the terminal to move in it.</p>}
+    {failed && <p className="info-error" role="alert">{failed}</p>}
+  </div>
+}
+
+export function ChoiceDock({ approval, attention, plan, agent, disabled, onChoose, onKey, onAction, onType, onFocusReply }: { plan?: ChatData['plan']; approval: Approval | null; attention: Attention | null; agent: string; disabled: boolean
+  onChoose: (kind: 'approval' | 'menu', option: Choice, approval: Approval | null, feedback?: string) => Promise<void>; onKey: (key: string) => void; onAction?: (action: PromptAction) => Promise<string | null>; onType?: (text: string, loginUrl?: string) => Promise<boolean>; onFocusReply?: () => void }) {
   const [feedback, setFeedback] = useState('')
   const [code, setCode] = useState('')
   const [sending, setSending] = useState(false)
@@ -27,14 +55,15 @@ export function ChoiceDock({ approval, attention, plan, agent, disabled, onChoos
   const options = (approval ? (approval.actionable ? approval.options : undefined) : attention?.options?.filter(option => option.id <= 9)) ?? []
   const keepPlanning = plan && approval?.actionable ? options.find(option => /^No,?\s+keep planning\b/i.test(option.text)) : undefined
   const panel = !approval && attention?.reason === 'panel'
+  const info = !approval && attention?.reason === 'info' ? attention : undefined
   // An unnumbered list such as Rewind: the arrow keys move the mark, Enter picks, Esc closes it.
   const picker = !approval && attention?.reason === 'picker' && attention.items?.length ? attention : undefined
   // A question taller than the pane: the screen shows only its last rows, so read it from the transcript. The keys answer it.
-  const ask = !approval && !options.length && !panel && !picker ? attention?.ask?.questions : undefined
+  const ask = !approval && !options.length && !panel && !info && !picker ? attention?.ask?.questions : undefined
   // A sign-in screen: its URL wraps over several lines, so the terminal can't open or copy it in one piece.
-  const login = !approval && !options.length && !panel && !picker ? attention?.login : undefined
+  const login = !approval && !options.length && !panel && !info && !picker ? attention?.login : undefined
   const keys = ask?.length === 1 ? Array.from({ length: Math.min(9, ask[0].options.length + 2) }, (_, at) => String(at + 1)) : ['1', '2', '3']
-  const title = plan ? 'Review plan' : login ? `${agent} sign-in` : approval ? `${agent} needs your permission` : panel ? `${agent} panel` : picker ? `${agent} · ${picker.title || 'Choose an item'}` : options.length || ask ? `${agent} asks` : `${agent} is waiting for you`
+  const title = plan ? 'Review plan' : info ? `${agent} · ${info.title || 'panel'}` : login ? `${agent} sign-in` : approval ? `${agent} needs your permission` : panel ? `${agent} panel` : picker ? `${agent} · ${picker.title || 'Choose an item'}` : options.length || ask ? `${agent} asks` : `${agent} is waiting for you`
   const text = approval ? approval.text : attention?.question || attention?.text || ''
   const root = useRef<HTMLElement>(null)
   // The message box of this pane: the desktop workspace can show several.
@@ -48,7 +77,7 @@ export function ChoiceDock({ approval, attention, plan, agent, disabled, onChoos
   return <section ref={root} className={`choice-dock ${plan ? 'plan-review' : ''} open`} aria-label={title}>
     <div className="choice-head"><span className="choice-mark" />{title}</div>
     <>
-      {plan ? <div className="plan-text assistant-message" tabIndex={0} aria-label="Plan"><TextMessagePartProvider text={plan.text}><Markdown /></TextMessagePartProvider></div> : panel ? <PanelPre text={text} /> : picker ? <div className="picker-card">
+      {plan ? <div className="plan-text assistant-message" tabIndex={0} aria-label="Plan"><TextMessagePartProvider text={plan.text}><Markdown /></TextMessagePartProvider></div> : info ? <InfoPanel info={info} disabled={disabled} onAction={onAction} /> : panel ? <PanelPre text={text} /> : picker ? <div className="picker-card">
         {picker.subtitle && <p className="picker-subtitle">{picker.subtitle}</p>}
         <ul className="picker-list" aria-label={picker.title || 'Items'}>
           {!!picker.more_above && <li className="picker-more">↑ {picker.more_above} more</li>}
@@ -76,11 +105,11 @@ export function ChoiceDock({ approval, attention, plan, agent, disabled, onChoos
         <span className="choice-number">{picked === option.id ? '…' : option.id}</span>{option.free
           ? <span><strong>Type your own answer</strong><small>{option.text === 'Type something.' ? 'Write it in the message box below, then send.' : `In the terminal now: “${option.text}”. Your answer from the message box replaces it.`}</small></span>
           : <span><strong>{option.text}</strong>{chat(option) ? <small>Close the question and talk it through in the message box.</small> : option.detail && <small>{option.detail}</small>}</span>}</button>)}</div>}
-      <div className="choice-keys">
+      {info ? <div className="choice-keys">{(info.body ?? text) && <CopyButton text={info.body ?? text} label="Copy panel text" className="copy-chip" />}</div> : <div className="choice-keys">
         {!options.length && !panel && !login && [...(picker ? [] : keys), 'Up', 'Down', 'Enter'].map(key => <button key={key} type="button" disabled={disabled} onClick={() => onKey(key)} aria-label={ask?.length === 1 && /^\d$/.test(key) ? `Choose ${key}: ${ask[0].options[Number(key) - 1]?.label ?? (Number(key) === ask[0].options.length + 1 ? 'Type something' : 'Chat about this')}` : undefined}>{key === 'Up' ? '↑' : key === 'Down' ? '↓' : key}</button>)}
         <button type="button" disabled={disabled} onClick={() => onKey('Escape')}>{options.length || picker ? 'Cancel (Esc)' : 'Close (Esc)'}</button>
         {!options.length && !login && !picker && text && <CopyButton text={text} label="Copy panel text" className="copy-chip" />}
-      </div>
+      </div>}
     </>
   </section>
 }

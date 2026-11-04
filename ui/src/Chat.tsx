@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { ArrowDown, ArrowLeftRight, Blocks, GitFork, Check, ChevronDown, ChevronRight, Clock3, Columns2, CornerDownRight, Gauge, Info, Layers, Maximize2, Menu, MessageSquare, Minimize2, MoreHorizontal, PanelTop, Pencil, Pin, PinOff, RefreshCw, RotateCcw, Rows2, Search, Settings2, ShieldAlert, SquareTerminal, Target, Terminal, WifiOff, X } from 'lucide-react'
 import { AssistantRuntimeProvider, ThreadPrimitive, useExternalStoreRuntime } from '@assistant-ui/react'
 import { ApiError, canFork, creditsLabel, errorText, usageLabel } from './api'
-import type { Api, Approval, ChatData, ChatMessage, Choice, Footer, Pane } from './api'
+import type { Api, Approval, Attention, ChatData, ChatMessage, Choice, Footer, Pane, PromptAction } from './api'
 import { usePolling } from './hooks'
 import type { Anchor } from './hooks'
 import { AgentIcon, PlanUsage, agentNames, chatTitle } from './Sidebar'
@@ -585,6 +585,17 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     setActing(true); setKeysOpen(false)
     try { return await write('key', { session: pane.id, thread: data?.thread ?? null, key, ...(card ? { card: true } : {}) }) } finally { setActing(false) }
   }
+  // A key from a read-only panel's footer: the server resolves the action id, checks the screen again, then sends one key.
+  // A refusal (the panel changed) returns its sentence to show beside the panel; the next poll shows the new panel.
+  async function promptAction(attention: Attention, action: PromptAction) {
+    if (acting) return null
+    setActing(true)
+    try {
+      await api('prompt-action', { session: pane.id, thread: data?.thread ?? null, promptId: attention.promptId, expectedRevision: attention.revision, actionId: action.id, requestId: crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}` })
+      return null
+    } catch (failure) { return errorText(failure) }
+    finally { await refresh(); setActing(false) }
+  }
   // Clears the text in the agent's own input box (for example digits that a card did not take).
   async function clearAgentInput() {
     if (acting) return
@@ -685,7 +696,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     {tools && <Tools api={api} pane={activePane} onClose={() => setTools(false)} onPick={text => { setDraft(text); setTools(false) }} />}
     {data?.login_result && <p className="login-result" role={data.login_result.phase === 'failed' ? 'alert' : 'status'}>{data.login_result.message}</p>}
     <StatusStack priorityKey={data?.approval ? `approval:${(data.approval as Approval).id}` : data?.attention ? `attention:${data.attention.id}` : data?.plan ? `plan:${data.plan.id}` : footer.heads_up ? 'heads' : browserAsk ? `browser-ask:${browserAsk.id}` : ''} chips={(footer.goal || !!footer.tasks?.length || (footer.suggestion && !draft.trim() && state !== 'Working')) ? <>{(footer.goal || !!footer.tasks?.length) ? <div className="live-chips">{footer.goal && <button type="button" className="live-chip" aria-haspopup="dialog" onClick={() => setLiveSheet('goal')}><Target size={14} />Goal active{footer.goal !== 'active' ? ` · ${footer.goal}` : ''}<ChevronRight size={13} /></button>}{footer.tasks?.map(task => <button type="button" key={task} className="live-chip" aria-haspopup="dialog" onClick={() => setLiveSheet('tasks')}><Layers size={14} />{taskLabel(task)}<ChevronRight size={13} /></button>)}</div> : null}{(footer.suggestion && !draft.trim() && state !== 'Working' ? <button type="button" className="prompt-suggestion" title="Use this suggested prompt" onClick={() => setDraft(footer.suggestion ?? '')}><CornerDownRight size={15} /><span>{footer.suggestion}</span></button> : null)}</> : null} items={[
-      { id: 'action', label: data?.plan ? 'Review plan' : data?.approval ? `${agentNames[activePane.agent]} needs permission` : data?.attention?.reason === 'panel' ? `${agentNames[activePane.agent]} panel open` : `${agentNames[activePane.agent]} needs attention`, active: !!(data?.approval || data?.attention || data?.plan), content: <>{data && (data.approval != null || data.attention || data.plan) && <ChoiceDock key={(data.approval as Approval | null)?.id ?? data.attention?.id ?? 'choice'} approval={data.approval as Approval | null} attention={data.attention ?? null} plan={data.plan} agent={agentNames[activePane.agent]} disabled={!writable || acting} onChoose={choose} onKey={key => void sendKey(key)} onType={(text, loginUrl) => write('type', { session: activePane.id, thread: data?.thread ?? null, text, enter: true, ...loginUrl ? { login_url: loginUrl } : {} })} />}</> },
+      { id: 'action', label: data?.plan ? 'Review plan' : data?.approval ? `${agentNames[activePane.agent]} needs permission` : data?.attention?.reason === 'panel' || data?.attention?.reason === 'info' ? `${agentNames[activePane.agent]} panel open` : `${agentNames[activePane.agent]} needs attention`, active: !!(data?.approval || data?.attention || data?.plan), content: <>{data && (data.approval != null || data.attention || data.plan) && <ChoiceDock key={(data.approval as Approval | null)?.id ?? data.attention?.id ?? 'choice'} approval={data.approval as Approval | null} attention={data.attention ?? null} plan={data.plan} agent={agentNames[activePane.agent]} disabled={!writable || acting} onChoose={choose} onKey={key => void sendKey(key)} onAction={action => promptAction(data.attention!, action)} onType={(text, loginUrl) => write('type', { session: activePane.id, thread: data?.thread ?? null, text, enter: true, ...loginUrl ? { login_url: loginUrl } : {} })} />}</> },
       { id: 'heads', label: '✦ Heads up', active: !!footer.heads_up, content: <>{footer.heads_up && <HeadsUp card={footer.heads_up} disabled={!writable || acting} onKey={headsUpKey} onChat={note => { setDraft(note); requestAnimationFrame(() => { const box = panelRef.current?.querySelector<HTMLTextAreaElement>('.composer textarea'); box?.focus(); box?.setSelectionRange(box.value.length, box.value.length) }) }} />}</> },
       { id: 'agents', label: `${background.length} agents running`, active: background.length > 0, content: <>{background.length > 0 && <div className="agents-strip"><ul>{background.map((agent, index) => <li key={index}><strong>{agent.name}</strong><span>{agent.task}</span><small>{agent.detail}</small></li>)}</ul></div>}</> },
       { id: 'queue', label: `${queued.length} queued${queued.some(item => item.failed) ? ' · Not sent' : ''}`, active: queued.length > 0, content: <>      {queued.map(item => item.failed ? <div key={item.id} className="user-message pending-message failed-message"><span>{item.text}</span><small role="alert">{item.offline ? <><WifiOff size={12} />Not sent</> : <span className="failed-reason">Not sent: {item.failed}</span>}

@@ -17,6 +17,7 @@ from codex_provider import PROFILE_NAME
 import login_flow
 import paths
 import window_size
+import prompt_actions
 
 LAUNCHERS = {'codex': 'codex',
              'claude': 'claude',
@@ -244,6 +245,7 @@ def cursor_in_menu(tail, marker):
 # and then its "Esc to cancel" footer is off screen: the tab row at its top still shows it.
 SETTINGS_TABS = re.compile(r'^\s*Settings\s+Status\b')
 INPUT_HINT = re.compile(r'esc Close|↑/↓ Scroll|Enter to (?:select|confirm|continue)|↑/?↓ (?:to )?(?:navigate|select)|enter Select|Esc to cancel|press enter|press any key|'
+                        r'\benter\s+\S+\s*[·•]\s*esc\b|'
                         r'Keyboard:|\(y/n\)|\[y/n\]|\(yes/no\)', re.I)
 
 
@@ -348,7 +350,7 @@ def menu_question(lines):
         index -= 1
     question = re.sub(r'^Question \d+/\d+:\s*', '', ' '.join(above))
     options, ruled = [], False
-    for line in lines[first:]:
+    for index, line in enumerate(lines[first:], first):
         match = re.match(r'^\s*([>❯›]?)\s*(\d+)[.)]\s+(.*\S)', line)
         if match:
             text = match[3].strip()
@@ -360,7 +362,8 @@ def menu_question(lines):
             if text == 'Type something.':
                 options[-1]['free'] = True
             ruled = False
-        elif options and INPUT_HINT.search(line):
+        elif options and (INPUT_HINT.search(line) or re.match(r'^\s*enter\b', line, re.I)
+                          and INPUT_HINT.search(joined_lines(lines[index:index + 3]))):
             break  # the key hint ends the menu; in a narrow pane it wraps, and a named input border follows
         elif options and clean(line) and RULE_LINE.match(line):
             ruled = True
@@ -544,6 +547,8 @@ def attention(entry, screen, working, now=None, login_screen=None):
         found.update(menu_question(menu_lines(lines)) or {})
     elif reason == 'picker':
         found.update(picker)
+    elif reason == 'panel':
+        found['requiresResponse'] = False
     elif link:
         found['login'] = link
     return found
@@ -612,8 +617,9 @@ def waiting_approval(registry, now=None):
 def live_status(entry, run=subprocess.run):
     if not entry.get('owner_pid') or not entry.get('writable'):
         return {'state': 'Unavailable', 'approval': None}
-    screen = capture(entry, run)
-    login_screen = login_capture(entry, screen, run)
+    styled = entry['agent'] == 'codex'
+    screen = capture(entry, run, styled=styled)
+    login_screen = login_capture(entry, prompt_actions.plain(screen), run)
     status = _live_status(entry, run, screen, login_screen=login_screen)
     progress = login_progress(entry, login_screen)
     if progress:
@@ -626,12 +632,15 @@ def live_status(entry, run=subprocess.run):
 
 
 def _live_status(entry, run, screen, login_screen=None):
+    styled_screen = screen
+    screen = prompt_actions.plain(screen)
     if entry['agent'] == 'antigravity':
         capture_notices(entry, screen)
     else:
         capture_quota_notices(entry, screen)
     pending = approval(screen)
     if pending:
+        prompt_actions.ledger.forget(entry['id'])
         if entry['agent'] == 'antigravity':
             pending['text'] = reflow_prompt(pending['text'])
         return {'state': 'Approval', 'approval': {k: v for k, v in pending.items() if not k.startswith('_')}}
@@ -653,8 +662,15 @@ def _live_status(entry, run, screen, login_screen=None):
                 return {'state': 'Approval', 'approval': {'id': None, 'text': screen.strip(), 'actionable': False}}
         except (OSError, ValueError):
             pass
-    needed = attention(entry, screen, working, login_screen=login_screen)
-    if needed and needed['reason'] == 'panel':  # a read-only panel waits on no one: keep the real state, show the panel
+    info = None
+    # Check chrome before any extra tmux call. The action route brackets its
+    # single fresh styled capture with metadata reads under SEND_LOCK.
+    if prompt_actions.panel(entry, styled_screen, ('', '', '', '1', '0', '0', '', '')):
+        info = prompt_actions.ledger.observe(entry, styled_screen, prompt_actions.metadata(entry, run))
+    else:
+        prompt_actions.ledger.forget(entry['id'])
+    needed = info or attention(entry, screen, working, login_screen=login_screen)
+    if needed and needed.get('requiresResponse') is False:  # navigation does not ask for an answer
         return {'state': 'Working' if working else 'Idle', 'approval': None, 'attention': needed}
     if needed:
         return {'state': 'Input needed', 'approval': None, 'attention': needed}

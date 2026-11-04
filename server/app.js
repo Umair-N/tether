@@ -144,10 +144,15 @@ function updateAttention(value) {
   panel.hidden = !value;
   if (!value) { document.querySelector('#attention-error').textContent = ''; return; }
   const atBottom = text.scrollHeight - text.scrollTop - text.clientHeight < 40;
-  text.textContent = value.text;
+  const info = value.reason === 'info';
+  text.textContent = info ? value.body : value.text;
+  panel.setAttribute('aria-label', info ? 'Terminal panel' : 'Terminal needs input');
+  panel.querySelector(':scope > strong').textContent = info ? 'Terminal panel' : 'Terminal needs input';
+  document.querySelector('#attention-type').style.display = info ? 'none' : '';
+  document.querySelector('#attention-keys').style.display = info ? 'none' : '';
   if (wasHidden || atBottom) text.scrollTop = text.scrollHeight;
   // A recognised multiple-choice question reads as a chat card with tappable options; the raw screen stays one tap away.
-  const card = document.querySelector('#attention-card'), choices = value.options?.length > 1;
+  const card = document.querySelector('#attention-card'), choices = !info && value.options?.length > 1;
   panel.classList.toggle('as-card', choices);
   card.hidden = !choices;
   // Show only the keys that mean something for this screen: a card's options replace the arrows and numbers.
