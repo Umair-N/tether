@@ -57,7 +57,8 @@ export interface Choice { id: number; text: string; detail?: string; selected?: 
 export interface Approval { id: string | null; text: string; actionable: boolean; options?: Choice[] }
 export interface AskQuestion { question: string; header: string; multi: boolean; options: { label: string; description: string }[] }
 /** ask: Claude's open question from the transcript, when the pane is too short to show all of it. */
-export interface Attention { id: string; text: string; reason: 'menu' | 'prompt' | 'no-input-box' | 'panel'; question?: string; options?: Choice[]; ask?: { id: string; questions: AskQuestion[] }; login?: { url: string; code: boolean } }
+export interface PickerItem { text: string; selected: boolean }
+export interface Attention { id: string; text: string; reason: 'menu' | 'prompt' | 'no-input-box' | 'panel' | 'picker'; title?: string; subtitle?: string; items?: PickerItem[]; more_above?: number; more_below?: number; hint?: string; question?: string; options?: Choice[]; ask?: { id: string; questions: AskQuestion[] }; login?: { url: string; code: boolean } }
 export interface PastChat { id: string; title: string; dir: string | null; time: string; live: boolean }
 export interface HistoryData { chats: PastChat[] }
 export interface UsageWindow { label: string; percent: number; resets_at: number | null }
