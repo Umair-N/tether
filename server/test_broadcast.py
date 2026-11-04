@@ -149,6 +149,23 @@ class GuardedPathTests(unittest.TestCase):
         self.assertEqual(result['reason'], 'Waits on an approval.')
         self.assertFalse({'load-buffer', 'paste-buffer', 'send-keys'} & set(commands))
 
+    def test_a_small_pane_reports_the_full_reason_without_typing(self):
+        commands = []
+        def run(command, **options):
+            commands.append(command)
+            output = {'capture-pane': 'reply\nmore reply\noutput\nstatus\n',
+                      'display-message': '100\t5\t100\t5\twork\tBugs\tlatest\n',
+                      'list-clients': '/dev/pts/20\t100\t6\t\n'}[command[1]]
+            return SimpleNamespace(stdout=output, returncode=0)
+        entry = pane('%1')
+        reason = terminal_input.small_pane_reason(entry, run)
+        with patch.object(terminal_input, 'verify'), patch.object(terminal_input, 'leave_scrollback'):
+            result = broadcast.send_one('%1', entry, 'hello', lambda entry: {'state': 'Idle'},
+                                        lambda entry, text, state: terminal_input.submit(entry, text, run=run))
+        self.assertEqual(result['result'], 'failed')
+        self.assertEqual(result['reason'], reason)
+        self.assertFalse({'load-buffer', 'paste-buffer', 'send-keys'} & {command[1] for command in commands})
+
 
 class EndpointTests(unittest.TestCase):
     def setUp(self):

@@ -81,7 +81,7 @@ class TmuxNameHookTests(unittest.TestCase):
 
     def test_tethers_own_rename_is_not_imported_again(self):
         tmux_names.install(run=self.run_tmux)
-        for name in ('build', 'cost $5', 'a\\b'):  # tmux stores "$" and "\" escaped, so those never match
+        for name in ('build', 'cost $5', 'a\\b'):  # special names stay tmux-only even when tmux escapes them
             self.tether_names(name)
             self.settle()
             self.assertEqual((self.option('@chat_name'), self.option('@chat_name_at')), (name, '123'))
@@ -95,6 +95,16 @@ class TmuxNameHookTests(unittest.TestCase):
         self.tmux('rename-window', '-t', self.pane, 'shared')
         self.settle()
         self.assertEqual((self.option('@chat_name'), self.option('@chat_name', second)), ('', ''))
+
+    def test_unescaped_dollar_name_is_not_imported(self):
+        # Supply a literal name to exercise newer tmux's unescaped dollar names on older tmux too.
+        self.tether_names('keep this')
+        result = self.run_tmux([paths.TMUX, 'source-file', '-'],
+                               input=tmux_names._command('user $name', []) + '\n',
+                               capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.settle()
+        self.assertEqual((self.option('@chat_name'), self.option('@chat_name_at')), ('keep this', '123'))
 
     def test_session_rename_names_a_pane_alone_in_its_session(self):
         tmux_names.install(run=self.run_tmux)

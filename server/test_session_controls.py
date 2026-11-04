@@ -1454,6 +1454,150 @@ class MenuIsNotADraftTests(unittest.TestCase):
         self.assertEqual(terminal.prompt_draft({'id': '%1', 'agent': 'codex'}, run), ['2 files left'])
 
 
+class SmallPanePromptTests(unittest.TestCase):
+    SCREEN = 'Claude Code\nPrevious reply\nMore output\nStill more output\nStatus\n'
+
+    def run_pane(self, height=5, clients='/dev/pts/20\t100\t6\t\n', screen=None,
+                 window_height=None, sizing='latest'):
+        calls = []
+
+        def run(argv, **kwargs):
+            calls.append(argv)
+            self.assertEqual(kwargs.get('timeout'), 5)
+            command = argv[1]
+            if command == 'capture-pane':
+                out = self.SCREEN if screen is None else screen
+            elif command == 'display-message':
+                out = f'100\t{height}\t100\t{window_height or height}\twork\tBugs\t{sizing}\n'
+            elif command == 'list-clients':
+                self.assertEqual(argv[argv.index('-t') + 1], '=work')
+                out = clients
+            else:
+                self.fail(f'Unexpected tmux command: {argv}')
+            return subprocess.CompletedProcess(argv, 0, stdout=out)
+        return run, calls
+
+    def test_short_claude_pane_names_client_and_fix(self):
+        run, calls = self.run_pane()
+        with self.assertRaises(terminal.PaneTooSmall) as caught:
+            terminal.prompt_draft({'id': '%1', 'agent': 'claude'}, run)
+        text = str(caught.exception)
+        for part in ('Bugs', '100x5', "Claude's input box", '/dev/pts/20', '100x6',
+                     'Make that terminal taller', 'tmux detach-client -t /dev/pts/20'):
+            self.assertIn(part, text)
+        self.assertEqual([argv[1] for argv in calls], ['capture-pane', 'display-message', 'list-clients'])
+
+    def test_short_pane_without_clients_for_each_agent(self):
+        for agent, name in (('codex', 'Codex'), ('antigravity', 'Antigravity')):
+            with self.subTest(agent=agent):
+                run, _ = self.run_pane(clients='')
+                with self.assertRaises(terminal.PaneTooSmall) as caught:
+                    terminal.prompt_draft({'id': '%1', 'agent': agent}, run)
+                self.assertIn(f"{name}'s input box", str(caught.exception))
+                self.assertIn('5 rows', str(caught.exception))
+                self.assertIn('Make it taller', str(caught.exception))
+
+    def test_tall_pane_keeps_generic_error_at_threshold(self):
+        for agent, name in (('claude', 'Claude'), ('codex', 'Codex'), ('antigravity', 'Antigravity')):
+            with self.subTest(agent=agent):
+                run, _ = self.run_pane(height=8)
+                with self.assertRaises(RuntimeError) as caught:
+                    terminal.prompt_draft({'id': '%1', 'agent': agent}, run)
+                self.assertNotIsInstance(caught.exception, terminal.PaneTooSmall)
+                self.assertEqual(str(caught.exception), f'Cannot find the {name} input box on screen. '
+                                 'Open the pane in Terminals to see what it shows.')
+
+    def test_visible_prompt_needs_no_size_query_even_in_a_short_pane(self):
+        for agent, marker in (('claude', '❯'), ('codex', '›'), ('antigravity', '>')):
+            with self.subTest(agent=agent):
+                run, calls = self.run_pane(screen=f'output\n────\n{marker}\n────\nstatus\n')
+                self.assertFalse(any(terminal.prompt_draft({'id': '%1', 'agent': agent}, run)))
+                self.assertEqual([argv[1] for argv in calls], ['capture-pane'])
+
+    def test_ignore_size_clients_are_excluded_and_matching_height_is_preferred(self):
+        clients = ('/dev/pts/1\t20\t2\tcontrol-mode,ignore-size\n'
+                   '/dev/pts/2\t40\t3\t\n/dev/pts/20\t100\t6\t\n')
+        run, _ = self.run_pane(clients=clients)
+        reason = terminal.small_pane_reason({'id': '%1', 'agent': 'claude'}, run)
+        self.assertIn('tmux detach-client -t /dev/pts/20', reason)
+        run, _ = self.run_pane(clients='/dev/pts/1\t20\t2\tcontrol-mode,ignore-size\n')
+        self.assertNotIn('detach-client', terminal.small_pane_reason({'id': '%1', 'agent': 'claude'}, run))
+
+    def test_split_pane_reports_the_pane_and_window_sizes(self):
+        run, _ = self.run_pane(window_height=24, clients='')
+        reason = terminal.small_pane_reason({'id': '%1', 'agent': 'claude'}, run)
+        self.assertIn('100x24', reason)
+        self.assertIn('100x5', reason)
+
+    def test_size_query_errors_fall_back_to_generic_error(self):
+        entry = {'id': '%1', 'agent': 'claude'}
+        for failing_command in ('display-message', 'list-clients'):
+            for failure in (OSError('gone'), subprocess.TimeoutExpired('tmux', 5),
+                            subprocess.CompletedProcess([], 1, stdout=''),
+                            subprocess.CompletedProcess([], 0, stdout='invalid')):
+                with self.subTest(command=failing_command, failure=failure):
+                    good_run, _ = self.run_pane()
+                    def run(argv, **kwargs):
+                        if argv[1] == failing_command:
+                            if isinstance(failure, Exception):
+                                raise failure
+                            return failure
+                        return good_run(argv, **kwargs)
+                    self.assertIsNone(terminal.small_pane_reason(entry, run))
+                    with self.assertRaises(RuntimeError) as caught:
+                        terminal.prompt_draft(entry, run)
+                    self.assertNotIsInstance(caught.exception, terminal.PaneTooSmall)
+
+    def test_guarded_controls_preserve_the_small_pane_error_without_writes(self):
+        entry = {'id': '%1', 'agent': 'claude'}
+        with patch.object(terminal, 'verify'), patch.object(terminal, 'leave_scrollback'):
+            for action in (lambda run: terminal.empty_prompt(entry, run),
+                           lambda run: terminal.card_key(entry, '1', run=run),
+                           lambda run: terminal.clear_draft(entry, run=run),
+                           lambda run: terminal.unqueue(entry, run=run),
+                           lambda run: terminal.submit(entry, 'hello', run=run)):
+                run, _ = self.run_pane()
+                with self.assertRaises(terminal.PaneTooSmall):
+                    action(run)
+
+    def test_pane_that_shrinks_after_enter_preserves_the_small_pane_error(self):
+        entry = {'id': '%1', 'agent': 'claude'}
+        small_run, _ = self.run_pane()
+        commands = []
+        entered = False
+        def run(argv, **kwargs):
+            nonlocal entered
+            commands.append(argv[1])
+            if argv[1] == 'capture-pane' and not entered:
+                return subprocess.CompletedProcess(argv, 0, stdout='reply\n────\n❯\n────\n')
+            if argv[1] == 'send-keys':
+                entered = True
+            if argv[1] in ('load-buffer', 'paste-buffer', 'send-keys', 'delete-buffer'):
+                return subprocess.CompletedProcess(argv, 0, stdout='')
+            return small_run(argv, **kwargs)
+        with patch.object(terminal, 'verify'), patch.object(terminal, 'leave_scrollback'), \
+                patch.object(terminal.time, 'sleep'):
+            with self.assertRaises(terminal.PaneTooSmall):
+                terminal.submit(entry, 'hello', run=run)
+        self.assertEqual(commands.count('send-keys'), 1)
+        self.assertEqual(commands[-1], 'delete-buffer')
+
+    def test_real_tmux_short_pane_on_private_socket(self):
+        with tempfile.TemporaryDirectory(prefix='tsp-') as folder:
+            socket = str(Path(folder) / 'tmux.sock')
+            def run(argv, **kwargs):
+                return subprocess.run([paths.TMUX, '-S', socket, '-f', '/dev/null', *argv[1:]], **kwargs)
+            try:
+                result = run([paths.TMUX, 'new-session', '-d', '-x', '100', '-y', '5', '-s', 'small',
+                              '-n', 'Bugs', '-P', '-F', '#{pane_id}',
+                              "printf 'output without a prompt\\n'; exec sleep 60"],
+                             check=True, capture_output=True, text=True, timeout=5)
+                reason = terminal.small_pane_reason({'id': result.stdout.strip(), 'agent': 'claude'}, run)
+                self.assertIn('100x5', reason)
+            finally:
+                run([paths.TMUX, 'kill-server'], capture_output=True, timeout=5)
+
+
 class AntigravityPromptTests(unittest.TestCase):
     """Antigravity draws a mode hint in its empty input box; that must not count as an unsent draft."""
     ENTRY = {'id': '%1', 'agent': 'antigravity'}

@@ -10,8 +10,8 @@ It skips:
 - Tether's own rename: Tether sets @chat_name before it renames the window (and the session, for a pane rename), so
   the names already match. A session rename in Tether renames first; the hook then writes the same name Tether
   writes right after. The hooks only set pane options and never rename anything, so nothing can ping-pong.
-- Names with "\\" or "$": tmux stores them escaped ("a\\$b"), so they can never match @chat_name, and the hook would
-  write the escaped text. Such names stay tmux-only.
+- Names with "\\" or "$": some tmux versions escape them ("a\\$b"), so they cannot reliably match @chat_name,
+  and the hook could write escaped text. Both characters stay tmux-only on every tmux version.
 
 install() keeps the user's own hooks: it puts Tether's command in its own array slot of each hook (set-hook -g
 hook[N]), finds that slot again by MARK, and uses a free slot the first time."""
@@ -29,7 +29,8 @@ EVERY = 60  # seconds between checks: a restarted tmux server has lost its globa
 def _command(name, required):
     """The hook command for one hook: name is the format of the new name, required the formats that must all be 1."""
     tests = [f'#{{==:{test},1}}' for test in required]
-    tests += [name, f'#{{!=:{name},#{{@chat_name}}}}', f'#{{?#{{m:*\\\\*,{name}}},0,1}}']
+    tests += [name, f'#{{!=:{name},#{{@chat_name}}}}', f'#{{?#{{m:*\\\\*,{name}}},0,1}}',
+              f'#{{?#{{m:*$*,{name}}},0,1}}']
     condition = tests[-1]
     for test in reversed(tests[:-1]):
         condition = f'#{{&&:{test},{condition}}}'
