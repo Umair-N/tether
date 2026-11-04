@@ -15,6 +15,7 @@ from antigravity import process_start, ROOT as AGY_ROOT, CACHE as AGY_CACHE, cap
 from quota_notices import capture as capture_quota_notices
 from codex_provider import PROFILE_NAME
 import paths
+import window_size
 
 LAUNCHERS = {'codex': 'codex',
              'claude': 'claude',
@@ -641,9 +642,9 @@ class PaneTooSmall(RuntimeError):
 
 
 # Claude needs two rules, the prompt and a status line, plus room for wrapped hints
-# and spacing. Eight rows is a diagnostic threshold, never a reason to resize a pane
-# or to reject an input box whose marker is still visible.
+# and spacing. Eight rows is a diagnostic threshold. A visible marker always wins.
 MIN_INPUT_ROWS = 8
+SIZE_FIXING = 'Tether is fixing the terminal size. Send again in a moment.'
 
 
 def small_pane_reason(entry, run=subprocess.run):
@@ -659,41 +660,12 @@ def small_pane_reason(entry, run=subprocess.run):
         pw, ph, ww, wh = map(int, (pw, ph, ww, wh))
         if min(pw, ph, ww, wh) <= 0 or not session or not sizing or ph >= MIN_INPUT_ROWS:
             return None
-        result = run([paths.TMUX, 'list-clients', '-t', '=' + session, '-F',
-                      '#{client_tty}\t#{client_width}\t#{client_height}\t#{client_flags}'],
-                     check=True, capture_output=True, text=True, timeout=5)
-        if result.returncode:
-            return None
-        clients = []
-        for line in result.stdout.splitlines():
-            tty, width, height, flags = line.split('\t')
-            width, height = int(width), int(height)
-            # pane_view and Zoom attach with ignore-size. Control clients cannot
-            # constrain the window either; never suggest detaching those views.
-            if not tty or {'ignore-size', 'control-mode'} & set(flags.split(',')):
-                continue
-            if min(width, height) <= 0:
-                return None
-            clients.append((height, width, tty))
     except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
         return None
-    name = {'claude': 'Claude', 'codex': 'Codex', 'antigravity': 'Antigravity'}[entry['agent']]
-    size = (f'{ww}x{wh} ({wh} rows high)' if (pw, ph) == (ww, wh)
-            else f'{ww}x{wh}; its pane is {pw}x{ph} ({ph} rows high)')
-    reason = f"The {window or session} window is {size}, too short to show {name}'s input box."
-    if not clients or sizing not in ('latest', 'smallest') or ph != wh:
-        return reason + ' Make it taller in Terminals.'
-    # Whole-window ttyd attaches look like any other terminal. Prefer a client
-    # whose height fits the window plus zero, one or two tmux status rows, then
-    # the smallest client. This fallback does not claim to identify its owner.
-    matching = [client for client in clients if wh <= client[0] <= wh + 2]
-    height, width, tty = min(matching or clients)
-    return (reason + f' Another terminal ({tty}, {width}x{height}) is attached '
-            f'and can set the window size (window-size {sizing}). '
-            f'Make that terminal taller, or detach it with: tmux detach-client -t {shlex.quote(tty)}')
+    return SIZE_FIXING
 
 
-def prompt_draft(entry, run=subprocess.run):
+def prompt_draft(entry, run=subprocess.run, *, _size_retry=True):
     screen = capture(entry, run)
     if approval(screen):
         raise RuntimeError('Respond to the pending approval before sending a message.')
@@ -703,8 +675,14 @@ def prompt_draft(entry, run=subprocess.run):
     lines = screen.splitlines()
     prompts = [i for i, line in enumerate(lines) if line.startswith(marker)]
     if not prompts:
+        if not _size_retry:
+            raise PaneTooSmall(SIZE_FIXING)
         reason = small_pane_reason(entry, run)
         if reason:
+            if _size_retry:
+                window_size.apply(run)
+                time.sleep(.1)  # Let the agent redraw its input after SIGWINCH.
+                return prompt_draft(entry, run, _size_retry=False)
             raise PaneTooSmall(reason)
         name = {'claude': 'Claude', 'codex': 'Codex', 'antigravity': 'Antigravity'}[entry['agent']]
         raise RuntimeError(f'Cannot find the {name} input box on screen. '
@@ -910,7 +888,7 @@ def clear_draft(entry, run=subprocess.run):
 QUEUE_HINT = 'Press up to edit queued messages'
 
 
-def unqueue(entry, run=subprocess.run, sleep=time.sleep):
+def unqueue(entry, run=subprocess.run, sleep=time.sleep, *, _size_retry=True):
     """Take back what waits in Claude's queue: Up pulls every queued message into its input (Claude's own "edit queued"),
     then the input is cleared. Returns the text so the page can put it back in its own message box."""
     if entry.get('agent') != 'claude':
@@ -919,8 +897,14 @@ def unqueue(entry, run=subprocess.run, sleep=time.sleep):
     lines = capture(entry, run).splitlines()
     prompts = [line for line in lines if line.startswith('❯')]
     if not prompts:
+        if not _size_retry:
+            raise PaneTooSmall(SIZE_FIXING)
         reason = small_pane_reason(entry, run)
         if reason:
+            if _size_retry:
+                window_size.apply(run)
+                sleep(.1)
+                return unqueue(entry, run, sleep, _size_retry=False)
             raise PaneTooSmall(reason)
     if not prompts or QUEUE_HINT not in prompts[-1]:
         raise RuntimeError('Nothing is queued. Claude may already have taken the message.')

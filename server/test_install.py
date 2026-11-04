@@ -370,6 +370,8 @@ class InstallTests(unittest.TestCase):
         self.assertTrue(self.repo.exists())
         self.assertFalse((self.home / '.config/tether/install.json').exists())
         self.assertFalse(list((self.home / '.config/systemd/user').glob('tether*.service')))
+        self.assertTrue(any(call[:3] == ['tmux', 'show-hooks', '-g']
+                            and call[-1] == 'client-attached' for call in self.calls()))
 
     def test_required_checks_stop_apply_with_numbered_fixes(self):
         (self.bin / 'tmux').unlink()

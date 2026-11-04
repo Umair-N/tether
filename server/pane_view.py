@@ -172,6 +172,7 @@ def zoom_restore(state):
         # The home slot was deleted. Keep the live pane visible in its surviving window, named after its program.
         # No rename-window: Tether's window-renamed hook would copy that name to the pane's chat name.
         command('set-option', '-w', '-t', window, 'automatic-rename', 'on').check_returncode()
+        command('set-option', '-wu', '-t', window, '@tether_zoom').check_returncode()
     else:
         # Never kill a window that still holds the real pane, including after a partial restore.
         if command('display-message', '-p', '-t', window, '#{window_id}').stdout.strip():
@@ -234,6 +235,7 @@ def zoom_enter(pane):
             zoom_save(folder, state)  # IDs are durable before any swap.
             registered = True
             if first:
+                zoom_command(state, 'set-option', '-w', '-t', window, '@tether_zoom', '1').check_returncode()
                 zoom_command(state, 'set-option', '-p', '-t', state['placeholder'], '@zoom_for', pane).check_returncode()
                 zoom_command(state, 'set-option', '-w', '-t', window, 'window-size', 'manual').check_returncode()
                 zoom_command(state, 'swap-pane', '-dZ', '-s', pane, '-t', state['placeholder']).check_returncode()
