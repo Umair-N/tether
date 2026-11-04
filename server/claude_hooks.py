@@ -281,6 +281,11 @@ def overlay(config, result, now=None, screen_read_at=None):
 if __name__ == '__main__':
     try:
         occurred = time.time()
-        capture(json.load(sys.stdin), occurred)
+        data = json.load(sys.stdin)
+        capture(data, occurred)
+        if (isinstance(data, dict) and valid_session(data.get('session_id'))
+                and data.get('hook_event_name') == 'SessionStart' and os.environ.get('TETHER_CDP_URL')):
+            from agent_browser_cli import note
+            print(json.dumps({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': note()}}))
     except Exception:
-        pass  # hooks must never print context or fail Claude Code
+        pass  # hook errors must never print context or fail Claude Code
