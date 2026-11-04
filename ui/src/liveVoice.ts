@@ -10,8 +10,8 @@ export interface VoiceEvents {
   onSpeech?: () => void            // speech began during an armed capture
 }
 
-const PAUSE_MS = 1100   // quiet after speech that ends a phrase
-const MIN_SPEECH_MS = 400
+const PAUSE_MS = 750    // quiet after speech that ends a phrase
+const MIN_SPEECH_MS = 250
 const BARGE_AFTER = 600 // skips the echo of the first word
 const BARGE_TICKS = 8   // 8 × 50 ms of steady sound
 let warnedAboutVAD = false
@@ -74,6 +74,8 @@ export class LiveVoice {
   private fallback = false
   private speechInProgress = false
   private dropSegment = false
+  private holdSegment = false              // speech began while a phrase was converting or sending
+  private held: Float32Array[] = []        // those phrases, sent on the next listen()
   private captureId = 0
   private finishing = false
   private stream: MediaStream | null = null
@@ -205,17 +207,21 @@ export class LiveVoice {
   private speechStart() {
     if (this.fallback || this.closed || this.muted || this.vadSuspended) return
     this.speechInProgress = true
-    this.dropSegment = !this.listening && !this.speaking
+    this.dropSegment = false
+    this.holdSegment = !this.listening && !this.speaking
     if (this.listening) { this.heard = true; this.events.onSpeech?.() }
     else if (this.speaking && performance.now() - this.speakStart > BARGE_AFTER) this.events.onBargeIn()
   }
 
   private speechEnd(audio: Float32Array) {
-    const accepted = this.listening && !this.dropSegment && !this.muted && !this.closed && !this.fallback && !this.vadSuspended
+    const usable = !this.dropSegment && !this.muted && !this.closed && !this.fallback && !this.vadSuspended
+    const hold = usable && !this.listening && this.holdSegment
     this.speechInProgress = false
     this.heard = false
     this.dropSegment = false
-    if (!accepted) return
+    this.holdSegment = false
+    if (hold) { this.held.push(audio); return }
+    if (!usable || !this.listening) return
     this.listening = false
     this.events.onPhrase(wav(audio))
   }
@@ -277,9 +283,20 @@ export class LiveVoice {
     this.heard = this.speechInProgress && !this.dropSegment
     this.finishing = false
     if (this.fallback) this.startRmsCapture(true)
+    if (this.held.length && !this.heard) { this.flushHeld(); return true }
     // A barge-in arms an existing Silero segment, rather than resetting it.
     if (this.heard) this.events.onSpeech?.()
     return true
+  }
+
+  /** Send the phrases heard while the last one was busy, as one clip. */
+  private flushHeld() {
+    const parts = this.held
+    this.held = []
+    const all = new Float32Array(parts.reduce((sum, part) => sum + part.length, 0))
+    parts.reduce((at, part) => { all.set(part, at); return at + part.length }, 0)
+    this.listening = false
+    queueMicrotask(() => { if (!this.muted && !this.closed) this.events.onPhrase(wav(all)) })
   }
 
   private startRmsCapture(accepted: boolean) {
@@ -330,6 +347,7 @@ export class LiveVoice {
   cancelListening() {
     this.captureId++
     this.dropSegment = true
+    this.held = []
     this.listening = false
     this.heard = false
     this.finishing = false

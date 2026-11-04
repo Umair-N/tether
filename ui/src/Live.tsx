@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { AudioLines, Check, ChevronDown, Mic, MicOff, X } from 'lucide-react'
-import { errorText, type Api, type Approval, type ChatData, type Choice, type Pane } from './api'
+import { errorText, SESSION_NAME, type Api, type Approval, type ChatData, type Choice, type Pane, type SessionsData } from './api'
 import type { Command } from './CommandMenu'
 import { agentNames, paneTitle } from './Sidebar'
+import { agentReady, FridayAgent, type AgentChats, type AgentEvent, type ToolHandler } from './fridayAgent'
 import { LiveVoice, sentences } from './liveVoice'
 import { speakable } from './speech'
 import './Live.css'
@@ -13,11 +14,12 @@ import './Live.css'
 export const ASSISTANT = 'Friday'
 
 // Like a phone call: the mic stays open and each pause sends the phrase. 'paused' is the person's own pause button.
-type Phase = 'starting' | 'idle' | 'paused' | 'listening' | 'converting' | 'sending' | 'speaking'
+// 'thinking' is the Friday agent's gap between the end of speech and its voice.
+type Phase = 'starting' | 'idle' | 'paused' | 'listening' | 'converting' | 'thinking' | 'sending' | 'speaking'
 interface Watch { lastId: string | null; since: number; name: string }
 interface Brief { speech: string }
 
-const STATUS: Record<Phase, string> = { starting: 'Starting', idle: 'Tap to talk', paused: 'Paused', listening: 'Listening', converting: 'Converting', sending: 'Sending', speaking: 'Speaking' }
+const STATUS: Record<Phase, string> = { starting: 'Starting', idle: 'Tap to talk', paused: 'Paused', listening: 'Listening', converting: 'Converting', thinking: 'Thinking', sending: 'Sending', speaking: 'Speaking' }
 const PANELS: Record<string, string> = { preview: 'browser', browser: 'browser', terminal: 'terminal', changes: 'changes', diff: 'changes', file: 'files', files: 'files', sidebar: 'sidebar' }
 
 const approvalOf = (pane: Pane) => {
@@ -27,6 +29,15 @@ const approvalOf = (pane: Pane) => {
 const name = (pane: Pane) => `${paneTitle(pane)} · ${agentNames[pane.agent]}`
 const lastReply = (data: ChatData) => [...data.messages].reverse().find(item => item.role === 'assistant' && !item.kind && item.text.trim()) ?? null
 const shortText = (text: string, limit: number) => { const plain = speakable(text); return plain.length > limit ? `${plain.slice(0, limit).replace(/\s+\S*$/, '')}…` : plain }
+const yesOption = (approval: Approval) => approval.options!.find(option => !option.free && !/^no\b/i.test(option.text)) ?? approval.options![0]
+const noOption = (approval: Approval) => { const options = approval.options!; return options.find(option => /^no\b/i.test(option.text)) ?? options[options.length - 1] }
+/** A chat by its spoken name: exact title first, then a part of it, then the agent name. */
+const findPane = (agents: Pane[], wanted: string) => {
+  const name = wanted.toLowerCase().trim().replace(/^the /, '').replace(/ (pane|chat|tab|session)$/, '')
+  return agents.find(pane => paneTitle(pane).toLowerCase() === name) ?? agents.find(pane => paneTitle(pane).toLowerCase().includes(name) || pane.agent === name)
+}
+const chatState = (pane: Pane) => approvalOf(pane) ? 'needs approval' : pane.needs ? `needs ${pane.needs.kind}` : pane.state.toLowerCase()
+const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 export function Live({ api, panes, selected, commands, onClose }: { api: Api; panes: Pane[]; selected?: Pane; commands: Command[]; onClose: () => void }) {
   const agents = panes.filter(pane => pane.agent !== 'shell')
@@ -44,6 +55,8 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
   const [menu, setMenu] = useState(false)
   const [watching, setWatching] = useState(0)
   const voice = useRef<LiveVoice | null>(null)
+  const agent = useRef<FridayAgent | null>(null)  // set when the local Friday worker runs; else `voice` does the old phrase loop
+  const [agentOn, setAgentOn] = useState(false)
   const canvas = useRef<HTMLCanvasElement>(null)
   const talkButton = useRef<HTMLButtonElement>(null)
   const phaseNow = useRef<Phase>('starting')
@@ -58,14 +71,17 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
   // Every step reads the latest panes and commands through `live`, so the voice callbacks never go stale.
   const flow = useRef({
     async say(who: string, text: string) {
-      if (!text.trim() || !voice.current) return
+      if (!text.trim()) return
+      if (agent.current) { setReply({ who, text }); agent.current.say(text); return }
+      if (!voice.current) return
       setReply({ who, text })
       go('speaking')
       const done = await voice.current.speak(sentences(text))
       if (done) flow.current.next()
     },
     /** Speak now, unless the person is talking or a reply is on its way; then after it. */
-    announce(who: string, text: string) {
+    announce(who: string, text: string, news?: Omit<AgentEvent, 'chat' | 'text'>) {
+      if (agent.current) { agent.current.event({ id: news?.id ?? `${who}-${Date.now()}`, kind: news?.kind ?? 'done', priority: news?.priority ?? 'idle', chat: who, text }); return }
       const phase = phaseNow.current
       if (phase === 'listening' && !talking.current) voice.current?.cancelListening()
       else if (phase !== 'idle' && phase !== 'paused') { queue.current.push({ who, text }); return }
@@ -79,6 +95,7 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
     },
     /** Open the mic for the next phrase. The tone marks "your turn" after Friday speaks. */
     listen(tone = false) {
+      if (agent.current) { go(agent.current.muted ? 'paused' : 'listening'); return }
       const engine = voice.current
       talking.current = false
       if (engine?.listening) { go('listening'); return }
@@ -93,7 +110,7 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
     async phrase(audio: Blob) {
       go('converting')
       try {
-        const response = await fetch('/mobile/api/transcribe', { method: 'POST', body: audio, credentials: 'same-origin', signal: AbortSignal.timeout(60000), headers: { 'X-Codex-Mobile': '1', 'X-Recording': `live-${Date.now()}`, 'Content-Type': audio.type } })
+        const response = await fetch('/mobile/api/transcribe', { method: 'POST', body: audio, credentials: 'same-origin', signal: AbortSignal.timeout(60000), headers: { 'X-Codex-Mobile': '1', 'X-Recording': `live-${Date.now()}`, 'X-Live-Phrase': '1', 'Content-Type': audio.type } })
         const data = await response.json().catch(() => ({})) as { text?: string; error?: string }
         if (!response.ok) throw new Error(data.error || 'Voice-to-text failed.')
         const text = (data.text ?? '').trim()
@@ -135,14 +152,18 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
       if (!target) { await flow.current.say(ASSISTANT, 'Pick a chat first.'); return }
       await flow.current.send(target, text)
     },
+    /** Type the words into the pane, then watch it for the reply. */
+    async deliver(pane: Pane, text: string) {
+      const before = await live.current.api<ChatData>(`chat?session=${encodeURIComponent(pane.id)}&limit=4`).catch(() => null)
+      await live.current.api('message', { session: pane.id, thread: before?.thread ?? pane.thread ?? null, message: text })
+      watches.current.set(pane.id, { lastId: before ? lastReply(before)?.id ?? null : null, since: Date.now(), name: paneTitle(pane) })
+      setWatching(watches.current.size)
+    },
     async send(pane: Pane, text: string) {
       go('sending')
       try {
-        const before = await live.current.api<ChatData>(`chat?session=${encodeURIComponent(pane.id)}&limit=4`).catch(() => null)
-        await live.current.api('message', { session: pane.id, thread: before?.thread ?? pane.thread ?? null, message: text })
+        await flow.current.deliver(pane, text)
         voice.current?.cue('sent')
-        watches.current.set(pane.id, { lastId: before ? lastReply(before)?.id ?? null : null, since: Date.now(), name: paneTitle(pane) })
-        setWatching(watches.current.size)
         setReply({ who: name(pane), text: '' })
         flow.current.listenOrWork()
       } catch (failure) {
@@ -151,26 +172,59 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
     },
     /** After a send: keep the floor open for the next command while the agent works. */
     listenOrWork() { flow.current.rest() },
+    async answer(pane: Pane, approval: Approval, option: Choice) {
+      await live.current.api('approval', { session: pane.id, thread: pane.thread ?? null, approval: approval.id, choice: option.id })
+      if (!watches.current.has(pane.id)) watches.current.set(pane.id, { lastId: null, since: Date.now(), name: paneTitle(pane) })
+      setWatching(watches.current.size)
+    },
     async choose(pane: Pane, approval: Approval, option: Choice, spoken: string) {
       go('sending')
       try {
-        await live.current.api('approval', { session: pane.id, thread: pane.thread ?? null, approval: approval.id, choice: option.id })
-        if (!watches.current.has(pane.id)) watches.current.set(pane.id, { lastId: null, since: Date.now(), name: paneTitle(pane) })
-        setWatching(watches.current.size)
+        await flow.current.answer(pane, approval, option)
+        if (agent.current) { agent.current.note(`You ${spoken === 'Approved.' ? 'approved' : 'denied'} the request in ${paneTitle(pane)}.`); flow.current.listen(); return }
         await flow.current.say(ASSISTANT, spoken)
       } catch (failure) { await flow.current.say(ASSISTANT, `That did not go through. ${errorText(failure)}`) }
     },
-    panel(verb: string, kind: string) {
+    /** Show or hide a panel. Returns what happened, in words. */
+    toggle(open: boolean, kind: string) {
       const { commands } = live.current
-      if (!commands.length) { void flow.current.say(ASSISTANT, 'Panels work on the desktop only.'); return }
-      const open = verb === 'open' || verb === 'show'
+      if (!commands.length) return { ok: false, words: 'Panels work on the desktop only.' }
       const label = kind === 'sidebar' ? 'the sidebar' : `the ${kind === 'browser' ? 'browser' : kind}`
       const command = commands.find(item => item.label.toLowerCase().includes(label) && item.label.startsWith(open ? 'Show' : 'Hide'))
       const other = commands.find(item => item.label.toLowerCase().includes(label))
       const spokenName = kind === 'browser' ? 'preview' : kind
-      if (command) { command.run(); void flow.current.say(ASSISTANT, `${open ? 'Opened' : 'Closed'} the ${spokenName}.`) }
-      else if (other) void flow.current.say(ASSISTANT, `The ${spokenName} is already ${open ? 'open' : 'closed'}.`)
-      else void flow.current.say(ASSISTANT, `There is no ${spokenName} panel for this chat.`)
+      if (command) { command.run(); return { ok: true, words: `${open ? 'Opened' : 'Closed'} the ${spokenName}.` } }
+      if (other) return { ok: true, words: `The ${spokenName} is already ${open ? 'open' : 'closed'}.` }
+      return { ok: false, words: `There is no ${spokenName} panel for this chat.` }
+    },
+    panel(verb: string, kind: string) {
+      void flow.current.say(ASSISTANT, flow.current.toggle(verb === 'open' || verb === 'show', kind).words)
+    },
+    /** A new tmux session with an agent in it; the first prompt goes in when the agent is up. */
+    async create(wanted: string, kind: 'claude' | 'codex', prompt: string) {
+      const { api } = live.current
+      const clean = wanted.replace(/[^A-Za-z0-9 _-]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40).replace(/[ ]+$/, '') || `${kind} ${new Date().toTimeString().slice(0, 5).replace(':', '')}`
+      if (!SESSION_NAME.test(clean)) throw new Error('Use letters, numbers, spaces or hyphens for the chat name.')
+      const made = await api<{ session: string; name: string }>('tmux-sessions', { name: clean })
+      let pane: Pane | undefined
+      for (let tries = 0; tries < 20 && !pane; tries++) {
+        pane = (await api<SessionsData>('sessions')).sessions.find(item => item.label === made.name)
+        if (!pane) await wait(300)
+      }
+      if (!pane) throw new Error(`The session ${made.name} started, but its pane is not visible yet.`)
+      await api('start', { session: pane.id, thread: null, agent: kind })
+      const id = pane.id
+      if (prompt.trim()) void (async () => {
+        // The agent takes a few seconds to start; type the prompt once the pane shows it.
+        for (let tries = 0; tries < 40; tries++) {
+          await wait(750)
+          const ready = (await api<SessionsData>('sessions').catch(() => null))?.sessions.find(item => item.id === id && item.agent === kind)
+          if (ready) { await flow.current.deliver(ready, prompt).catch(failure => flow.current.announce(ASSISTANT, `The prompt did not reach ${made.name}. ${errorText(failure)}`, { id: `new-${id}`, kind: 'error', priority: 'idle' })); return }
+        }
+        flow.current.announce(ASSISTANT, `${made.name} did not start in time, so the prompt was not sent.`, { id: `new-${id}`, kind: 'error', priority: 'idle' })
+      })()
+      setTargetId(id)
+      return made.name
     },
     async brief() {
       const { agents } = live.current
@@ -184,22 +238,114 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
     },
   })
 
-  // Start: mic, screen lock, a short briefing, then listen.
+  // The tools Friday's brain calls. They run here, with the page's own sign-in, and reply in short facts.
+  const tools = useRef<Record<string, ToolHandler>>({
+    list_chats: async () => ({ ...chats() }),
+    send_to_chat: async ({ chat, prompt }) => {
+      const pane = findPane(live.current.agents, String(chat ?? '')) ?? (chat ? undefined : live.current.target)
+      if (!pane) return { error: `No chat called ${chat}.` }
+      if (!String(prompt ?? '').trim()) return { error: 'The prompt is empty.' }
+      await flow.current.deliver(pane, String(prompt))
+      return { ok: true, chat: paneTitle(pane) }
+    },
+    answer_approval: async ({ chat, decision }) => {
+      const pane = findPane(live.current.agents, String(chat ?? '')) ?? live.current.approvalPane
+      const approval = pane && approvalOf(pane)
+      if (!pane || !approval) return { error: 'No chat is waiting for approval.' }
+      await flow.current.answer(pane, approval, decision === 'approve' ? yesOption(approval) : noOption(approval))
+      return { ok: true, chat: paneTitle(pane), decision: decision === 'approve' ? 'approve' : 'deny' }
+    },
+    read_last_reply: async ({ chat }) => {
+      const pane = findPane(live.current.agents, String(chat ?? '')) ?? live.current.target
+      if (!pane) return { error: `No chat called ${chat}.` }
+      const data = await live.current.api<ChatData>(`chat?session=${encodeURIComponent(pane.id)}&limit=6`)
+      const message = lastReply(data)
+      return { chat: paneTitle(pane), text: message ? shortText(message.text, 1500) : 'No reply yet.' }
+    },
+    new_chat: async ({ name: wanted, agent: kind, prompt }) => {
+      const made = await flow.current.create(String(wanted ?? ''), kind === 'codex' ? 'codex' : 'claude', String(prompt ?? ''))
+      return { ok: true, chat: made }
+    },
+    switch_chat: async ({ chat }) => {
+      const pane = findPane(live.current.agents, String(chat ?? ''))
+      if (!pane) return { error: `No chat called ${chat}.` }
+      setTargetId(pane.id)
+      return { ok: true, chat: paneTitle(pane) }
+    },
+    open_panel: async ({ panel, open }) => {
+      const kind = PANELS[String(panel ?? '').toLowerCase()]
+      if (!kind) return { error: `No panel called ${panel}.` }
+      const done = flow.current.toggle(open !== false, kind)
+      return done.ok ? { ok: true } : { error: done.words }
+    },
+  })
+  /** The chats as Friday sees them: name, agent, state, and what each needs from you. */
+  function chats(): AgentChats {
+    const { agents, target } = live.current
+    return { chats: agents.map(pane => ({ name: paneTitle(pane), agent: agentNames[pane.agent], state: chatState(pane), needs: pane.needs?.text ?? (approvalOf(pane) ? shortText(approvalOf(pane)!.text, 140) : '') })), target: target ? paneTitle(target) : '' }
+  }
+
+  // Start: the Friday agent when its worker runs, else the phrase loop. Then a short briefing.
   useEffect(() => {
-    const engine = new LiveVoice({
+    let gone = false
+    const blocked = (failure: unknown) => failure instanceof DOMException && failure.name === 'NotAllowedError'
+    const classic = () => {
+      const engine = new LiveVoice({
       onPhrase: audio => { talking.current = false; void flow.current.phrase(audio) },
       onSpeech: () => { talking.current = true },
       onBargeIn: () => { engine.stopSpeaking(); flow.current.listen() },
-    })
-    voice.current = engine
-    let gone = false
-    engine.open().then(() => { if (!gone) void flow.current.brief() }, failure => {
+      })
+      voice.current = engine
+      engine.open().then(() => { if (!gone) void flow.current.brief() }, failure => {
+        if (gone) return
+        setProblem(blocked(failure) ? 'The microphone is blocked. Allow it in the browser, then start Live mode again.' : errorText(failure))
+        go('idle')
+      })
+    }
+    void agentReady().then(async ready => {
       if (gone) return
-      setProblem(failure instanceof DOMException && failure.name === 'NotAllowedError' ? 'The microphone is blocked. Allow it in the browser, then start Live mode again.' : errorText(failure))
-      go('idle')
+      if (!ready) { classic(); return }
+      const friday = new FridayAgent({
+        tools: tools.current,
+        onTurn: turn => {
+          if (turn === 'listening') flow.current.listen()
+          else go(turn)
+        },
+        onUserText: (text, final) => { if (final) { setSaid(text); setProblem('') } },
+        onBotText: text => setReply({ who: ASSISTANT, text }),
+        onMetrics: metrics => console.debug('Friday turn', metrics),
+        onClosed: reason => {
+          if (gone || agent.current !== friday) return
+          agent.current = null
+          setAgentOn(false)
+          friday.close()
+          setProblem(`${reason} Using the basic voice instead.`)
+          classic()
+        },
+      })
+      agent.current = friday
+      setAgentOn(true)
+      try {
+        await friday.open()
+        if (gone) return
+        friday.state(chats())
+        go('listening')
+        void flow.current.brief()
+      } catch (failure) {
+        if (gone || agent.current !== friday) return  // onClosed already fell back
+        agent.current = null
+        setAgentOn(false)
+        friday.close()
+        if (blocked(failure)) { setProblem('The microphone is blocked. Allow it in the browser, then start Live mode again.'); go('idle'); return }
+        classic()
+      }
     })
-    return () => { gone = true; engine.close(); voice.current = null }
+    return () => { gone = true; agent.current?.close(); agent.current = null; voice.current?.close(); voice.current = null }
   }, [])
+
+  // Friday hears the chat list whenever it changes, so it can answer "what's running" from facts.
+  const chatsKey = JSON.stringify([agents.map(pane => [pane.id, paneTitle(pane), pane.state, approvalOf(pane)?.id, pane.needs?.text]), target?.id])
+  useEffect(() => { if (agentOn) agent.current?.state(chats()) }, [agentOn, chatsKey])
 
   // Keep the screen on. The browser drops the lock when the page hides, so ask again when it shows.
   useEffect(() => {
@@ -226,7 +372,8 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
       if (announced.current.has(item.id!)) continue
       announced.current.add(item.id!)
       if (phaseNow.current === 'starting') continue  // the briefing covers it
-      flow.current.announce(ASSISTANT, `${paneTitle(pane)} needs your OK: ${shortText(item.text, 140)} Say approve or deny.`)
+      if (agent.current) flow.current.announce(paneTitle(pane), shortText(item.text, 200), { id: item.id!, kind: 'approval', priority: 'now' })
+      else flow.current.announce(ASSISTANT, `${paneTitle(pane)} needs your OK: ${shortText(item.text, 140)} Say approve or deny.`)
     }
   })
 
@@ -243,6 +390,8 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
           if (!done || !message || message.id === watch.lastId || data.approval) return
           watches.current.delete(id)
           setWatching(watches.current.size)
+          // Friday's own brain shortens the reply; the old loop asks the server for a summary.
+          if (agent.current) { flow.current.announce(watch.name, shortText(message.text, 600), { id: message.id, kind: 'done', priority: 'idle' }); return }
           const result = await api<{ summary: string }>('live/summary', { text: message.text, pane: watch.name }).catch(() => null)
           const summary = result?.summary || sentences(message.text).slice(0, 2).join(' ')
           flow.current.announce(watch.name, summary)
@@ -311,11 +460,11 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
     const draw = (now: number) => {
       const t = now / 1000
       const state = phaseNow.current
-      const level = voice.current?.level() ?? 0
+      const level = agent.current?.level() ?? voice.current?.level() ?? 0
       let wanted = 0.06
       if (state === 'listening') wanted = Math.max(0.12, level)
       else if (state === 'speaking') wanted = Math.max(0.15, level)
-      else if (state === 'converting' || state === 'sending') wanted = 0.22
+      else if (state === 'converting' || state === 'thinking' || state === 'sending') wanted = 0.22
       else if (state === 'paused') wanted = 0.02
       if (state === 'listening' && watches.current.size) wanted = Math.max(wanted, 0.1 + 0.04 * Math.sin(t * 2))
       smooth += (wanted - smooth) * (reduced ? 1 : 0.18)
@@ -346,7 +495,7 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
       blob(cx, cy, r * 0.95, tt * 1.15, amp, 2.1, two, 0.45)
       blob(cx, cy, r * 0.8, tt * 0.9, amp * 0.8, 4.2, color.light ? two : [255, 244, 232], 0.3)
       if (color.light) blob(cx - r * 0.12, cy - r * 0.15, r * 0.45, tt * 1.3, amp * 0.6, 5.3, [255, 255, 255], 0.55)
-      if ((state === 'converting' || state === 'sending') && !reduced) {
+      if ((state === 'converting' || state === 'thinking' || state === 'sending') && !reduced) {
         context.lineWidth = Math.max(2, width / 260)
         context.strokeStyle = `rgba(${one.join(',')},0.8)`
         context.lineCap = 'round'
@@ -360,6 +509,7 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
   }, [])
 
   function talk() {
+    if (agent.current) { if (phase !== 'starting') togglePause(); return }  // Friday hears all the time; the button pauses it
     const engine = voice.current
     if (!engine || phase === 'starting') return
     if (phase === 'speaking') { engine.stopSpeaking(); flow.current.listen(); return }
@@ -369,6 +519,8 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
   }
   /** Pause: the mic stops; Friday still reads replies and approvals. Resume: listen again. */
   function togglePause() {
+    const friday = agent.current
+    if (friday) { friday.muted = !muted; setMuted(friday.muted); go(friday.muted ? 'paused' : 'listening'); return }
     const engine = voice.current
     if (!engine) return
     engine.muted = !muted
@@ -378,8 +530,7 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
   }
   function tapApproval(yes: boolean) {
     if (!approval || !approvalPane) return
-    const options = approval.options!
-    const option = yes ? options.find(item => !item.free && !/^no\b/i.test(item.text)) ?? options[0] : options.find(item => /^no\b/i.test(item.text)) ?? options[options.length - 1]
+    const option = yes ? yesOption(approval) : noOption(approval)
     voice.current?.stopSpeaking()
     void flow.current.choose(approvalPane, approval, option, yes ? 'Approved.' : 'Denied.')
   }
@@ -397,7 +548,7 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
 
   const working = agents.filter(pane => pane.state === 'Working').length
   const status = STATUS[phase]
-  const talkLabel = phase === 'speaking' ? 'Interrupt' : phase === 'listening' ? 'Send now' : phase === 'paused' ? 'Resume' : 'Talk'
+  const talkLabel = agentOn ? (muted ? 'Resume' : 'Pause') : phase === 'speaking' ? 'Interrupt' : phase === 'listening' ? 'Send now' : phase === 'paused' ? 'Resume' : 'Talk'
   const picker = agents.map(pane => <button key={pane.id} type="button" role="menuitemradio" aria-checked={pane.id === targetId} className="live-pane" data-state={approvalOf(pane) ? 'asking' : pane.state === 'Working' ? 'working' : 'idle'} onClick={() => { setTargetId(pane.id); setMenu(false) }}>
     <i aria-hidden="true" /><span><b>{paneTitle(pane)}</b><small>{agentNames[pane.agent]}{approvalOf(pane) ? ' · needs your OK' : pane.state === 'Working' ? ' · working' : ''}</small></span><Check size={15} className="live-check" aria-hidden="true" />
   </button>)
@@ -406,7 +557,7 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
     <aside className="live-rail" aria-label="Commands go to">
       <h2>Commands go to</h2>
       <div role="menu" aria-label="Send voice commands to">{picker}</div>
-      <p className="live-note">Just talk: each pause sends what you said. Say “switch to” and a chat name to change it, or “what's running” for a briefing.</p>
+      <p className="live-note">{agentOn ? 'Just talk. Friday sends your requests to the chats, answers questions, and tells you when a chat finishes or needs you.' : 'Just talk: each pause sends what you said. Say “switch to” and a chat name to change it, or “what\'s running” for a briefing.'}</p>
     </aside>
     <section className="live-stage">
       <div className="live-aurora" aria-hidden="true" />
@@ -441,8 +592,8 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
       </div>}
 
       <div className="live-controls">
-        <div className="live-ctl"><button type="button" className="live-round" aria-pressed={muted} aria-label={muted ? 'Resume listening' : 'Pause listening'} onClick={togglePause}>{muted ? <MicOff size={22} /> : <Mic size={22} />}</button><span>{muted ? 'Paused' : 'Pause'}</span></div>
-        <div className="live-ctl live-talk" data-on={phase === 'listening'}><button ref={talkButton} type="button" className="live-round" aria-label={talkLabel} onClick={talk} disabled={phase === 'starting'}><AudioLines size={28} /></button><span>{talkLabel} <kbd>Space</kbd></span></div>
+        {!agentOn && <div className="live-ctl"><button type="button" className="live-round" aria-pressed={muted} aria-label={muted ? 'Resume listening' : 'Pause listening'} onClick={togglePause}>{muted ? <MicOff size={22} /> : <Mic size={22} />}</button><span>{muted ? 'Paused' : 'Pause'}</span></div>}
+        <div className="live-ctl live-talk" data-on={phase === 'listening'}><button ref={talkButton} type="button" className="live-round" aria-label={talkLabel} onClick={talk} disabled={phase === 'starting'} aria-pressed={agentOn ? muted : undefined}>{agentOn && muted ? <MicOff size={28} /> : <AudioLines size={28} />}</button><span>{talkLabel} <kbd>Space</kbd></span></div>
         <div className="live-ctl live-end"><button type="button" className="live-round" aria-label="End Live mode" onClick={onClose}><X size={22} /></button><span>End <kbd>Esc</kbd></span></div>
       </div>
     </section>
