@@ -712,6 +712,15 @@ button.live-chip:active { background: var(--line); }
 .choice-options strong { font-weight: 500; overflow-wrap: anywhere; }
 .choice-options small { color: var(--muted); font-size: 12.5px; line-height: 1.4; }
 .choice-number { flex: none; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; background: var(--hover); color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.picker-card { margin: 0 16px 10px; }
+.picker-subtitle { margin: 0 0 8px; color: var(--muted); font-size: 13px; line-height: 1.4; }
+.picker-list { max-height: 34vh; overflow: auto; margin: 0; padding: 0; list-style: none; border: 1px solid var(--line); border-radius: 10px; }
+.picker-list li { padding: 9px 12px; border-bottom: 1px solid var(--line); color: var(--text); font-size: 14px; line-height: 1.4; overflow-wrap: anywhere; }
+.picker-list li:last-child { border-bottom: 0; }
+.picker-list li.current { background: var(--hover); box-shadow: inset 3px 0 0 var(--accent); font-weight: 500; }
+.picker-list li.picker-more { color: var(--muted); font-size: 12.5px; }
+.status-content .picker-list { max-height: none; overflow: visible; }
+.picker-card .ask-hint { margin-top: 8px; }
 .choice-keys { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 16px 12px; }
 .choice-keys button { min-width: 44px; min-height: 36px; padding: 0 12px; border: 1px solid var(--line); border-radius: 18px; background: none; color: var(--muted); font-size: 13px; }
 
