@@ -3,9 +3,10 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { Inbox as InboxIcon, X } from 'lucide-react'
 import { ApiError, errorText } from './api'
 import type { Api, Approval, Choice, Pane } from './api'
-import { AgentIcon, agentNames, paneTitle } from './Sidebar'
+import { AgentIcon, agentNames, paneTitle, shownIndex } from './Sidebar'
 import type { Session } from './Sidebar'
 import { KIND_LABEL, MOD, age } from './needs'
+import { changeAgentBrowser, watchTab } from './AgentBrowser'
 import type { InboxItem } from './needs'
 
 // Desktop "Needs you" list: every pane, in every session, that waits on you. Newest first.
@@ -13,8 +14,10 @@ import type { InboxItem } from './needs'
 
 const rowTitle = (pane: Pane, sessions: Session[]) => {
   const session = sessions.find(item => item.id === pane.tmux_session)
-  if (!session) return paneTitle(pane)
-  return session.panes.length > 1 ? `${session.name} · ${paneTitle(pane)}` : session.name
+  // The same pane name as the sidebar: an unnamed pane gets its number, "Shell 0.2".
+  const name = [paneTitle(pane), shownIndex(pane)].filter(Boolean).join(' ')
+  if (!session) return name
+  return session.panes.length > 1 ? `${session.name} · ${name}` : session.name
 }
 
 interface InboxProps {
@@ -131,7 +134,7 @@ export function Inbox({ api, items, sessions, selected, open, onToggle, onOpen, 
         const { pane } = item
         const title = rowTitle(pane, sessions)
         const waiting = busy === pane.id
-        return <li key={pane.id} data-pane={pane.id} className={`inbox-row ${item.kind}`} aria-current={pane.id === selected ? 'true' : undefined} onKeyDown={event => onRowKey(event, item)}>
+        return <li key={`${pane.id}:${item.kind}`} data-pane={pane.id} className={`inbox-row ${item.kind}`} aria-current={pane.id === selected ? 'true' : undefined} onKeyDown={event => onRowKey(event, item)}>
           <button type="button" className="inbox-open" onClick={() => onOpen(pane)}
             aria-label={`${KIND_LABEL[item.kind]}: ${title}, ${agentNames[pane.agent]}. ${item.text}. ${age(item.at, now)}.`}>
             <span className="inbox-kind"><span className="inbox-dot" aria-hidden="true" />{KIND_LABEL[item.kind]}<span className="inbox-age">{age(item.at, now)}</span></span>
@@ -139,6 +142,11 @@ export function Inbox({ api, items, sessions, selected, open, onToggle, onOpen, 
             <span className="inbox-meta"><AgentIcon agent={pane.agent} icon={pane.pane_icon} size={13} />{agentNames[pane.agent]}</span>
             {item.text && <span className="inbox-text" title={item.text}>{item.text}</span>}
           </button>
+          {item.kind === 'browser' && <div className="inbox-actions" role="group" aria-label={`Answer ${title}`}>
+            {item.tab && <button type="button" className="inbox-yes" onClick={() => watchTab(item.tab!, pane.id)}>Open the page</button>}
+            <button type="button" onClick={() => void changeAgentBrowser(api, 'browser/ask/dismiss', { id: item.ask })
+              .catch(error => setErrors(current => ({ ...current, [pane.id]: errorText(error) })))}>Done</button>
+          </div>}
           {(item.yes || item.no || item.menu) && <div className="inbox-actions" role="group" aria-label={`Answer ${title}`}>
             {item.yes && <button type="button" className="inbox-yes" disabled={waiting} title={item.yes.text} onClick={() => void answer(item, item.yes!)}>Yes <kbd>Y</kbd></button>}
             {item.no && <button type="button" disabled={waiting} title={item.no.text} onClick={() => void answer(item, item.no!)}>No <kbd>N</kbd></button>}

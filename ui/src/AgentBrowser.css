@@ -1,0 +1,34 @@
+/* Agent browser: the chat card, the owner line in the Browser panel, and the phone sheet. */
+.agent-browser-card { display: flex; flex-direction: column; gap: 8px; margin: 0 18px 8px; }
+.agent-browser-ask { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: start; padding: 10px 12px; border: 1px solid var(--attention); border-radius: 12px; background: var(--surface); }
+.agent-browser-ask > svg { color: var(--attention); margin-top: 2px; }
+.agent-browser-ask p { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+.agent-browser-actions { grid-column: 2; display: flex; flex-wrap: wrap; gap: 8px; }
+.agent-browser-tabs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.agent-browser-tabs li { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.agent-browser-tabs li > svg { color: var(--muted); flex: none; }
+.agent-browser-tabs span { flex: 1; min-width: 0; display: flex; flex-direction: column; font-size: 14px; }
+.agent-browser-tabs :is(strong, small) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-browser-tabs small { color: var(--muted); font-size: 12px; }
+
+.browser-agent { display: flex; align-items: center; gap: 6px; margin: -2px 10px 6px; font-size: 12px; color: var(--muted); }
+.browser-agent > svg { flex: none; color: var(--accent); }
+.browser-agent > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browser-agent .browser-text-button { min-height: 28px; padding: 0 8px; font-size: 12px; }
+
+.browser-sheet[open] { position: fixed; inset: 0; width: 100%; height: 100dvh; max-width: none; max-height: none; margin: 0; border: 0; display: flex; flex-direction: column;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); background: var(--bg); color: var(--text); }
+.browser-sheet-head { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 0 12px 0 4px; border-bottom: 1px solid var(--line); }
+.browser-sheet > .browser-panel { flex: 1; min-height: 0; }
+
+/* "Needs you" list row for a browser ask (Inbox.tsx). */
+.inbox-row.browser { border-color: color-mix(in srgb, var(--attention) 55%, var(--line)); }
+
+/* Phone tab bar: the Browser tab and its dot (PhoneTabs.tsx). */
+.phone-tab-icon { position: relative; display: inline-flex; }
+.phone-tab-dot { position: absolute; top: -2px; right: -4px; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); box-shadow: 0 0 0 2px var(--sidebar); }
+.phone-tab-dot.asking { background: var(--attention); }
+
+/* Settings › Shared browser: one row per agent tool. */
+.agent-browser-setup button { flex: none; }
+.agent-browser-stale { color: var(--attention); }

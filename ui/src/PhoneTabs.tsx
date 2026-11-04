@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { AudioLines, Folder, MessageCircle, SquareTerminal } from 'lucide-react'
+import { AudioLines, Folder, Globe, MessageCircle, SquareTerminal } from 'lucide-react'
 import { ASSISTANT } from './Live'
 import type { Screen } from './Rail'
 import { toggleButton } from './phoneScreen'
@@ -14,7 +14,10 @@ const TABS: { id: Screen; label: string; icon: typeof Folder }[] = [
   { id: 'terminals', label: 'Terminals', icon: SquareTerminal },
 ]
 
-export function PhoneTabs({ screen, onScreen, setScreen, terminals, onLive }: { screen: Screen; onScreen: (screen: Screen) => void; setScreen: (screen: Screen) => void; terminals: boolean; onLive?: () => void }) {
+/** browser: opens the shared browser full screen. busy = an agent has tabs open, asking = an agent needs the person there. */
+export interface PhoneBrowser { onOpen: () => void; busy: boolean; asking: boolean }
+
+export function PhoneTabs({ screen, onScreen, setScreen, terminals, onLive, browser }: { screen: Screen; onScreen: (screen: Screen) => void; setScreen: (screen: Screen) => void; terminals: boolean; onLive?: () => void; browser?: PhoneBrowser }) {
   // The chat header has its own terminal button, and each pane keeps its own view. Keep the tab in step with what shows.
   useEffect(() => {
     if (screen === 'files') return
@@ -32,6 +35,11 @@ export function PhoneTabs({ screen, onScreen, setScreen, terminals, onLive }: { 
   return <nav className="phone-tabbar" aria-label="Tether">
     {TABS.map(({ id, label, icon: Icon }) => <button key={id} type="button" aria-current={screen === id ? 'page' : undefined}
       disabled={id === 'terminals' && !terminals} onClick={() => onScreen(id)}><Icon size={22} aria-hidden="true" /><span>{label}</span></button>)}
+    {browser && <button type="button" className="phone-tab-browser" onClick={browser.onOpen}
+      aria-label={browser.asking ? 'Browser, an agent needs you' : browser.busy ? 'Browser, agents are using it' : 'Browser'}>
+      <span className="phone-tab-icon"><Globe size={22} aria-hidden="true" />{(browser.busy || browser.asking) && <span className={`phone-tab-dot${browser.asking ? ' asking' : ''}`} aria-hidden="true" />}</span>
+      <span>Browser</span>
+    </button>}
     {onLive && <button type="button" onClick={onLive}><AudioLines size={22} aria-hidden="true" /><span>{ASSISTANT}</span></button>}
   </nav>
 }
