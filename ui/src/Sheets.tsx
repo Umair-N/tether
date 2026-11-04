@@ -15,6 +15,7 @@ import type { Keep, ProjectMarks } from './Project'
 import { SCHEMES, schemeById } from './schemes'
 import { HostResources } from './HostResources'
 import { GlobalCodexLevel } from './CodexLevel'
+import { AgentBrowserSettings } from './AgentBrowser'
 
 type PaneLevel = 'all' | 'important' | 'urgent' | 'off'
 type Delivery = 'sound' | 'silent' | 'off'
@@ -411,6 +412,7 @@ function SystemSettings({ api, onReload }: { api: Api; onReload: () => void }) {
       <div className="switch-row"><span><strong>Updates</strong><small>{status ? `Version ${status.current} · ${status.mode === 'off' ? 'Checks off' : status.checking ? 'Checking…' : status.available ? `${status.latest} available` : status.latest ? 'Up to date' : 'No release data'}` : 'Loading…'}</small></span>{status?.available && status.url.startsWith('https://') && <a className="secondary" href={status.url} target="_blank" rel="noreferrer">Release notes</a>}</div>
       <div className="switch-row"><span><strong>Reload Tether</strong><small>Unsent drafts stay.</small></span><button type="button" className="secondary" onClick={onReload}>Reload</button></div>
     </section>
+    <AgentBrowserSettings api={api} />
   </>
 }
 

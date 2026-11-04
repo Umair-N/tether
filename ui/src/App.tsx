@@ -6,7 +6,7 @@ import { useModal, usePolling } from './hooks'
 import type { Anchor } from './hooks'
 import { usePrefs } from './prefs'
 import { applyScheme } from './schemes'
-import { PlanUsage, Sidebar, groupSessions, isArchived, isDone, needsYou, paneTitle, runningPanes, sortByPrefs, toggleArchive } from './Sidebar'
+import { PlanUsage, Sidebar, groupSessions, isArchived, isDone, needsYou, paneTitle, runningPanes, shownIndex, sortByPrefs, toggleArchive } from './Sidebar'
 import type { Session } from './Sidebar'
 import { PaneActions, ResumeChat, SessionActions, Settings } from './Sheets'
 import type { Place } from './Sheets'
@@ -37,6 +37,7 @@ import type { FilesTarget } from './Explorer'
 import { ExplorerPhone } from './ExplorerPhone'
 import { PhoneTabs } from './PhoneTabs'
 import { ASSISTANT, Live } from './Live'
+import { BrowserSheet, WATCH_EVENT, browserAsks, setPaneLabels, useAgentBrowser, watchTab } from './AgentBrowser'
 import { AgentBubble } from './AgentBubble'
 import { SidePins } from './SidePins'
 import { AgentsPage } from './AgentsView'
@@ -70,6 +71,8 @@ function App() {
   const [project, setProject] = useState<{ session: string; pin?: string } | null>(null)
   const [planSheet, setPlanSheet] = useState(false)
   const [liveMode, setLive] = useState(false)
+  // Phone (or no workspace): "Watch" on an agent's browser card opens the browser full screen.
+  const [browserSheet, setBrowserSheet] = useState(false)
   // Desktop workspace: the ⌘K command menu or the ? shortcuts sheet.
   const [menu, setMenu] = useState<'commands' | 'shortcuts' | null>(null)
   // Home-screen shortcuts open /chat/?go=attention|new|usage (manifest.webmanifest).
@@ -157,7 +160,9 @@ function App() {
   const multi = slotPanes.length > 1
   // Desktop "Needs you" list (Inbox.tsx). Its show/hide switch is the shared layout.desktop.inbox pref.
   const desktop = !!view
-  const inbox = useMemo(() => desktop ? inboxItems(panes, prefs.seen, pane?.id) : [], [desktop, panes, prefs.seen, pane?.id])
+  const agentBrowser = useAgentBrowser(api)
+  const asks = useMemo(() => browserAsks(agentBrowser), [agentBrowser])
+  const inbox = useMemo(() => desktop ? inboxItems(panes, prefs.seen, pane?.id, asks) : [], [desktop, panes, prefs.seen, pane?.id, asks])
   const stacked = !!desk.stack && slotPanes.length === 2
   // Keep the stored slots in step with what shows, so focus moves and pane picks survive a reload.
   const slotKey = view ? `${view.slots.join(',')}|${view.focus}` : ''
@@ -177,6 +182,19 @@ function App() {
   const setDesk = (patch: Partial<DesktopLayout>) => update(current => ({ layout: withDesk(current.layout, deskKey, { ...deskFor(current.layout, deskKey), ...patch }) }))
   // The panel column beside the slots (PanelColumn.tsx), saved with this session's layout.
   const setPanels: SetPanels = change => update(current => { const stored = deskFor(current.layout, deskKey); return { layout: withDesk(current.layout, deskKey, { ...stored, ...withPanels(stored, change(stored)) }) } })
+  // "Watch" in a chat's browser card (AgentBrowser.tsx): show the Browser panel, or the full-screen sheet without a workspace.
+  const watchRef = useRef({ panel: false, open: false, setPanels })
+  watchRef.current = { panel: !!view, open: hasPanel(panelCols(desk), 'browser'), setPanels }
+  useEffect(() => {
+    const onWatch = () => {
+      const { panel, open, setPanels: change } = watchRef.current
+      if (!panel) setBrowserSheet(true)
+      else if (!open) togglePanelKind(change, 'browser')
+    }
+    window.addEventListener(WATCH_EVENT, onWatch)
+    return () => window.removeEventListener(WATCH_EVENT, onWatch)
+  }, [])
+  useEffect(() => setPaneLabels(panes.map(item => ({ id: item.id, label: [paneTitle(item), shownIndex(item)].filter(Boolean).join(' ') }))), [panes])
   const focusSlot = (index: number) => {
     const target = slotPanes[index]
     if (!view || !target) return
@@ -527,7 +545,13 @@ function App() {
       } : undefined} />}
     {prefs.agentBubble && sessions.some(item => item.panes.some(p => p.agent !== 'shell')) && <AgentBubble sessions={sessions} seen={prefs.seen} selected={pane?.id} onOpen={openPane} onMarkRead={markRead} onPage={() => setAgentsPage('list')} onHide={() => { update(() => ({ agentBubble: false })); setNotice('Agents bubble hidden. Turn it on in Settings › Chat.') }} />}
     {livePins.length > 0 && <SidePins api={api} pins={prefs.sidePins} sessions={sessions} seen={prefs.seen} selected={pane?.id} onOpen={openPane} onPin={pinPane} onUnpin={unpinPane} onNote={notePin} onMove={movePin} onUpdate={() => void refresh()} />}
-    {!wide && <PhoneTabs screen={screen} onScreen={next => choosePhoneScreen(next, setScreen)} setScreen={setScreen} terminals={!!pane} onLive={() => setLive(true)} />}
+    {!wide && <PhoneTabs screen={screen} onScreen={next => choosePhoneScreen(next, setScreen)} setScreen={setScreen} terminals={!!pane} onLive={() => setLive(true)}
+      browser={pane ? {
+        // An open ask goes straight to the agent's page. Otherwise the browser opens on the last tab.
+        onOpen: () => { const ask = asks.find(item => item.tab); if (ask?.tab && ask.pane) watchTab(ask.tab, ask.pane); else setBrowserSheet(true) },
+        busy: !!agentBrowser?.agents.some(agent => agent.tabs.length), asking: asks.length > 0,
+      } : undefined} />}
+    {browserSheet && pane && <BrowserSheet api={api} pane={pane} onClose={() => setBrowserSheet(false)} />}
     {liveMode && <Live api={api} panes={panes} selected={pane} commands={commands.filter(item => !item.label.includes('Live mode'))} onClose={() => setLive(false)} />}
     {view && <Inbox api={api} items={inbox} sessions={sessions} selected={pane?.id} open={desk.inbox} onToggle={() => setDesk({ inbox: !desk.inbox })} onOpen={openPane} onUpdate={() => void refresh()} />}
     {view && picking !== null && picking < view.slots.length && <SlotPicker index={picking} sessions={sortByPrefs(sessions, prefs.order).filter(item => !isArchived(item, prefs.archived))} slots={view.slots} onPane={id => { showInSlot(id, picking); setPicking(null) }} onSession={target => { showSession(target); setPicking(null) }} onClose={() => setPicking(null)} />}

@@ -3,10 +3,12 @@ import { agentNames, isDone, needsYou } from './Sidebar'
 
 // The rows of the desktop "Needs you" list (Inbox.tsx).
 
-export type Kind = Needs['kind'] | 'done'
-export interface InboxItem { pane: Pane; kind: Kind; text: string; at: number; yes?: Choice; no?: Choice; menu?: Choice[] }
+export type Kind = Needs['kind'] | 'done' | 'browser'
+/** browser: an agent asked for the person in the shared browser (AgentBrowser.tsx). ask is its id, tab the agent's first tab. */
+export interface InboxItem { pane: Pane; kind: Kind; text: string; at: number; yes?: Choice; no?: Choice; menu?: Choice[]; ask?: string; tab?: string }
+export interface BrowserAskRow { id: string; pane: string | null; text: string; at: number; tab?: string }
 
-export const KIND_LABEL: Record<Kind, string> = { approval: 'Needs permission', plan: 'Plan to review', question: 'Question', done: 'Done' }
+export const KIND_LABEL: Record<Kind, string> = { approval: 'Needs permission', plan: 'Plan to review', question: 'Question', done: 'Done', browser: 'Needs you in the browser' }
 const YES = /^Yes\b/i, ALWAYS = /always|don.t ask|remember/i
 const NO = /^(?:No\b|Reject\b|Cancel\b|Deny\b)/i
 const PLAN = /\bkeep planning\b|tell Claude what to change/i
@@ -19,8 +21,12 @@ function fallback(pane: Pane): Needs {
   return { kind: plan ? 'plan' : pane.state === 'Approval' ? 'approval' : 'question', text }
 }
 
-export function inboxItems(panes: Pane[], seen: Record<string, number>, selected?: string): InboxItem[] {
+export function inboxItems(panes: Pane[], seen: Record<string, number>, selected?: string, asks: BrowserAskRow[] = []): InboxItem[] {
   const items: InboxItem[] = []
+  for (const ask of asks) {
+    const pane = panes.find(item => item.id === ask.pane)
+    if (pane) items.push({ pane, kind: 'browser', text: ask.text, at: ask.at, ask: ask.id, tab: ask.tab })
+  }
   for (const pane of panes) {
     if (needsYou(pane.state)) {
       const needs = pane.needs ?? fallback(pane)

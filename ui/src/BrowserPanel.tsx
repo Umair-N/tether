@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
-import { ArrowLeft, ArrowRight, Check, Crosshair, HatGlasses, Keyboard, KeyRound, Monitor, PenLine, Plus, RotateCw, Send, Smartphone, Square, Tablet, Trash2, Type, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Bot, Check, Crosshair, HatGlasses, Keyboard, KeyRound, Monitor, PenLine, Plus, RotateCw, Send, Smartphone, Square, Tablet, Trash2, Type, X } from 'lucide-react'
 import { errorText } from './api'
 import type { Api, Pane } from './api'
+import { usePaneLabel, WATCH_EVENT } from './AgentBrowser'
 import { useHost } from './host'
 
 // Same shape as PanelProps in src/panels.ts (frame lane); kept here until the lanes merge.
 export interface BrowserPanelProps { api: Api; pane: Pane; folder: string | null; active: boolean }
 
 type Mode = 'private' | 'saved'
-interface BrowserTab { id: string; url: string; title: string; preset: string; mode: Mode; width: number; height: number; touch: boolean }
+// 'agent': a tab an agent opened over CDP (server/browser_cdp.py). The agent owns its size.
+interface BrowserTab { id: string; url: string; title: string; preset: string; mode: Mode | 'agent'; width: number; height: number; touch: boolean; owner?: { pane: string | null } | null }
 interface Preset { id: string; label: string; width: number; height: number; touch: boolean }
 interface BrowserState { tabs: BrowserTab[]; presets: Preset[]; nav?: { back: boolean; forward: boolean } }
 interface FrameMessage { seq: number; width: number; height: number; jpeg: string }
@@ -90,6 +92,12 @@ export function BrowserPanel({ api, pane, active }: BrowserPanelProps) {
   const deviceMenu = useMenu()
   const tab = tabs.find(item => item.id === current) ?? tabs[0] ?? null
   const tabId = tab?.id ?? null
+  // Agent tabs are watch-only until the person takes over: no clicks, keys or navigation reach the page.
+  const [control, setControl] = useState<string | null>(null)
+  const watching = tab?.mode === 'agent' && control !== tab.id
+  const watchingRef = useRef(watching)
+  watchingRef.current = watching
+  const owner = usePaneLabel(tab?.owner?.pane)
 
   const stageRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -120,6 +128,12 @@ export function BrowserPanel({ api, pane, active }: BrowserPanelProps) {
   // Start the browser only when the panel is first shown.
   useEffect(() => { if (active && !loaded) void load() }, [active]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (tab && tab.id !== current) choose(tab.id) }, [tab?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  // "Watch" in a chat card (AgentBrowser.tsx): show that tab. Reload the list: the tab can be newer than the stream's last list.
+  useEffect(() => {
+    const onWatch = (event: Event) => { const id = (event as CustomEvent<{ tab: string }>).detail.tab; choose(id); void load() }
+    window.addEventListener(WATCH_EVENT, onWatch)
+    return () => window.removeEventListener(WATCH_EVENT, onWatch)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Stage size: the page is scaled to fit it, and a Desktop tab takes its size.
   useEffect(() => {
@@ -130,7 +144,7 @@ export function BrowserPanel({ api, pane, active }: BrowserPanelProps) {
     return () => observer.disconnect()
   }, [loaded])
   useEffect(() => {
-    if (!tab || tab.preset !== 'desktop' || stage.width < 50 || stage.height < 50 || noting) return
+    if (!tab || tab.mode === 'agent' || tab.preset !== 'desktop' || stage.width < 50 || stage.height < 50 || noting) return
     const width = Math.max(320, stage.width), height = Math.max(240, stage.height)
     if (Math.abs(width - tab.width) < 3 && Math.abs(height - tab.height) < 3) return
     const timer = setTimeout(() => void api<BrowserTab>('browser/device', { tab: tab.id, preset: 'desktop', width, height }).then(row => setTabs(list => list.map(item => item.id === row.id ? row : item))).catch(() => undefined), 400)
@@ -181,6 +195,7 @@ export function BrowserPanel({ api, pane, active }: BrowserPanelProps) {
   const sending = useRef(false)
   const scheduled = useRef(false)
   function push(...events: Gesture[]) {
+    if (watchingRef.current) return
     for (const event of events) {
       const last = queue.current[queue.current.length - 1]
       if (last && last.type === event.type && event.type === 'move') queue.current[queue.current.length - 1] = event
@@ -438,9 +453,9 @@ export function BrowserPanel({ api, pane, active }: BrowserPanelProps) {
     <div className="browser-tabs" role="tablist" aria-label="Browser tabs">
       {tabs.map(item => {
         const name = tabName(item)
-        return <div key={item.id} className={item.id === tab?.id ? 'browser-tab active' : 'browser-tab'} title={item.mode === 'saved' ? `${name} · ${savedNote(host)}` : `${name} · Private`}>
+        return <div key={item.id} className={item.id === tab?.id ? 'browser-tab active' : 'browser-tab'} title={item.mode === 'saved' ? `${name} · ${savedNote(host)}` : item.mode === 'agent' ? `${name} · Agent` : `${name} · Private`}>
           <button type="button" role="tab" aria-selected={item.id === tab?.id} className="browser-tab-main" onClick={() => choose(item.id)}>
-            {item.mode === 'saved' ? <KeyRound size={14} aria-label="Saved" /> : <HatGlasses size={14} aria-label="Private" />}
+            {item.mode === 'saved' ? <KeyRound size={14} aria-label="Saved" /> : item.mode === 'agent' ? <Bot size={14} aria-label="Agent" /> : <HatGlasses size={14} aria-label="Private" />}
             <span>{name}</span>
           </button>
           <button type="button" className="browser-tab-close" aria-label={`Close ${name}`} onClick={() => void closeTab(item.id)}><X size={14} /></button>
@@ -462,26 +477,31 @@ export function BrowserPanel({ api, pane, active }: BrowserPanelProps) {
       <span className="browser-grow" />
       <button type="button" className="browser-icon" aria-label="Close notes" title="Close" onClick={stopNotes}><X size={17} /></button>
       <button type="button" className="browser-send" onClick={() => void sendToChat()}><Send size={16} /><span>Send to chat</span></button>
-    </div> : <form className="browser-bar" onSubmit={event => { event.preventDefault(); void navigate(draft ?? '') }}>
-      <button type="button" className="browser-icon" aria-label="Back" disabled={!nav.back} onClick={() => tab && void act('browser/history', { tab: tab.id, action: 'back' })}><ArrowLeft size={17} /></button>
-      <button type="button" className="browser-icon" aria-label="Forward" disabled={!nav.forward} onClick={() => tab && void act('browser/history', { tab: tab.id, action: 'forward' })}><ArrowRight size={17} /></button>
-      <button type="button" className="browser-icon" aria-label="Reload" disabled={!tab} onClick={() => tab && void act('browser/history', { tab: tab.id, action: 'reload' })}><RotateCw size={16} /></button>
-      <input ref={urlRef} className="browser-url" aria-label="Address" placeholder="Address or port, like 8765" spellCheck={false} autoCapitalize="off" autoCorrect="off" enterKeyHint="go" inputMode="url"
+    </div> : <form className="browser-bar" onSubmit={event => { event.preventDefault(); if (!watching) void navigate(draft ?? '') }}>
+      <button type="button" className="browser-icon" aria-label="Back" disabled={!nav.back || watching} onClick={() => tab && void act('browser/history', { tab: tab.id, action: 'back' })}><ArrowLeft size={17} /></button>
+      <button type="button" className="browser-icon" aria-label="Forward" disabled={!nav.forward || watching} onClick={() => tab && void act('browser/history', { tab: tab.id, action: 'forward' })}><ArrowRight size={17} /></button>
+      <button type="button" className="browser-icon" aria-label="Reload" disabled={!tab || watching} onClick={() => tab && void act('browser/history', { tab: tab.id, action: 'reload' })}><RotateCw size={16} /></button>
+      <input ref={urlRef} className="browser-url" aria-label="Address" readOnly={watching} placeholder="Address or port, like 8765" spellCheck={false} autoCapitalize="off" autoCorrect="off" enterKeyHint="go" inputMode="url"
         value={draft ?? shown(tab?.url ?? '')} onFocus={event => { setDraft(shown(tab?.url ?? '')); event.currentTarget.select() }} onBlur={() => setDraft(null)} onChange={event => setDraft(event.target.value)}
         onKeyDown={event => { if (event.key === 'Escape') { setDraft(null); event.currentTarget.blur() } }} />
       <div className="browser-menu-anchor" ref={deviceMenu.ref} onKeyDown={deviceMenu.onKeyDown}>
-        <button type="button" className="browser-icon" aria-label={`Device: ${presetLabel}`} title={`Device: ${presetLabel}`} aria-haspopup="menu" aria-expanded={deviceMenu.open} disabled={!tab} onClick={() => deviceMenu.setOpen(!deviceMenu.open)}><DeviceIcon preset={tab?.preset ?? 'desktop'} /></button>
+        <button type="button" className="browser-icon" aria-label={`Device: ${presetLabel}`} title={`Device: ${presetLabel}`} aria-haspopup="menu" aria-expanded={deviceMenu.open} disabled={!tab || tab.mode === 'agent'} onClick={() => deviceMenu.setOpen(!deviceMenu.open)}><DeviceIcon preset={tab?.preset ?? 'desktop'} /></button>
         {deviceMenu.open && <div className="browser-menu end" role="menu">
           {presets.map(item => <button key={item.id} type="button" role="menuitemradio" aria-checked={item.id === tab?.preset} autoFocus={item.id === tab?.preset} onClick={() => void setDevice(item.id)}>
             <DeviceIcon preset={item.id} /><span>{item.label}<small>{item.id === 'desktop' ? 'Fits the panel' : `${item.width} × ${item.height}`}</small></span>{item.id === tab?.preset && <Check size={16} />}
           </button>)}
         </div>}
       </div>
-      <button type="button" className="browser-icon browser-touch-only" aria-label="Type into the page" onClick={() => keysRef.current?.focus()}><Keyboard size={17} /></button>
+      <button type="button" className="browser-icon browser-touch-only" aria-label="Type into the page" disabled={watching} onClick={() => keysRef.current?.focus()}><Keyboard size={17} /></button>
       <button type="button" className="browser-icon" aria-label="Add notes to this frame" title="Notes" disabled={!frame} onClick={startNotes}><PenLine size={17} /></button>
     </form>}
 
     {tab?.mode === 'saved' && <p className="browser-saved"><KeyRound size={13} />{savedNote(host)}</p>}
+    {tab?.mode === 'agent' && <div className="browser-agent" role="note">
+      <Bot size={14} aria-hidden="true" />
+      <span>{watching ? `${owner ?? 'An agent'} uses this tab. You watch.` : `You control this tab. ${owner ?? 'The agent'} can still act.`}</span>
+      <button type="button" className="browser-text-button" aria-pressed={!watching} onClick={() => setControl(watching ? tab.id : null)}>{watching ? 'Take over' : 'Stop'}</button>
+    </div>}
 
     <div className={typing ? 'browser-stage typing' : 'browser-stage'} ref={stageRef} tabIndex={-1} aria-label="Page">
       <div className="browser-screen" style={view}>
