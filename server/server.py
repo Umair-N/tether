@@ -42,6 +42,7 @@ import codex_provider
 import foundry_spend
 import transcribe
 import tts
+import friday_proxy
 import live_mode
 import shell_log
 import terminal_replies
@@ -1209,6 +1210,8 @@ class Handler(BaseHTTPRequestHandler):
                 codex_level.get(self)
             elif tts.handles(path):
                 tts.get(self)
+            elif friday_proxy.handles(path):
+                friday_proxy.get(self)
             elif live_mode.handles(path):
                 live_mode.get(self, lambda: [session_row(entry) for entry in sessions()])
             elif path == '/mobile/api/stream':
@@ -1243,7 +1246,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.respond(403, {'error': 'Reload the page and try again.'})
             return
         if self.path not in ('/mobile/api/message', '/mobile/api/broadcast', '/mobile/api/approval', '/mobile/api/menu', '/mobile/api/start', '/mobile/api/session', '/mobile/api/tmux-sessions', '/mobile/api/key', '/mobile/api/clear-draft', '/mobile/api/unqueue', '/mobile/api/mode', '/mobile/api/type',
-                         '/mobile/api/push/subscribe', '/mobile/api/push/unsubscribe', '/mobile/api/push/test', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/shortcuts', '/mobile/api/prefs', '/mobile/api/codex-provider', '/mobile/api/model-options', '/mobile/api/model', '/mobile/api/rename', '/mobile/api/merge', '/mobile/api/shell', '/mobile/api/upload', '/mobile/api/transcribe', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/switch') and not browser_api.handles(self.path) and not projects_api.handles(self.path) and not codex_level.handles(self.path) and not tts.handles(self.path) and not live_mode.handles(self.path):
+                         '/mobile/api/push/subscribe', '/mobile/api/push/unsubscribe', '/mobile/api/push/test', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/shortcuts', '/mobile/api/prefs', '/mobile/api/codex-provider', '/mobile/api/model-options', '/mobile/api/model', '/mobile/api/rename', '/mobile/api/merge', '/mobile/api/shell', '/mobile/api/upload', '/mobile/api/transcribe', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/switch') and not browser_api.handles(self.path) and not projects_api.handles(self.path) and not codex_level.handles(self.path) and not tts.handles(self.path) and not friday_proxy.handles(self.path) and not live_mode.handles(self.path):
             self.respond(404, {'error': 'Not found'})
             return
         # Reject unauthenticated and cross-origin submissions.
@@ -1265,6 +1268,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if tts.handles(self.path):
             tts.post(self)
+            return
+        if friday_proxy.handles(self.path):
+            friday_proxy.post(self)
             return
         if live_mode.handles(self.path):
             live_mode.post(self)
@@ -1639,6 +1645,17 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(400, {'error': str(exc)})
         except RuntimeError as exc:
             self.respond(503, {'error': str(exc)})
+
+    def do_PATCH(self):
+        if self.path.split('?', 1)[0] != friday_proxy.OFFER:
+            self.respond(404, {'error': 'Not found'})
+            return
+        if self.deny():
+            return
+        if not auth.same_origin(self.headers.get('Origin', ''), self.headers.get('Host', '')) or self.headers.get('X-Codex-Mobile') != '1':
+            self.respond(403, {'error': 'Reload the page and try again.'})
+            return
+        friday_proxy.patch(self)
 
     def do_DELETE(self):
         if self.path not in ('/mobile/api/tmux-sessions', '/mobile/api/session'):
