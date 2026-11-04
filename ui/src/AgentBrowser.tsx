@@ -200,8 +200,12 @@ export function AgentBrowserSettings({ api }: { api: Api }) {
 
 function StaleAgents({ panes }: { panes: string[] }) {
   const all = useSyncExternalStore(subscribeLabels, () => labels)
+  const [open, setOpen] = useState(false)
   const names = panes.map(pane => all[pane] ?? pane)
-  return <p className="setting-note agent-browser-stale" role="status">
-    {names.length === 1 ? `${names[0]} started before this was on.` : `${names.length} agents started before this was on: ${names.join(', ')}.`} Restart {names.length === 1 ? 'it' : 'them'} to use the shared browser.
-  </p>
+  const one = names.length === 1
+  return <div className="setting-note agent-browser-stale" role="status">
+    <p>{one ? `${names[0]} started before this was on.` : `${names.length} agents started before this was on.`} {one ? 'Restart it to use the shared browser.' : 'Restart an agent to let it use the shared browser.'}</p>
+    {!one && <button type="button" className="agent-browser-names" aria-expanded={open} onClick={() => setOpen(value => !value)}>{open ? 'Hide names' : 'Show names'}</button>}
+    {!one && open && <ul>{names.map((name, index) => <li key={panes[index]}>{name}</li>)}</ul>}
+  </div>
 }
