@@ -108,22 +108,74 @@ class NarrowControlTests(unittest.TestCase):
         screen = 'Run this command?\n❯ 1. Yes\n  2. No\n\nEsc to cancel\n\n● Done\n────\n❯ \n────\n'
         self.assertIsNone(terminal.approval(screen))
 
-    def test_narrow_controls_refuse_before_any_key_or_buffer_write(self):
+    def test_narrow_controls_reject_changed_content_before_any_write(self):
         for agent in ('claude', 'codex', 'antigravity'):
             entry = {'id': '%test', 'agent': agent}
             screen = 'Run this command?\n❯ 1. Yes\n  2. No\n'
-            actions = [lambda run: model_picker.open_picker(entry, run=run, sleep=lambda _: None),
-                       lambda run: terminal.respond_approval(entry, terminal.approval(screen)['id'], choice=1, run=run),
-                       lambda run: terminal.menu_choose(entry, 1, run=run, sleep=lambda _: None)]
+            actions = [lambda run: terminal.respond_approval(entry, 'stale-approval-id', choice=1, run=run),
+                       lambda run: terminal.menu_choose(entry, 1, label='Yes, allow once', run=run, sleep=lambda _: None)]
             if agent == 'claude':
                 actions.extend((lambda run: terminal.unqueue(entry, run=run),
                                 lambda run: terminal.card_key(entry, '1', run=run)))
             for action in actions:
                 with self.subTest(agent=agent, action=action), patch.object(terminal, 'verify'):
                     run = Screen(screen, 22)
-                    with self.assertRaises(terminal.PaneTooSmall):
+                    with self.assertRaises(RuntimeError) as caught:
                         action(run)
+                    self.assertNotIsInstance(caught.exception, terminal.PaneTooSmall)
                     self.assertTrue(all(argv[1] in ('capture-pane', 'display-message') for argv in run.commands))
+
+    def test_22_column_codex_usage_menu_sends_down_and_enter(self):
+        screen = 'Usage\nAccount usage and\nresets.\n\n› 1. View analytics\n  2. Redeem reset\n\nenter open · esc\nback'
+        menu = terminal.menu_question(screen.splitlines())
+        self.assertEqual(menu['question'], 'Usage Account usage and resets.')
+        self.assertEqual([(row['id'], row['text'], row['selected']) for row in menu['options']],
+                         [(1, 'View analytics', True), (2, 'Redeem reset', False)])
+        for choice, label, expected in ((1, 'View analytics', ['Enter']),
+                                         (2, 'Redeem reset', ['Down', 'Enter'])):
+            with self.subTest(choice=choice):
+                state = Screen(screen, 22)
+                keys = []
+
+                def run(argv, **kwargs):
+                    if argv[1] != 'send-keys':
+                        return state(argv, **kwargs)
+                    keys.append(argv[-1])
+                    if argv[-1] == 'Down':
+                        state.styled = screen.replace('› 1.', '  1.').replace('  2.', '› 2.')
+                    return subprocess.CompletedProcess(argv, 0, '', '')
+
+                with patch.object(terminal, 'verify'):
+                    terminal.menu_choose({'id': '%test', 'agent': 'codex'}, choice, label=label,
+                                         run=run, sleep=lambda _: None)
+                self.assertEqual(keys, expected)
+                self.assertTrue(all(argv[1] == 'capture-pane' for argv in state.commands))
+
+    def test_cut_menu_label_after_move_never_sends_enter(self):
+        screen = 'Usage\n› 1. View analytics\n  2. Redeem reset\nenter open · esc back'
+        state = Screen(screen, 22)
+        keys = []
+
+        def run(argv, **kwargs):
+            if argv[1] != 'send-keys':
+                return state(argv, **kwargs)
+            keys.append(argv[-1])
+            state.styled = 'Usage\n  1. View analytics\n› 2. Redeem re\nenter open · esc back'
+            return subprocess.CompletedProcess(argv, 0, '', '')
+
+        with patch.object(terminal, 'verify'), self.assertRaisesRegex(RuntimeError, 'question changed'):
+            terminal.menu_choose({'id': '%test', 'agent': 'codex'}, 2, label='Redeem reset',
+                                 run=run, sleep=lambda _: None)
+        self.assertEqual(keys, ['Down'])
+
+    def test_narrow_model_open_rejects_a_draft_before_any_write(self):
+        for agent, marker in (('claude', '❯'), ('codex', '›'), ('antigravity', '>')):
+            with self.subTest(agent=agent), patch.object(terminal, 'verify'), \
+                    patch.object(terminal, 'live_status', return_value={'state': 'Idle'}):
+                run = Screen(f'{marker} keep this draft\n────\n', 22)
+                with self.assertRaises(terminal.DraftError):
+                    model_picker.open_picker({'id': '%test', 'agent': agent}, run=run, sleep=lambda _: None)
+                self.assertTrue(all(argv[1] == 'capture-pane' for argv in run.commands))
 
     def test_wrapped_persistent_approval_is_not_a_once_choice(self):
         screen = 'Run this command?\n❯ 1. Yes, and don\'t\n     ask again\n  2. No\n'
@@ -140,6 +192,12 @@ class NarrowControlTests(unittest.TestCase):
                     self.assertFalse(pending['actionable'])
                 else:
                     self.assertIsNone(pending['_once'])
+                run = Screen(screen, 22)
+                with patch.object(terminal, 'verify'), self.assertRaises(RuntimeError) as caught:
+                    terminal.respond_approval({'id': '%test', 'agent': 'claude'}, pending['id'],
+                                              action='approve', run=run)
+                self.assertNotIsInstance(caught.exception, terminal.PaneTooSmall)
+                self.assertTrue(all(argv[1] == 'capture-pane' for argv in run.commands))
 
     def test_approval_last_option_continuation_is_bound_to_request(self):
         screen = 'Run this command?\n❯ 1. Yes\n  2. No, explain\n     the reason\n\nEsc to cancel\n'

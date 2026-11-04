@@ -1563,8 +1563,6 @@ class Handler(BaseHTTPRequestHandler):
                 with SEND_LOCK:
                     verify(config)
                     def read_mode():
-                        from terminal_input import require_pane_space
-                        require_pane_space(config)
                         return footer.parse(capture(config, styled=True))
                     result = footer.set_mode(read_mode,
                                              lambda: subprocess.run([paths.TMUX, 'send-keys', '-t', config['id'], 'BTab'], check=True, capture_output=True, timeout=5),

@@ -375,7 +375,6 @@ def menu_choose(entry, choice, label=None, answer=None, run=subprocess.run, slee
     until it is on the chosen row (checking the screen after each press), then Enter. answer: text for the own-answer row;
     its old text is removed first."""
     def press(*keys):
-        require_pane_space(entry, run)
         run([paths.TMUX, 'send-keys', '-t', entry['id'], *keys], check=True, capture_output=True, timeout=5)
 
     def look():
@@ -384,7 +383,6 @@ def menu_choose(entry, choice, label=None, answer=None, run=subprocess.run, slee
             raise RuntimeError('The question is no longer open.')
         return menu['options']
     verify(entry, run)
-    require_pane_space(entry, run)
     options = look()
     target = next((i for i, option in enumerate(options) if option['id'] == choice), None)
     if target is None:
@@ -730,8 +728,7 @@ class PaneTooSmall(RuntimeError):
     """The pane cannot show enough of the input or control to act safely."""
 
 
-# A visible, readable input always wins. Complex controls need room for labels
-# and hints; missing inputs use the same read-only size diagnosis.
+# A visible, readable input always wins. Diagnose pane size only when the input is missing.
 MIN_INPUT_ROWS = 8
 MIN_INPUT_COLS = 40
 SIZE_HELP = 'This pane is too small to read safely. Zoom it in Terminals, or make it at least 40 columns by 8 rows, then try again.'
@@ -753,13 +750,6 @@ def small_pane_reason(entry, run=subprocess.run):
     except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError, AttributeError):
         return None
     return SIZE_HELP
-
-
-def require_pane_space(entry, run=subprocess.run):
-    """Refuse controls whose labels can be clipped by a narrow split; a wrong key press is worse than a refusal."""
-    reason = small_pane_reason(entry, run)
-    if reason:
-        raise PaneTooSmall(reason)
 
 
 def prompt_draft(entry, run=subprocess.run, *, _size_retry=True):
@@ -985,7 +975,6 @@ def card_key(entry, key, run=subprocess.run, sleep=time.sleep):
     blocks every later send. So: refuse when the box has text. If the digit lands as text, remove it, focus the card with
     Ctrl+X Tab (Claude's abovePrompt:focus key) and press it once more. If it lands as text again, remove it and give up."""
     verify(entry, run)
-    require_pane_space(entry, run)
     draft = [line for line in prompt_draft(entry, run) if line]
     if draft:
         raise DraftError(f'Claude’s input box has text (“{" ".join(draft)[:40]}”). Clear it, then tap again.')
@@ -1035,7 +1024,6 @@ def unqueue(entry, run=subprocess.run, sleep=time.sleep, *, _size_retry=True):
     if entry.get('agent') != 'claude':
         raise ValueError('Only Claude queues can be cancelled from here.')
     verify(entry, run)
-    require_pane_space(entry, run)
     styled = capture(entry, run, styled=True)
     lines = ANSI_SGR.sub('', styled).splitlines()
     prompts = [line for line in lines if line.startswith('❯')]
@@ -1124,9 +1112,6 @@ def submit(entry, message, run=subprocess.run):
             # Agents mark the highlighted row of a picker (/model ...) like the input line. If the box no longer holds the
             # text we sent, a menu opened: pressing Enter again would choose an item for the user.
             if '\n' not in message.strip() and not ''.join(' '.join(draft).split()).startswith(sent[:30]):
-                reason = small_pane_reason(entry, run)
-                if reason:
-                    raise PaneTooSmall(reason)
                 return
         raise DraftError('The message reached the agent input but was not submitted. Clear it, then send again.')
     finally:
@@ -1155,7 +1140,6 @@ def respond_approval(entry, identifier, action=None, run=subprocess.run, choice=
     if choice is None and action not in ('approve', 'reject'):
         raise ValueError('Invalid approval action.')
     verify(entry, run)
-    require_pane_space(entry, run)
     pending = approval(capture(entry, run))
     if not pending or pending['id'] != identifier or not pending['actionable']:
         raise RuntimeError('The approval changed. Reload and review it again.')
@@ -1177,7 +1161,6 @@ def respond_approval(entry, identifier, action=None, run=subprocess.run, choice=
     expected = pending['_selected']
     for _ in range(abs(delta)):
         verify(entry, run)
-        require_pane_space(entry, run)
         current = approval(capture(entry, run))
         if not current or current['id'] != identifier:
             raise RuntimeError('The approval changed. Review it again.')
@@ -1194,7 +1177,6 @@ def respond_approval(entry, identifier, action=None, run=subprocess.run, choice=
                 raise RuntimeError('Could not confirm the approval selection. Check Termius.')
             time.sleep(.03)
     verify(entry, run)
-    require_pane_space(entry, run)
     current = approval(capture(entry, run))
     if not current or current['id'] != identifier or current['_selected'] != target:
         raise RuntimeError('Could not confirm the selected approval choice. Review it in Termius.')

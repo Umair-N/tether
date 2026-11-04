@@ -31,8 +31,6 @@ def visible(entry, run=subprocess.run):
 
 
 def press(entry, *keys, run=subprocess.run):
-    from terminal_input import require_pane_space
-    require_pane_space(entry, run)
     run([TMUX, 'send-keys', '-t', entry['id'], *keys], check=True, capture_output=True, timeout=5)
 
 
@@ -281,9 +279,8 @@ def close(entry, run=subprocess.run, sleep=time.sleep):
 
 
 def open_picker(entry, run=subprocess.run, sleep=time.sleep):
-    from terminal_input import empty_prompt, live_status, require_pane_space, verify
+    from terminal_input import empty_prompt, live_status, verify
     verify(entry, run)
-    require_pane_space(entry, run)
     close(entry, run, sleep)  # a picker left open by an earlier attempt would look like an unsent draft
     state = live_status(entry, run)['state']
     if state != 'Idle':
