@@ -1457,45 +1457,59 @@ class MenuIsNotADraftTests(unittest.TestCase):
 class SmallPanePromptTests(unittest.TestCase):
     SCREEN = 'Claude Code\nPrevious reply\nMore output\nStill more output\nStatus\n'
 
+    def setUp(self):
+        pause = patch.object(terminal.time, 'sleep')
+        pause.start()
+        self.addCleanup(pause.stop)
+
     def run_pane(self, height=5, clients='/dev/pts/20\t100\t6\t\n', screen=None,
                  window_height=None, sizing='latest'):
         calls = []
 
         def run(argv, **kwargs):
             calls.append(argv)
-            self.assertEqual(kwargs.get('timeout'), 5)
             command = argv[1]
+            if command != 'list-windows':
+                self.assertEqual(kwargs.get('timeout'), 5)
             if command == 'capture-pane':
                 out = self.SCREEN if screen is None else screen
             elif command == 'display-message':
                 out = f'100\t{height}\t100\t{window_height or height}\twork\tBugs\t{sizing}\n'
-            elif command == 'list-clients':
-                self.assertEqual(argv[argv.index('-t') + 1], '=work')
-                out = clients
+            elif command == 'list-windows':
+                out = ''  # No registry: repair cannot help this fake pane.
             else:
                 self.fail(f'Unexpected tmux command: {argv}')
             return subprocess.CompletedProcess(argv, 0, stdout=out)
         return run, calls
 
-    def test_short_claude_pane_names_client_and_fix(self):
-        run, calls = self.run_pane()
-        with self.assertRaises(terminal.PaneTooSmall) as caught:
-            terminal.prompt_draft({'id': '%1', 'agent': 'claude'}, run)
-        text = str(caught.exception)
-        for part in ('Bugs', '100x5', "Claude's input box", '/dev/pts/20', '100x6',
-                     'Make that terminal taller', 'tmux detach-client -t /dev/pts/20'):
-            self.assertIn(part, text)
-        self.assertEqual([argv[1] for argv in calls], ['capture-pane', 'display-message', 'list-clients'])
-
-    def test_short_pane_without_clients_for_each_agent(self):
-        for agent, name in (('codex', 'Codex'), ('antigravity', 'Antigravity')):
+    def test_short_pane_applies_size_and_retries_once_for_each_agent(self):
+        for agent in ('claude', 'codex', 'antigravity'):
             with self.subTest(agent=agent):
-                run, _ = self.run_pane(clients='')
+                run, calls = self.run_pane()
                 with self.assertRaises(terminal.PaneTooSmall) as caught:
                     terminal.prompt_draft({'id': '%1', 'agent': agent}, run)
-                self.assertIn(f"{name}'s input box", str(caught.exception))
-                self.assertIn('5 rows', str(caught.exception))
-                self.assertIn('Make it taller', str(caught.exception))
+                self.assertEqual(str(caught.exception), terminal.SIZE_FIXING)
+                self.assertEqual([argv[1] for argv in calls],
+                                 ['capture-pane', 'display-message', 'list-windows', 'capture-pane'])
+
+    def test_repair_reveals_prompt_and_preserves_existing_draft(self):
+        for agent, marker in (('claude', '❯'), ('codex', '›'), ('antigravity', '>')):
+            with self.subTest(agent=agent):
+                small_run, calls = self.run_pane()
+                repaired = False
+                def run(argv, **kwargs):
+                    if repaired and argv[1] == 'capture-pane':
+                        return subprocess.CompletedProcess(argv, 0, marker + ' existing draft\n────\n')
+                    return small_run(argv, **kwargs)
+                def repair(received_run):
+                    nonlocal repaired
+                    self.assertIs(received_run, run)
+                    repaired = True
+                    return True
+                with patch.object(terminal.window_size, 'apply', side_effect=repair) as apply:
+                    self.assertEqual(terminal.prompt_draft({'id': '%1', 'agent': agent}, run), ['existing draft'])
+                apply.assert_called_once_with(run)
+                self.assertFalse({'send-keys', 'paste-buffer'} & {a[1] for a in calls})
 
     def test_tall_pane_keeps_generic_error_at_threshold(self):
         for agent, name in (('claude', 'Claude'), ('codex', 'Codex'), ('antigravity', 'Antigravity')):
@@ -1514,24 +1528,14 @@ class SmallPanePromptTests(unittest.TestCase):
                 self.assertFalse(any(terminal.prompt_draft({'id': '%1', 'agent': agent}, run)))
                 self.assertEqual([argv[1] for argv in calls], ['capture-pane'])
 
-    def test_ignore_size_clients_are_excluded_and_matching_height_is_preferred(self):
-        clients = ('/dev/pts/1\t20\t2\tcontrol-mode,ignore-size\n'
-                   '/dev/pts/2\t40\t3\t\n/dev/pts/20\t100\t6\t\n')
-        run, _ = self.run_pane(clients=clients)
-        reason = terminal.small_pane_reason({'id': '%1', 'agent': 'claude'}, run)
-        self.assertIn('tmux detach-client -t /dev/pts/20', reason)
-        run, _ = self.run_pane(clients='/dev/pts/1\t20\t2\tcontrol-mode,ignore-size\n')
-        self.assertNotIn('detach-client', terminal.small_pane_reason({'id': '%1', 'agent': 'claude'}, run))
-
-    def test_split_pane_reports_the_pane_and_window_sizes(self):
+    def test_split_pane_reports_tether_repair(self):
         run, _ = self.run_pane(window_height=24, clients='')
-        reason = terminal.small_pane_reason({'id': '%1', 'agent': 'claude'}, run)
-        self.assertIn('100x24', reason)
-        self.assertIn('100x5', reason)
+        self.assertEqual(terminal.small_pane_reason({'id': '%1', 'agent': 'claude'}, run),
+                         terminal.SIZE_FIXING)
 
     def test_size_query_errors_fall_back_to_generic_error(self):
         entry = {'id': '%1', 'agent': 'claude'}
-        for failing_command in ('display-message', 'list-clients'):
+        for failing_command in ('display-message',):
             for failure in (OSError('gone'), subprocess.TimeoutExpired('tmux', 5),
                             subprocess.CompletedProcess([], 1, stdout=''),
                             subprocess.CompletedProcess([], 0, stdout='invalid')):
@@ -1593,7 +1597,7 @@ class SmallPanePromptTests(unittest.TestCase):
                               "printf 'output without a prompt\\n'; exec sleep 60"],
                              check=True, capture_output=True, text=True, timeout=5)
                 reason = terminal.small_pane_reason({'id': result.stdout.strip(), 'agent': 'claude'}, run)
-                self.assertIn('100x5', reason)
+                self.assertEqual(reason, terminal.SIZE_FIXING)
             finally:
                 run([paths.TMUX, 'kill-server'], capture_output=True, timeout=5)
 
@@ -1737,11 +1741,14 @@ class SharedCacheTests(unittest.TestCase):
         server.STATUS_CACHE.clear()
 
     def test_sessions_are_discovered_once_a_second_for_everyone(self):
-        with patch.object(server, 'discover', return_value=['a']) as discover, patch.object(server, 'settings', return_value={}):
+        with patch.object(server, 'discover', return_value=['a']) as discover, \
+                patch.object(server, 'settings', return_value={}), patch.object(server.window_size, 'apply') as size:
             self.assertEqual((server.sessions(), server.sessions()), (['a'], ['a']))
             self.assertEqual(discover.call_count, 1)
             server.SESSIONS_CACHE[0] -= 2  # a second later
             server.sessions()
+            self.assertEqual(size.call_count, 2)
+            size.assert_called_with(server.subprocess.run, entries=['a'])
             self.assertEqual(discover.call_count, 2)
 
     def test_status_is_shared_and_a_vanished_pane_is_unavailable_not_fatal(self):

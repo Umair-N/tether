@@ -155,7 +155,7 @@ class GuardedPathTests(unittest.TestCase):
             commands.append(command)
             output = {'capture-pane': 'reply\nmore reply\noutput\nstatus\n',
                       'display-message': '100\t5\t100\t5\twork\tBugs\tlatest\n',
-                      'list-clients': '/dev/pts/20\t100\t6\t\n'}[command[1]]
+                      'list-windows': ''}[command[1]]
             return SimpleNamespace(stdout=output, returncode=0)
         entry = pane('%1')
         reason = terminal_input.small_pane_reason(entry, run)
