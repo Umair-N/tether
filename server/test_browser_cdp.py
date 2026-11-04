@@ -372,7 +372,9 @@ class ProxyTests(unittest.TestCase):
         self.assertEqual(proxy.availability(), (False, 'No Chromium found.'))
         self.assertIsNone(quiet.conn)
 
-    def test_availability_config_env_asks_and_panel_routes(self):
+    @patch.object(browser_api.agent_browser_setup, 'status', return_value={'claude': 'ok', 'codex': 'none'})
+    @patch.object(browser_api.agent_browser_setup, 'stale_panes', return_value=[])
+    def test_availability_config_env_asks_and_panel_routes(self, _stale, _setup):
         config = self.proxy.config_path
         self.assertEqual(config.stat().st_mode & 0o777, 0o600)
         self.assertEqual(config.parent.stat().st_mode & 0o777, 0o700)
@@ -405,7 +407,7 @@ class ProxyTests(unittest.TestCase):
         self.assertEqual(len(handler.replies[0][1]['asks']), 19)
         handler = FakeHandler('/mobile/api/browser/agents')
         browser_api.get(handler, self.browser, self.proxy)
-        self.assertEqual(set(handler.replies[0][1]), {'enabled', 'available', 'reason', 'agents', 'asks'})
+        self.assertEqual(set(handler.replies[0][1]), {'enabled', 'available', 'reason', 'agents', 'asks', 'setup', 'stale'})
         for text in ('', 'a' * 301):
             with self.assertRaises(ValueError):
                 self.proxy.ask(text, None)

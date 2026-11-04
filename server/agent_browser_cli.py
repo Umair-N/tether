@@ -33,13 +33,21 @@ def endpoint(cdp, action):
 
 def main(args=None):
     args = sys.argv[1:] if args is None else args
+    if args == ['hook']:
+        try:
+            sys.stdin.read()
+            if os.environ.get('TETHER_CDP_URL'):
+                print(json.dumps({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': note()}}))
+        except Exception:
+            pass  # A SessionStart hook must never print an error or stop the agent.
+        return 0
     cdp = os.environ.get('TETHER_CDP_URL')
     if not cdp:
         print('Tether shared browser is not available in this shell.')
         return 1
     status = args == ['status']
     if not status and (len(args) != 2 or args[0] != 'ask' or not args[1].strip()):
-        print('Usage: tether-browser ask "<text>" | status')
+        print('Usage: tether-browser ask "<text>" | status | hook')
         return 1
     try:
         data = None

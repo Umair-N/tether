@@ -17,6 +17,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from agent_browser_setup import has_browser_env, playwright_server
+
 HERE = Path(__file__).resolve().parent
 GUARD = 'TETHER_LAUNCH'
 # Only an interactive session gets the project. Anything else (print mode, exec, login, mcp ...) runs as typed.
@@ -122,14 +124,11 @@ def codex_browser_env_args():
         return []
     overrides = []
     for name, server in config.get('mcp_servers', {}).items():
-        if not server.get('command'):
-            continue
-        if not any('playwright' in str(value).lower() for value in [server['command'], *server.get('args', [])]):
+        if not playwright_server(server):
             continue
         env_vars = list(server.get('env_vars', []))
         variable = 'PLAYWRIGHT_MCP_CDP_ENDPOINT'
-        if variable in env_vars or any(isinstance(value, dict) and value.get('name') == variable
-                                      and value.get('source', 'local') == 'local' for value in env_vars):
+        if has_browser_env(env_vars):
             continue
         env_vars.append(variable)
         # Preserve both plain names and Codex's {name, source} entries.
