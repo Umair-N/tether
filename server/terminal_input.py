@@ -18,6 +18,7 @@ import login_flow
 import paths
 import window_size
 import prompt_actions
+import choice_state
 
 LAUNCHERS = {'codex': 'codex',
              'claude': 'claude',
@@ -496,7 +497,7 @@ def login_progress(entry, screen, now=None):
     return {key: state[key] for key in ('phase', 'message')} if state['phase'] != 'waiting' else None
 
 
-def attention(entry, screen, working, now=None, login_screen=None):
+def attention(entry, screen, working, now=None, login_screen=None, styled_screen=None):
     """Catch-all for any screen that waits on the user but is not a recognized approval.
 
     Returns the visible screen once the same situation has lasted ATTENTION_DELAY seconds, so redraws and
@@ -518,7 +519,8 @@ def attention(entry, screen, working, now=None, login_screen=None):
         reason, tail = 'panel', lines[tabs:]
     elif len(numbered) >= 2 and cursor_in_menu(tail, marker):
         reason = 'menu'
-    elif entry['agent'] == 'claude' and (picker := cursor_picker(screen)):
+    elif ((entry['agent'] == 'claude' and (picker := cursor_picker(screen)))
+          or (entry['agent'] == 'codex' and (picker := choice_state.cursor_picker(styled_screen or screen, 'codex')))):
         reason, tail = 'picker', picker['text'].splitlines()
     elif INPUT_HINT.search(joined_lines(lines[-8:])):
         reason = 'prompt'
@@ -551,6 +553,10 @@ def attention(entry, screen, working, now=None, login_screen=None):
         found['requiresResponse'] = False
     elif link:
         found['login'] = link
+    if reason in ('menu', 'picker'):
+        choice = choice_state.parse(styled_screen or screen, entry['agent'])
+        if choice is not None:
+            found['choice'] = choice
     return found
 
 
@@ -617,10 +623,10 @@ def waiting_approval(registry, now=None):
 def live_status(entry, run=subprocess.run):
     if not entry.get('owner_pid') or not entry.get('writable'):
         return {'state': 'Unavailable', 'approval': None}
-    styled = entry['agent'] == 'codex'
-    screen = capture(entry, run, styled=styled)
-    login_screen = login_capture(entry, prompt_actions.plain(screen), run)
-    status = _live_status(entry, run, screen, login_screen=login_screen)
+    styled_screen = capture(entry, run, styled=True)
+    screen = prompt_actions.plain(styled_screen)
+    login_screen = login_capture(entry, screen, run)
+    status = _live_status(entry, run, screen, login_screen=login_screen, styled_screen=styled_screen)
     progress = login_progress(entry, login_screen)
     if progress:
         status['login_result'] = progress
@@ -631,9 +637,9 @@ def live_status(entry, run=subprocess.run):
     return status
 
 
-def _live_status(entry, run, screen, login_screen=None):
-    styled_screen = screen
-    screen = prompt_actions.plain(screen)
+def _live_status(entry, run, screen, login_screen=None, styled_screen=None):
+    if styled_screen is None:  # callers that pass one frame may pass it styled
+        styled_screen, screen = screen, prompt_actions.plain(screen)
     if entry['agent'] == 'antigravity':
         capture_notices(entry, screen)
     else:
@@ -669,7 +675,7 @@ def _live_status(entry, run, screen, login_screen=None):
         info = prompt_actions.ledger.observe(entry, styled_screen, prompt_actions.metadata(entry, run))
     else:
         prompt_actions.ledger.forget(entry['id'])
-    needed = info or attention(entry, screen, working, login_screen=login_screen)
+    needed = info or attention(entry, screen, working, login_screen=login_screen, styled_screen=styled_screen)
     if needed and needed.get('requiresResponse') is False:  # navigation does not ask for an answer
         return {'state': 'Working' if working else 'Idle', 'approval': None, 'attention': needed}
     if needed:
