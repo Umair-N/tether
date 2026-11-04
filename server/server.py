@@ -1572,8 +1572,12 @@ class Handler(BaseHTTPRequestHandler):
                         card_key(config, key)
                     else:
                         verify(config)
-                        subprocess.run([paths.TMUX, 'send-keys', '-t', config['id'], key],
-                                       check=True, capture_output=True, timeout=5)
+                        from terminal_input import drop_double_escape
+                        if key == 'Escape' and drop_double_escape(config):
+                            print(f'/mobile/api/key dropped double Escape for Claude pane {config["id"]}', file=sys.stderr, flush=True)
+                        else:
+                            subprocess.run([paths.TMUX, 'send-keys', '-t', config['id'], key],
+                                           check=True, capture_output=True, timeout=5)
                 self.respond(200, {'accepted': True})
                 return
             if self.path == '/mobile/api/menu':

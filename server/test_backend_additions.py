@@ -60,6 +60,44 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(self.request('/mobile/api/key', {'session': '%12', 'key': 'C-c'})[0], 409)
         self.assertEqual(self.request('/mobile/api/key', {'session': '%12', 'thread': CHAT, 'key': 'C-z'})[0], 400)
 
+    def test_double_escape_guard_uses_a_fake_clock_and_keeps_response_contract(self):
+        import terminal_input as terminal
+        entry = {'id': '%esc-guard', 'agent': 'claude', 'thread': CHAT, 'writable': True}
+        self.entries.return_value = [entry]
+        body = {'session': entry['id'], 'thread': CHAT, 'key': 'Escape'}
+        screen = ['──────────\n❯ \n──────────\n']
+        clock = [100.0]
+        with patch.dict(terminal._escape_seen, clear=True), \
+                patch.object(server.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(terminal, 'capture', side_effect=lambda *args, **kwargs: screen[0]), \
+                patch('builtins.print') as log:
+            def press():
+                self.run.reset_mock()
+                self.assertEqual(self.request('/mobile/api/key', body), (200, {'accepted': True}))
+                return [call.args[0][-1] for call in self.run.call_args_list if 'send-keys' in call.args[0]]
+
+            self.assertEqual(press(), ['Escape'])
+            clock[0] += .5
+            self.assertEqual(press(), [])
+            log.assert_called_once()
+            self.assertIn('Escape', log.call_args.args[0])
+            clock[0] += 1.0
+            self.assertEqual(press(), ['Escape'])
+            clock[0] += .2
+            screen[0] = '──────────\n❯ Keep this draft\n──────────\n'
+            self.assertEqual(press(), ['Escape'])
+            clock[0] += .2
+            screen[0] = (Path(__file__).parent / 'test_fixtures/pickers/claude_rewind_150x39.txt').read_text()
+            self.assertEqual(press(), ['Escape'])  # Esc must still cancel an open picker.
+            clock[0] += .2
+            screen[0] = 'No input box on screen'
+            self.assertEqual(press(), ['Escape'])
+            clock[0] += .2
+            screen[0] = '──────────\n❯ \n──────────\n'
+            entry['agent'] = 'codex'
+            self.assertEqual(press(), ['Escape'])
+            log.assert_called_once()
+
     def test_split_directions_do_not_require_thread_or_writable(self):
         self.entries.return_value = [{'id': '%12', 'thread': CHAT, 'writable': False}]
         for direction, flag in [('right', '-h'), ('down', '-v')]:
