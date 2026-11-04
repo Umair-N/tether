@@ -34,6 +34,7 @@ export interface ChatMessage {
   time: string
 }
 export interface ChatData {
+  login_result?: { phase: 'done' | 'failed' | 'unknown'; message: string }
   preview?: { text: string }
   // A `!` shell command that is still running in Claude Code, read from the screen (the transcript gets it only at the end).
   bang?: { command: string; output: string; seconds: number | null }
@@ -58,7 +59,7 @@ export interface Approval { id: string | null; text: string; actionable: boolean
 export interface AskQuestion { question: string; header: string; multi: boolean; options: { label: string; description: string }[] }
 /** ask: Claude's open question from the transcript, when the pane is too short to show all of it. */
 export interface PickerItem { text: string; selected: boolean }
-export interface Attention { id: string; text: string; reason: 'menu' | 'prompt' | 'no-input-box' | 'panel' | 'picker'; title?: string; subtitle?: string; items?: PickerItem[]; more_above?: number; more_below?: number; hint?: string; question?: string; options?: Choice[]; ask?: { id: string; questions: AskQuestion[] }; login?: { url: string; code: boolean } }
+export interface Attention { id: string; text: string; reason: 'menu' | 'prompt' | 'no-input-box' | 'panel' | 'picker'; title?: string; subtitle?: string; items?: PickerItem[]; more_above?: number; more_below?: number; hint?: string; question?: string; options?: Choice[]; ask?: { id: string; questions: AskQuestion[] }; login?: { url: string; code: boolean; user_code?: string; message?: string } }
 export interface PastChat { id: string; title: string; dir: string | null; time: string; live: boolean }
 export interface HistoryData { chats: PastChat[] }
 export interface UsageWindow { label: string; percent: number; resets_at: number | null }

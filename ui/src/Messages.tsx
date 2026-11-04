@@ -1,3 +1,4 @@
+import { copyText } from './clipboard'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Blocks, Clock3, Layers, Check, Copy, Share2, ChevronRight, X, TextSelect, MessageSquare, Info, ShieldAlert, Square, Volume2 } from 'lucide-react'
 import { MessagePrimitive } from '@assistant-ui/react'
@@ -158,12 +159,12 @@ function MessageMenu({ text, mode, onSelect, onClose }: { text: string; mode: 'm
   </dialog>
 }
 // Copy with a short "Copied" confirmation. The Clipboard API needs HTTPS, which Tailscale Serve gives us.
-export function CopyButton({ text, label, className = 'icon-button' }: { text: string; label: string; className?: string }) {
+export function CopyButton({ text, label, className = 'icon-button', wide = false }: { text: string; label: string; className?: string; wide?: boolean }) {
   const [done, setDone] = useState<'' | 'ok' | 'fail'>('')
   useEffect(() => { if (!done) return; const timer = setTimeout(() => setDone(''), 1500); return () => clearTimeout(timer) }, [done])
   return <button type="button" className={className} aria-label={done === 'ok' ? 'Copied' : label} title={label}
-    onClick={() => navigator.clipboard.writeText(text).then(() => setDone('ok'), () => setDone('fail'))}>
-    {done === 'ok' ? <Check size={16} /> : <Copy size={16} />}{className !== 'icon-button' && <span>{done === 'ok' ? 'Copied' : done === 'fail' ? 'Failed' : 'Copy'}</span>}
+    onClick={() => copyText(text).then(() => setDone('ok'), () => setDone('fail'))}>
+    {done === 'ok' ? <Check size={16} /> : <Copy size={16} />}{className !== 'icon-button' && <span>{done === 'ok' ? 'Copied' : done === 'fail' ? 'Failed' : wide ? label : 'Copy'}</span>}
   </button>
 }
 // Time of the reply, as the CLI shows it: "9:36 PM" today, "Fri 9:36 PM" this week, else the date.

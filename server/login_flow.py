@@ -16,6 +16,8 @@ HOSTS = {'claude': {'claude.ai', 'claude.com', 'platform.claude.com', 'anthropic
          'codex': {'auth.openai.com', 'chatgpt.com', 'openai.com'}}
 ANSI = re.compile(r'\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))')
 LIMIT = 600
+URL_PART = re.compile(r"^[A-Za-z0-9%._~:/?#\[\]@!$&'()*+,;=-]+$")
+CODE_ERROR = re.compile(r'invalid (?:authentication |authorization |sign.in )?code|code (?:is )?(?:invalid|expired)|authentication failed|sign.in failed', re.I)
 
 
 def agent_name(agent):
@@ -49,18 +51,28 @@ def parse_screen(agent, screen):
     agent_name(agent)
     screen = ANSI.sub('', screen)
     url = None
-    for match in re.finditer(r'https?://[^\s<>\x00-\x1f]+', screen):
-        candidate = match.group().rstrip(').,;\'"')
+    lines = screen.splitlines()
+    for index, line in enumerate(lines):
+        match = re.search(r'https://[^\s<>\x00-\x1f]+', line)
+        if not match:
+            continue
+        candidate = match.group()
+        # Some CLI versions print separate lines, not terminal soft wraps (-J).
+        for more in lines[index + 1:]:
+            if not URL_PART.fullmatch(more.strip()):
+                break
+            candidate += more.strip()
+        candidate = candidate.rstrip(').,;\'"')
         try:
             parts = urlsplit(candidate)
-            if parts.hostname in HOSTS[agent] and not parts.username and not parts.password and parts.port in (None, 80, 443):
+            if parts.hostname in HOSTS[agent] and not parts.username and not parts.password and parts.port in (None, 443):
                 url = candidate
                 break
         except ValueError:
             pass
     # Device codes are displayed alone or after a label; never return arbitrary terminal text.
     # Codex 0.165 prints "2. Enter this one-time code" and the code on the same or the next line.
-    code = re.search(r'(?i)one-time code\b[^\n]*?(?:\n\s*)?\b([A-Z0-9]{3,10}(?:-[A-Z0-9]{3,10}){1,3})\b', screen) if agent == 'codex' else None
+    code = re.search(r'(?i)one-time\s+code\b.{0,160}?\b([A-Z0-9]{3,10}(?:-[A-Z0-9]{3,10}){1,3})\b', ' '.join(screen.split())) if agent == 'codex' else None
     return {'url': url, 'user_code': code.group(1) if code else None}
 
 
@@ -125,12 +137,18 @@ class LoginRunner:
             self.finish(flow, 'done' if success else 'failed', 'Signed in.' if success else 'Sign-in failed. Try again.',
                         getattr(accounts, agent)() if success else None)
             return
-        if not flow['submitted']:
-            parsed = parse_screen(agent, self.tmux('capture-pane', '-p', '-J', '-S', '-200', '-t', target))
+        screen = self.tmux('capture-pane', '-p', '-J', '-S', '-200', '-t', target)
+        failed_code = bool(CODE_ERROR.search(screen))
+        if flow['submitted'] and failed_code:
+            self.finish(flow, 'failed', 'Sign-in code failed. Start sign-in again.')
+            return
+        if not flow['submitted'] or failed_code:
+            parsed = parse_screen(agent, screen)
             flow['state'].update({key: value or flow['state'][key] for key, value in parsed.items()})
             ready = flow['state']['url']
             flow['state'].update(phase='waiting_code' if agent == 'claude' and ready else 'waiting_browser',
-                                 message=('Open the sign-in link, then paste the code here.' if agent == 'claude' else 'Open the sign-in link and enter the device code.') if ready else 'Waiting for the CLI sign-in link…')
+                                 message='Sign-in code failed. Check the code and try again.' if failed_code else
+                                 ('Open the sign-in link, then paste the code here.' if agent == 'claude' else 'Open the sign-in link and enter the device code.') if ready else 'Waiting for the CLI sign-in link…')
 
     def watch(self, agent, flow):
         while True:

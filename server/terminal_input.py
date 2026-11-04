@@ -14,6 +14,7 @@ import uuid
 from antigravity import process_start, ROOT as AGY_ROOT, CACHE as AGY_CACHE, capture_notices
 from quota_notices import capture as capture_quota_notices
 from codex_provider import PROFILE_NAME
+import login_flow
 import paths
 import window_size
 
@@ -388,30 +389,75 @@ def menu_choose(entry, choice, label=None, answer=None, run=subprocess.run, slee
     press('Enter')
 
 
-URL_PART = re.compile(r"^[A-Za-z0-9%._~:/?#\[\]@!$&'()*+,;=-]+$")
-LOGIN_HOSTS = {'claude.ai', 'claude.com', 'platform.claude.com', 'console.anthropic.com', 'auth.openai.com'}
-
-
-def login_link(lines):
+def login_link(lines, agent=None):
     """A sign-in screen (Claude's /login, codex login): the sign-in URL, joined back from its wrapped lines, and whether
     the screen asks for a code. A wrapped URL is one link only on its first line, so a click opens a broken address."""
-    for index, line in enumerate(lines):
-        match = re.search(r'https://\S+', line)
-        if not match:
+    # An earlier login in scrollback must never own the current input box.
+    start = max((i + 1 for i, line in enumerate(lines) if re.match(r'^[❯›>]\s', line)), default=0)
+    # Use the latest login link, including when history holds an earlier attempt.
+    for index in range(len(lines) - 1, start - 1, -1):
+        if 'https://' not in lines[index]:
             continue
-        url = match.group()
-        for more in lines[index + 1:]:
-            if not URL_PART.match(more.strip()):
-                break  # a blank line or words end the URL
-            url += more.strip()
-        host = urlsplit(url).hostname or ''
-        if host == 'auth.openai.com' or (host in LOGIN_HOSTS and '/oauth/' in url):
-            code = any(re.search(r'paste code|authentication code|enter (?:the )?code', other, re.I) for other in lines[index:])
-            return {'url': url, 'code': code}
+        screen = '\n'.join(lines[index:])
+        for name in (('claude', 'codex') if agent is None else (agent,)):
+            if name not in login_flow.HOSTS:
+                continue
+            parsed = login_flow.parse_screen(name, screen)
+            url = parsed['url']
+            if url and (urlsplit(url).hostname == 'auth.openai.com' or '/oauth/' in url):
+                code = name == 'claude' and bool(re.search(r'paste\s+code|authentication code|enter (?:the )?code', ' '.join(screen.split()), re.I))
+                found = {'url': url, 'code': code}
+                if parsed['user_code']:
+                    found['user_code'] = parsed['user_code']
+                if login_flow.CODE_ERROR.search(screen):
+                    found['message'] = 'Sign-in code failed. Check the code and try again.'
+                return found
     return None
 
 
-def attention(entry, screen, working, now=None):
+def login_capture(entry, screen, run=subprocess.run):
+    """A resized pane can push the start of its URL into history. Only a live login field permits recovery."""
+    if entry['agent'] not in login_flow.HOSTS or not re.search(r'Pastecodehereifprompted>|one-timecode', re.sub(r'\s+', '', screen), re.I):
+        return screen
+    return run([paths.TMUX, 'capture-pane', '-p', '-J', '-S', '-200', '-t', entry['id']],
+               check=True, capture_output=True, text=True, timeout=5).stdout
+
+
+_login_progress = {}
+
+
+def login_progress(entry, screen, now=None):
+    """Short-lived native login feedback. Store no URL, code, transcript, or credential."""
+    key = (entry['id'], entry.get('owner_pid'), entry.get('process_start'), entry.get('thread'))
+    link = login_link(screen.splitlines(), entry['agent'])
+    if not link and key not in _login_progress:
+        return None
+    now = time.monotonic() if now is None else now
+    for old_key, value in list(_login_progress.items()):
+        if value['expires'] <= now:
+            _login_progress.pop(old_key, None)
+    fingerprint = hashlib.sha256(link['url'].encode()).hexdigest() if link else None
+    state = _login_progress.get(key)
+    if link and (not state or state['fingerprint'] != fingerprint):
+        if len(_login_progress) >= 64:
+            _login_progress.pop(next(iter(_login_progress)))
+        state = {'fingerprint': fingerprint, 'phase': 'waiting', 'message': '', 'expires': now + login_flow.LIMIT}
+        _login_progress[key] = state
+    if not state:
+        return None
+    # Only inspect the live end of the screen, not old chat messages above a login.
+    tail = '\n'.join(screen.rstrip().splitlines()[-15:])
+    phase = 'done' if re.search(r'(?im)^\s*(?:[✓✔]\s*)?(?:Login successful|Successfully logged in|Logged in successfully|Authentication successful|Signed in successfully)\b', tail) else 'failed' if login_flow.CODE_ERROR.search(tail) else None
+    if phase:
+        if state['phase'] != phase:
+            state['expires'] = now + 30
+        state.update(phase=phase, message='Signed in.' if phase == 'done' else 'Sign-in failed. Try again.')
+    elif not link and state['phase'] == 'waiting':
+        state.update(phase='unknown', message='Sign-in screen closed. Check the account in Plan usage.')
+    return {key: state[key] for key in ('phase', 'message')} if state['phase'] != 'waiting' else None
+
+
+def attention(entry, screen, working, now=None, login_screen=None):
     """Catch-all for any screen that waits on the user but is not a recognized approval.
 
     Returns the visible screen once the same situation has lasted ATTENTION_DELAY seconds, so redraws and
@@ -423,9 +469,12 @@ def attention(entry, screen, working, now=None):
     marker = {'claude': '❯', 'codex': '›', 'antigravity': '>'}.get(entry['agent'])
     reason = None
     picker = None
+    link = login_link(login_screen.splitlines() if login_screen is not None else lines, entry['agent'])
     numbered = [line for line in tail if NUMBERED_ITEM.match(line)]
     tabs = next((index for index, line in enumerate(lines) if SETTINGS_TABS.match(line)), None) if entry['agent'] == 'claude' else None
-    if tabs is not None:
+    if link:
+        reason = 'prompt'
+    elif tabs is not None:
         # Claude's Settings dialog (/usage, /status ...) only shows facts. Show it from its tab row, without the chat above it.
         reason, tail = 'panel', lines[tabs:]
     elif len(numbered) >= 2 and cursor_in_menu(tail, marker):
@@ -459,10 +508,8 @@ def attention(entry, screen, working, now=None):
         found.update(menu_question(menu_lines(lines)) or {})
     elif reason == 'picker':
         found.update(picker)
-    elif reason == 'prompt':
-        link = login_link(tail)
-        if link:
-            found['login'] = link
+    elif link:
+        found['login'] = link
     return found
 
 
@@ -530,7 +577,11 @@ def live_status(entry, run=subprocess.run):
     if not entry.get('owner_pid') or not entry.get('writable'):
         return {'state': 'Unavailable', 'approval': None}
     screen = capture(entry, run)
-    status = _live_status(entry, run, screen)
+    login_screen = login_capture(entry, screen, run)
+    status = _live_status(entry, run, screen, login_screen=login_screen)
+    progress = login_progress(entry, login_screen)
+    if progress:
+        status['login_result'] = progress
     if entry['agent'] == 'claude':
         import footer  # footer imports this module
         # Background work from Claude's footer line ("1 shell", "2 local agents"), so the session list can show it.
@@ -538,7 +589,7 @@ def live_status(entry, run=subprocess.run):
     return status
 
 
-def _live_status(entry, run, screen):
+def _live_status(entry, run, screen, login_screen=None):
     if entry['agent'] == 'antigravity':
         capture_notices(entry, screen)
     else:
@@ -566,7 +617,7 @@ def _live_status(entry, run, screen):
                 return {'state': 'Approval', 'approval': {'id': None, 'text': screen.strip(), 'actionable': False}}
         except (OSError, ValueError):
             pass
-    needed = attention(entry, screen, working)
+    needed = attention(entry, screen, working, login_screen=login_screen)
     if needed and needed['reason'] == 'panel':  # a read-only panel waits on no one: keep the real state, show the panel
         return {'state': 'Working' if working else 'Idle', 'approval': None, 'attention': needed}
     if needed:
@@ -830,11 +881,27 @@ def empty_prompt(entry, run=subprocess.run):
         raise DraftError('There is an unsent draft in the agent input. Clear it, then send again.')
 
 
-def type_text(entry, text, enter=False, run=subprocess.run):
+def login_code_draft(screen):
+    prompts = list(re.finditer(r'Paste\s+code\s+here\s+if\s+prompted\s*>', screen, re.I))
+    return re.split(r'\bEsc\s+to\s+cancel\b', screen[prompts[-1].end():], maxsplit=1, flags=re.I)[0].strip() if prompts else None
+
+
+def type_text(entry, text, enter=False, run=subprocess.run, login_url=None):
     if not isinstance(text, str) or not 0 < len(text) <= 500 or any(ord(c) < 32 or ord(c) == 127 for c in text):
         raise ValueError('Enter up to 500 characters of text.')
     verify(entry, run)
-    run([paths.TMUX, 'send-keys', '-t', entry['id'], '-l', text], check=True, capture_output=True, timeout=5)
+    if login_url is not None:
+        screen = capture(entry, run)
+        if login_code_draft(screen):
+            raise DraftError('The sign-in field has text. Check the terminal before sending.')
+        screen = login_capture(entry, screen, run)
+        lines = screen.splitlines()
+        link = login_link(lines, entry['agent'])
+        if entry['agent'] != 'claude' or not link or not link['code'] or link['url'] != login_url:
+            raise RuntimeError('The sign-in prompt changed. Reload and try again.')
+        if login_code_draft(screen) != '':
+            raise DraftError('The sign-in field has text or is not visible. Check the terminal before sending.')
+    run([paths.TMUX, 'send-keys', '-t', entry['id'], '-l', '--', text], check=True, capture_output=True, timeout=5)
     if enter:
         run([paths.TMUX, 'send-keys', '-t', entry['id'], 'Enter'], check=True, capture_output=True, timeout=5)
 

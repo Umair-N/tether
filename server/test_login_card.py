@@ -117,5 +117,82 @@ class SavedAccounts(unittest.TestCase):
             saved_accounts.switch('claude', 2, self.runner([], code=1))
 
 
+class LoginRegressions(unittest.TestCase):
+    def test_codex_device_login_without_a_key_hint_has_a_copyable_code(self):
+        screen = ('Sign in with ChatGPT using device authorization:\n'
+                  '1. Open this link in your browser\nhttps://auth.openai.com/codex/device\n'
+                  '2. Enter this one-time code\nABCD-1234\nWaiting for authorization…')
+        found = seen({'id': '%fixture-device', 'agent': 'codex'}, screen)
+        self.assertEqual(found['login'], {'url': 'https://auth.openai.com/codex/device', 'code': False, 'user_code': 'ABCD-1234'})
+
+    def test_long_login_screen_keeps_url_above_last_thirty_rows(self):
+        found = seen({'id': '%fixture-tall', 'agent': 'claude'}, SIGN_IN.replace('  Paste code', '\n' * 35 + '  Paste code'))
+        self.assertEqual(found['login']['url'], URL)
+
+    def test_login_link_rejects_userinfo_and_bad_ports(self):
+        for url in ('https://evil@claude.com/oauth/authorize', 'https://claude.com:bad/oauth/authorize',
+                    'https://claude.com:1234/oauth/authorize', 'https://claude.com.evil.test/oauth/authorize'):
+            with self.subTest(url=url):
+                self.assertIsNone(terminal_input.login_link([url, 'Paste code here if prompted >']))
+
+    def test_old_login_url_does_not_hide_the_current_input(self):
+        self.assertNotIn('login', seen({'id': '%fixture-old', 'agent': 'claude'}, SIGN_IN + '\n❯ ready\nEsc to cancel'))
+
+    def test_passive_account_snapshot_never_runs_ccswap(self):
+        from unittest.mock import patch
+        with patch.object(saved_accounts, '_snapshot', None), patch.object(saved_accounts.subprocess, 'run', side_effect=AssertionError('passive command')):
+            self.assertEqual(saved_accounts.snapshot()['claude'], [])
+
+    def test_native_code_is_bound_to_login_and_preserves_drafts(self):
+        from unittest.mock import patch
+        calls = []
+        def run(argv, **kwargs):
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, 0, SIGN_IN)
+        entry = {'id': '%fixture', 'agent': 'claude'}
+        with patch.object(terminal_input, 'verify'):
+            terminal_input.type_text(entry, '-literal-code', enter=True, login_url=URL, run=run)
+            self.assertEqual(calls[-2][1:], ['send-keys', '-t', '%fixture', '-l', '--', '-literal-code'])
+            self.assertEqual(calls[-1][1:], ['send-keys', '-t', '%fixture', 'Enter'])
+            for screen in ('❯ existing draft', SIGN_IN.replace('prompted >', 'prompted > existing'),
+                           SIGN_IN + '\n' + SIGN_IN.replace('prompted >', 'prompted > existing')):
+                calls.clear()
+                with patch.object(terminal_input, 'capture', return_value=screen), self.assertRaises(RuntimeError):
+                    terminal_input.type_text(entry, 'code', enter=True, login_url=URL, run=run)
+                self.assertEqual(calls, [])
+
+    def test_resized_login_recovers_the_latest_link_without_reading_history_at_a_normal_prompt(self):
+        from unittest.mock import Mock
+        entry = {'id': '%clipped', 'agent': 'claude'}
+        current = 'rest-of-a-clipped-link\nPaste code here if prompted >'
+        history = 'https://claude.com/cai/oauth/authorize?state=old\n\n' + SIGN_IN
+        run = Mock(return_value=subprocess.CompletedProcess([], 0, history))
+        recovered = terminal_input.login_capture(entry, current, run)
+        terminal_input._attention_seen.clear()
+        terminal_input.attention(entry, current, False, now=0, login_screen=recovered)
+        found = terminal_input.attention(entry, current, False, now=10, login_screen=recovered)
+        self.assertEqual(found['login']['url'], URL)
+        self.assertIn('-J', run.call_args.args[0])
+        run.reset_mock()
+        self.assertEqual(terminal_input.login_capture(entry, '❯ existing draft', run), '❯ existing draft')
+        run.assert_not_called()
+
+    def test_native_login_reports_only_explicit_outcomes(self):
+        entry = {'id': '%outcome', 'agent': 'claude', 'process_start': 1, 'thread': 'one'}
+        self.assertIsNone(terminal_input.login_progress(entry, SIGN_IN, now=0))
+        result = terminal_input.login_progress(entry, 'Login successful. Press Enter to continue.', now=1)
+        self.assertEqual(result, {'phase': 'done', 'message': 'Signed in.'})
+        self.assertIsNone(terminal_input.login_progress(dict(entry, thread='two'), '❯ ', now=2))
+        entry['id'] = '%failure'
+        terminal_input.login_progress(entry, SIGN_IN, now=0)
+        result = terminal_input.login_progress(entry, 'Authentication failed. Try again.', now=1)
+        self.assertEqual(result['phase'], 'failed')
+        entry['id'] = '%closed'
+        terminal_input.login_progress(entry, SIGN_IN, now=0)
+        result = terminal_input.login_progress(entry, '❯ ', now=1)
+        self.assertEqual(result['phase'], 'unknown')
+        self.assertNotIn(URL, repr(terminal_input._login_progress))
+
+
 if __name__ == '__main__':
     unittest.main()

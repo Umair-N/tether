@@ -748,7 +748,7 @@ class AttentionTests(unittest.TestCase):
             for bad in ('', 'x' * 501, 'a\x1bb', None):
                 with self.assertRaises(ValueError):
                     terminal.type_text(self.CLAUDE, bad, run=run)
-        self.assertEqual(sent, [['%a', '-l', 'my answer'], ['%a', 'Enter']])
+        self.assertEqual(sent, [['%a', '-l', '--', 'my answer'], ['%a', 'Enter']])
 
 
 class PanelAndProgramTests(unittest.TestCase):
