@@ -59,7 +59,13 @@ const count = (window: FoundrySpend['estimate']['tokens'], key: 'requests' | 'to
 // It shows while Foundry is chosen, and on the plan too if Foundry was used this month.
 function SpendRow({ api, show }: { api: Api; show: boolean }) {
   const [spend, setSpend] = useState<FoundrySpend | null>(null)
-  useEffect(() => { void api<FoundrySpend>('foundry-spend').then(setSpend, () => {}) }, [api, show])
+  // Refresh every minute while open: the estimate grows as Codex runs write their logs.
+  useEffect(() => {
+    const load = () => { void api<FoundrySpend>('foundry-spend').then(setSpend, () => {}) }
+    load()
+    const timer = window.setInterval(load, 60_000)
+    return () => window.clearInterval(timer)
+  }, [api, show])
   if (!spend || (!show && !spend.estimate.usd)) return null
   const { estimate, bill, budget } = spend
   const used = bill.state === 'ok' ? bill.usd : estimate.usd
