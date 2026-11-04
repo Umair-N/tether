@@ -8,17 +8,66 @@ description: Guide Tether setup when the user says "set up tether", "install tet
 Use the repository's `install.py` for all installation work, dependencies, services, and hooks.
 Keep this skill a guide; do not write service files or agent settings yourself.
 
-## Find the repository and show defaults
+## Select a release install and show defaults
 
-1. Check the current directory and its parents for Tether's root `install.py`, `server/`, and `ui/`.
-2. If inside Tether, use that checkout without a location question.
-3. Otherwise, ask where to use or clone Tether; offer `~/tether` as the default.
-4. Reuse a Tether checkout at that location, or clone `https://github.com/incmak/tether.git` there.
-   Preserve existing files if that location contains another project.
-5. Read `install.py` and run `python3 install.py --help` from the repository root.
-6. Run `python3 install.py --plan --json` with no option overrides.
-7. Show a short table from the JSON: URL, host/auth, ports, features, reused choices, checks, legacy units, and planned changes.
-   Include failed checks and their `fix` text; exit code zero alone does not prove readiness.
+Use a tagged release by default. Do not clone `main` for a normal install.
+If cwd is inside Tether, ask: release install / “I want to develop Tether”.
+Do not silently use that checkout. Keep every checkout and all user data.
+
+1. Read `~/.config/tether/install.json` if present, or `TETHER_INSTALL_STATE` when set.
+   If its `repo` is a git checkout, use the migration branch below before normal setup.
+2. For an existing release install, reuse `~/.local/share/tether/current`.
+   For a first install, run `python3 <this-skill-directory>/bootstrap.py` from any directory.
+   Resolve the script beside this SKILL.md, not relative to cwd.
+   The Codex copy is byte-identical to `integrations/claude/tether/skills/setup/bootstrap.py`.
+3. Bootstrap downloads `tether-<version>.tar.gz` and `SHA256SUMS` from the latest stable GitHub release.
+   It uses `TETHER_REPO` (default `incmak/tether`) and the CLI's latest-release endpoint.
+   It verifies SHA-256, rejects unsafe paths and links, and atomically sets `current`.
+   It writes only `~/.local/share/tether/releases/<version>/`, `current`, and the release lock.
+   It does not install services or change agent settings.
+   Stop on failure. Never fall back to an unverified archive or a git clone.
+4. Bootstrap and `current/tether install` accept `--to vX.Y.Z` for a published tag.
+   Offline installs require both `--archive PATH --sums PATH`; use the original `tether-<version>.tar.gz` filename.
+   `tether install` prepares the same layout; it does not apply the installer.
+5. Read `current/install.py` and run `python3 ~/.local/share/tether/current/install.py --help`.
+6. Run `python3 ~/.local/share/tether/current/install.py --plan --json --no-build-ui` with no other overrides.
+   The release archive contains `ui/dist`; do not require Node or rebuild it.
+7. Show URL, host/auth, ports, features, updates, reused choices, checks, legacy units, hooks, and `cli_link`.
+   Include failed checks and their `fix` text. Exit code zero alone does not prove readiness.
+   Show plan warnings, including the shell line when `~/.local/bin` is absent from PATH.
+   Apply creates `~/.local/bin/tether -> ~/.local/share/tether/current/tether`.
+   It preserves any foreign command at that path and reports the conflict.
+
+### Migrate an existing checkout install
+
+Offer migration to a release, or the explicit developer choice. Do not replace saved choices with defaults.
+Explain that migration moves services, update units, Claude hooks, and Tether status lines to `current`.
+It keeps tokens, preferences, chat data, transcripts, and the checkout.
+Local checkout changes produce a warning; migration does not modify the checkout.
+
+Show the saved choices and ask for an explicit yes before migration.
+After yes, run bootstrap if no release is prepared, then run:
+
+```sh
+python3 ~/.local/share/tether/current/tether migrate
+```
+
+Migration reads the saved `repo`; `--from PATH` must match it.
+It accepts the same tag/archive flags as bootstrap. Pass the same flags when bootstrap used a specific archive or tag.
+Migration reuses a prepared release only when its contents match the verified archive.
+It applies `current/install.py` with the saved choices and `--no-build-ui`, then checks `/chat/`.
+A failed installer, restart, or health check restores checkout units, hooks, status lines, and saved state.
+Report failure clearly. Never delete the checkout; after success explain that the user can remove it.
+Then use the release plan to review any further settings changes.
+
+### Explicit developer choice
+
+Only when the user chooses “I want to develop Tether”, ask where to use or clone the checkout.
+Offer `~/tether`, preserve existing files, and reuse an existing Tether checkout when selected.
+Otherwise clone `https://github.com/incmak/tether.git` there.
+Use that checkout's `install.py --plan --json` and `--apply --json`.
+Keep its default UI build choice; development needs Node and npm.
+Use `git pull` and reapply for checkout updates. Release installs update with `tether update`.
 
 ## Ask once for choices
 
@@ -33,7 +82,7 @@ Do not ask for ports, dependencies, or build choices unless the plan reports a f
 2. **Remote access** (phone, tablet, other computers), single choice: Tailscale / same Wi-Fi LAN / HTTPS reverse proxy / this computer only.
    Recommend Tailscale for phone access; this computer only offers no remote phone access.
    Include the LAN plain-HTTP warning below in this choice.
-3. **Updates**, single choice: notify / auto / off; recommend notify.
+3. **Updates**, single choice: notify / auto / off; recommend notify unless the user selects auto.
    Pass it as `--updates notify|auto|off`; `auto` adds a daily update timer.
    A git checkout updates with `git pull`; release installs use `tether update`.
 4. **Legacy units**, only when `legacy_units` is nonempty: keep / replace; default keep.
@@ -59,15 +108,17 @@ Use an explicit flag for each feature, including features the user disables:
 | This computer only | `--host 127.0.0.1 --auth token` |
 
 1. Retain the baseline chat port through `--port` unless the user chooses another port to resolve a failed check.
-   Leave the UI build choice at the installer's default; it builds missing or stale assets.
+   For releases, always pass `--no-build-ui`. For explicit development, retain the default build choice.
 2. Add `--replace-legacy` only when the user selects replace.
-3. Re-run `python3 install.py --plan --json` with the chosen flags.
+3. Re-run `python3 ~/.local/share/tether/current/install.py --plan --json --no-build-ui` with the chosen flags.
+   For explicit development, use the checkout installer instead.
 4. Show a short before/after table for changed options, checks, units, commands, hooks, and legacy actions.
    State that apply can install dependencies, build the UI, save choices, and start or restart the listed services.
 5. Resolve failed checks before apply; keep necessary follow-up questions limited to the reported failure.
 6. Ask for an explicit yes to apply this reviewed plan, including any legacy replacement.
    Wait for the answer; a menu choice does not authorize apply.
-7. After yes, run `python3 install.py --apply --json` with exactly the reviewed flags.
+7. After yes, run `python3 ~/.local/share/tether/current/install.py --apply --json --no-build-ui` with exactly the reviewed flags.
+   For explicit development, use the checkout installer instead.
    Report a failed command as a failure; do not claim setup succeeded.
    If the returned plan differs materially from the review, report the difference.
 

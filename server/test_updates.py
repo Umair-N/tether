@@ -262,9 +262,14 @@ class ReleaseTests(unittest.TestCase):
         archive = self.asset_dir / 'tether-0.2.0.tar.gz'
         with tarfile.open(archive, 'w:gz') as tar:
             for name, content in [('VERSION', b'0.2.0\n'), ('install.py', (ROOT / 'install.py').read_bytes()),
-                                  ('ui/dist/index.html', b'new')]:
+                                  ('ui/dist/index.html', b'new'), ('tether', (ROOT / 'tether').read_bytes()),
+                                  ('server/updates.py', (ROOT / 'server/updates.py').read_bytes()),
+                                  ('server/paths.py', (ROOT / 'server/paths.py').read_bytes()),
+                                  ('integrations/claude/tether/skills/setup/bootstrap.py',
+                                   (ROOT / 'integrations/claude/tether/skills/setup/bootstrap.py').read_bytes())]:
                 info = tarfile.TarInfo(name)
                 info.size = len(content)
+                info.mode = 0o755 if name == 'tether' else 0o644
                 tar.addfile(info, io.BytesIO(content))
             if unsafe:
                 info = tarfile.TarInfo(unsafe)

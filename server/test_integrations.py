@@ -46,17 +46,27 @@ class IntegrationTests(unittest.TestCase):
                     self.assertIsNotNone(value, f'Missing or empty {field}')
                     self.assertNotIn(value[1].strip(), ('""', "''"))
 
-    def test_documented_installer_flags_exist(self):
+    def test_documented_flags_exist(self):
         result = subprocess.run(
             [sys.executable, str(ROOT / 'install.py'), '--help'],
             cwd=ROOT, capture_output=True, text=True, check=True, timeout=10,
         )
         help_flags = set(re.findall(r'(?<![\w-])--[a-z][a-z-]*\b', result.stdout))
+        for script, args in ((ROOT / 'tether', ['install', '--help']),
+                             (ROOT / 'tether', ['migrate', '--help']),
+                             (ROOT / 'integrations/claude/tether/skills/setup/bootstrap.py', ['--help'])):
+            result = subprocess.run([sys.executable, str(script), *args], capture_output=True,
+                                    text=True, check=True, timeout=10)
+            help_flags.update(re.findall(r'(?<![\w-])--[a-z][a-z-]*\b', result.stdout))
         for path in SKILLS:
             with self.subTest(skill=path.relative_to(ROOT)):
                 flags = set(re.findall(r'(?<![\w-])--[a-z][a-z-]*\b', path.read_text()))
                 self.assertTrue(flags, 'Skill must document installer flags')
-                self.assertFalse(flags - help_flags, f'Unsupported installer flags: {sorted(flags - help_flags)}')
+                self.assertFalse(flags - help_flags, f'Unsupported documented flags: {sorted(flags - help_flags)}')
+
+    def test_packaged_bootstraps_match(self):
+        self.assertEqual(SKILLS[0].with_name('bootstrap.py').read_bytes(),
+                         SKILLS[1].with_name('bootstrap.py').read_bytes())
 
 
 if __name__ == '__main__':

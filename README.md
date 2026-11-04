@@ -31,12 +31,12 @@ They do not show the current React UI.
 
 - Linux. The server uses `/proc` and Linux agent file layouts; macOS is not supported.
 - Python 3.10 or newer. CI targets Python 3.12.
-- Node.js 22 and npm to build the React UI.
+- Node.js 22 and npm for development UI builds. Release archives include the built UI.
 - `tmux` and at least one installed agent: Claude Code, Codex CLI, or Antigravity.
 - A systemd user session for the installer. The installer needs no root.
 - Optional: [`ttyd`](https://github.com/tsl0922/ttyd) for the interactive terminal, and `pywebpush` for push notifications.
 
-The core server uses only the Python standard library. The React UI requires a build.
+The core server uses only the Python standard library. Release installs need no Node or npm.
 
 ## Set up with Claude Code or Codex
 
@@ -50,8 +50,8 @@ The agent offers features and remote access, shows an installer plan, then waits
 
 **Codex CLI**
 
-1. Clone this repository with `git clone https://github.com/incmak/tether.git ~/tether`, or use an existing checkout.
-2. From the checkout, run the three copy commands in the [Codex setup skill](integrations/codex/skills/tether-setup/SKILL.md#install-this-codex-skill). They move an existing copy aside before copying.
+1. Prepare a release with the bootstrap in Quick start below, or use an existing release.
+2. From `~/.local/share/tether/current`, run the three copy commands in the [Codex setup skill](integrations/codex/skills/tether-setup/SKILL.md#install-this-codex-skill). They move an existing copy aside before copying.
 3. Restart Codex if needed, then type `set up tether` or `$tether-setup` and follow the guided setup.
 
 The Codex copy steps use the local skill layout; current [Codex docs](https://developers.openai.com/codex/skills) list `~/.agents/skills`.
@@ -61,10 +61,31 @@ See the [Claude Code marketplace docs](https://code.claude.com/docs/en/plugin-ma
 
 ## Quick start
 
-1. From the repository root, run `python3 install.py --plan` to check requirements and review the changes.
-2. Run `python3 install.py --apply` with the same options. It builds the UI when needed and starts the user services.
-3. Start `tmux new -s work`, then run `claude`, `codex`, or `agy` inside it.
-4. Open the printed `/chat/` URL. Sign in with the token from the printed file path.
+The setup skills install the latest stable release by default. To prepare a release without a checkout:
+
+```sh
+curl -fL https://raw.githubusercontent.com/incmak/tether/v0.1.2/integrations/claude/tether/skills/setup/bootstrap.py -o tether-bootstrap.py
+python3 tether-bootstrap.py
+python3 ~/.local/share/tether/current/install.py --plan --json --no-build-ui
+python3 ~/.local/share/tether/current/install.py --apply --json --no-build-ui
+```
+
+Review the plan and resolve failed checks before apply. The script uses only Python's standard library.
+It downloads the release tarball and `SHA256SUMS`, checks SHA-256, and rejects unsafe archive paths and links.
+It installs files into `~/.local/share/tether/releases/<version>/` and atomically points `current` at that release.
+It does not start services; `install.py --apply` handles services, hooks, dependencies, and saved choices.
+The installer creates `~/.local/bin/tether -> ~/.local/share/tether/current/tether` and preserves any foreign command there.
+Its plan includes `cli_link` and warnings. If `~/.local/bin` is absent from PATH, add:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Start `tmux new -s work`, then run `claude`, `codex`, or `agy` inside it.
+Open the printed `/chat/` URL. Sign in with the token from the printed file path.
+
+For development, explicitly choose a git checkout. Run `python3 install.py --plan`, then `python3 install.py --apply` there.
+The checkout installer builds the UI when needed.
 
 Each Linux user runs the installer separately. It selects the first free chat port from 7683 and separate optional service ports.
 Ports occupied by other users count as taken.
@@ -229,11 +250,12 @@ The server checks the latest stable release once per day without an authenticati
 The sidebar shows a dismissible link to release notes. Each version has its own dismissal.
 Failed checks keep the last known result. `off` disables these checks and the banner.
 
-For a release install, place the extracted tree in `~/.local/share/tether/releases/<version>/`.
-Create `~/.local/share/tether/current` as a symlink to that directory.
-Run `python3 ~/.local/share/tether/current/install.py --apply --no-build-ui`.
-The archive contains the built UI. Services use the `current` symlink.
-Use `~/.local/share/tether/current/tether` as the CLI, or add a symlink in your local executable directory.
+Use Quick start or either setup skill for the first release install.
+The archive contains the built UI. Services, hooks, status lines, and the CLI use the stable `current` path.
+With an available CLI, `tether install` prepares the same release layout without applying the installer.
+It refuses an existing `current`; use `tether update` for an established release install.
+Bootstrap and `tether install` accept `--to vX.Y.Z` and paired `--archive PATH --sums PATH` for offline installs.
+Keep the archive filename `tether-<version>.tar.gz`. SHA-256 and archive safety checks also apply offline.
 
 ```bash
 tether update --check              # Report the latest stable release.
@@ -241,8 +263,8 @@ tether update                      # Ask before applying it.
 tether update --yes                # Apply without a prompt.
 tether update --to v0.2.0          # Select a published version, including an rc release.
 tether rollback                    # Restore the previous release.
-python3 install.py --plan --updates auto
-python3 install.py --apply --updates auto
+python3 ~/.local/share/tether/current/install.py --plan --updates auto --no-build-ui
+python3 ~/.local/share/tether/current/install.py --apply --updates auto --no-build-ui
 ```
 
 The installer saves `--updates notify|auto|off`. The default is `notify`.
@@ -257,5 +279,21 @@ A failed install, restart, or health check restores the prior release, units, an
 A successful update keeps the active release and one rollback release.
 Updates use a lock to prevent concurrent changes. They preserve chat data and agent transcripts.
 
-A git checkout refuses release updates. Run `git pull`, then `python3 install.py --apply` there.
+A git checkout refuses release updates. Developers use `git pull`, then `python3 install.py --apply` there.
+To move an existing checkout install to releases, prepare a release with bootstrap, then run:
+
+```sh
+python3 ~/.local/share/tether/current/tether migrate
+# Optional: --from /path/to/checkout --to v0.1.2
+# Offline: --archive /path/to/tether-0.1.2.tar.gz --sums /path/to/SHA256SUMS
+```
+
+Migration uses the checkout path and choices in `~/.config/tether/install.json` (or `TETHER_INSTALL_STATE`).
+An explicit `--from` must match that saved checkout. Use the same tag/archive flags as bootstrap.
+A prepared release must match the verified archive before migration can reuse it.
+Migration reapplies the installer without a UI build, then checks `/chat/`.
+It moves unit paths, Claude lifecycle hooks, Tether usage status lines, saved `repo`, and automatic update units to `current`.
+It keeps tokens, preferences, configuration, chat data, and agent transcripts.
+Failure restores checkout units, settings, and saved state, then restarts the checkout services.
+The checkout stays untouched, including local changes. After success, the user can remove it.
 Set `TETHER_REPO` to choose another release repository. The default is `incmak/tether`.

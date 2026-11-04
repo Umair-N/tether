@@ -213,7 +213,8 @@ def merge_claude_hooks(data, entries, remove=False):
             return None
         command = entry['hooks'][0]['command']
         def owned(handler):
-            return handler.get('type') == 'command' and handler.get('command') == command
+            return (handler.get('type') == 'command' and handler.get('command') == command or
+                    remove and owned_command(handler, Path(shlex.split(command)[1])))
         if remove:
             if not any(owned(handler) for group in groups for handler in group['hooks']):
                 continue
@@ -234,6 +235,26 @@ def merge_claude_hooks(data, entries, remove=False):
     if hooks or 'hooks' in data:
         result['hooks'] = hooks
     return result
+
+
+def cli_link_plan(home, service_repo, uninstall=False):
+    if uninstall or service_repo != home / '.local/share/tether/current':
+        return None
+    link, target = home / '.local/bin/tether', service_repo / 'tether'
+    action = ('keep' if link.is_symlink() and link.readlink() == target else
+              'preserve foreign path' if link.exists() or link.is_symlink() else 'create')
+    return dict(path=str(link), target=str(target), action=action)
+
+
+def owned_command(value, script):
+    if (not isinstance(value, dict) or value.get('type') != 'command' or
+            not isinstance(value.get('command'), str)):
+        return False
+    try:
+        words = shlex.split(value.get('command', ''))
+    except ValueError:
+        return False
+    return len(words) == 2 and words[1] == str(script)
 
 
 def make_plan(args, repo=ROOT, home=None):
@@ -401,7 +422,9 @@ def make_plan(args, repo=ROOT, home=None):
         commands = [command for command in commands
                     if command[:2] != ['systemctl', '--user'] or command[2] == 'daemon-reload']
     hooks = []
-    if options['hooks'] and not args.uninstall:
+    old_repo = Path(saved.get('repo', service_repo))
+    relocating = old_repo != service_repo and not args.uninstall
+    if (options['hooks'] or relocating) and not args.uninstall:
         for folder, script, extra in (('.claude', 'claude_usage.py', {}),
                                      ('.gemini/antigravity-cli', 'antigravity_status.py', {'enabled': True, 'stack_with_default': True})):
             directory = home / folder
@@ -410,23 +433,45 @@ def make_plan(args, repo=ROOT, home=None):
             settings = directory / 'settings.json'
             try:
                 data = json.loads(settings.read_text()) if settings.exists() else {}
-                status = 'preserve' if not isinstance(data, dict) or 'statusLine' in data else 'add'
+                status = 'preserve'
+                if isinstance(data, dict):
+                    if relocating and owned_command(data.get('statusLine'), old_repo / 'server' / script):
+                        status = 'replace'
+                    elif 'statusLine' not in data and options['hooks']:
+                        status = 'add'
             except ValueError:
                 status = 'preserve invalid JSON'
-            hooks.append(dict(path=str(settings), action=status,
+            hooks.append(dict(path=str(settings), action=status, old_repo=str(old_repo), script=script,
                               value=dict(type='command', command=shlex.join([sys.executable, str(service_repo / 'server' / script)]), **extra)))
-    if options['hooks'] or args.uninstall:
+    if options['hooks'] or args.uninstall or relocating:
         settings = home / '.claude/settings.json'
         if settings.parent.is_dir():
             entries = claude_hook_entries(Path(saved.get('repo', service_repo)) if args.uninstall else service_repo)
             try:
                 data = json.loads(settings.read_text()) if settings.exists() else {}
-                merged = merge_claude_hooks(data, entries, remove=args.uninstall)
-                status = 'preserve' if merged is None or merged == data else 'remove' if args.uninstall else 'merge'
+                original = data
+                if relocating and not options['hooks'] and merge_claude_hooks(data, entries) is not None:
+                    # Move handlers that remain from a prior hook install, without enabling new ones.
+                    entries = {event: entry for event, entry in entries.items()
+                               if any(owned_command(handler, old_repo / 'server/claude_hooks.py')
+                                      for group in data.get('hooks', {}).get(event, [])
+                                      for handler in group['hooks'])}
+                if relocating:
+                    data = merge_claude_hooks(data, claude_hook_entries(old_repo), remove=True)
+                merged = merge_claude_hooks(data, entries, remove=args.uninstall) if data is not None else None
+                status = 'preserve' if merged is None or merged == original else 'remove' if args.uninstall else 'merge'
             except ValueError:
                 status = 'preserve invalid JSON'
-            hooks.append(dict(path=str(settings), action=status, entries=entries))
-    return dict(version=VERSION, action='uninstall' if args.uninstall else 'install', repo=str(service_repo), build_repo=str(repo),
+            hooks.append(dict(path=str(settings), action=status, entries=entries,
+                              old_entries=claude_hook_entries(old_repo) if relocating else None))
+    cli_link = cli_link_plan(home, service_repo, args.uninstall)
+    warnings = []
+    if cli_link:
+        if cli_link['action'] == 'preserve foreign path':
+            warnings.append(f'Existing {cli_link["path"]} belongs to another install; kept unchanged. Use {cli_link["target"]}.')
+        if str(home / '.local/bin') not in os.environ.get('PATH', '').split(os.pathsep):
+            warnings.append('~/.local/bin is not on PATH. Add this shell line: export PATH="$HOME/.local/bin:$PATH"')
+    return dict(cli_link=cli_link, warnings=warnings, version=VERSION, action='uninstall' if args.uninstall else 'install', repo=str(service_repo), build_repo=str(repo),
                 options=options, reused_saved_choices=sorted(set(reused)), checks=checks,
                 legacy_units=legacy, legacy_action='disable and stop' if args.replace_legacy and not args.uninstall else 'leave untouched',
                 units=files, commands=commands, hooks=hooks, state_file=str(state_file),
@@ -486,8 +531,11 @@ def apply_plan(plan, home=None):
             data = json.loads(settings.read_text()) if settings.exists() else {}
         except ValueError:
             continue
-        merged = merge_claude_hooks(data, hook['entries'], remove=plan['action'] == 'uninstall')
-        if merged is None or merged == data:
+        original = data
+        if hook.get('old_entries'):
+            data = merge_claude_hooks(data, hook['old_entries'], remove=True)
+        merged = merge_claude_hooks(data, hook['entries'], remove=plan['action'] == 'uninstall') if data is not None else None
+        if merged is None or merged == original:
             continue
         if settings.exists():
             shutil.copy2(settings, settings.with_name(settings.name + '.before-tether'))
@@ -496,16 +544,33 @@ def apply_plan(plan, home=None):
         state.unlink(missing_ok=True)
         return
     for hook in plan['hooks']:
-        if hook['action'] != 'add':
+        if hook['action'] not in ('add', 'replace'):
             continue
         settings = Path(hook['path'])
         data = json.loads(settings.read_text()) if settings.exists() else {}
-        if 'statusLine' in data:
+        if hook['action'] == 'replace':
+            if not owned_command(data.get('statusLine'), Path(hook['old_repo']) / 'server' / hook['script']):
+                continue
+        elif 'statusLine' in data:
             continue
         if settings.exists():
             shutil.copy2(settings, settings.with_name(settings.name + '.before-tether'))
-        data['statusLine'] = hook['value']
+        data['statusLine'] = (dict(data['statusLine'], command=hook['value']['command'])
+                              if hook['action'] == 'replace' else hook['value'])
         settings.write_text(json.dumps(data, indent=2) + '\n')
+    cli_link = cli_link_plan(home, Path(plan['repo']))
+    if cli_link:
+        if cli_link['action'] == 'create':
+            link = Path(cli_link['path'])
+            link.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                link.symlink_to(cli_link['target'])
+            except FileExistsError:
+                print(f'Existing {link} kept unchanged.', file=sys.stderr)
+        elif cli_link['action'] == 'preserve foreign path':
+            print(f'Existing {cli_link["path"]} kept unchanged. Use {cli_link["target"]}.', file=sys.stderr)
+    for warning in plan.get('warnings', []):
+        print(warning, file=sys.stderr)
     state.parent.mkdir(parents=True, exist_ok=True)
     record = dict(version=VERSION, repo=plan['repo'], options=plan['options'], updates=plan['options']['updates'],
                   unit_names=sorted(plan['units']), timestamp=datetime.now(timezone.utc).isoformat())
@@ -518,6 +583,10 @@ def print_plan(plan):
     print(f'Tether {plan["action"]} plan: {plan["repo"]}')
     if plan['reused_saved_choices']:
         print('Reuse saved choices: ' + ', '.join(plan['reused_saved_choices']))
+    if plan.get('cli_link'):
+        print('CLI link: ' + json.dumps(plan['cli_link'], sort_keys=True))
+    for warning in plan.get('warnings', []):
+        print('Warning: ' + warning)
     for item in plan['checks']:
         print(f'{"PASS" if item["ok"] else "FAIL"}: {item["name"]}')
     for name in plan['legacy_units']:
