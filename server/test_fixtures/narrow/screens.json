@@ -1,0 +1,954 @@
+[
+  {
+    "agent": "claude",
+    "width": 20,
+    "kind": "empty",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────\n\u001b[1m❯\u001b[0m \u001b[2mTry \"fix the tests\n\u001b[0m────────────────────\n"
+  },
+  {
+    "agent": "claude",
+    "width": 20,
+    "kind": "typed",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────\n\u001b[1m❯\u001b[0m keep this draft\n────────────────────\n"
+  },
+  {
+    "agent": "claude",
+    "width": 20,
+    "kind": "typed_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────\n\u001b[1m❯\u001b[0m Try \"fix the tests\n────────────────────\n"
+  },
+  {
+    "agent": "claude",
+    "width": 20,
+    "kind": "wrapped_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────\n\u001b[1m❯\u001b[0m \u001b[2mTry \"fix the tests\n\" or ask about this\nproject\u001b[0m\n────────────────────\n"
+  },
+  {
+    "agent": "claude",
+    "width": 20,
+    "kind": "wrapped_draft",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────\n\u001b[1m❯\u001b[0m keep this draft an\nd all of its wrapped\n continuation\n────────────────────\n"
+  },
+  {
+    "agent": "claude",
+    "width": 20,
+    "kind": "approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to\nproceed?\n\u001b[1m❯\u001b[0m 1. Yes\n  2. No\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "claude",
+    "width": 20,
+    "kind": "clipped_approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to proc?\n\u001b[1m❯\u001b[0m 1. Yes, and don'ts\n  2. No, explain whg\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "claude",
+    "width": 20,
+    "kind": "menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Rewind\n\n  Previous point\n\u001b[1m❯\u001b[0m (current)\n\nEnter to continue ·\nEsc to cancel\n"
+  },
+  {
+    "agent": "claude",
+    "width": 20,
+    "kind": "clipped_menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Rewind\n\n\u001b[1m❯\u001b[0m 1. A long option n\n  2. Another optionn\n\nEnter to continue ·l\n"
+  },
+  {
+    "agent": "claude",
+    "width": 22,
+    "kind": "empty",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────\n\u001b[1m❯\u001b[0m \u001b[2mTry \"fix the tests\"\n\u001b[0m──────────────────────\n"
+  },
+  {
+    "agent": "claude",
+    "width": 22,
+    "kind": "typed",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────\n\u001b[1m❯\u001b[0m keep this draft\n──────────────────────\n"
+  },
+  {
+    "agent": "claude",
+    "width": 22,
+    "kind": "typed_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────\n\u001b[1m❯\u001b[0m Try \"fix the tests\"\n──────────────────────\n"
+  },
+  {
+    "agent": "claude",
+    "width": 22,
+    "kind": "wrapped_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────\n\u001b[1m❯\u001b[0m \u001b[2mTry \"fix the tests\"\nor ask about this proj\nect\u001b[0m\n──────────────────────\n"
+  },
+  {
+    "agent": "claude",
+    "width": 22,
+    "kind": "wrapped_draft",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────\n\u001b[1m❯\u001b[0m keep this draft and\nall of its wrapped con\ntinuation\n──────────────────────\n"
+  },
+  {
+    "agent": "claude",
+    "width": 22,
+    "kind": "approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to\nproceed?\n\u001b[1m❯\u001b[0m 1. Yes\n  2. No\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "claude",
+    "width": 22,
+    "kind": "clipped_approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to procee?\n\u001b[1m❯\u001b[0m 1. Yes, and don't as\n  2. No, explain whatg\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "claude",
+    "width": 22,
+    "kind": "menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Rewind\n\n  Previous point\n\u001b[1m❯\u001b[0m (current)\n\nEnter to continue ·\nEsc to cancel\n"
+  },
+  {
+    "agent": "claude",
+    "width": 22,
+    "kind": "clipped_menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Rewind\n\n\u001b[1m❯\u001b[0m 1. A long option win\n  2. Another option wn\n\nEnter to continue · El\n"
+  },
+  {
+    "agent": "claude",
+    "width": 30,
+    "kind": "empty",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────────────\n\u001b[1m❯\u001b[0m \u001b[2mTry \"fix the tests\" or ask a\n\u001b[0m──────────────────────────────\n"
+  },
+  {
+    "agent": "claude",
+    "width": 30,
+    "kind": "typed",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────────────\n\u001b[1m❯\u001b[0m keep this draft\n──────────────────────────────\n"
+  },
+  {
+    "agent": "claude",
+    "width": 30,
+    "kind": "typed_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────────────\n\u001b[1m❯\u001b[0m Try \"fix the tests\" or ask a\n──────────────────────────────\n"
+  },
+  {
+    "agent": "claude",
+    "width": 30,
+    "kind": "wrapped_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────────────\n\u001b[1m❯\u001b[0m \u001b[2mTry \"fix the tests\" or ask a\nbout this project\u001b[0m\n──────────────────────────────\n"
+  },
+  {
+    "agent": "claude",
+    "width": 30,
+    "kind": "wrapped_draft",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────────────\n\u001b[1m❯\u001b[0m keep this draft and all of i\nts wrapped continuation\n──────────────────────────────\n"
+  },
+  {
+    "agent": "claude",
+    "width": 30,
+    "kind": "approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to proceed?\n\u001b[1m❯\u001b[0m 1. Yes\n  2. No\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "claude",
+    "width": 30,
+    "kind": "clipped_approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to proceed?\n\u001b[1m❯\u001b[0m 1. Yes, and don't ask agains\n  2. No, explain what must chg\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "claude",
+    "width": 30,
+    "kind": "menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Rewind\n\n  Previous point\n\u001b[1m❯\u001b[0m (current)\n\nEnter to continue · Esc to\ncancel\n"
+  },
+  {
+    "agent": "claude",
+    "width": 30,
+    "kind": "clipped_menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Rewind\n\n\u001b[1m❯\u001b[0m 1. A long option with an exn\n  2. Another option with a lon\n\nEnter to continue · Esc to cal\n"
+  },
+  {
+    "agent": "claude",
+    "width": 40,
+    "kind": "empty",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────\n\u001b[1m❯\u001b[0m \u001b[2mTry \"fix the tests\" or ask about this\n\u001b[0m────────────────────────────────────────\n"
+  },
+  {
+    "agent": "claude",
+    "width": 40,
+    "kind": "typed",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────\n\u001b[1m❯\u001b[0m keep this draft\n────────────────────────────────────────\n"
+  },
+  {
+    "agent": "claude",
+    "width": 40,
+    "kind": "typed_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────\n\u001b[1m❯\u001b[0m Try \"fix the tests\" or ask about this\n────────────────────────────────────────\n"
+  },
+  {
+    "agent": "claude",
+    "width": 40,
+    "kind": "wrapped_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────\n\u001b[1m❯\u001b[0m \u001b[2mTry \"fix the tests\" or ask about this\nproject\u001b[0m\n────────────────────────────────────────\n"
+  },
+  {
+    "agent": "claude",
+    "width": 40,
+    "kind": "wrapped_draft",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────\n\u001b[1m❯\u001b[0m keep this draft and all of its wrapped\n continuation\n────────────────────────────────────────\n"
+  },
+  {
+    "agent": "claude",
+    "width": 40,
+    "kind": "approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to proceed?\n\u001b[1m❯\u001b[0m 1. Yes\n  2. No\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "claude",
+    "width": 40,
+    "kind": "clipped_approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to proceed?\n\u001b[1m❯\u001b[0m 1. Yes, and don't ask again for theses\n  2. No, explain what must change beforg\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "claude",
+    "width": 40,
+    "kind": "menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Rewind\n\n  Previous point\n\u001b[1m❯\u001b[0m (current)\n\nEnter to continue · Esc to cancel\n"
+  },
+  {
+    "agent": "claude",
+    "width": 40,
+    "kind": "clipped_menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Rewind\n\n\u001b[1m❯\u001b[0m 1. A long option with an explanation\n  2. Another option with a longer explan\n\nEnter to continue · Esc to cancel\n"
+  },
+  {
+    "agent": "claude",
+    "width": 80,
+    "kind": "empty",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────────────────────────────────────────────\n\u001b[1m❯\u001b[0m \u001b[2mTry \"fix the tests\" or ask about this project\u001b[0m\n────────────────────────────────────────────────────────────────────────────────\n"
+  },
+  {
+    "agent": "claude",
+    "width": 80,
+    "kind": "typed",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────────────────────────────────────────────\n\u001b[1m❯\u001b[0m keep this draft\n────────────────────────────────────────────────────────────────────────────────\n"
+  },
+  {
+    "agent": "claude",
+    "width": 80,
+    "kind": "typed_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────────────────────────────────────────────\n\u001b[1m❯\u001b[0m Try \"fix the tests\" or ask about this project\n────────────────────────────────────────────────────────────────────────────────\n"
+  },
+  {
+    "agent": "claude",
+    "width": 80,
+    "kind": "wrapped_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────────────────────────────────────────────\n\u001b[1m❯\u001b[0m \u001b[2mTry \"fix the tests\" or ask about this project\u001b[0m\n────────────────────────────────────────────────────────────────────────────────\n"
+  },
+  {
+    "agent": "claude",
+    "width": 80,
+    "kind": "wrapped_draft",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────────────────────────────────────────────\n\u001b[1m❯\u001b[0m keep this draft and all of its wrapped continuation\n────────────────────────────────────────────────────────────────────────────────\n"
+  },
+  {
+    "agent": "claude",
+    "width": 80,
+    "kind": "approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to proceed?\n\u001b[1m❯\u001b[0m 1. Yes\n  2. No\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "claude",
+    "width": 80,
+    "kind": "clipped_approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to proceed?\n\u001b[1m❯\u001b[0m 1. Yes, and don't ask again for these files\n  2. No, explain what must change before retrying\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "claude",
+    "width": 80,
+    "kind": "menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Rewind\n\n  Previous point\n\u001b[1m❯\u001b[0m (current)\n\nEnter to continue · Esc to cancel\n"
+  },
+  {
+    "agent": "claude",
+    "width": 80,
+    "kind": "clipped_menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Rewind\n\n\u001b[1m❯\u001b[0m 1. A long option with an explanation\n  2. Another option with a longer explanation\n\nEnter to continue · Esc to cancel\n"
+  },
+  {
+    "agent": "codex",
+    "width": 20,
+    "kind": "empty",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────\n\u001b[1m›\u001b[0m \u001b[2mAsk Codex to do an\n\u001b[0m────────────────────\n"
+  },
+  {
+    "agent": "codex",
+    "width": 20,
+    "kind": "typed",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────\n\u001b[1m›\u001b[0m keep this draft\n────────────────────\n"
+  },
+  {
+    "agent": "codex",
+    "width": 20,
+    "kind": "typed_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────\n\u001b[1m›\u001b[0m Ask Codex to do an\n────────────────────\n"
+  },
+  {
+    "agent": "codex",
+    "width": 20,
+    "kind": "wrapped_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────\n\u001b[1m›\u001b[0m \u001b[2mAsk Codex to do an\nything\u001b[0m\n────────────────────\n"
+  },
+  {
+    "agent": "codex",
+    "width": 20,
+    "kind": "wrapped_draft",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────\n\u001b[1m›\u001b[0m keep this draft an\nd all of its wrapped\n continuation\n────────────────────\n"
+  },
+  {
+    "agent": "codex",
+    "width": 20,
+    "kind": "approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to\nproceed?\n\u001b[1m›\u001b[0m 1. Yes\n  2. No\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "codex",
+    "width": 20,
+    "kind": "clipped_approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to proc?\n\u001b[1m›\u001b[0m 1. Yes, and don'ts\n  2. No, explain whg\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "codex",
+    "width": 20,
+    "kind": "menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Select Model and\nEffort\n\n\u001b[1m›\u001b[0m 1. Model A\n  2. Model B\n\nenter select · esc\nback\n"
+  },
+  {
+    "agent": "codex",
+    "width": 20,
+    "kind": "clipped_menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Select Model and Eft\n\n\u001b[1m›\u001b[0m 1. A long option n\n  2. Another optionn\n\nenter select · esc k\n"
+  },
+  {
+    "agent": "codex",
+    "width": 22,
+    "kind": "empty",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────\n\u001b[1m›\u001b[0m \u001b[2mAsk Codex to do anyt\n\u001b[0m──────────────────────\n"
+  },
+  {
+    "agent": "codex",
+    "width": 22,
+    "kind": "typed",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────\n\u001b[1m›\u001b[0m keep this draft\n──────────────────────\n"
+  },
+  {
+    "agent": "codex",
+    "width": 22,
+    "kind": "typed_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────\n\u001b[1m›\u001b[0m Ask Codex to do anyt\n──────────────────────\n"
+  },
+  {
+    "agent": "codex",
+    "width": 22,
+    "kind": "wrapped_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────\n\u001b[1m›\u001b[0m \u001b[2mAsk Codex to do anyt\nhing\u001b[0m\n──────────────────────\n"
+  },
+  {
+    "agent": "codex",
+    "width": 22,
+    "kind": "wrapped_draft",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────\n\u001b[1m›\u001b[0m keep this draft and\nall of its wrapped con\ntinuation\n──────────────────────\n"
+  },
+  {
+    "agent": "codex",
+    "width": 22,
+    "kind": "approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to\nproceed?\n\u001b[1m›\u001b[0m 1. Yes\n  2. No\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "codex",
+    "width": 22,
+    "kind": "clipped_approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to procee?\n\u001b[1m›\u001b[0m 1. Yes, and don't as\n  2. No, explain whatg\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "codex",
+    "width": 22,
+    "kind": "menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Select Model and\nEffort\n\n\u001b[1m›\u001b[0m 1. Model A\n  2. Model B\n\nenter select · esc\nback\n"
+  },
+  {
+    "agent": "codex",
+    "width": 22,
+    "kind": "clipped_menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Select Model and Effot\n\n\u001b[1m›\u001b[0m 1. A long option win\n  2. Another option wn\n\nenter select · esc bak\n"
+  },
+  {
+    "agent": "codex",
+    "width": 30,
+    "kind": "empty",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────────────\n\u001b[1m›\u001b[0m \u001b[2mAsk Codex to do anything\u001b[0m\n──────────────────────────────\n"
+  },
+  {
+    "agent": "codex",
+    "width": 30,
+    "kind": "typed",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────────────\n\u001b[1m›\u001b[0m keep this draft\n──────────────────────────────\n"
+  },
+  {
+    "agent": "codex",
+    "width": 30,
+    "kind": "typed_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────────────\n\u001b[1m›\u001b[0m Ask Codex to do anything\n──────────────────────────────\n"
+  },
+  {
+    "agent": "codex",
+    "width": 30,
+    "kind": "wrapped_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────────────\n\u001b[1m›\u001b[0m \u001b[2mAsk Codex to do anything\u001b[0m\n──────────────────────────────\n"
+  },
+  {
+    "agent": "codex",
+    "width": 30,
+    "kind": "wrapped_draft",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────────────\n\u001b[1m›\u001b[0m keep this draft and all of i\nts wrapped continuation\n──────────────────────────────\n"
+  },
+  {
+    "agent": "codex",
+    "width": 30,
+    "kind": "approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to proceed?\n\u001b[1m›\u001b[0m 1. Yes\n  2. No\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "codex",
+    "width": 30,
+    "kind": "clipped_approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to proceed?\n\u001b[1m›\u001b[0m 1. Yes, and don't ask agains\n  2. No, explain what must chg\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "codex",
+    "width": 30,
+    "kind": "menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Select Model and Effort\n\n\u001b[1m›\u001b[0m 1. Model A\n  2. Model B\n\nenter select · esc back\n"
+  },
+  {
+    "agent": "codex",
+    "width": 30,
+    "kind": "clipped_menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Select Model and Effort\n\n\u001b[1m›\u001b[0m 1. A long option with an exn\n  2. Another option with a lon\n\nenter select · esc back\n"
+  },
+  {
+    "agent": "codex",
+    "width": 40,
+    "kind": "empty",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────\n\u001b[1m›\u001b[0m \u001b[2mAsk Codex to do anything\u001b[0m\n────────────────────────────────────────\n"
+  },
+  {
+    "agent": "codex",
+    "width": 40,
+    "kind": "typed",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────\n\u001b[1m›\u001b[0m keep this draft\n────────────────────────────────────────\n"
+  },
+  {
+    "agent": "codex",
+    "width": 40,
+    "kind": "typed_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────\n\u001b[1m›\u001b[0m Ask Codex to do anything\n────────────────────────────────────────\n"
+  },
+  {
+    "agent": "codex",
+    "width": 40,
+    "kind": "wrapped_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────\n\u001b[1m›\u001b[0m \u001b[2mAsk Codex to do anything\u001b[0m\n────────────────────────────────────────\n"
+  },
+  {
+    "agent": "codex",
+    "width": 40,
+    "kind": "wrapped_draft",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────\n\u001b[1m›\u001b[0m keep this draft and all of its wrapped\n continuation\n────────────────────────────────────────\n"
+  },
+  {
+    "agent": "codex",
+    "width": 40,
+    "kind": "approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to proceed?\n\u001b[1m›\u001b[0m 1. Yes\n  2. No\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "codex",
+    "width": 40,
+    "kind": "clipped_approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to proceed?\n\u001b[1m›\u001b[0m 1. Yes, and don't ask again for theses\n  2. No, explain what must change beforg\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "codex",
+    "width": 40,
+    "kind": "menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Select Model and Effort\n\n\u001b[1m›\u001b[0m 1. Model A\n  2. Model B\n\nenter select · esc back\n"
+  },
+  {
+    "agent": "codex",
+    "width": 40,
+    "kind": "clipped_menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Select Model and Effort\n\n\u001b[1m›\u001b[0m 1. A long option with an explanation\n  2. Another option with a longer explan\n\nenter select · esc back\n"
+  },
+  {
+    "agent": "codex",
+    "width": 80,
+    "kind": "empty",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────────────────────────────────────────────\n\u001b[1m›\u001b[0m \u001b[2mAsk Codex to do anything\u001b[0m\n────────────────────────────────────────────────────────────────────────────────\n"
+  },
+  {
+    "agent": "codex",
+    "width": 80,
+    "kind": "typed",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────────────────────────────────────────────\n\u001b[1m›\u001b[0m keep this draft\n────────────────────────────────────────────────────────────────────────────────\n"
+  },
+  {
+    "agent": "codex",
+    "width": 80,
+    "kind": "typed_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────────────────────────────────────────────\n\u001b[1m›\u001b[0m Ask Codex to do anything\n────────────────────────────────────────────────────────────────────────────────\n"
+  },
+  {
+    "agent": "codex",
+    "width": 80,
+    "kind": "wrapped_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────────────────────────────────────────────\n\u001b[1m›\u001b[0m \u001b[2mAsk Codex to do anything\u001b[0m\n────────────────────────────────────────────────────────────────────────────────\n"
+  },
+  {
+    "agent": "codex",
+    "width": 80,
+    "kind": "wrapped_draft",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────────────────────────────────────────────\n\u001b[1m›\u001b[0m keep this draft and all of its wrapped continuation\n────────────────────────────────────────────────────────────────────────────────\n"
+  },
+  {
+    "agent": "codex",
+    "width": 80,
+    "kind": "approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to proceed?\n\u001b[1m›\u001b[0m 1. Yes\n  2. No\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "codex",
+    "width": 80,
+    "kind": "clipped_approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to proceed?\n\u001b[1m›\u001b[0m 1. Yes, and don't ask again for these files\n  2. No, explain what must change before retrying\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "codex",
+    "width": 80,
+    "kind": "menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Select Model and Effort\n\n\u001b[1m›\u001b[0m 1. Model A\n  2. Model B\n\nenter select · esc back\n"
+  },
+  {
+    "agent": "codex",
+    "width": 80,
+    "kind": "clipped_menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Select Model and Effort\n\n\u001b[1m›\u001b[0m 1. A long option with an explanation\n  2. Another option with a longer explanation\n\nenter select · esc back\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 20,
+    "kind": "empty",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────\n\u001b[1m>\u001b[0m \u001b[38;5;109mAuto mode: edits &\n\u001b[39m────────────────────\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 20,
+    "kind": "typed",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────\n\u001b[1m>\u001b[0m keep this draft\n────────────────────\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 20,
+    "kind": "typed_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────\n\u001b[1m>\u001b[0m Auto mode: edits &\n────────────────────\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 20,
+    "kind": "wrapped_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────\n\u001b[1m>\u001b[0m \u001b[38;5;109mAuto mode: edits &\n safe commands auto-\napproved (shift+tab\nto cycle)\u001b[39m\n────────────────────\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 20,
+    "kind": "wrapped_draft",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────\n\u001b[1m>\u001b[0m keep this draft an\nd all of its wrapped\n continuation\n────────────────────\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 20,
+    "kind": "approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to\nproceed?\n\u001b[1m>\u001b[0m 1. Yes\n  2. No\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 20,
+    "kind": "clipped_approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to proc?\n\u001b[1m>\u001b[0m 1. Yes, and don'ts\n  2. No, explain whg\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 20,
+    "kind": "menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Switch Model\n\n  Search:\n\n\u001b[1m>\u001b[0m Model A\n  Model B\n\nKeyboard: ↑/↓\nNavigate enter\nSelect esc Go Back\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 20,
+    "kind": "clipped_menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Switch Model\n\n\u001b[1m>\u001b[0m 1. A long option n\n  2. Another optionn\n\nKeyboard: ↑/↓ Navigk\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 22,
+    "kind": "empty",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────\n\u001b[1m>\u001b[0m \u001b[38;5;109mAuto mode: edits & s\n\u001b[39m──────────────────────\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 22,
+    "kind": "typed",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────\n\u001b[1m>\u001b[0m keep this draft\n──────────────────────\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 22,
+    "kind": "typed_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────\n\u001b[1m>\u001b[0m Auto mode: edits & s\n──────────────────────\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 22,
+    "kind": "wrapped_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────\n\u001b[1m>\u001b[0m \u001b[38;5;109mAuto mode: edits & s\nafe commands auto-appr\noved (shift+tab to cyc\nle)\u001b[39m\n──────────────────────\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 22,
+    "kind": "wrapped_draft",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────\n\u001b[1m>\u001b[0m keep this draft and\nall of its wrapped con\ntinuation\n──────────────────────\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 22,
+    "kind": "approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to\nproceed?\n\u001b[1m>\u001b[0m 1. Yes\n  2. No\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 22,
+    "kind": "clipped_approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to procee?\n\u001b[1m>\u001b[0m 1. Yes, and don't as\n  2. No, explain whatg\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 22,
+    "kind": "menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Switch Model\n\n  Search:\n\n\u001b[1m>\u001b[0m Model A\n  Model B\n\nKeyboard: ↑/↓ Navigate\nenter Select esc Go\nBack\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 22,
+    "kind": "clipped_menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Switch Model\n\n\u001b[1m>\u001b[0m 1. A long option win\n  2. Another option wn\n\nKeyboard: ↑/↓ Navigatk\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 30,
+    "kind": "empty",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────────────\n\u001b[1m>\u001b[0m \u001b[38;5;109mAuto mode: edits & safe comm\n\u001b[39m──────────────────────────────\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 30,
+    "kind": "typed",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────────────\n\u001b[1m>\u001b[0m keep this draft\n──────────────────────────────\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 30,
+    "kind": "typed_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────────────\n\u001b[1m>\u001b[0m Auto mode: edits & safe comm\n──────────────────────────────\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 30,
+    "kind": "wrapped_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────────────\n\u001b[1m>\u001b[0m \u001b[38;5;109mAuto mode: edits & safe comm\nands auto-approved (shift+tab\nto cycle)\u001b[39m\n──────────────────────────────\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 30,
+    "kind": "wrapped_draft",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "──────────────────────────────\n\u001b[1m>\u001b[0m keep this draft and all of i\nts wrapped continuation\n──────────────────────────────\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 30,
+    "kind": "approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to proceed?\n\u001b[1m>\u001b[0m 1. Yes\n  2. No\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 30,
+    "kind": "clipped_approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to proceed?\n\u001b[1m>\u001b[0m 1. Yes, and don't ask agains\n  2. No, explain what must chg\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 30,
+    "kind": "menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Switch Model\n\n  Search:\n\n\u001b[1m>\u001b[0m Model A\n  Model B\n\nKeyboard: ↑/↓ Navigate enter\nSelect esc Go Back\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 30,
+    "kind": "clipped_menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Switch Model\n\n\u001b[1m>\u001b[0m 1. A long option with an exn\n  2. Another option with a lon\n\nKeyboard: ↑/↓ Navigate enter k\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 40,
+    "kind": "empty",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────\n\u001b[1m>\u001b[0m \u001b[38;5;109mAuto mode: edits & safe commands auto-\n\u001b[39m────────────────────────────────────────\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 40,
+    "kind": "typed",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────\n\u001b[1m>\u001b[0m keep this draft\n────────────────────────────────────────\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 40,
+    "kind": "typed_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────\n\u001b[1m>\u001b[0m Auto mode: edits & safe commands auto-\n────────────────────────────────────────\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 40,
+    "kind": "wrapped_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────\n\u001b[1m>\u001b[0m \u001b[38;5;109mAuto mode: edits & safe commands auto-\napproved (shift+tab to cycle)\u001b[39m\n────────────────────────────────────────\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 40,
+    "kind": "wrapped_draft",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────\n\u001b[1m>\u001b[0m keep this draft and all of its wrapped\n continuation\n────────────────────────────────────────\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 40,
+    "kind": "approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to proceed?\n\u001b[1m>\u001b[0m 1. Yes\n  2. No\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 40,
+    "kind": "clipped_approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to proceed?\n\u001b[1m>\u001b[0m 1. Yes, and don't ask again for theses\n  2. No, explain what must change beforg\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 40,
+    "kind": "menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Switch Model\n\n  Search:\n\n\u001b[1m>\u001b[0m Model A\n  Model B\n\nKeyboard: ↑/↓ Navigate enter Select esc\nGo Back\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 40,
+    "kind": "clipped_menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Switch Model\n\n\u001b[1m>\u001b[0m 1. A long option with an explanation\n  2. Another option with a longer explan\n\nKeyboard: ↑/↓ Navigate enter Select esck\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 80,
+    "kind": "empty",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────────────────────────────────────────────\n\u001b[1m>\u001b[0m \u001b[38;5;109mAuto mode: edits & safe commands auto-approved (shift+tab to cycle)\u001b[39m\n────────────────────────────────────────────────────────────────────────────────\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 80,
+    "kind": "typed",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────────────────────────────────────────────\n\u001b[1m>\u001b[0m keep this draft\n────────────────────────────────────────────────────────────────────────────────\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 80,
+    "kind": "typed_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────────────────────────────────────────────\n\u001b[1m>\u001b[0m Auto mode: edits & safe commands auto-approved (shift+tab to cycle)\n────────────────────────────────────────────────────────────────────────────────\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 80,
+    "kind": "wrapped_hint",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────────────────────────────────────────────\n\u001b[1m>\u001b[0m \u001b[38;5;109mAuto mode: edits & safe commands auto-approved (shift+tab to cycle)\u001b[39m\n────────────────────────────────────────────────────────────────────────────────\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 80,
+    "kind": "wrapped_draft",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "────────────────────────────────────────────────────────────────────────────────\n\u001b[1m>\u001b[0m keep this draft and all of its wrapped continuation\n────────────────────────────────────────────────────────────────────────────────\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 80,
+    "kind": "approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to proceed?\n\u001b[1m>\u001b[0m 1. Yes\n  2. No\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 80,
+    "kind": "clipped_approval",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Command\ntouch example.txt\n\nDo you want to proceed?\n\u001b[1m>\u001b[0m 1. Yes, and don't ask again for these files\n  2. No, explain what must change before retrying\n\nEsc to cancel\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 80,
+    "kind": "menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Switch Model\n\n  Search:\n\n\u001b[1m>\u001b[0m Model A\n  Model B\n\nKeyboard: ↑/↓ Navigate enter Select esc Go Back\n"
+  },
+  {
+    "agent": "antigravity",
+    "width": 80,
+    "kind": "clipped_menu",
+    "source": "private tmux replay of renderer sequences",
+    "screen": "Switch Model\n\n\u001b[1m>\u001b[0m 1. A long option with an explanation\n  2. Another option with a longer explanation\n\nKeyboard: ↑/↓ Navigate enter Select esc Go Back\n"
+  },
+  {
+    "agent": "codex",
+    "width": 22,
+    "kind": "empty",
+    "source": "native Codex capture, reported pane",
+    "screen": "\u001b[1m›\u001b[0m \u001b[2mAsk Codex to do any\u001b[0m\n"
+  }
+]
