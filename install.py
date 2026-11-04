@@ -541,6 +541,8 @@ def apply_plan(plan, home=None):
             shutil.copy2(settings, settings.with_name(settings.name + '.before-tether'))
         settings.write_text(json.dumps(merged, indent=2) + '\n')
     if plan['action'] == 'uninstall':
+        # Services have stopped, so they cannot reinstall these hooks during cleanup.
+        run([sys.executable, str(ROOT / 'server/window_size.py'), 'uninstall'], stdout=sys.stderr)
         state.unlink(missing_ok=True)
         return
     for hook in plan['hooks']:

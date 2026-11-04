@@ -15,6 +15,7 @@ from antigravity import process_start, ROOT as AGY_ROOT, CACHE as AGY_CACHE, cap
 from quota_notices import capture as capture_quota_notices
 from codex_provider import PROFILE_NAME
 import paths
+import window_size
 
 LAUNCHERS = {'codex': 'codex',
              'claude': 'claude',
@@ -213,6 +214,77 @@ INPUT_HINT = re.compile(r'esc Close|↑/↓ Scroll|Enter to (?:select|confirm|co
 
 
 RULE_LINE = re.compile(r'^[\s─━│┃╭╮╰╯┌┐└┘├┤┬┴┼═║-]*$')
+PICKER_CURSOR = re.compile(r'^\s*[❯›]\s+(\S.*)$')
+PICKER_MORE = re.compile(r'^\s*([↑↓])\s+(\d+)\s+more\s*$')
+PICKER_HINT = re.compile(r'^Enter to .+[·•].*\bEsc to \S', re.I)
+
+
+def cursor_picker(screen):
+    """Read an unnumbered cursor picker, bounded by its header and Enter/Esc footer."""
+    lines = screen.rstrip().splitlines()
+    # A narrow pane can wrap the footer. Stop as soon as both key instructions appear.
+    hint = None
+    for index in range(len(lines) - 1, -1, -1):
+        if not re.match(r'^\s*Enter to\b', lines[index], re.I):
+            continue
+        for end in range(index + 1, min(index + 3, len(lines)) + 1):
+            text = ' '.join(line.strip() for line in lines[index:end])
+            if PICKER_HINT.search(text):
+                hint = (index, end, text)
+                break
+        if hint:
+            break
+    if hint is None:
+        return None
+    index, end, hint_text = hint
+    # An old picker in chat history must not hide the current input box or reply.
+    if any(re.match(r'^\s*[❯›]', line) or CHAT_LINE.match(line) for line in lines[end:]):
+        return None
+    cursor = next((i for i in range(index - 1, -1, -1) if PICKER_CURSOR.match(lines[i])), None)
+    if cursor is None or NUMBERED_ITEM.match(lines[cursor]):
+        return None
+    if any(CHAT_LINE.match(line) for line in lines[cursor + 1:index]):
+        return None
+    # Rows align with the cursor's label. A scroll count also marks the list's start.
+    column = PICKER_CURSOR.match(lines[cursor]).start(1)
+    first = cursor
+    for i in range(cursor - 1, -1, -1):
+        line = lines[i]
+        if not line.strip():
+            continue
+        if PICKER_MORE.match(line):
+            first = i
+            break
+        if RULE_LINE.match(line) or len(line) - len(line.lstrip()) < column:
+            break
+        first = i
+    # The paragraph directly above the list is the panel header. Never take the
+    # screen tail: it can include the conversation above this paragraph.
+    top = first - 1
+    while top >= 0 and not lines[top].strip():
+        top -= 1
+    bottom = top + 1
+    while top >= 0 and lines[top].strip() and not RULE_LINE.match(lines[top]):
+        top -= 1
+    header = [line.strip() for line in lines[top + 1:bottom]]
+    if not header or any(CHAT_LINE.match(line) or re.match(r'^[❯›]', line) for line in header):
+        return None
+    items, counts = [], {'↑': 0, '↓': 0}
+    for line in lines[first:index]:
+        if not line.strip() or RULE_LINE.match(line):
+            continue
+        if match := PICKER_MORE.match(line):
+            counts[match[1]] = int(match[2])
+        elif NUMBERED_ITEM.match(line):
+            return None  # numbered menus keep their existing parser and response
+        else:
+            match = PICKER_CURSOR.match(line)
+            items.append({'text': match[1].strip() if match else line.strip(), 'selected': bool(match)})
+    if not items or sum(item['selected'] for item in items) != 1:
+        return None
+    return {'title': header[0], 'subtitle': ' '.join(header[1:]), 'items': items,
+            'more_above': counts['↑'], 'more_below': counts['↓'], 'hint': hint_text,
+            'text': '\n'.join(lines[top + 1:end]).strip()}
 
 
 def menu_lines(lines, limit=80):
@@ -350,6 +422,7 @@ def attention(entry, screen, working, now=None):
     tail = lines[-30:]
     marker = {'claude': '❯', 'codex': '›', 'antigravity': '>'}.get(entry['agent'])
     reason = None
+    picker = None
     numbered = [line for line in tail if NUMBERED_ITEM.match(line)]
     tabs = next((index for index, line in enumerate(lines) if SETTINGS_TABS.match(line)), None) if entry['agent'] == 'claude' else None
     if tabs is not None:
@@ -357,6 +430,8 @@ def attention(entry, screen, working, now=None):
         reason, tail = 'panel', lines[tabs:]
     elif len(numbered) >= 2 and cursor_in_menu(tail, marker):
         reason = 'menu'
+    elif entry['agent'] == 'claude' and (picker := cursor_picker(screen)):
+        reason, tail = 'picker', picker['text'].splitlines()
     elif any(INPUT_HINT.search(line) for line in lines[-8:]):
         reason = 'prompt'
     elif marker and not working and lines and not any(line.startswith(marker) for line in lines[-15:]):
@@ -378,10 +453,12 @@ def attention(entry, screen, working, now=None):
         return None
     # Once shown, a panel that redraws (a /usage panel fills in, a clock ticks) stays up and keeps its id.
     # A menu takes the new id, because a new question needs a fresh card.
-    seen.update(fingerprint=fingerprint, last=now, shown=True, id=fingerprint if reason == 'menu' else seen['id'])
+    seen.update(fingerprint=fingerprint, last=now, shown=True, id=fingerprint if reason in ('menu', 'picker') else seen['id'])
     found = {'id': seen['id'], 'text': text, 'reason': reason}
     if reason == 'menu':
         found.update(menu_question(menu_lines(lines)) or {})
+    elif reason == 'picker':
+        found.update(picker)
     elif reason == 'prompt':
         link = login_link(tail)
         if link:
@@ -565,9 +642,9 @@ class PaneTooSmall(RuntimeError):
 
 
 # Claude needs two rules, the prompt and a status line, plus room for wrapped hints
-# and spacing. Eight rows is a diagnostic threshold, never a reason to resize a pane
-# or to reject an input box whose marker is still visible.
+# and spacing. Eight rows is a diagnostic threshold. A visible marker always wins.
 MIN_INPUT_ROWS = 8
+SIZE_FIXING = 'Tether is fixing the terminal size. Send again in a moment.'
 
 
 def small_pane_reason(entry, run=subprocess.run):
@@ -583,50 +660,29 @@ def small_pane_reason(entry, run=subprocess.run):
         pw, ph, ww, wh = map(int, (pw, ph, ww, wh))
         if min(pw, ph, ww, wh) <= 0 or not session or not sizing or ph >= MIN_INPUT_ROWS:
             return None
-        result = run([paths.TMUX, 'list-clients', '-t', '=' + session, '-F',
-                      '#{client_tty}\t#{client_width}\t#{client_height}\t#{client_flags}'],
-                     check=True, capture_output=True, text=True, timeout=5)
-        if result.returncode:
-            return None
-        clients = []
-        for line in result.stdout.splitlines():
-            tty, width, height, flags = line.split('\t')
-            width, height = int(width), int(height)
-            # pane_view and Zoom attach with ignore-size. Control clients cannot
-            # constrain the window either; never suggest detaching those views.
-            if not tty or {'ignore-size', 'control-mode'} & set(flags.split(',')):
-                continue
-            if min(width, height) <= 0:
-                return None
-            clients.append((height, width, tty))
     except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
         return None
-    name = {'claude': 'Claude', 'codex': 'Codex', 'antigravity': 'Antigravity'}[entry['agent']]
-    size = (f'{ww}x{wh} ({wh} rows high)' if (pw, ph) == (ww, wh)
-            else f'{ww}x{wh}; its pane is {pw}x{ph} ({ph} rows high)')
-    reason = f"The {window or session} window is {size}, too short to show {name}'s input box."
-    if not clients or sizing not in ('latest', 'smallest') or ph != wh:
-        return reason + ' Make it taller in Terminals.'
-    # Whole-window ttyd attaches look like any other terminal. Prefer a client
-    # whose height fits the window plus zero, one or two tmux status rows, then
-    # the smallest client. This fallback does not claim to identify its owner.
-    matching = [client for client in clients if wh <= client[0] <= wh + 2]
-    height, width, tty = min(matching or clients)
-    return (reason + f' Another terminal ({tty}, {width}x{height}) is attached '
-            f'and can set the window size (window-size {sizing}). '
-            f'Make that terminal taller, or detach it with: tmux detach-client -t {shlex.quote(tty)}')
+    return SIZE_FIXING
 
 
-def prompt_draft(entry, run=subprocess.run):
+def prompt_draft(entry, run=subprocess.run, *, _size_retry=True):
     screen = capture(entry, run)
     if approval(screen):
         raise RuntimeError('Respond to the pending approval before sending a message.')
+    if entry['agent'] == 'claude' and (picker := cursor_picker(screen)):
+        raise RuntimeError(f'Claude has the {picker["title"]} picker open. Choose an item or press Esc in the card.')
     marker = {'claude': '❯', 'codex': '›', 'antigravity': '>'}[entry['agent']]
     lines = screen.splitlines()
     prompts = [i for i, line in enumerate(lines) if line.startswith(marker)]
     if not prompts:
+        if not _size_retry:
+            raise PaneTooSmall(SIZE_FIXING)
         reason = small_pane_reason(entry, run)
         if reason:
+            if _size_retry:
+                window_size.apply(run)
+                time.sleep(.1)  # Let the agent redraw its input after SIGWINCH.
+                return prompt_draft(entry, run, _size_retry=False)
             raise PaneTooSmall(reason)
         name = {'claude': 'Claude', 'codex': 'Codex', 'antigravity': 'Antigravity'}[entry['agent']]
         raise RuntimeError(f'Cannot find the {name} input box on screen. '
@@ -728,17 +784,36 @@ PANEL_CLOSE = re.compile(r'Esc to (?:cancel|close|exit|go back)|esc (?:Close|to 
 
 def close_info_panel(entry, run=subprocess.run):
     """A read-only panel such as /usage, /status or /cost covers Claude's input box. Sending a message means the person
-    is done with it, so press Esc once. A numbered menu or an approval asks something, so it is never closed here."""
+    is done with it, so press Esc once. A menu, picker or approval asks something, so it is never closed here."""
     if entry.get('agent') != 'claude':
         return False
     screen = capture(entry, run)
     lines = screen.rstrip().splitlines()
     panel = any(PANEL_CLOSE.search(line) for line in lines[-8:]) or any(SETTINGS_TABS.match(line) for line in lines)
-    if approval(screen) or not panel or any(CURSOR_ITEM.match(line) for line in lines[-30:]):
+    if approval(screen) or cursor_picker(screen) or not panel or any(CURSOR_ITEM.match(line) for line in lines[-30:]):
         return False
     run([paths.TMUX, 'send-keys', '-t', entry['id'], 'Escape'], check=True, capture_output=True, timeout=5)
     time.sleep(.4)
     return True
+
+
+_escape_seen = {}
+
+
+def drop_double_escape(entry, run=subprocess.run, now=None):
+    """Suppress repeated Esc requests only at Claude's visible, empty input box."""
+    if entry.get('agent') != 'claude':
+        return False
+    now = time.monotonic() if now is None else now
+    identity = (entry['id'], entry.get('thread'), entry.get('owner_pid'), entry.get('process_start'))
+    previous = _escape_seen.get(identity)
+    _escape_seen[identity] = now
+    if previous is None or not 0 <= now - previous < 1.0:
+        return False
+    try:
+        return not any(prompt_draft(entry, run))
+    except RuntimeError:
+        return False  # a picker, approval or hidden input box must still receive Esc
 
 
 def empty_prompt(entry, run=subprocess.run):
@@ -813,7 +888,7 @@ def clear_draft(entry, run=subprocess.run):
 QUEUE_HINT = 'Press up to edit queued messages'
 
 
-def unqueue(entry, run=subprocess.run, sleep=time.sleep):
+def unqueue(entry, run=subprocess.run, sleep=time.sleep, *, _size_retry=True):
     """Take back what waits in Claude's queue: Up pulls every queued message into its input (Claude's own "edit queued"),
     then the input is cleared. Returns the text so the page can put it back in its own message box."""
     if entry.get('agent') != 'claude':
@@ -822,8 +897,14 @@ def unqueue(entry, run=subprocess.run, sleep=time.sleep):
     lines = capture(entry, run).splitlines()
     prompts = [line for line in lines if line.startswith('❯')]
     if not prompts:
+        if not _size_retry:
+            raise PaneTooSmall(SIZE_FIXING)
         reason = small_pane_reason(entry, run)
         if reason:
+            if _size_retry:
+                window_size.apply(run)
+                sleep(.1)
+                return unqueue(entry, run, sleep, _size_retry=False)
             raise PaneTooSmall(reason)
     if not prompts or QUEUE_HINT not in prompts[-1]:
         raise RuntimeError('Nothing is queued. Claude may already have taken the message.')

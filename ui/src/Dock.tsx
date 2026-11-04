@@ -25,12 +25,14 @@ export function ChoiceDock({ approval, attention, plan, agent, disabled, onChoos
   const options = (approval ? (approval.actionable ? approval.options : undefined) : attention?.options?.filter(option => option.id <= 9)) ?? []
   const keepPlanning = plan && approval?.actionable ? options.find(option => /^No,?\s+keep planning\b/i.test(option.text)) : undefined
   const panel = !approval && attention?.reason === 'panel'
+  // An unnumbered list such as Rewind: the arrow keys move the mark, Enter picks, Esc closes it.
+  const picker = !approval && attention?.reason === 'picker' && attention.items?.length ? attention : undefined
   // A question taller than the pane: the screen shows only its last rows, so read it from the transcript. The keys answer it.
-  const ask = !approval && !options.length && !panel ? attention?.ask?.questions : undefined
+  const ask = !approval && !options.length && !panel && !picker ? attention?.ask?.questions : undefined
   // A sign-in screen: its URL wraps over several lines, so the terminal can't open or copy it in one piece.
-  const login = !approval && !options.length && !panel ? attention?.login : undefined
+  const login = !approval && !options.length && !panel && !picker ? attention?.login : undefined
   const keys = ask?.length === 1 ? Array.from({ length: Math.min(9, ask[0].options.length + 2) }, (_, at) => String(at + 1)) : ['1', '2', '3']
-  const title = plan ? 'Review plan' : login ? `${agent} sign-in` : approval ? `${agent} needs your permission` : panel ? `${agent} panel` : options.length || ask ? `${agent} asks` : `${agent} is waiting for you`
+  const title = plan ? 'Review plan' : login ? `${agent} sign-in` : approval ? `${agent} needs your permission` : panel ? `${agent} panel` : picker ? `${agent} · ${picker.title || 'Choose an item'}` : options.length || ask ? `${agent} asks` : `${agent} is waiting for you`
   const text = approval ? approval.text : attention?.question || attention?.text || ''
   const root = useRef<HTMLElement>(null)
   // The message box of this pane: the desktop workspace can show several.
@@ -44,7 +46,14 @@ export function ChoiceDock({ approval, attention, plan, agent, disabled, onChoos
   return <section ref={root} className={`choice-dock ${plan ? 'plan-review' : ''} open`} aria-label={title}>
     <div className="choice-head"><span className="choice-mark" />{title}</div>
     <>
-      {plan ? <div className="plan-text assistant-message" tabIndex={0} aria-label="Plan"><TextMessagePartProvider text={plan.text}><Markdown /></TextMessagePartProvider></div> : panel ? <PanelPre text={text} /> : login ? <div className="login-card">
+      {plan ? <div className="plan-text assistant-message" tabIndex={0} aria-label="Plan"><TextMessagePartProvider text={plan.text}><Markdown /></TextMessagePartProvider></div> : panel ? <PanelPre text={text} /> : picker ? <div className="picker-card">
+        {picker.subtitle && <p className="picker-subtitle">{picker.subtitle}</p>}
+        <ul className="picker-list" aria-label={picker.title || 'Items'}>
+          {!!picker.more_above && <li className="picker-more">↑ {picker.more_above} more</li>}
+          {picker.items!.map((item, at) => <li key={at} className={item.selected ? 'current' : ''} aria-current={item.selected || undefined}>{item.text}</li>)}
+          {!!picker.more_below && <li className="picker-more">↓ {picker.more_below} more</li>}
+        </ul>
+        <p className="ask-hint">Use ↑ and ↓ to move the mark. Enter chooses the marked item. Esc closes the list.</p></div> : login ? <div className="login-card">
         <p>{login.code ? 'Open the sign-in page and sign in. Then paste the code it shows here.' : 'Open the sign-in page and sign in. This card closes when sign-in ends.'}</p>
         <div className="login-card-links"><a className="primary" href={login.url} target="_blank" rel="noopener noreferrer">Open sign-in page</a><CopyButton text={login.url} label="Copy link" className="copy-chip" /></div>
         {login.code && onType && <form className="login-card-code" onSubmit={event => { event.preventDefault(); const value = code.trim(); if (!value) return; setSending(true); void onType(value).then(ok => { if (ok) setCode('') }).finally(() => setSending(false)) }}>
@@ -63,9 +72,9 @@ export function ChoiceDock({ approval, attention, plan, agent, disabled, onChoos
           ? <span><strong>Type your own answer</strong><small>{option.text === 'Type something.' ? 'Write it in the message box below, then send.' : `In the terminal now: “${option.text}”. Your answer from the message box replaces it.`}</small></span>
           : <span><strong>{option.text}</strong>{chat(option) ? <small>Close the question and talk it through in the message box.</small> : option.detail && <small>{option.detail}</small>}</span>}</button>)}</div>}
       <div className="choice-keys">
-        {!options.length && !panel && !login && [...keys, 'Up', 'Down', 'Enter'].map(key => <button key={key} type="button" disabled={disabled} onClick={() => onKey(key)} aria-label={ask?.length === 1 && /^\d$/.test(key) ? `Choose ${key}: ${ask[0].options[Number(key) - 1]?.label ?? (Number(key) === ask[0].options.length + 1 ? 'Type something' : 'Chat about this')}` : undefined}>{key === 'Up' ? '↑' : key === 'Down' ? '↓' : key}</button>)}
-        <button type="button" disabled={disabled} onClick={() => onKey('Escape')}>{options.length ? 'Cancel (Esc)' : 'Close (Esc)'}</button>
-        {!options.length && !login && text && <CopyButton text={text} label="Copy panel text" className="copy-chip" />}
+        {!options.length && !panel && !login && [...(picker ? [] : keys), 'Up', 'Down', 'Enter'].map(key => <button key={key} type="button" disabled={disabled} onClick={() => onKey(key)} aria-label={ask?.length === 1 && /^\d$/.test(key) ? `Choose ${key}: ${ask[0].options[Number(key) - 1]?.label ?? (Number(key) === ask[0].options.length + 1 ? 'Type something' : 'Chat about this')}` : undefined}>{key === 'Up' ? '↑' : key === 'Down' ? '↓' : key}</button>)}
+        <button type="button" disabled={disabled} onClick={() => onKey('Escape')}>{options.length || picker ? 'Cancel (Esc)' : 'Close (Esc)'}</button>
+        {!options.length && !login && !picker && text && <CopyButton text={text} label="Copy panel text" className="copy-chip" />}
       </div>
     </>
   </section>

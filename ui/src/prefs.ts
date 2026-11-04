@@ -52,7 +52,13 @@ export interface PanelLayout { cols: { items: PanelItem[]; rows?: number[] }[]; 
 export interface Draft { text: string; at: number }
 export interface SidePin { pane: string; note?: string }
 const KEY = 'tmux-chat.prefs.v1'
+const CLEARED_KEEP = 2 * 86400  // Match CLEARED_KEEP in server/prefs_sync.py (seconds).
 const DEFAULTS: Prefs = { pinned: [], sidePins: [], order: [], collapsed: { past: true }, expanded: {}, selected: null, lastPane: {}, voiceOff: false, voiceSound: true, readAloud: false, handsFree: false, agentBubble: true, liveReplyPreview: true, theme: 'system', scheme: 'claude', textSize: 'default', showPaths: false, sort: 'smart', seen: {}, paneOrder: {}, drafts: {}, archived: {}, layout: {} }
+
+function keptDrafts(drafts: Record<string, Draft>) {
+  const now = Date.now() / 1000
+  return Object.fromEntries(Object.entries(drafts).filter(([, draft]) => draft.text || now - draft.at < CLEARED_KEEP))
+}
 
 function load(): Prefs {
   let prefs = DEFAULTS
@@ -68,7 +74,7 @@ function load(): Prefs {
       localStorage.removeItem('tether.drafts')
     }
   } catch { /* storage blocked */ }
-  return prefs
+  return { ...prefs, drafts: keptDrafts(prefs.drafts) }
 }
 
 const SYNCED = ['pinned', 'sidePins', 'order', 'paneOrder', 'sort', 'seen', 'collapsed', 'showPaths', 'liveReplyPreview', 'voiceOff', 'voiceSound', 'theme', 'scheme', 'drafts', 'archived', 'layout'] as const
@@ -105,12 +111,13 @@ export function usePrefs() {
     const incoming = Object.fromEntries(Object.entries(stored.prefs).filter(([key]) => !(key in pending.current))) as Shared
     // Drafts: keep the newer copy per pane. A local edit the server has not seen (say, a reload right after typing) goes back up.
     if (incoming.drafts) {
-      const local = latest.current.drafts
+      const local = keptDrafts(latest.current.drafts)
       const merged = { ...incoming.drafts }
-      const newer = Object.entries(local).filter(([pane, draft]) => draft.at > (incoming.drafts?.[pane]?.at ?? 0))
+      const newer = Object.entries(local).filter(([pane, draft]) =>
+        draft.at > (incoming.drafts?.[pane]?.at ?? 0) && (draft.text || pane in incoming.drafts!))
       for (const [pane, draft] of newer) merged[pane] = draft
+      if (newer.length > 0) { pending.current.drafts = merged; window.clearTimeout(timer.current); timer.current = window.setTimeout(() => void flushRef.current(), 400) }
       incoming.drafts = merged
-      if (newer.length) { pending.current.drafts = merged; window.clearTimeout(timer.current); timer.current = window.setTimeout(() => void flushRef.current(), 400) }
     }
     if (!Object.keys(incoming).length) return
     setPrefs(current => {
@@ -127,6 +134,7 @@ export function usePrefs() {
     busy.current = true
     const changes = pending.current
     pending.current = {}
+    if (changes.drafts) changes.drafts = keptDrafts(changes.drafts)
     try { apply(await request<Stored>('prefs', { changes })) } catch { pending.current = { ...changes, ...pending.current } /* offline: try again on the next change or pull */ }
     busy.current = false
     if (Object.keys(pending.current).length) timer.current = window.setTimeout(flush, 2000)

@@ -62,6 +62,7 @@ import side_shells
 import host_stats
 import tmux_merge
 import tmux_names
+import window_size
 import projects_api
 import codex_level
 import browser_api
@@ -201,6 +202,7 @@ def sessions():
     with SESSIONS_LOCK:
         if time.monotonic() - SESSIONS_CACHE[0] > 1:
             SESSIONS_CACHE[1] = discover(settings(), subprocess.run)
+            window_size.apply(subprocess.run, entries=SESSIONS_CACHE[1])
             SESSIONS_CACHE[0] = time.monotonic()
         return SESSIONS_CACHE[1]
 
@@ -1572,8 +1574,12 @@ class Handler(BaseHTTPRequestHandler):
                         card_key(config, key)
                     else:
                         verify(config)
-                        subprocess.run([paths.TMUX, 'send-keys', '-t', config['id'], key],
-                                       check=True, capture_output=True, timeout=5)
+                        from terminal_input import drop_double_escape
+                        if key == 'Escape' and drop_double_escape(config):
+                            print(f'/mobile/api/key dropped double Escape for Claude pane {config["id"]}', file=sys.stderr, flush=True)
+                        else:
+                            subprocess.run([paths.TMUX, 'send-keys', '-t', config['id'], key],
+                                           check=True, capture_output=True, timeout=5)
                 self.respond(200, {'accepted': True})
                 return
             if self.path == '/mobile/api/menu':
@@ -1732,4 +1738,5 @@ if __name__ == '__main__':
         auth.token()
     threading.Thread(target=monitor_notices, daemon=True).start()
     threading.Thread(target=tmux_names.watch, daemon=True).start()  # tmux renames flow back into pane names
+    threading.Thread(target=window_size.watch, daemon=True).start()
     ThreadingHTTPServer((host, port), Handler).serve_forever()

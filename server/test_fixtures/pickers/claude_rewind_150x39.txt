@@ -1,0 +1,39 @@
+Earlier chat: Worked for 9s…
+
+❯ hello?
+● Earlier chat reply.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+Rewind
+Restore the code and/or conversation to the point before…
+
+↑ 26 more
+  hello?
+  No code changes
+
+❯ (current)
+
+Enter to continue · Esc to cancel
+
+
