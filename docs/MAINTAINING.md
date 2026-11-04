@@ -71,7 +71,8 @@ See the official [Actions settings guide](https://docs.github.com/en/repositorie
 
 Only the maintainer creates release tags. A push to `main` does not release software to users.
 
-1. Bump the root `VERSION` file, for example to `0.2.0` or `0.2.0-rc1`.
+1. Bump root `VERSION` and `integrations/claude/tether/.claude-plugin/plugin.json` together.
+   Update the bootstrap tag in README Quick start for stable releases.
 2. Run the server tests and UI checks listed in [AGENTS.md](../AGENTS.md).
 3. Commit the release changes to `main` after review.
 4. Create the matching tag with `git tag v0.2.0`.
@@ -85,3 +86,12 @@ The archive excludes git metadata, dependencies, and untracked test data.
 Only the publication job has `contents: write` permission.
 It uses `gh release create` with `GITHUB_TOKEN`, tag verification, and generated release notes.
 Tags with `-rc` produce prereleases. Daily stable checks use the latest stable release endpoint.
+
+The first-install bootstrap lives in `integrations/claude/tether/skills/setup/bootstrap.py`.
+The CLI imports its archive verification, extraction, staging, and atomic switch helpers.
+The Codex skill ships an identical copy because a copied skill cannot reach the Claude plugin directory.
+`test_integrations` checks that both copies match. Change them together.
+`install.py` uses schema version 1 for saved choices; this is independent of the release version.
+Keep that schema compatible so migration and updates retain saved choices.
+Run `python3 -m unittest -q test_install test_updates test_release_install test_integrations` from `server/` for local release proofs.
+These tests use temporary homes, local archives, loopback HTTP, and fake service commands.

@@ -7,6 +7,12 @@ import subprocess
 import paths
 
 AGENTS = ('claude', 'codex')
+_snapshot = None
+
+
+def snapshot():
+    """Passive reads never start ccswap: even `list` can rotate Claude credentials."""
+    return _snapshot or {'available': bool(binary()), 'claude': [], 'codex': []}
 
 
 def binary():
@@ -35,6 +41,7 @@ def codex_account(raw):
 
 def listing(run=subprocess.run):
     """{'available': bool, 'claude': [...], 'codex': [...]}. Missing ccswap is not an error: the sheet then hides the list."""
+    global _snapshot
     tool = binary()
     if not tool:
         return {'available': False, 'claude': [], 'codex': []}
@@ -46,6 +53,7 @@ def listing(run=subprocess.run):
     for agent, shape in (('claude', claude_account), ('codex', codex_account)):
         accounts = ((data.get(agent) or {}).get('accounts')) or []
         out[agent] = [shape(a) for a in accounts if isinstance(a, dict) and isinstance(a.get('number'), int)]
+    _snapshot = out
     return out
 
 

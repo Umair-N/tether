@@ -31,6 +31,8 @@ def visible(entry, run=subprocess.run):
 
 
 def press(entry, *keys, run=subprocess.run):
+    from terminal_input import require_pane_space
+    require_pane_space(entry, run)
     run([TMUX, 'send-keys', '-t', entry['id'], *keys], check=True, capture_output=True, timeout=5)
 
 
@@ -42,14 +44,14 @@ def picker_open(agent, text):
     """True while the picker's key hint is on the visible screen (headers can scroll out of view)."""
     tail = [line for line in text.splitlines() if line.strip()][-14:]
     hints = HINTS[agent] if isinstance(HINTS[agent], tuple) else (HINTS[agent],)
-    return any(hint.lower() in line.lower() for hint in hints for line in tail)
+    return any(hint.lower() in ' '.join(line.strip().lower() for line in tail) for hint in hints)
 
 
 def region(text, header):
     """The screen text from the newest picker header onward (older pickers stay in the scrollback)."""
     lines = text.splitlines()
-    starts = [index for index, line in enumerate(lines) if header.lower() in line.lower()]
-    return lines[starts[-1]:] if starts else []
+    start = header_position(text, header)
+    return lines[start:] if start >= 0 else []
 
 
 # ---- parsers: one per agent --------------------------------------------------------------------------------------
@@ -83,7 +85,8 @@ def parse_claude(text, on_screen=None):
     if on_screen is not None:
         # The list is taller than the pane: lines that scrolled into history keep their first-drawn look, so only the rows
         # still on screen can say which one is selected (and what the effort slider reads).
-        marked = {row['id'] for row in numbered_rows(on_screen.splitlines()) if row['selected']}
+        shown = region(on_screen, 'Select model') or on_screen.splitlines()
+        marked = {row['id'] for row in numbered_rows(shown) if row['selected']}
         for row in rows:
             row['selected'] = row['id'] in marked
         lines = on_screen.splitlines()
@@ -109,24 +112,19 @@ def slider_level(lines):
     for index, line in enumerate(lines):
         if '◉' in line and index + 1 < len(lines):
             column = line.index('◉')
-            labels = [(match.start() + len(match[0]) / 2, match[0]) for match in re.finditer(r'[A-Za-z]+', lines[index + 1])]
-            if labels:
-                return min(labels, key=lambda item: abs(item[0] - column))[1].lower()
-    # A narrow pane cuts the slider's right end: the last label ("high") and its marker are off screen. A bar still filled
-    # to the edge with no ◉ in view means the selection is the next level after the last one that is visible.
-    for index, line in enumerate(lines):
-        if 'Effort' in line and '━' in line and '◉' not in line and index + 1 < len(lines):
-            seen = [match[0].lower() for match in re.finditer(r'[A-Za-z]+', lines[index + 1])]
-            if seen and seen[-1] in ORDER and rank(seen[-1]) + 1 < len(ORDER):
-                return ORDER[rank(seen[-1]) + 1]
+            for match in re.finditer(r'[A-Za-z]+', lines[index + 1]):
+                if match.start() <= column < match.end() and match[0].lower() in ORDER:
+                    return match[0].lower()
+    # A clipped marker does not reveal the selected level. Guessing the next
+    # label can move the slider in the wrong direction or falsely report success.
     return None
 
 
 def claude_effort(text):
     """The level on Claude's effort line ("Medium effort (default) ←/→ to adjust"); a narrow pane wraps the hint onto the next line."""
     found = None
-    for match in re.finditer(r'(?P<level>[A-Za-z]+) effort(?: \(default\))?\s+←/→', text):
-        found = match['level'].lower()
+    for match in re.finditer(r'(?P<level>extra\s+high|[A-Za-z]+)\s+effort(?:\s+\(default\))?\s+←/→', text, re.I):
+        found = ' '.join(match['level'].lower().split())
     return found
 
 
@@ -156,17 +154,35 @@ PARSERS = {'antigravity': parse_antigravity}
 
 
 def header_position(text, header):
-    positions = [index for index, line in enumerate(text.splitlines()) if header.lower() in line.lower()]
+    lines = text.splitlines()
+    positions = []
+    for index, line in enumerate(lines):
+        if not line.strip():
+            continue
+        paragraph = []
+        for row in lines[index:index + 4]:
+            if not row.strip() or NUMBERED.match(row):
+                break
+            paragraph.append(row.strip())
+        if header.lower() in ' '.join(paragraph).lower():
+            positions.append(index)
     return positions[-1] if positions else -1
 
 
 def parse(entry, text, on_screen=None):
     if entry['agent'] == 'codex':  # two steps; whichever header is newest is the one on screen
         step_two = header_position(text, 'Select Reasoning Level') > header_position(text, 'Select Model and Effort')
-        return parse_codex_effort(text) if step_two else parse_codex_models(text)
+        result = parse_codex_effort(text) if step_two else parse_codex_models(text)
+        if result and on_screen is not None:
+            header = 'Select Reasoning Level' if step_two else 'Select Model and Effort'
+            shown = region(on_screen, header) or on_screen.splitlines()
+            marked = {row['id'] for row in numbered_rows(shown) if row['selected']}
+            for row in result['rows']:
+                row['selected'] = row['id'] in marked
+        return result
     if entry['agent'] == 'claude':
         return parse_claude(text, on_screen)
-    return PARSERS[entry['agent']](text)
+    return PARSERS[entry['agent']](on_screen if on_screen is not None else text)
 
 
 # ---- driving -----------------------------------------------------------------------------------------------------
@@ -178,11 +194,12 @@ def settle(sleep=time.sleep):
 def snapshot(entry, run, sleep):
     """Wait for the redraw, then read the picker: scrollback for the whole list, the live screen for what is selected."""
     settle(sleep)
-    return parse(entry, capture(entry, run), visible(entry, run) if entry['agent'] == 'claude' else None)  # only Claude's parser reads the live screen
+    return parse(entry, capture(entry, run), visible(entry, run))
 
 
 def selected_index(rows):
-    return next((index for index, row in enumerate(rows) if row['selected']), None)
+    marked = [index for index, row in enumerate(rows) if row['selected']]
+    return marked[0] if len(marked) == 1 else None
 
 
 def move_to(entry, target_id, run=subprocess.run, sleep=time.sleep, fetch=None):
@@ -194,6 +211,8 @@ def move_to(entry, target_id, run=subprocess.run, sleep=time.sleep, fetch=None):
         rows = screen['rows']
         here = selected_index(rows)
         ids = [row['id'] for row in rows]
+        if len(ids) != len(set(ids)):
+            raise PickerError('The visible model names are ambiguous. Widen the pane, then try again.')
         if here is None:
             raise PickerError('Could not see which item is selected.')
         if rows[here]['id'] == target_id:
@@ -232,13 +251,13 @@ def set_effort(entry, wanted, current_level, fetch, run=subprocess.run):
 def probe_levels(entry, current_level, fetch, run=subprocess.run):
     """The slider's levels in order, low to high: walk to the left end, then to the right end."""
     previous = current_level()
-    if previous is None:
+    if rank(previous) is None:
         return []
     for _ in range(8):
         press(entry, 'Left', run=run)
         fetch()
         level = current_level()
-        if level == previous or level is None:
+        if level == previous or rank(level) is None:
             break
         previous = level
     levels = [previous]
@@ -246,7 +265,7 @@ def probe_levels(entry, current_level, fetch, run=subprocess.run):
         press(entry, 'Right', run=run)
         fetch()
         level = current_level()
-        if level is None or level in levels:
+        if rank(level) is None or level in levels:
             break
         levels.append(level)
     return levels
@@ -262,8 +281,9 @@ def close(entry, run=subprocess.run, sleep=time.sleep):
 
 
 def open_picker(entry, run=subprocess.run, sleep=time.sleep):
-    from terminal_input import empty_prompt, live_status, verify
+    from terminal_input import empty_prompt, live_status, require_pane_space, verify
     verify(entry, run)
+    require_pane_space(entry, run)
     close(entry, run, sleep)  # a picker left open by an earlier attempt would look like an unsent draft
     state = live_status(entry, run)['state']
     if state != 'Idle':
@@ -291,10 +311,11 @@ def claude_view(entry, run, sleep):
     history, on_screen = capture(entry, run), visible(entry, run)
     lines = region(history, 'Select model')
     rows = {row['id']: row for row in numbered_rows(lines)}
-    shown = numbered_rows(on_screen.splitlines())
+    shown = numbered_rows(region(on_screen, 'Select model') or on_screen.splitlines())
     for row in shown:
         rows[row['id']] = dict(rows.get(row['id'], {}), **row)
-    marked = next((int(row['id']) for row in shown if row['selected']), None)
+    selected = selected_index(shown)
+    marked = int(shown[selected]['id']) if selected is not None else None
     effort = claude_effort(on_screen)
     more = [int(match[1]) for line in lines if (match := MORE.search(line))]
     return {'rows': rows, 'marked': marked, 'effort': effort, 'hidden': more[-1] if more else 0}

@@ -162,7 +162,9 @@ MODES = ('default', 'accept', 'plan', 'auto', 'bypass')
 def mode_key(mode):
     """'⏵⏵ accept edits on' -> 'accept'; no mode line means Claude's default mode."""
     text = (mode or '').lower()
-    return next((key for key in MODES[1:] if key in text), 'default')
+    if text in ('', 'default', 'dontask'):
+        return 'default'
+    return next((key for key in MODES[1:] if re.search(r'\b' + key + r'\b', text)), None)
 
 
 def set_mode(read, press, target, sleep=time.sleep, tries=6):
@@ -170,7 +172,14 @@ def set_mode(read, press, target, sleep=time.sleep, tries=6):
     Waits for each press to land, so fast taps on the phone cannot skip past the mode you asked for."""
     if target not in MODES:
         raise ValueError('Unknown mode.')
-    current = mode_key(read().get('mode'))
+    def current_mode():
+        result = read()
+        current = mode_key(result.get('mode'))
+        if result.get('observed') is False or current is None:
+            raise RuntimeError('Cannot read the permission mode. Widen the pane or use the terminal view.')
+        return current
+
+    current = current_mode()
     seen = [current]
     for _ in range(tries):
         if current == target:
@@ -178,7 +187,7 @@ def set_mode(read, press, target, sleep=time.sleep, tries=6):
         press()
         for _ in range(12):
             sleep(.15)
-            now = mode_key(read().get('mode'))
+            now = current_mode()
             if now != current:
                 break
         current = now

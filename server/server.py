@@ -1129,7 +1129,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(200, live_state.for_thread(config.get('thread')) if config['agent'] == 'claude' else {'goal': None, 'tasks': []})
             elif path == '/mobile/api/accounts':
                 try:
-                    self.respond(200, saved_accounts.listing())
+                    self.respond(200, saved_accounts.snapshot())
                 except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as exc:
                     self.respond(502, {'error': str(exc) if isinstance(exc, RuntimeError) else 'Could not read saved accounts.'})
             elif path == '/mobile/api/login/state':
@@ -1256,7 +1256,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.respond(403, {'error': 'Reload the page and try again.'})
             return
         if self.path not in ('/mobile/api/message', '/mobile/api/broadcast', '/mobile/api/approval', '/mobile/api/menu', '/mobile/api/start', '/mobile/api/session', '/mobile/api/tmux-sessions', '/mobile/api/key', '/mobile/api/clear-draft', '/mobile/api/unqueue', '/mobile/api/mode', '/mobile/api/type',
-                         '/mobile/api/push/subscribe', '/mobile/api/push/unsubscribe', '/mobile/api/push/test', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/shortcuts', '/mobile/api/prefs', '/mobile/api/codex-provider', '/mobile/api/model-options', '/mobile/api/model', '/mobile/api/rename', '/mobile/api/merge', '/mobile/api/shell', '/mobile/api/upload', '/mobile/api/transcribe', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/switch') and not browser_api.handles(self.path) and not projects_api.handles(self.path) and not codex_level.handles(self.path) and not tts.handles(self.path) and not friday_proxy.handles(self.path) and not live_mode.handles(self.path):
+                         '/mobile/api/push/subscribe', '/mobile/api/push/unsubscribe', '/mobile/api/push/test', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/shortcuts', '/mobile/api/prefs', '/mobile/api/codex-provider', '/mobile/api/model-options', '/mobile/api/model', '/mobile/api/rename', '/mobile/api/merge', '/mobile/api/shell', '/mobile/api/upload', '/mobile/api/transcribe', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/refresh', '/mobile/api/accounts/switch') and not browser_api.handles(self.path) and not projects_api.handles(self.path) and not codex_level.handles(self.path) and not tts.handles(self.path) and not friday_proxy.handles(self.path) and not live_mode.handles(self.path):
             self.respond(404, {'error': 'Not found'})
             return
         # Reject unauthenticated and cross-origin submissions.
@@ -1305,6 +1305,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if self.path == '/mobile/api/broadcast':
                 self.respond(200, broadcast_message(body))
+                return
+            if self.path == '/mobile/api/accounts/refresh':
+                self.respond(200, saved_accounts.listing())
                 return
             if self.path == '/mobile/api/accounts/switch':
                 self.respond(200, saved_accounts.switch(body.get('agent'), body.get('number')))
@@ -1559,7 +1562,11 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError('Modes are for Claude sessions.')
                 with SEND_LOCK:
                     verify(config)
-                    result = footer.set_mode(lambda: footer.parse(capture(config, styled=True)),
+                    def read_mode():
+                        from terminal_input import require_pane_space
+                        require_pane_space(config)
+                        return footer.parse(capture(config, styled=True))
+                    result = footer.set_mode(read_mode,
                                              lambda: subprocess.run([paths.TMUX, 'send-keys', '-t', config['id'], 'BTab'], check=True, capture_output=True, timeout=5),
                                              body.get('mode'))
                 self.respond(200, result)
@@ -1595,7 +1602,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if self.path == '/mobile/api/type':
                 with SEND_LOCK:
-                    type_text(config, body.get('text'), enter=body.get('enter') is True)
+                    type_text(config, body.get('text'), enter=body.get('enter') is True, login_url=body.get('login_url'))
                 self.respond(200, {'accepted': True})
                 return
             if self.path == '/mobile/api/unqueue':
@@ -1615,7 +1622,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.respond(200, {'accepted': True, 'delivery': send_text(config, message)})
         except (ValueError, UnicodeError) as exc:
-            self.respond(400, {'error': str(exc) if self.path in ('/mobile/api/session', '/mobile/api/broadcast', '/mobile/api/merge', '/mobile/api/model', '/mobile/api/shell', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/mode', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/menu', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/switch') else 'Invalid message.'})
+            self.respond(400, {'error': str(exc) if self.path in ('/mobile/api/session', '/mobile/api/broadcast', '/mobile/api/merge', '/mobile/api/model', '/mobile/api/shell', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/mode', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/menu', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/refresh', '/mobile/api/accounts/switch') else 'Invalid message.'})
         except (OSError, RuntimeError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
             # The journal keeps why a send was refused; the access log shows only "503".
             print(f'{self.path} refused: {type(exc).__name__}: {str(exc)[:200]}', file=sys.stderr, flush=True)

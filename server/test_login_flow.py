@@ -36,12 +36,27 @@ class LoginTests(unittest.TestCase):
                 self.assertEqual(parsed['user_code'], 'ABCD-1234' if agent == 'codex' else None)
         self.assertIsNone(login.parse_screen('codex', 'token: secret\n1234-5678-not-a-code')['user_code'])
         self.assertEqual(login.parse_screen('codex', '2. Enter this one-time code after you are signed in (expires in 15 minutes)\n   K7QX-P2MZ9')['user_code'], 'K7QX-P2MZ9')
+        self.assertEqual(login.parse_screen('codex', '2. Enter this one-time\n code (expires in 15\n minutes)\n   ABCD-1234')['user_code'], 'ABCD-1234')
 
     def test_claude_cli_2_1_link_on_claude_com(self):
         # Claude Code 2.1.316 prints its sign-in link on claude.com. Tether waited for a link forever.
         screen = "Opening browser to sign in\u2026\nIf the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true&state=x\nPaste code here if prompted >"
         self.assertEqual(login.parse_screen('claude', screen)['url'], 'https://claude.com/cai/oauth/authorize?code=true&state=x')
         self.assertIsNone(login.parse_screen('claude', 'https://claude.com.evil.test/x')['url'])
+
+    def test_wrapped_url_keeps_every_character(self):
+        url = 'https://claude.com/cai/oauth/authorize?code=true&state=' + 'x' * 450
+        screen = '\n'.join(url[i:i + 50] for i in range(0, len(url), 50)) + '\n\nPaste code here if prompted >'
+        self.assertEqual(login.parse_screen('claude', screen)['url'], url)
+
+    def test_failed_code_reports_failure_and_closes_its_session(self):
+        flow = self.start()
+        self.runner.code('claude', 'not-a-real-code')
+        self.screen += '\nInvalid code. Please try again.\nPaste code here if prompted >'
+        self.runner.update('claude', flow)
+        self.assertEqual(self.runner.state('claude')['phase'], 'failed')
+        self.assertIsNone(flow['session'])
+        self.assertIn('failed', self.runner.state('claude')['message'].lower())
 
     def test_vendor_hosts_and_url_validation(self):
         for agent, hosts in login.HOSTS.items():
@@ -196,6 +211,36 @@ class LoginRouteTests(unittest.TestCase):
         handler = self.handler('state?agent=shell', {})
         handler.do_GET()
         handler.respond.assert_called_once_with(400, {'error': 'Select Claude or Codex.'})
+
+    def test_account_reads_are_passive_and_refresh_requires_a_protected_post(self):
+        cached = {'available': True, 'claude': [], 'codex': []}
+        with patch.object(server.saved_accounts, 'snapshot', return_value=cached) as snapshot, patch.object(server.saved_accounts, 'listing', return_value=cached) as listing:
+            handler = self.handler('state', {})
+            handler.path = '/mobile/api/accounts'
+            handler.do_GET()
+            snapshot.assert_called_once_with()
+            listing.assert_not_called()
+            handler.respond.assert_called_once_with(200, cached)
+            handler = self.handler('state', {})
+            handler.path = '/mobile/api/accounts/refresh'
+            handler.do_POST()
+            listing.assert_called_once_with()
+            handler.respond.assert_called_once_with(200, cached)
+            for missing in ('Origin', 'X-Codex-Mobile'):
+                listing.reset_mock()
+                handler = self.handler('state', {})
+                handler.path = '/mobile/api/accounts/refresh'
+                handler.headers.pop(missing)
+                handler.do_POST()
+                listing.assert_not_called()
+                handler.respond.assert_called_once_with(403, {'error': 'Reload the page and try again.'})
+
+    def test_passive_usage_requests_cached_reports(self):
+        with patch.object(server, 'usage_summary', return_value={}) as summary:
+            handler = self.handler('state', {})
+            handler.path = '/mobile/api/usage'
+            handler.do_GET()
+            summary.assert_called_once_with(live_age=float('inf'))
 
 
 if __name__ == '__main__':

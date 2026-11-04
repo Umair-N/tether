@@ -2,10 +2,10 @@
 """Apply tagged Tether releases with a health check and automatic rollback; message many agent panes (broadcast)."""
 import argparse
 import fcntl
-import hashlib
+import importlib.util
 import json
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import shutil
 import subprocess
 import sys
@@ -19,65 +19,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / 'server'))
 import updates
 
 
-def switch(link, target):
-    temp = link.with_name(link.name + '.new')
-    temp.unlink(missing_ok=True)
-    temp.symlink_to(target, target_is_directory=True)
-    temp.replace(link)
+_spec = importlib.util.spec_from_file_location(
+    'tether_bootstrap', Path(__file__).resolve().parent / 'integrations/claude/tether/skills/setup/bootstrap.py')
+bootstrap = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(bootstrap)
+switch, extract, download = bootstrap.switch, bootstrap.extract, bootstrap.download
+release_files = bootstrap.release_files
 
 
-def extract(archive, destination):
-    with tarfile.open(archive, 'r:gz') as bundle:
-        members = bundle.getmembers()
-        for member in members:
-            path = PurePosixPath(member.name)
-            if path.is_absolute() or '..' in path.parts or not (member.isfile() or member.isdir()):
-                raise ValueError('Unsafe tar member: ' + member.name)
-        # Validate the whole archive before writing; do not rely on version-specific tar filters.
-        for member in members:
-            target = destination.joinpath(*PurePosixPath(member.name).parts)
-            if member.isdir():
-                target.mkdir(parents=True, exist_ok=True)
-            else:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with bundle.extractfile(member) as source, target.open('wb') as output:
-                    shutil.copyfileobj(source, output)
-                target.chmod(member.mode & 0o777)
-
-
-def download(url, destination):
-    with urlopen(url, timeout=30) as response, destination.open('wb') as output:
-        shutil.copyfileobj(response, output)
-
-
-def release_files(release, directory):
-    ver = release['tag_name'].removeprefix('v')
-    updates.version(ver)
-    name = f'tether-{ver}.tar.gz'
-    assets = {item['name']: item['browser_download_url'] for item in release.get('assets', [])}
-    if name not in assets or 'SHA256SUMS' not in assets:
-        raise ValueError('Release lacks the tarball or SHA256SUMS')
-    archive = directory / name
-    sums = directory / 'SHA256SUMS'
-    download(assets[name], archive)
-    download(assets['SHA256SUMS'], sums)
-    expected = None
-    for line in sums.read_text().splitlines():
-        parts = line.split()
-        if len(parts) == 2 and parts[1].lstrip('*') == name:
-            expected = parts[0]
-    hasher = hashlib.sha256()
-    with archive.open('rb') as source:
-        for chunk in iter(lambda: source.read(262144), b''):
-            hasher.update(chunk)
-    digest = hasher.hexdigest()
-    if expected is None or digest != expected:
-        raise ValueError('Checksum mismatch; update refused')
-    return archive, ver
-
-
-def run(command):
-    subprocess.run(command, check=True, timeout=600)
+def run(command, quiet=False):
+    if not quiet:
+        subprocess.run(command, check=True, timeout=600)
+        return
+    # Hide the long plan on success; show it when the command fails. Warnings stay on stderr.
+    result = subprocess.run(command, stdout=subprocess.PIPE, text=True, timeout=600)
+    if result.returncode:
+        sys.stdout.write(result.stdout)
+        raise subprocess.CalledProcessError(result.returncode, command)
 
 
 def restart(state):
@@ -87,6 +45,9 @@ def restart(state):
         units.insert(0, 'tether.service')
     run(['systemctl', '--user', 'daemon-reload'])
     run(['systemctl', '--user', 'restart', *units])
+    if 'tether-update.timer' in state.get('unit_names', []):
+        run(['systemctl', '--user', 'enable', '--now', 'tether-update.timer'])
+        run(['systemctl', '--user', 'restart', 'tether-update.timer'])
 
 
 def healthy(port, seconds=30, host='127.0.0.1'):
@@ -119,22 +80,72 @@ def git_checkout(repo):
 
 
 def snapshot(state_file):
-    units = Path.home() / '.config/systemd/user'
-    return state_file.read_bytes(), {name: (units / name).read_bytes() if (units / name).exists() else None
-                                    for name in ('tether.service', 'tether-terminal.service', 'tether-voice.service',
-                                                 'tether-update.service', 'tether-update.timer')}
+    home = Path.home()
+    units = home / '.config/systemd/user'
+    paths = [units / name for name in ('tether.service', 'tether-terminal.service', 'tether-voice.service',
+                                      'tether-update.service', 'tether-update.timer')]
+    for folder in ('.claude', '.gemini/antigravity-cli'):
+        settings = home / folder / 'settings.json'
+        paths.extend([settings, settings.with_name('settings.json.before-tether')])
+    paths.append(home / '.local/bin/tether')
+    return state_file.read_bytes(), {
+        path: ('link', str(path.readlink())) if path.is_symlink() else
+        path.read_bytes() if path.exists() else None for path in paths}
 
 
 def restore(state_file, backup):
     content, files = backup
     state_file.write_bytes(content)
-    units = Path.home() / '.config/systemd/user'
-    units.mkdir(parents=True, exist_ok=True)
-    for name, data in files.items():
+    for path, data in files.items():
         if data is None:
-            (units / name).unlink(missing_ok=True)
+            path.unlink(missing_ok=True)
+        elif isinstance(data, tuple):
+            path.unlink(missing_ok=True)
+            path.symlink_to(data[1])
         else:
-            (units / name).write_bytes(data)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+
+
+def migrate(args, root, state_file, state):
+    checkout = Path(args.source or state['repo']).expanduser().resolve()
+    if checkout != Path(state['repo']).resolve() or not git_checkout(checkout):
+        raise ValueError('Migration source must be the saved installation checkout')
+    try:
+        dirty = subprocess.run(['git', '-C', str(checkout), 'status', '--porcelain'],
+                               capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        dirty = None
+    if dirty is None or dirty.returncode or dirty.stdout.strip():
+        print('Warning: checkout has local changes or git status is unavailable; checkout stays untouched.')
+    backup = snapshot(state_file)
+    link = root / 'current'
+    if link.exists() and not link.is_symlink():
+        raise ValueError('Refusing to replace a non-symlink current path')
+    old_link = link.readlink() if link.is_symlink() else None
+    target = bootstrap.stage(args, root, reuse=True)
+    try:
+        switch(link, target)
+        run([sys.executable, str(link / 'install.py'), '--apply', '--json', '--no-build-ui', '--defer-restart'], quiet=True)
+        new_state = json.loads(state_file.read_text())
+        restart(new_state)
+        if not healthy(new_state['options']['port'], host=new_state['options'].get('host', '127.0.0.1')):
+            raise RuntimeError('Health check failed')
+    except Exception as error:
+        if old_link is None:
+            link.unlink(missing_ok=True)
+        else:
+            switch(link, old_link)
+        restore(state_file, backup)
+        try:
+            restart(state)
+        except Exception as rollback_error:
+            raise RuntimeError(f'{error}; restored checkout files, but restart failed: {rollback_error}') from error
+        if old_link is None or link.resolve() != target.resolve():
+            shutil.rmtree(target)
+        raise RuntimeError(f'{error}; rolled back to checkout {checkout}') from error
+    print(f'Migrated to v{target.name}. Checkout {checkout} is no longer used and can be removed by you.')
+    return 0
 
 
 def activate(root, target, state_file, state):
@@ -232,6 +243,13 @@ def main(argv=None):
     update.add_argument('--auto', action='store_true')
     update.add_argument('--to')
     commands.add_parser('rollback')
+    for name in ('install', 'migrate'):
+        command = commands.add_parser(name, help='Prepare a release' if name == 'install' else 'Move a checkout install to a release')
+        command.add_argument('--to')
+        command.add_argument('--archive', type=Path)
+        command.add_argument('--sums', type=Path)
+        if name == 'migrate':
+            command.add_argument('--from', dest='source', type=Path)
     send = commands.add_parser('broadcast', help='Message many agent panes through the running Tether server.')
     send.add_argument('text')
     send.add_argument('--panes', nargs='+', help='Pane ids such as %%3 %%7 (or %%3,%%7). Default: every idle agent pane.')
@@ -240,8 +258,19 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.command == 'broadcast':
         return broadcast(args)
+    if args.command == 'install':
+        install_args = [flag for key in ('to', 'archive', 'sums')
+                        if getattr(args, key) is not None for flag in ('--' + key, str(getattr(args, key)))]
+        return bootstrap.main(install_args)
     try:
         state_file = updates.install_file()
+        if args.command == 'migrate':
+            state = json.loads(state_file.read_text())
+            root = Path.home() / '.local/share/tether'
+            root.mkdir(parents=True, exist_ok=True)
+            with (root / 'update.lock').open('a') as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return migrate(args, root, state_file, state)
         state = json.loads(state_file.read_text())
         if git_checkout(state['repo']):
             print('this is a git checkout: run git pull, then python3 install.py --apply')

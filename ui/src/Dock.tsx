@@ -7,6 +7,7 @@ import { useModal, usePolling } from './hooks'
 import { agentNames } from './Sidebar'
 import { Linked, PanelText, PanelPre, CopyButton, Markdown } from './Messages'
 import { Elapsed } from './Notices'
+import { LoginLink } from './LoginLink'
 
 
 
@@ -16,10 +17,11 @@ import { Elapsed } from './Notices'
 
 
 export function ChoiceDock({ approval, attention, plan, agent, disabled, onChoose, onKey, onType, onFocusReply }: { plan?: ChatData['plan']; approval: Approval | null; attention: Attention | null; agent: string; disabled: boolean
-  onChoose: (kind: 'approval' | 'menu', option: Choice, approval: Approval | null, feedback?: string) => Promise<void>; onKey: (key: string) => void; onType?: (text: string) => Promise<boolean>; onFocusReply?: () => void }) {
+  onChoose: (kind: 'approval' | 'menu', option: Choice, approval: Approval | null, feedback?: string) => Promise<void>; onKey: (key: string) => void; onType?: (text: string, loginUrl?: string) => Promise<boolean>; onFocusReply?: () => void }) {
   const [feedback, setFeedback] = useState('')
   const [code, setCode] = useState('')
   const [sending, setSending] = useState(false)
+  const [codeSent, setCodeSent] = useState(false)
   const [picked, setPicked] = useState<number | null>(null)
   const kind = approval ? 'approval' : 'menu'
   const options = (approval ? (approval.actionable ? approval.options : undefined) : attention?.options?.filter(option => option.id <= 9)) ?? []
@@ -54,9 +56,12 @@ export function ChoiceDock({ approval, attention, plan, agent, disabled, onChoos
           {!!picker.more_below && <li className="picker-more">↓ {picker.more_below} more</li>}
         </ul>
         <p className="ask-hint">Use ↑ and ↓ to move the mark. Enter chooses the marked item. Esc closes the list.</p></div> : login ? <div className="login-card">
-        <p>{login.code ? 'Open the sign-in page and sign in. Then paste the code it shows here.' : 'Open the sign-in page and sign in. This card closes when sign-in ends.'}</p>
-        <div className="login-card-links"><a className="primary" href={login.url} target="_blank" rel="noopener noreferrer">Open sign-in page</a><CopyButton text={login.url} label="Copy link" className="copy-chip" /></div>
-        {login.code && onType && <form className="login-card-code" onSubmit={event => { event.preventDefault(); const value = code.trim(); if (!value) return; setSending(true); void onType(value).then(ok => { if (ok) setCode('') }).finally(() => setSending(false)) }}>
+        <p>{login.code ? 'Open the sign-in page and sign in. Then paste the code it shows here.' : 'Open the sign-in page and enter the device code there.'}</p>
+        <LoginLink url={login.url} />
+        {login.user_code && <div className="login-device"><code>{login.user_code}</code><CopyButton text={login.user_code} label="Copy code" className="copy-chip" wide /></div>}
+        {login.message && <p role="alert">{login.message}</p>}
+        {codeSent && <p role="status">Code sent. Waiting for the agent to finish sign-in.</p>}
+        {login.code && onType && <form className="login-card-code" onSubmit={event => { event.preventDefault(); const value = code.trim(); if (!value || sending || disabled) return; setSending(true); setCodeSent(false); void onType(value, login.url).then(ok => { if (ok) { setCode(''); setCodeSent(true) } }).finally(() => setSending(false)) }}>
           <label htmlFor={`login-code-${attention?.id}`}>Sign-in code</label>
           <div><input id={`login-code-${attention?.id}`} type="password" autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={500} value={code} disabled={disabled || sending} onChange={event => setCode(event.target.value)} />
           <button type="submit" className="primary" disabled={disabled || sending || !code.trim()}>{sending ? 'Sending…' : 'Send code'}</button></div></form>}

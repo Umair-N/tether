@@ -82,7 +82,7 @@ export function QuickReply({ api, pane, id, focus, onOpen, onSuccess }: Props) {
         : data.plan ? <div className="side-pin-plan"><p>{agent} wants you to review a plan.</p><button type="button" className="primary" disabled={disabled} onClick={onOpen}>Open chat</button></div>
         : <>
           {(approval || attention) && <ChoiceDock key={approval?.id ?? attention?.id ?? 'choice'} approval={approval} attention={attention} plan={data.plan} agent={agent} disabled={disabled}
-            onChoose={choose} onKey={key => { void write('key', { key }, true) }} onType={text => write('type', { text, enter: true }, true)} onFocusReply={() => input.current?.focus()} />}
+            onChoose={choose} onKey={key => { void write('key', { key }, true) }} onType={(text, loginUrl) => write('type', { text, enter: true, ...loginUrl ? { login_url: loginUrl } : {} }, true)} onFocusReply={() => input.current?.focus()} />}
           {reply && <form className="side-pin-reply-field" onSubmit={event => { event.preventDefault(); send() }}>
             <textarea ref={input} rows={1} maxLength={4000} placeholder={`Message ${title}`} aria-label={`Message ${title}`} value={text} disabled={disabled}
               onChange={event => setText(event.target.value)} onKeyDown={event => {
@@ -93,6 +93,7 @@ export function QuickReply({ api, pane, id, focus, onOpen, onSuccess }: Props) {
         </>}
       <footer className="side-pin-quick-foot"><span>{data && !approval && !attention ? context : ''}</span><button type="button" disabled={disabled} onClick={onOpen}>Open chat</button></footer>
     </fieldset>
+    {data?.login_result && <p role={data.login_result.phase === 'failed' ? 'alert' : 'status'}>{data.login_result.message}</p>}
     {sendError && <p className="side-pin-reply-error" role="alert">{sendError}</p>}
   </div>
 }
