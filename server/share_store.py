@@ -680,3 +680,23 @@ class Store:
                         path.unlink(missing_ok=True)
                     else:
                         shutil.rmtree(path)
+
+    def thumbnail_if_missing(self, identifier, body, mime, actor=OWNER):
+        if len(body) > THUMB_LIMIT:
+            raise ShareError(413, 'That thumbnail exceeds 512 KiB.')
+        if mime not in ('image/jpeg', 'image/webp') or raster_type(body) != mime:
+            raise ShareError(400, 'Send a JPEG or WebP thumbnail.')
+        with self.connection(write=True) as db:
+            row = self.row(db, identifier, actor)
+            if not row['thumb_mime']:
+                self._copy_bytes(self.root / 'thumbs' / identifier, body)
+                db.execute('UPDATE files SET thumb_mime=? WHERE id=?', (mime, identifier))
+            return self.public(self.row(db, identifier, actor))
+
+    def fill_metadata(self, identifier, width=None, height=None, duration=None, actor=OWNER):
+        values = metadata({'width': width, 'height': height, 'duration': duration})
+        with self.connection(write=True) as db:
+            self.row(db, identifier, actor)
+            for key, value in values.items():
+                db.execute('UPDATE files SET ' + key + '=? WHERE id=? AND ' + key + ' IS NULL', (value, identifier))
+            return self.public(self.row(db, identifier, actor))
