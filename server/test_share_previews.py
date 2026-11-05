@@ -126,8 +126,9 @@ class PreviewTests(unittest.TestCase):
     def test_video_stores_thumbnail_and_metadata_with_expected_arguments(self):
         checks = """import sys
 assert sys.stdin.buffer.read() == b''
-for flag in ('-nostdin', '-hide_banner', '-loglevel', '-protocol_whitelist'):
+for flag in ('-hide_banner', '-loglevel', '-protocol_whitelist'):
     assert flag in sys.argv
+assert ('-nostdin' in sys.argv) == sys.argv[0].endswith('ffmpeg')  # real ffprobe rejects -nostdin
 assert sys.argv[sys.argv.index('-protocol_whitelist') + 1] == 'file'
 assert any(arg.startswith('file:/') for arg in sys.argv)
 """
@@ -136,6 +137,7 @@ assert any(arg.startswith('file:/') for arg in sys.argv)
 assert '480' in sys.argv[sys.argv.index('-vf') + 1]
 assert sys.argv[sys.argv.index('-q:v') + 1] == '5'
 assert sys.argv[-1] == 'pipe:1'
+assert sys.argv[sys.argv.index('-threads') + 1] == '1'
 sys.stdout.buffer.write(""" + repr(JPEG) + ')')
         file = self.put()
         result = self.run_job(file)

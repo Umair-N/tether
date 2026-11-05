@@ -20,7 +20,10 @@ _thread = None
 _pending = set()
 _failed = set()
 _backfills = {}
-_COMMON = ['-nostdin', '-hide_banner', '-loglevel', 'error', '-protocol_whitelist', 'file']
+# ffprobe has no -nostdin option; stdin is DEVNULL for both tools anyway.
+_COMMON = ['-hide_banner', '-loglevel', 'error', '-protocol_whitelist', 'file']
+# One decode thread: one per core reserves more than the 1 GiB address-space limit on many-core hosts.
+_FFMPEG = ['-nostdin', *_COMMON, '-threads', '1']
 _SCALE = "scale=w='min(480,iw)':h='min(480,ih)':force_original_aspect_ratio=decrease"
 _UNSUPPORTED_IMAGES = {
     'image/heic', 'image/heif', 'image/heic-sequence', 'image/heif-sequence',
@@ -126,7 +129,7 @@ def _preview(store, identifier):
             if kind == 'video':
                 duration = row['duration'] if row['duration'] is not None else values.get('duration', 0)
                 seek = ['-ss', str(min(1, duration / 3))]
-            body = _run([available['ffmpeg'], *_COMMON, *seek, '-i', 'file:' + str(path),
+            body = _run([available['ffmpeg'], *_FFMPEG, *seek, '-i', 'file:' + str(path),
                          '-frames:v', '1', '-vf', _SCALE, '-c:v', 'mjpeg', '-q:v', '5', '-f', 'image2pipe', 'pipe:1'])
     if body is not None:
         if len(body) > THUMB_LIMIT or raster_type(body) != 'image/jpeg':
