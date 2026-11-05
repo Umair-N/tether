@@ -87,12 +87,14 @@ const BROWSERS: { id: BrowserId; label: string; note: string; icon: typeof UserR
 export function BrowserPanel(props: BrowserPanelProps) {
   const [which, setWhich] = useState<BrowserId>(() => { try { return localStorage.getItem(WHICH_KEY) === 'signed' ? 'signed' : 'test' } catch { return 'test' } })
   const change = (id: BrowserId) => { setWhich(id); try { localStorage.setItem(WHICH_KEY, id) } catch { /* private mode */ } }
-  // "Watch" opens an agent tab, and agent tabs live only in the test browser.
+  // "Watch" opens an agent tab: in the test browser, or in the signed-in browser when Mak allowed it (detail.browser).
   useEffect(() => {
     const onWatch = (event: Event) => {
-      if (which === 'test') return
-      try { localStorage.setItem(tabKey('test'), (event as CustomEvent<{ tab: string }>).detail.tab) } catch { /* private mode */ }
-      change('test')
+      const detail = (event as CustomEvent<{ tab: string; browser?: BrowserId }>).detail
+      const target = detail.browser === 'signed' ? 'signed' : 'test'
+      if (which === target) return
+      try { localStorage.setItem(tabKey(target), detail.tab) } catch { /* private mode */ }
+      change(target)
     }
     window.addEventListener(WATCH_EVENT, onWatch)
     return () => window.removeEventListener(WATCH_EVENT, onWatch)
@@ -169,7 +171,11 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
   useEffect(() => { if (tab && tab.id !== current) choose(tab.id) }, [tab?.id]) // eslint-disable-line react-hooks/exhaustive-deps
   // "Watch" in a chat card (AgentBrowser.tsx): show that tab. Reload the list: the tab can be newer than the stream's last list.
   useEffect(() => {
-    const onWatch = (event: Event) => { if (which !== 'test') return; const id = (event as CustomEvent<{ tab: string }>).detail.tab; choose(id); void load() }
+    const onWatch = (event: Event) => {
+      const detail = (event as CustomEvent<{ tab: string; browser?: BrowserId }>).detail
+      if (which !== (detail.browser === 'signed' ? 'signed' : 'test')) return
+      choose(detail.tab); void load()
+    }
     window.addEventListener(WATCH_EVENT, onWatch)
     return () => window.removeEventListener(WATCH_EVENT, onWatch)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps

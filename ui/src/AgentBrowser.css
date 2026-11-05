@@ -44,3 +44,10 @@
 .agent-browser-stale .agent-browser-names { min-height: 44px; padding: 0; border: 0; background: none; color: var(--accent, var(--text)); font: inherit; font-weight: 600; text-decoration: underline; cursor: pointer; }
 .agent-browser-stale ul { margin: 0; padding-left: 18px; color: var(--muted); }
 .agent-browser-stale li { overflow-wrap: anywhere; }
+
+/* Signed-in browser: an agent's request (Allow / Deny) and its running grant. */
+.signed-ask-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.signed-ask-text p { margin: 0; }
+.signed-ask-reason { overflow-wrap: anywhere; }
+.signed-ask-meta { color: var(--muted); font-size: 12px !important; }
+.agent-browser-tabs li > button + button { margin-left: -4px; }

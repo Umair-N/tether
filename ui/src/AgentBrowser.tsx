@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { Bot, ChevronDown, Globe, Hand, X } from 'lucide-react'
+import { Bot, ChevronDown, Globe, Hand, KeyRound, X } from 'lucide-react'
 import { errorText } from './api'
-import type { Api, Pane } from './api'
+import type { Api, Pane, SignedBrowserAccess } from './api'
 import type { BrowserAskRow } from './needs'
 import { BrowserPanel } from './BrowserPanel'
 import './AgentBrowser.css'
@@ -21,7 +21,10 @@ interface AgentBrowserWire {
 type SetupState = 'ok' | 'missing' | 'none' | 'manual'
 export interface AgentBrowserStatus extends Omit<AgentBrowserWire, 'agents'> {
   agents: { pane: string | null; tabs: AgentTab[]; since: number }[]
+  // Signed-in browser: agents' requests waiting for Mak, and the grants running now (server/signed_access.py).
+  signed: Pick<SignedBrowserAccess, 'requests' | 'grants'>
 }
+const NO_SIGNED = { requests: [], grants: [] }
 
 export const WATCH_EVENT = 'tether-browser-watch'
 export const TAB_KEY = 'tether-browser-tab'
@@ -33,6 +36,7 @@ let poller: { api: Api; timer: number } | null = null
 const listeners = new Set<() => void>()
 function emit() { listeners.forEach(listener => listener()) }
 let known: Record<string, AgentTab> = {}
+let signed: AgentBrowserStatus['signed'] = NO_SIGNED
 async function accept(api: Api, wire: AgentBrowserWire | null) {
   // Older servers answer 404: treat that as "no agent browser".
   if (!wire || !Array.isArray(wire.agents)) { status = null; emit(); return }
@@ -44,13 +48,15 @@ async function accept(api: Api, wire: AgentBrowserWire | null) {
       known = Object.fromEntries(rows.map(row => [row.id, { id: row.id, url: row.url, title: row.title }]))
     } catch { /* keep the old titles */ }
   }
-  status = { ...wire, agents: wire.agents.map(agent => ({ ...agent, tabs: agent.tabs.map(id => known[id] ?? { id, url: '', title: '' }) })) }
+  status = { ...wire, signed, agents: wire.agents.map(agent => ({ ...agent, tabs: agent.tabs.map(id => known[id] ?? { id, url: '', title: '' }) })) }
   emit()
 }
 async function poll(api: Api) {
   if (document.visibilityState !== 'visible') return
   let wire: AgentBrowserWire | null = null
   try { wire = await api<AgentBrowserWire>('browser/agents') } catch { /* off or old server */ }
+  // Does not start Chrome. Older servers answer 404: no requests.
+  try { const access = await api<SignedBrowserAccess>('browser/signed/access'); signed = { requests: access.requests ?? [], grants: access.grants ?? [] } } catch { signed = NO_SIGNED }
   await accept(api, wire)
 }
 function subscribe(api: Api) {
@@ -71,6 +77,11 @@ export function useAgentBrowser(api: Api) {
   let sub = subscribers.get(api)
   if (!sub) { sub = subscribe(api); subscribers.set(api, sub) }
   return useSyncExternalStore(sub, () => status)
+}
+async function answerSigned(api: Api, path: 'allow' | 'deny' | 'end', id: string) {
+  const access = await api<SignedBrowserAccess>(`browser/signed/${path}`, { id })
+  signed = { requests: access.requests, grants: access.grants }
+  if (status) { status = { ...status, signed }; emit() }
 }
 export async function changeAgentBrowser(api: Api, path: 'browser/agents' | 'browser/ask/dismiss' | 'browser/agents/setup', body: unknown) {
   await accept(api, await api<AgentBrowserWire>(path, body))
@@ -97,10 +108,11 @@ export function usePaneLabel(pane: string | null | undefined) {
   return pane ? all[pane] ?? null : null
 }
 
-/** Open the browser on an agent's tab: the desktop panel, or the phone sheet. App.tsx listens. */
-export function watchTab(tab: string, pane: string) {
-  try { localStorage.setItem(TAB_KEY, tab) } catch { /* private mode: the panel picks the first tab */ }
-  window.dispatchEvent(new CustomEvent(WATCH_EVENT, { detail: { tab, pane } }))
+/** Open the browser on an agent's tab: the desktop panel, or the phone sheet. App.tsx listens.
+ * browser 'signed': a tab Mak allowed an agent to use in the signed-in browser. */
+export function watchTab(tab: string, pane: string, browser: 'test' | 'signed' = 'test') {
+  try { localStorage.setItem(browser === 'signed' ? TAB_KEY + '-signed' : TAB_KEY, tab) } catch { /* private mode: the panel picks the first tab */ }
+  window.dispatchEvent(new CustomEvent(WATCH_EVENT, { detail: { tab, pane, browser } }))
 }
 
 export function hostOf(url: string) {
@@ -111,10 +123,65 @@ export function hostOf(url: string) {
 export function agentBrowserItems(api: Api, state: AgentBrowserStatus | null, pane: string) {
   const tabs = state?.agents.filter(agent => agent.pane === pane).flatMap(agent => agent.tabs) ?? []
   const ask = state?.asks.find(item => item.pane === pane) ?? null
-  if (!tabs.length && !ask) return []
+  const signedAsk = state?.signed.requests.find(item => item.pane === pane)
+  const grant = state?.signed.grants.find(item => item.pane === pane)
+  const signedItems = signedAsk ? [{ id: 'browser-signed-ask', label: 'Wants your signed-in browser', active: true, content: <SignedAskCard api={api} request={signedAsk} /> }]
+    : grant ? [{ id: 'browser-signed', label: 'Using your signed-in browser', active: true, content: <SignedGrantCard api={api} grant={grant} /> }] : []
+  if (!tabs.length && !ask) return signedItems
   const first = tabs.find(tab => tab.url && tab.url !== 'about:blank') ?? tabs[0]
   const label = ask ? 'Needs you in the browser' : first ? `Browsing ${hostOf(first.url) || 'a page'}` : 'Browser'
-  return [{ id: ask ? 'browser-ask' : 'browser', label, active: true, content: <AgentBrowserCard api={api} pane={pane} tabs={tabs} ask={ask} /> }]
+  return [...signedItems, { id: ask ? 'browser-ask' : 'browser', label, active: true, content: <AgentBrowserCard api={api} pane={pane} tabs={tabs} ask={ask} /> }]
+}
+
+type SignedRequest = AgentBrowserStatus['signed']['requests'][number]
+type SignedGrant = AgentBrowserStatus['signed']['grants'][number]
+
+/** An agent asks to drive one tab of the signed-in browser. It waits up to 2 minutes for this answer. */
+function SignedAskCard({ api, request }: { api: Api; request: SignedRequest }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const name = usePaneLabel(request.pane) ?? request.agent
+  const answer = async (path: 'allow' | 'deny') => {
+    setBusy(true); setError('')
+    try { await answerSigned(api, path, request.id) } catch (failure) { setError(errorText(failure)) } finally { setBusy(false) }
+  }
+  return <div className="agent-browser-card">
+    <div className="agent-browser-ask signed-ask" role="alert">
+      <KeyRound size={16} aria-hidden="true" />
+      <div className="signed-ask-text">
+        <p><strong>{name}</strong> wants to use your signed-in browser for {request.minutes} min.</p>
+        <p className="signed-ask-reason">“{request.reason}”</p>
+        {request.url && <p className="signed-ask-meta">Opens {hostOf(request.url)}</p>}
+        <p className="signed-ask-meta">It gets one new tab with your sign-ins. It cannot see your other tabs, cookies or settings.</p>
+      </div>
+      <div className="agent-browser-actions">
+        <button type="button" className="primary" disabled={busy} onClick={() => void answer('allow')}>Allow</button>
+        <button type="button" className="secondary" disabled={busy} onClick={() => void answer('deny')}>Deny</button>
+      </div>
+    </div>
+    {error && <p className="error" role="alert">{error}</p>}
+  </div>
+}
+
+function minutesLeft(expires: number, now: number) { return Math.max(0, Math.ceil((expires * 1000 - now) / 60000)) }
+
+/** A running grant: watch the agent's tab, or end access now. The tab stays open for Mak after the end. */
+function SignedGrantCard({ api, grant }: { api: Api; grant: SignedGrant }) {
+  const [now, setNow] = useState(() => Date.now())
+  const [error, setError] = useState('')
+  useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 15000); return () => clearInterval(timer) }, [])
+  const left = minutesLeft(grant.expires, now)
+  return <div className="agent-browser-card">
+    <ul className="agent-browser-tabs">
+      <li>
+        <KeyRound size={15} aria-hidden="true" />
+        <span><strong>Signed-in tab</strong><small>{left ? `${left} min left` : 'Ending'} · {grant.reason}</small></span>
+        <button type="button" className="secondary" onClick={() => watchTab(grant.tab, grant.pane, 'signed')}>Watch</button>
+        <button type="button" className="secondary" onClick={() => void answerSigned(api, 'end', grant.id).catch(failure => setError(errorText(failure)))}>End now</button>
+      </li>
+    </ul>
+    {error && <p className="error" role="alert">{error}</p>}
+  </div>
 }
 
 function AgentBrowserCard({ api, pane, tabs, ask }: { api: Api; pane: string; tabs: AgentTab[]; ask: AgentAsk | null }) {
