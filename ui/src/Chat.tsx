@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDown, ArrowLeftRight, Blocks, GitFork, Check, ChevronDown, ChevronRight, Clock3, Columns2, CornerDownRight, Gauge, Info, Layers, Maximize2, Menu, MessageSquare, Minimize2, MoreHorizontal, PanelTop, Pencil, Pin, PinOff, RefreshCw, RotateCcw, Rows2, Search, Settings2, ShieldAlert, SquareTerminal, Target, Terminal, WifiOff, X } from 'lucide-react'
+import { ArrowDown, ArrowLeftRight, Blocks, GitFork, Check, ChevronDown, ChevronRight, Clock3, Columns2, CornerDownRight, Gauge, Info, Layers, Maximize2, Menu, MessageSquare, Minimize2, MoreHorizontal, PanelTop, Pencil, Pin, PinOff, RefreshCw, RotateCcw, Rows2, Search, Settings2, Shield, ShieldAlert, SquareTerminal, Target, Terminal, WifiOff, X } from 'lucide-react'
 import { AssistantRuntimeProvider, ThreadPrimitive, useExternalStoreRuntime } from '@assistant-ui/react'
 import { ApiError, canFork, creditsLabel, errorText, usageLabel } from './api'
 import type { Api, Approval, AskBridge, Attention, ChatData, ChatMessage, Choice, Footer, Pane, PromptAction } from './api'
@@ -26,6 +26,7 @@ import { State } from './NewSession'
 import { Linked, Message, convertMessage } from './Messages'
 import { Composer } from './Composer'
 import { expandPlaceholders } from './pasteText'
+import { autoBlock } from './noticeText'
 import { ChoiceDock, HeadsUp, taskLabel, SessionInfo, LiveSheet, SearchSheet } from './Dock'
 import { AskBar } from './ChoiceExtras'
 import { LiveTerminal } from './Terminal'
@@ -748,7 +749,15 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     <NoticeStack items={[
       ...(data && !writable ? [{ id: 'read-only', group: 'environment' as const, variant: 'info' as const, icon: <Info size={15} />, title: 'This pane is read-only.' }] : []),
       ...(toast ? [{ id: 'toast', icon: <Info size={15} />, title: toast, live: true }] : []),
-      ...visibleNotices.map(note => ({ id: `notice:${note}`, variant: (/\b(error|failed|denied|limit)\b/i.test(note) ? 'warning' : 'default') as NoticeVariant, icon: /\b(error|failed|denied|limit)\b/i.test(note) ? <ShieldAlert size={15} /> : <Info size={15} />, title: <Linked text={note} />, dismissLabel: `Hide notice: ${note}`, onDismiss: () => hideNotice(note) })),
+      ...visibleNotices.map(note => {
+        const base = { id: `notice:${note}`, dismissLabel: `Hide notice: ${note}`, onDismiss: () => hideNotice(note) }
+        // Auto mode's safety check stopped a tool call. Say what happened and what comes next; offer the fix only when Claude is idle.
+        const block = autoBlock(note)
+        if (block) return { ...base, icon: <Shield size={15} />, title: block.title,
+          detail: `${block.reason ? `Rule: ${block.reason}. ` : ''}${state === 'Working' ? 'Claude will try another way' : 'Approve it to let Claude retry'}`,
+          action: state === 'Working' ? undefined : { label: 'Review', hint: 'Open /permissions, tab Recently blocked', disabled: !writable || acting, onClick: () => void send('/permissions') } }
+        return { ...base, variant: (/\b(error|failed|denied|limit)\b/i.test(note) ? 'warning' : 'default') as NoticeVariant, icon: /\b(error|failed|denied|limit)\b/i.test(note) ? <ShieldAlert size={15} /> : <Info size={15} />, title: <Linked text={note} /> }
+      }),
     ]} />
     {state !== 'Working' && doneIn?.pane === pane.id && <div className="working-line done-line" role="status"><span className="done-check"><Check size={12} strokeWidth={3} /></span><span><strong>Done in {formatElapsed(doneIn.seconds)}</strong></span></div>}
     {state === 'Working' && <div className="working-line" role="status"><span className="state-dot working" /><span><span className="working-head"><strong>{footer.spinner?.verb ?? 'Working…'}</strong>{workingSince && !footer.spinner?.detail && <Elapsed since={workingSince.at} />}</span>{footer.spinner && <small>{footer.spinner.detail}</small>}{footer.running && <span className="running-tool"><Terminal size={13} /><span>{footer.running.title}<code>{footer.running.command}</code></span><small>{footer.running.elapsed}</small></span>}{footer.denied && <span className="running-tool denied-tool"><ShieldAlert size={13} /><span>{footer.denied.text}{footer.denied.reason && <small>{footer.denied.reason}</small>}</span></span>}</span></div>}

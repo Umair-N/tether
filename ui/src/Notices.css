@@ -1,0 +1,9 @@
+/* A notice with a next step: bold title, then muted detail, then one small action (Notices.tsx). */
+.notice-title { color: var(--text); font-weight: 600; }
+.notice-detail { color: var(--muted); }
+.notice-detail::before { content: ' · '; }
+.notice-action { flex: none; align-self: center; min-height: 0; height: 24px; margin: 0; padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--text); font-size: 12px; font-weight: 600; line-height: 22px; }
+.notice-action:hover:not(:disabled) { background: var(--hover); }
+.notice-action:disabled { color: var(--muted); opacity: .7; }
+.notice-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (pointer: coarse) { .notice-action { height: 32px; } }

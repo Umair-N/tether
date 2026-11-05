@@ -4,6 +4,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { ChevronDown, X } from 'lucide-react'
+import './Notices.css'
 
 export type NoticeVariant = 'default' | 'info' | 'warning' | 'error'
 // The machine comes first, then what needs you. The order is fixed, so rows never trade places.
@@ -14,6 +15,8 @@ export interface NoticeItem {
   group?: NoticeGroup
   icon: ReactNode
   title: ReactNode
+  detail?: ReactNode  // muted text after the title: what happens next
+  action?: { label: string; onClick: () => void; disabled?: boolean; hint?: string }
   dismissLabel?: string
   onDismiss?: () => void
   live?: boolean  // a status that changes, read by screen readers as it changes
@@ -34,11 +37,12 @@ function NoticeCard({ item }: { item: NoticeItem }) {
     const observer = new ResizeObserver(measure)
     observer.observe(element)
     return () => observer.disconnect()
-  }, [item.title])
+  }, [item.title, item.detail])
   const variant = item.variant ?? 'default'
   return <div className={`notice-card ${variant} ${open ? 'open' : ''}`} role={variant === 'error' || variant === 'warning' ? 'alert' : item.live ? 'status' : undefined}>
     <span className="notice-icon" aria-hidden="true">{item.icon}</span>
-    <span ref={text} className="notice-text">{item.title}</span>
+    <span ref={text} className="notice-text">{item.detail ? <><span className="notice-title">{item.title}</span><span className="notice-detail">{item.detail}</span></> : item.title}</span>
+    {item.action && <button type="button" className="notice-action" disabled={item.action.disabled} title={item.action.hint} onClick={item.action.onClick}>{item.action.label}</button>}
     {(overflow || open) && <button type="button" className="notice-button" aria-expanded={open} aria-label={open ? 'Show less' : 'Show all'} onClick={() => setOpen(!open)}><ChevronDown size={15} /></button>}
     {item.onDismiss && <button type="button" className="notice-button" aria-label={item.dismissLabel ?? 'Hide notice'} onClick={item.onDismiss}><X size={14} /></button>}
   </div>
