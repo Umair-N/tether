@@ -1,4 +1,4 @@
-"""One headless Chromium on this machine, driven over the Chrome DevTools Protocol, for the browser panel.
+"""Panel browsers driven over private Chrome DevTools pipes.
 
 The browser starts on first use with `--remote-debugging-pipe`: commands go in on the child's fd 3 and replies and
 events come out on fd 4, one JSON message per NUL byte. No TCP debug port opens, and fds 3/4 are Unix sockets so
@@ -19,11 +19,13 @@ import time
 from urllib.parse import urlsplit
 
 import paths
+from browser_display import VirtualDisplay
 
 IDLE_SECONDS = 15 * 60
 CALL_TIMEOUT = 15
 MAX_TABS = 12
 PROFILE = paths.CACHE / 'browser' / 'profile'  # both folders are mode 700
+SIGNED_PROFILE = paths.CACHE / 'signed-browser' / 'profile'
 MODES = ('private', 'saved')
 DESKTOP = (1280, 800)
 # JPEG quality of streamed frames. At 60, text on a 2x screen showed blocks. Desktop tabs render at 2x (PRESETS) for the same reason;
@@ -74,6 +76,11 @@ def find_chrome():
     builds = sorted(glob.glob(str(paths.HOME / '.cache/ms-playwright/chromium-*/chrome-linux*/chrome')),
                     key=lambda path: int(re.search(r'chromium-(\d+)', path).group(1)), reverse=True)
     return next((path for path in builds if os.access(path, os.X_OK)), None)
+
+
+def find_signed_chrome():
+    """The signed-in browser always uses branded Chrome, never the agent's override."""
+    return '/usr/bin/google-chrome' if os.access('/usr/bin/google-chrome', os.X_OK) else None
 
 
 def needs_no_sandbox():
@@ -259,25 +266,30 @@ def _channel():
     return _high_fd(one.detach()), _high_fd(other.detach())
 
 
-def launch(chrome, profile, extra=()):
+def launch(chrome, profile, extra=(), *, headed=False, env=None):
     """Start Chromium in its own process group with the DevTools pipe on fds 3 and 4. Returns (pid, read_fd, write_fd)."""
-    to_child_r, to_child_w = _channel()
-    from_child_r, from_child_w = _channel()
     profile.mkdir(parents=True, exist_ok=True, mode=0o700)
     for folder in (profile.parent, profile):  # mkdir's mode does not apply to folders that already exist
         folder.chmod(0o700)
-    args = [chrome, '--headless=new', '--remote-debugging-pipe', '--user-data-dir=' + str(profile),
+    args = [chrome, *(['--disable-blink-features=AutomationControlled'] if headed else ['--headless=new']),
+            '--remote-debugging-pipe', '--user-data-dir=' + str(profile),
             '--no-first-run', '--no-default-browser-check', '--disable-sync', '--mute-audio', '--password-store=basic',
             '--window-size=%d,%d' % DESKTOP, '--force-device-scale-factor=2', *extra, 'about:blank']
     if needs_no_sandbox():
         args.insert(2, '--no-sandbox')
+    to_child_r, to_child_w = _channel()
+    from_child_r, from_child_w = _channel()
     actions = [(os.POSIX_SPAWN_OPEN, 0, os.devnull, os.O_RDONLY, 0),
                (os.POSIX_SPAWN_OPEN, 1, os.devnull, os.O_WRONLY, 0),
                (os.POSIX_SPAWN_OPEN, 2, os.devnull, os.O_WRONLY, 0),
                (os.POSIX_SPAWN_DUP2, to_child_r, 3),
                (os.POSIX_SPAWN_DUP2, from_child_w, 4)]
     try:
-        pid = os.posix_spawn(chrome, args, dict(os.environ), file_actions=actions, setsid=True)
+        pid = os.posix_spawn(chrome, args, dict(os.environ, **(env or {})), file_actions=actions, setsid=True)
+    except OSError:
+        os.close(from_child_r)
+        os.close(to_child_w)
+        raise
     finally:
         os.close(to_child_r)
         os.close(from_child_w)
@@ -314,10 +326,16 @@ class Tab:
 
 
 class Browser:
-    """The single shared browser. All public methods start it when needed and are safe to call from any thread."""
+    """One panel browser. Public methods start it when needed and are safe to call from any thread."""
 
-    def __init__(self, launcher=launch, chrome_finder=find_chrome, profile=PROFILE, clock=time.monotonic):
-        self.launcher, self.chrome_finder, self.profile, self.clock = launcher, chrome_finder, profile, clock
+    def __init__(self, launcher=launch, chrome_finder=None, profile=None, clock=time.monotonic,
+                 *, signed=False, display=None):
+        self.launcher, self.clock = launcher, clock
+        self.chrome_finder = chrome_finder or (find_signed_chrome if signed else find_chrome)
+        self.profile = profile if profile is not None else (SIGNED_PROFILE if signed else PROFILE)
+        self.signed = signed
+        self.display = (display or VirtualDisplay()) if signed else None
+        self.default_mode = 'saved' if signed else 'private'
         self.lock = threading.RLock()
         self.conn = None
         self.pid = None
@@ -330,6 +348,7 @@ class Browser:
         self.agent_proxy = None
         self.used = clock()
         self.watcher = None
+        self.idle_stop = threading.Event()
 
     # life cycle ------------------------------------------------------------------------------------------------
     def running(self):
@@ -343,14 +362,21 @@ class Browser:
             self.touch()
             if self.running():
                 return
+            if self.pid or self.conn:
+                self.stop()
             self._reset()
             chrome = self.chrome_finder()
             if not chrome:
-                raise BrowserError('No Chromium found. Install one or set MOBILE_TMUX_CHROME.')
-            pid, read_fd, write_fd = self.launcher(chrome, self.profile)
-            self.pid = pid
-            self.conn = Connection(read_fd, write_fd, self._event, self._closed)
+                raise BrowserError('Google Chrome is not installed.' if self.signed else
+                                   'No Chromium found. Install one or set MOBILE_TMUX_CHROME.')
             try:
+                if self.signed:
+                    env = self.display.start()
+                    pid, read_fd, write_fd = self.launcher(chrome, self.profile, headed=True, env=env)
+                else:
+                    pid, read_fd, write_fd = self.launcher(chrome, self.profile)
+                self.pid = pid
+                self.conn = Connection(read_fd, write_fd, self._event, self._closed)
                 version = self.conn.call('Browser.getVersion', timeout=30)
                 self.product = str(version.get('product') or '')
                 if self.agent_proxy:
@@ -359,17 +385,19 @@ class Browser:
                 self.conn.call('Browser.setDownloadBehavior', {'behavior': 'deny'})
                 self.conn.call('Target.setDiscoverTargets', {'discover': True})
                 # The start-up about:blank page stays hidden: it keeps the browser alive when every tab is closed.
-                self._create('about:blank', 'private')
-            except BrowserError:
+                self._create('about:blank', self.default_mode)
+            except (BrowserError, OSError, RuntimeError) as exc:
                 self.stop()
-                raise
-            if self.watcher is None or not self.watcher.is_alive():
-                self.watcher = threading.Thread(target=self._watch, daemon=True, name='browser-idle')
+                raise BrowserError(str(exc)) from exc
+            if self.watcher is None or not self.watcher.is_alive() or self.idle_stop.is_set():
+                self.idle_stop = threading.Event()
+                self.watcher = threading.Thread(target=self._watch, args=(self.idle_stop,), daemon=True, name='browser-idle')
                 self.watcher.start()
 
     def stop(self):
         """Close the browser this server started (its own process group only)."""
         with self.lock:
+            self.idle_stop.set()
             if self.agent_proxy:
                 self.agent_proxy.browser_stopped()
             conn, pid = self.conn, self.pid
@@ -381,6 +409,10 @@ class Browser:
                     pass
             if pid:
                 _reap(pid)
+            if conn:
+                conn._shut()
+            if self.display:
+                self.display.stop()
             self._reset()
 
     def _reset(self):
@@ -401,13 +433,15 @@ class Browser:
                 pid, self.pid, self.conn = self.pid, None, None
                 if pid:
                     _reap(pid)
+                self.idle_stop.set()
+                if self.display:
+                    self.display.stop()
                 self._reset()
 
-    def _watch(self):
-        while True:
-            time.sleep(30)
+    def _watch(self, stopped):
+        while not stopped.wait(30):
             with self.lock:
-                if not self.running():
+                if stopped.is_set() or not self.running():
                     return
                 busy = any(tab.viewers for tab in self.tabs.values()) or bool(self.agent_proxy and self.agent_proxy.busy())
                 if busy:
@@ -421,6 +455,8 @@ class Browser:
         self.version += 1
 
     def _adopt(self, target, info=None, mode='saved', context=None, owner=None):
+        if self.signed and (mode != 'saved' or context):
+            raise BrowserError('The signed-in browser accepts saved user tabs only.')
         session = self.conn.call('Target.attachToTarget', {'targetId': target, 'flatten': True})['sessionId']
         tab = Tab(target, session, mode, context, owner)
         if info:
@@ -471,13 +507,16 @@ class Browser:
         self.ensure()
         with self.lock:
             if not self.order:  # every tab closed itself (window.close): offer a fresh one
-                self._create('about:blank', 'private')
+                self._create('about:blank', self.default_mode)
         return self.state()
 
-    def new_tab(self, url='about:blank', mode='private'):
+    def new_tab(self, url='about:blank', mode=None):
         url = normalize_url(url)
+        mode = self.default_mode if mode is None else mode
         if mode not in MODES:
             raise ValueError('Unknown tab mode.')
+        if self.signed and mode != 'saved':
+            raise ValueError('The signed-in browser accepts saved tabs only.')
         self.ensure()
         with self.lock:
             if self._user_tab_count() >= MAX_TABS:
@@ -492,7 +531,7 @@ class Browser:
             self.conn.call('Target.closeTarget', {'targetId': target})
             self._forget(tab)
             if not self.order:
-                self._create('about:blank', 'private')
+                self._create('about:blank', self.default_mode)
             return self.state()
 
     def _forget(self, tab):
@@ -598,7 +637,8 @@ class Browser:
             self.conn.call('Emulation.setTouchEmulationEnabled', {'enabled': False}, session)
             self.conn.call('Emulation.setEmitTouchEventsForMouse', {'enabled': False}, session)
             if self.user_agent:
-                self.conn.call('Emulation.setUserAgentOverride', {'userAgent': self.user_agent}, session)
+                # Keep Chrome's native UA and client hints on signed-in desktop tabs.
+                self.conn.call('Emulation.setUserAgentOverride', {'userAgent': '' if self.signed else self.user_agent}, session)
         else:
             self.conn.call('Emulation.setDeviceMetricsOverride',
                            {'width': spec['width'], 'height': spec['height'], 'deviceScaleFactor': spec['scale'],
@@ -773,6 +813,8 @@ class Browser:
 
     def adopt_agent(self, info, client):
         """Attach a panel session on a worker; the agent retains its own viewport and context."""
+        if self.signed:
+            return
         with self.lock:
             if (self.running() and not client.closed and info['targetId'] not in self.tabs
                     and info['targetId'] in client.targets):
@@ -877,12 +919,18 @@ def _reap(pid):
             time.sleep(.05)
 
 
-def frame_event(frame):
+def frame_event(frame, browser_id='test'):
     """One SSE 'frame' message: metadata plus the JPEG as base64 (the pipe already carries it that way)."""
     seq, metadata, data, _ = frame
     head = json.dumps({'seq': seq, 'width': metadata.get('deviceWidth'), 'height': metadata.get('deviceHeight'),
-                       'top': metadata.get('offsetTop', 0)})
+                       'top': metadata.get('offsetTop', 0), **({'browser': 'signed'} if browser_id == 'signed' else {})})
     return ('event: frame\ndata: ' + head[:-1] + ',"jpeg":"' + data + '"}\n\n').encode()
 
 
 BROWSER = Browser()
+SIGNED_BROWSER = Browser(chrome_finder=find_signed_chrome, profile=SIGNED_PROFILE, signed=True)
+
+
+def stop_all():
+    SIGNED_BROWSER.stop()
+    BROWSER.stop()

@@ -1749,7 +1749,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == '__main__':
+    import atexit
+    import browser
     import pane_view
+    atexit.register(browser.stop_all)
     pane_view.zoom_repair_all()
     paths.SCOPE_TMUX = bool(os.environ.get('INVOCATION_ID'))
     # A tmux server that this service starts takes its default-shell from $SHELL. systemd gives /bin/bash, so new panes

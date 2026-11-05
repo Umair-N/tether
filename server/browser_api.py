@@ -19,41 +19,49 @@ def handles(path):
     return path.startswith(PREFIX)
 
 
-def get(handler, the_browser=None, the_proxy=None, the_setup=None):
-    the_browser = the_browser or browser.BROWSER
+def get(handler, the_browser=None, the_proxy=None, the_setup=None, signed_browser=None):
     parts = urlsplit(handler.path)
     query = parse_qs(parts.query)
     name = parts.path[len(PREFIX):]
+    browser_id = query.get('browser', ['test'])[0]
     try:
+        the_browser = _select(browser_id, the_browser, signed_browser)
+        _user_only(browser_id, name)
         if name == 'agents':
             handler.respond(200, _agent_state(_proxy(the_proxy), the_setup))
         elif name == 'tabs':
-            handler.respond(200, the_browser.list_tabs())
+            state = the_browser.list_tabs()
+            state['browsers'] = _browsers(the_browser if browser_id == 'test' else None,
+                                        the_browser if browser_id == 'signed' else signed_browser)
+            handler.respond(200, _tag(state, browser_id))
         elif name == 'stream':
-            stream(handler, the_browser, query.get('tab', [''])[0], _int(query, 'w', 1280), _int(query, 'h', 800))
+            stream(handler, the_browser, query.get('tab', [''])[0], _int(query, 'w', 1280), _int(query, 'h', 800), browser_id)
         else:
-            handler.respond(404, {'error': 'Not found'})
+            handler.respond(404, _tag({'error': 'Not found'}, browser_id))
     except browser.BrowserError as exc:
-        handler.respond(503, {'error': str(exc)})
+        handler.respond(503, _tag({'error': str(exc)}, browser_id))
     except ValueError as exc:
-        handler.respond(400, {'error': str(exc)})
+        handler.respond(400, _tag({'error': str(exc)}, browser_id))
 
 
-def post(handler, the_browser=None, the_proxy=None, the_setup=None):
-    the_browser = the_browser or browser.BROWSER
+def post(handler, the_browser=None, the_proxy=None, the_setup=None, signed_browser=None):
     the_setup = the_setup or agent_browser_setup
     name = handler.path.split('?', 1)[0][len(PREFIX):]
-    if name not in POST_NAMES:
-        handler.respond(404, {'error': 'Not found'})
-        return
+    browser_id = parse_qs(urlsplit(handler.path).query).get('browser', ['test'])[0]
     try:
         size = int(handler.headers.get('Content-Length', '0') or 0)
         if not 0 < size <= 262144:
-            handler.respond(413, {'error': 'Invalid request.'})
+            handler.respond(413, _tag({'error': 'Invalid request.'}, browser_id))
             return
         body = json.loads(handler.rfile.read(size))
         if not isinstance(body, dict):
             raise ValueError('Invalid request.')
+        browser_id = body.get('browser', browser_id)
+        the_browser = _select(browser_id, the_browser, signed_browser)
+        if name not in POST_NAMES:
+            handler.respond(404, _tag({'error': 'Not found'}, browser_id))
+            return
+        _user_only(browser_id, name)
         tab = body.get('tab')
         if name not in ('new', 'agents', 'agents/setup', 'ask/dismiss') and not isinstance(tab, str):
             raise ValueError('Choose a tab.')
@@ -74,7 +82,7 @@ def post(handler, the_browser=None, the_proxy=None, the_setup=None):
             proxy = _proxy(the_proxy)
             result = _agent_state(proxy, the_setup, proxy.dismiss(body.get('id')))
         elif name == 'new':
-            result = the_browser.new_tab(body.get('url') or 'about:blank', body.get('mode') or 'private')
+            result = the_browser.new_tab(body.get('url') or 'about:blank', body.get('mode') or None)
         elif name == 'close':
             result = the_browser.close_tab(tab)
         elif name == 'navigate':
@@ -86,13 +94,43 @@ def post(handler, the_browser=None, the_proxy=None, the_setup=None):
         elif name == 'device':
             result = the_browser.set_device(tab, body.get('preset'), body.get('width'), body.get('height'))
         else:
-            handler.respond(404, {'error': 'Not found'})
+            handler.respond(404, _tag({'error': 'Not found'}, browser_id))
             return
-        handler.respond(200, result)
+        handler.respond(200, _tag(result, browser_id))
     except browser.BrowserError as exc:
-        handler.respond(503, {'error': str(exc)})
+        handler.respond(503, _tag({'error': str(exc)}, browser_id))
     except (ValueError, UnicodeError) as exc:
-        handler.respond(400, {'error': str(exc) or 'Invalid request.'})
+        handler.respond(400, _tag({'error': str(exc) or 'Invalid request.'}, browser_id))
+
+
+def _select(browser_id, test=None, signed=None):
+    if browser_id == 'test':
+        return test or browser.BROWSER
+    if browser_id == 'signed':
+        return signed or browser.SIGNED_BROWSER
+    raise ValueError('Choose the test or signed browser.')
+
+
+def _tag(result, browser_id):
+    return dict(result, browser='signed') if browser_id == 'signed' else result
+
+
+def _user_only(browser_id, name):
+    if browser_id == 'signed' and name in ('agents', 'agents/setup', 'ask/dismiss'):
+        raise ValueError('Agents cannot access the signed-in browser.')
+
+
+def _browsers(test=None, signed=None):
+    rows = []
+    for ident, label, instance in (('test', 'Test browser', test or browser.BROWSER),
+                                   ('signed', 'Signed-in browser', signed or browser.SIGNED_BROWSER)):
+        reason = ''
+        if not instance.chrome_finder():
+            reason = 'Google Chrome is not installed.' if ident == 'signed' else 'No Chromium found.'
+        elif ident == 'signed' and not instance.display.finder():
+            reason = 'Xvfb is not installed.'
+        rows.append({'id': ident, 'label': label, 'running': instance.running(), 'available': not reason, 'reason': reason})
+    return rows
 
 
 def _proxy(the_proxy):
@@ -110,7 +148,7 @@ def _agent_state(proxy, the_setup=None, state=None):
     return result
 
 
-def stream(handler, the_browser, target, width, height):
+def stream(handler, the_browser, target, width, height, browser_id='test'):
     """Server-sent events for one tab: `frame` (JPEG), `tabs` (tab list and back/forward state), `closed`."""
     tab = the_browser.watch(target, width, height)
     try:
@@ -134,7 +172,7 @@ def stream(handler, the_browser, target, width, height):
                 checked = time.monotonic()
                 the_browser.refresh(tab)
             if tab.target not in the_browser.tabs:
-                handler.wfile.write(b'event: closed\ndata: {}\n\n')
+                handler.wfile.write(('event: closed\ndata: ' + json.dumps(_tag({}, browser_id)) + '\n\n').encode())
                 handler.wfile.flush()
                 return
             if the_browser.version != version:
@@ -144,20 +182,20 @@ def stream(handler, the_browser, target, width, height):
                     state['nav'] = the_browser.nav_state(tab.target)
                 except browser.BrowserError:
                     state['nav'] = {'back': False, 'forward': False}
-                handler.wfile.write(('event: tabs\ndata: ' + json.dumps(state) + '\n\n').encode())
+                handler.wfile.write(('event: tabs\ndata: ' + json.dumps(_tag(state, browser_id)) + '\n\n').encode())
                 wrote = time.monotonic()
             if frame is not None and not the_browser.heal(tab, frame):
                 seen = frame[0]  # a frame at the wrong size would map clicks wrongly; the next one fits
                 the_browser.ack(tab, frame)
             elif frame is not None:
                 sent = time.monotonic()
-                handler.wfile.write(browser.frame_event(frame))
+                handler.wfile.write(browser.frame_event(frame, browser_id))
                 handler.wfile.flush()
                 seen, wrote = frame[0], time.monotonic()
                 time.sleep(max(0.0, FRAME_INTERVAL - (wrote - sent)))
                 the_browser.ack(tab, frame)
             elif time.monotonic() - wrote >= KEEPALIVE:
-                handler.wfile.write(b'event: idle\ndata: {}\n\n')
+                handler.wfile.write(('event: idle\ndata: ' + json.dumps(_tag({}, browser_id)) + '\n\n').encode())
                 wrote = time.monotonic()
             handler.wfile.flush()
             the_browser.touch()

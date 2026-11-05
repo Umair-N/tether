@@ -1,4 +1,21 @@
 export type Agent = 'claude' | 'codex' | 'antigravity' | 'shell'
+/** Omit browser for the existing test browser. Signed-in tabs always use mode: 'saved'. */
+export type BrowserId = 'test' | 'signed'
+export interface BrowserSelection { browser?: BrowserId }
+export interface BrowserAvailability { id: BrowserId; label: string; running: boolean; available: boolean; reason: string }
+export interface BrowserTab {
+  id: string; url: string; title: string; preset: string; mode: 'private' | 'saved' | 'agent'
+  width: number; height: number; touch: boolean
+  owner?: { pane: string | null }; controller?: 'user' | 'agent'
+}
+export interface BrowserTabs extends BrowserSelection {
+  running: boolean; version: number; tabs: BrowserTab[]; browsers: BrowserAvailability[]
+  presets: { id: string; label: string; width: number; height: number; touch: boolean }[]
+  nav?: { back: boolean; forward: boolean }
+}
+/** SSE tabs events carry the selected browser's state, without the browser switch list. */
+export type BrowserStreamTabs = Omit<BrowserTabs, 'browsers'>
+export interface BrowserFrame extends BrowserSelection { seq: number; width: number; height: number; top: number; jpeg: string }
 export interface Pane {
   id: string
   tmux_session: string

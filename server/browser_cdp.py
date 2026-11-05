@@ -545,6 +545,8 @@ class Proxy:
     def __init__(self, the_browser=None, config_path=CONFIG, notifier=lambda *args, **kwargs: None,
                  env_runner=subprocess.run, pane_finder=peer_pane):
         self.browser = the_browser or browser.BROWSER
+        if self.browser.signed:
+            raise ValueError('Agents cannot access the signed-in browser.')
         self.config_path = Path(config_path)
         self.config = load_config(self.config_path)
         self.notifier, self.env_runner, self.pane_finder = notifier, env_runner, pane_finder

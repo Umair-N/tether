@@ -293,10 +293,10 @@ class ProxyTests(unittest.TestCase):
         self.assertEqual(self.client.transport.closes, [1011])
         self.assertTrue(self.proxy.busy())
         self.browser.used = -browser.IDLE_SECONDS * 2
-        with patch.object(browser.time, 'sleep', side_effect=[None, RuntimeError('end watch')]), \
+        with patch.object(self.browser.idle_stop, 'wait', side_effect=[False, RuntimeError('end watch')]), \
              patch.object(self.browser, 'stop') as stop:
             with self.assertRaisesRegex(RuntimeError, 'end watch'):
-                self.browser._watch()
+                self.browser._watch(self.browser.idle_stop)
             stop.assert_not_called()
         self.assertGreater(self.browser.used, 0)
 
