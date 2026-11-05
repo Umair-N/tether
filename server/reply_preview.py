@@ -43,14 +43,28 @@ def extract(screen, width, messages):
     if not prompts:
         return None
     stops = [i for i, line in enumerate(lines[:prompts[-1]]) if SPINNER.match(line)]
-    if not stops:
-        return None
-    stop = stops[-1]
+    if stops:
+        stop = stops[-1]
+    else:
+        borders = [i for i, line in enumerate(lines[:prompts[-1]])
+                   if re.fullmatch(r'─+|─{10,}[^─]', line.strip())]
+        if not borders:
+            return None
+        stop = borders[-1]
     starts = [i for i, line in enumerate(lines[:stop]) if line.startswith('● ')]
     if not starts:
         return None
     start = starts[-1]
     raw = [lines[start][2:]] + lines[start + 1:stop]
+    if not stops:
+        statuses = {i for i, line in enumerate(raw)
+                    if re.match(r'^\s*[^\w\s]\s+[A-Z]\w* for \d', line)
+                    or (i > 0 and not raw[i - 1].strip()
+                        and len(line) - len(line.lstrip(' ')) > 4 and line.strip())}
+        while raw and (not raw[-1].strip() or len(raw) - 1 in statuses):
+            raw.pop()
+        if any(i < len(raw) for i in statuses):
+            return None
     while raw and not raw[-1].strip():
         raw.pop()
     if not raw or not raw[0].strip() or TOOL.match(raw[0]) or CHROME.search('\n'.join(raw)):

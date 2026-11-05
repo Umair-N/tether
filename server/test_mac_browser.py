@@ -1,7 +1,10 @@
 """Isolated device credentials, connection lifetime, routing and one-tab CDP contracts."""
 import io
 import json
+import os
 from pathlib import Path
+import shutil
+import signal
 import subprocess
 import tempfile
 import threading
@@ -16,6 +19,7 @@ import mac_browser as mac
 import signed_access as signed
 from test_browser import FakeHandler
 from test_browser_cdp import Capture
+from test_browser_device import playwright_modules
 from test_signed_access import wait_for
 
 ORIGIN = 'chrome-extension://' + 'a' * 32
@@ -87,13 +91,68 @@ class FakeTransport:
         self.closed = True
 
 
-class GrantTests(unittest.TestCase):
+class ChromiumTransport(FakeTransport):
+    """One real debugger session, shared by every synthetic Mac session."""
+    def __init__(self):
+        super().__init__()
+        self.temp = tempfile.TemporaryDirectory(prefix='tether-mac-contexts-')
+        self.events = []
+        self.pid, read_fd, write_fd = browser.launch(browser.find_chrome(), Path(self.temp.name) / 'profile')
+        self.conn = browser.Connection(read_fd, write_fd, self.event)
+        try:
+            targets = self.conn.call('Target.getTargets')['targetInfos']
+            self.target = next(row['targetId'] for row in targets if row['type'] == 'page')
+            self.session = self.conn.call('Target.attachToTarget',
+                                          {'targetId': self.target, 'flatten': True})['sessionId']
+        except Exception:
+            self.abort()
+            raise
+
+    def event(self, method, params, session):
+        if session == self.session and self.device:
+            self.events.append((method, params))
+            self.device.handle({'type': 'event', 'epoch': self.device.epoch, 'grant': self.grant,
+                                'tab': 7, 'method': method, 'params': params})
+
+    def message(self, message):
+        self.sent.append(message)
+        if message['type'] == 'grant':
+            self.grant = message['id']
+            self.device.handle({'type': 'granted', 'id': self.grant, 'tab': 7, 'target': self.target,
+                                'expires': (time.time() + 60) * 1000, 'epoch': self.device.epoch})
+        elif message['type'] == 'command':
+            def reply(result):
+                self.device.handle({'type': 'error' if 'error' in result else 'result', 'id': message['id'],
+                                    'result': result.get('result', {}), 'epoch': self.device.epoch})
+            self.conn.forward({'method': message['method'], 'params': message['params'],
+                               'sessionId': self.session}, reply)
+
+    def abort(self):
+        if self.closed:
+            return
+        super().abort()
+        try:
+            os.killpg(self.pid, signal.SIGTERM)
+            try:
+                wait_for(lambda: os.waitpid(self.pid, os.WNOHANG)[0], seconds=5)
+            except AssertionError:
+                os.killpg(self.pid, signal.SIGKILL)
+                wait_for(lambda: os.waitpid(self.pid, os.WNOHANG)[0], seconds=5)
+        finally:
+            self.conn._shut()
+            self.conn.reader.join(timeout=2)
+            self.temp.cleanup()
+
+
+class GrantHarness:
+    transport_type = FakeTransport
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='p20-grant-')
         self.addCleanup(self.temp.cleanup)
         self.broker = mac.Broker(Path(self.temp.name) / 'devices.json')
         pair = self.broker.exchange(self.broker.pair()['code'], ORIGIN, 'Test Chrome')
-        self.transport = FakeTransport()
+        self.transport = self.transport_type()
         self.device = self.broker.register(pair['id'], self.transport, 'Chrome/147.0')
         self.transport.device = self.device
         self.access = mac.MacAccess(self.broker, request_seconds=3)
@@ -128,6 +187,244 @@ class GrantTests(unittest.TestCase):
         client.open()
         self.addCleanup(client.cleanup)
         return client, capture
+
+
+CONTEXT_CLIENT = r'''
+const assert = require('node:assert/strict');
+const {chromium} = require('playwright-core');
+(async () => {
+  const connections = [];
+  const connect = async () => {
+    const connection = await chromium.connectOverCDP(process.env.E2E_CDP_URL, {timeout:10000});
+    connections.push(connection);
+    assert.equal(connection.contexts()[0].pages().length, 1);
+    return connection;
+  };
+  const exercise = async (connection, label) => {
+    const page = connection.contexts()[0].pages()[0];
+    page.setDefaultTimeout(5000);
+    assert.equal(await page.evaluate(() => document.body.tagName), 'BODY');
+    assert.match(await page.locator('h1').textContent(), /^Mac context/);
+    await page.goto(process.env.E2E_PAGE_URL + label, {timeout:10000});
+    assert.equal(await page.evaluate(() => document.querySelector('h1').textContent), 'Mac context /' + label);
+    assert.equal(await page.locator('h1').textContent(), 'Mac context /' + label);
+    const png = await page.screenshot({timeout:5000});
+    assert.equal(png.subarray(1,4).toString(), 'PNG');
+  };
+  try {
+    if (process.env.E2E_MODE === 'concurrent') {
+      const [first, second] = await Promise.all([connect(), connect()]);
+      await exercise(first, 'first');
+      await exercise(second, 'second');
+      await first.close();
+      await exercise(second, 'survivor');
+    } else {
+      await exercise(await connect(), 'first');
+      await connections[0].close();
+      await exercise(await connect(), 'second');
+    }
+    console.log(JSON.stringify({ok:true, mode:process.env.E2E_MODE}));
+  } finally {
+    for (const connection of connections) await connection.close();
+  }
+})().catch(error => { console.error(error.stack); process.exitCode = 1; });
+'''
+
+
+@unittest.skipUnless(browser.find_chrome(), 'Headless Chromium is required')
+class RealContextTests(GrantHarness, unittest.TestCase):
+    transport_type = ChromiumTransport
+
+    def command(self, client, capture, method, params=None, session=None):
+        message = {'id': 1, 'method': method, 'params': params or {}}
+        if session:
+            message['sessionId'] = session
+        client.handle(message)
+        reply = capture.messages[-1]
+        self.assertNotIn('error', reply)
+        return reply['result']
+
+    def attach(self, grant):
+        client, capture = self.client(grant)
+        session = self.command(client, capture, 'Target.attachToTarget',
+                               {'targetId': grant.row['tab'], 'flatten': True})['sessionId']
+        return client, capture, session
+
+    def test_runtime_already_enabled_second_session_gets_main_world(self):
+        grant = self.grant()
+        first, out, session = self.attach(grant)
+        self.command(first, out, 'Runtime.enable', session=session)
+        self.assertTrue(any(event.get('method') == 'Runtime.executionContextCreated' for event in out.messages))
+        second, out, session = self.attach(grant)
+        self.command(second, out, 'Runtime.enable', session=session)
+        contexts = [event['params']['context'] for event in out.messages
+                    if event.get('method') == 'Runtime.executionContextCreated']
+        self.assertTrue(contexts, 'Second synthetic session never receives a main-world execution context')
+        main = next(context for context in contexts if context.get('auxData', {}).get('isDefault'))
+        result = self.command(second, out, 'Runtime.evaluate',
+                              {'expression': 'document.body.tagName', 'contextId': main['id']}, session)
+        self.assertEqual(result['result']['value'], 'BODY')
+
+    def serve_page(self):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        class Page(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+            def do_GET(self):
+                data = ('<title>Mac context test</title><h1>Mac context ' + self.path + '</h1>').encode()
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Page)
+        server.daemon_threads = True
+        thread = threading.Thread(target=server.serve_forever, name='mac-context-test-http')
+        thread.start()
+        def stop():
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+        self.addCleanup(stop)
+        return f'http://127.0.0.1:{server.server_port}/'
+
+    def playwright(self, mode):
+        url = self.serve_page()
+        signed.Access._listen(self.access)
+        grant = self.grant()
+        panel = self.broker.browser.tab(grant.row['tab']).session
+        self.broker.browser.conn.call('Runtime.enable', session=panel)
+        self.broker.browser.conn.call('Page.navigate', {'url': url}, panel)
+        wait_for(lambda: self.transport.conn.call('Runtime.evaluate',
+                 {'expression': 'document.readyState'}, self.transport.session)['result'].get('value') == 'complete')
+        run = subprocess.run(['timeout', '45', 'node', '-e', CONTEXT_CLIENT],
+                             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=50,
+                             env=dict(os.environ, NODE_PATH=playwright_modules(), E2E_CDP_URL=self.access.url(grant),
+                                      E2E_PAGE_URL=url, E2E_MODE=mode))
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertEqual(json.loads(run.stdout), {'ok': True, 'mode': mode})
+
+    @unittest.skipUnless(shutil.which('node') and playwright_modules(), 'Cached playwright-core is required')
+    def test_two_sequential_playwright_clients(self):
+        self.playwright('sequential')
+
+    @unittest.skipUnless(shutil.which('node') and playwright_modules(), 'Cached playwright-core is required')
+    def test_two_concurrent_playwright_clients_and_disconnect(self):
+        self.playwright('concurrent')
+
+    def test_navigation_replays_only_live_contexts(self):
+        url = self.serve_page()
+        grant = self.grant()
+        first, out, session = self.attach(grant)
+        self.command(first, out, 'Runtime.enable', session=session)
+        original = {event['params']['context']['uniqueId'] for event in out.messages
+                    if event.get('method') == 'Runtime.executionContextCreated'}
+        # Disconnect the only subscriber, then navigate with no Runtime subscribers.
+        first.cleanup()
+        panel = self.broker.browser.tab(grant.row['tab']).session
+        self.broker.browser.conn.call('Page.navigate', {'url': url}, panel)
+        wait_for(lambda: any(method == 'Runtime.executionContextsCleared' for method, _ in self.transport.events))
+        wait_for(lambda: self.transport.conn.call('Runtime.evaluate',
+                 {'expression': 'document.readyState'}, self.transport.session)['result'].get('value') == 'complete')
+        second, out, session = self.attach(grant)
+        self.command(second, out, 'Runtime.enable', session=session)
+        contexts = [event['params']['context'] for event in out.messages
+                    if event.get('method') == 'Runtime.executionContextCreated']
+        self.assertTrue(contexts)
+        self.assertTrue(original.isdisjoint(context['uniqueId'] for context in contexts))
+        main = next(context for context in contexts if context.get('auxData', {}).get('isDefault'))
+        result = self.command(second, out, 'Runtime.evaluate',
+                              {'expression': 'document.querySelector("h1").textContent', 'contextId': main['id']}, session)
+        self.assertEqual(result['result']['value'], 'Mac context /')
+
+    def test_removed_iframe_context_not_replayed(self):
+        grant = self.grant()
+        first, out, session = self.attach(grant)
+        self.command(first, out, 'Runtime.enable', session=session)
+        self.command(first, out, 'Runtime.evaluate', {'expression': '''new Promise(resolve => {
+          const frame = document.createElement('iframe'); frame.id = 'child';
+          frame.onload = () => resolve(true); document.body.append(frame);
+        })''', 'awaitPromise': True}, session)
+        contexts = [event['params']['context'] for event in out.messages
+                    if event.get('method') == 'Runtime.executionContextCreated']
+        child = next(context for context in contexts if context['auxData'].get('frameId') != self.transport.target)
+        self.command(first, out, 'Runtime.evaluate', {'expression': 'document.getElementById("child").remove()'}, session)
+        wait_for(lambda: any(method == 'Runtime.executionContextDestroyed'
+                             and params.get('executionContextId') == child['id']
+                             for method, params in self.transport.events))
+        second, out, session = self.attach(grant)
+        self.command(second, out, 'Runtime.enable', session=session)
+        replayed = [event['params']['context']['uniqueId'] for event in out.messages
+                    if event.get('method') == 'Runtime.executionContextCreated']
+        self.assertTrue(replayed)
+        self.assertNotIn(child['uniqueId'], replayed)
+
+
+class GrantTests(GrantHarness, unittest.TestCase):
+    def test_context_subscription_replay_disable_detach_and_removal(self):
+        grant = self.grant()
+        conn = self.broker.browser.conn
+        target = grant.row['tab']
+        first = conn.call('Target.attachToTarget', {'targetId': target})['sessionId']
+        second = conn.call('Target.attachToTarget', {'targetId': target})['sessionId']
+        a, b = [], []
+        conn.register_sink(first, a.append)
+        conn.register_sink(second, b.append)
+        conn.call('Runtime.enable', session=first)
+        def emit(method, params, ident=None):
+            self.device.handle({'type': 'event', 'epoch': self.device.epoch, 'grant': ident or grant.row['id'],
+                                'tab': 7, 'method': method, 'params': params})
+        emit('Runtime.executionContextCreated', {'context': {'id': 1, 'uniqueId': 'main'}})
+        emit('Runtime.executionContextCreated', {'context': {'id': 2, 'uniqueId': 'child'}})
+        self.assertEqual(b, [])  # An attached but disabled session receives no Runtime events.
+        emit('Runtime.executionContextDestroyed', {'executionContextUniqueId': 'child'})
+        emit('Runtime.executionContextCreated', {'context': {'id': 3, 'uniqueId': 'old'}}, 'stale-grant')
+        before = len(a)
+        conn.call('Runtime.enable', session=second)
+        self.assertEqual(len(a), before)
+        self.assertEqual([row['params']['context']['id'] for row in b], [1])
+        conn.call('Runtime.enable', session=second)
+        self.assertEqual(len(b), 1)  # Same-session enable is idempotent, as in Chrome.
+        conn.call('Runtime.disable', session=first)
+        emit('Runtime.executionContextsCleared', {})
+        self.assertEqual(len(a), before)
+        self.assertEqual(b[-1]['method'], 'Runtime.executionContextsCleared')
+        conn.call('Runtime.enable', session=first)
+        self.assertEqual(len(a), before)  # The cleared context must not return.
+        methods = [row.get('method') for row in self.transport.sent]
+        self.assertEqual(methods.count('Runtime.enable'), 1)
+        self.assertNotIn('Runtime.disable', methods)
+        conn.send('Target.detachFromTarget', {'sessionId': first})
+        self.assertNotIn(first, conn.sessions)
+        self.assertNotIn(first, conn.enabled)
+        self.assertNotIn(first, conn.sinks)
+        with patch.object(self.broker.browser, '_event', side_effect=lambda *args: self.access.end(grant.row['id'])):
+            emit('Runtime.executionContextCreated', {'context': {'id': 4}})
+        self.assertEqual(conn.contexts, {})
+        self.assertEqual(conn.enabled, {})
+        self.assertEqual(conn.runtime_started, set())
+
+    def test_shared_domains_disable_only_when_last_subscriber_disables(self):
+        grant = self.grant()
+        conn = self.broker.browser.conn
+        sessions = [conn.call('Target.attachToTarget', {'targetId': grant.row['tab']})['sessionId'] for _ in range(2)]
+        for domain in sorted(mac.SHARED_DOMAINS - {'Runtime'}):
+            with self.subTest(domain=domain):
+                for session in sessions:
+                    conn.call(domain + '.enable', session=session)
+                before = len(self.transport.sent)
+                conn.call(domain + '.disable', session=sessions[0])
+                self.assertEqual(len(self.transport.sent), before)
+                conn.call(domain + '.disable', session=sessions[1])
+                self.assertEqual(self.transport.sent[-1]['method'], domain + '.disable')
+                self.assertEqual(len(self.transport.sent), before + 1)
+        for session in sessions:
+            conn.call('Page.setLifecycleEventsEnabled', {'enabled': True}, session)
+        before = len(self.transport.sent)
+        conn.call('Page.setLifecycleEventsEnabled', {'enabled': False}, sessions[0])
+        self.assertEqual(len(self.transport.sent), before)
+        conn.call('Page.setLifecycleEventsEnabled', {'enabled': False}, sessions[1])
+        self.assertEqual(len(self.transport.sent), before + 1)
 
     def test_discovery_policy_identity_takeover_and_end(self):
         grant = self.grant()

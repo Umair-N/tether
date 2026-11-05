@@ -4,12 +4,15 @@ Two sources:
 - estimate: tokens from this machine's Codex logs (~/.codex/sessions) for runs on the Foundry provider, priced with Microsoft's public
   Retail Prices API (Global Standard). It is live, but it counts runs on this machine only.
 - bill: the real month-to-date cost from Azure Cost Management, when ~/.config/tether/azure-cost.json gives a read-only
-  service principal. Azure updates it a few times a day. The file must be mode 600; Tether never sends or prints the secret.
+  service principal or Azure CLI sign-in. Azure updates it a few times a day. The file must be mode 600;
+  Tether never sends or prints the secret.
 """
 import datetime as dt
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import threading
 import time
 import urllib.error
@@ -185,27 +188,56 @@ def _bill_config():
         config = json.loads(path.read_text())
     except (OSError, ValueError):
         return None, f'{path.name} is not valid JSON.'
+    if config.get('auth') == 'az':
+        if not isinstance(config.get('scope'), str) or not config['scope']:
+            return None, f'{path.name} needs scope.'
+        return config, None
     need = ('tenant_id', 'client_id', 'client_secret', 'scope')
     if not all(isinstance(config.get(key), str) and config[key] for key in need):
         return None, f'{path.name} needs tenant_id, client_id, client_secret and scope.'
     return config, None
 
 
-def bill(fetch=_fetch_json, now=None):
-    """The real month-to-date cost from Azure Cost Management, cached for an hour (Azure limits query calls)."""
+class _NoToken(Exception):
+    """The az CLI gave no token; the message is the hint for the user."""
+
+
+def bill(fetch=_fetch_json, now=None, run=subprocess.run):
+    """The real month-to-date cost from Azure Cost Management, cached (Azure limits query calls)."""
     now = now or time.time()
     config, problem = _bill_config()
     if problem:
         return {'state': 'error', 'hint': problem}
     if not config:
         return {'state': 'not-set-up'}
+    auth = 'az' if config.get('auth') == 'az' else 'service-principal'
     with _lock:
-        if _bill.get('at', 0) > now - 3600 and _bill.get('scope') == config['scope']:
+        # Keep a good answer for an hour; retry an error after 5 minutes, so a fresh az login shows soon.
+        ttl = 3600 if _bill.get('answer', {}).get('state') == 'ok' else 300
+        if (_bill.get('at', 0) > now - ttl and _bill.get('scope') == config['scope']
+                and _bill.get('auth') == auth):
             return _bill['answer']
     try:
-        token = fetch(f"https://login.microsoftonline.com/{urllib.parse.quote(config['tenant_id'])}/oauth2/v2.0/token",
-                      data=urllib.parse.urlencode({'grant_type': 'client_credentials', 'client_id': config['client_id'],
-                                                   'client_secret': config['client_secret'], 'scope': 'https://management.azure.com/.default'}).encode())['access_token']
+        if auth == 'az':
+            az = shutil.which('az')
+            if not az:
+                fallback = paths.HOME / '.local/bin/az'
+                az = str(fallback) if fallback.is_file() else None
+            if not az:
+                raise _NoToken('Install the Azure CLI on this server, or use a service principal.')
+            expired = 'The Azure CLI sign-in has expired. Run az login on this server.'
+            try:
+                result = run([az, 'account', 'get-access-token', '--resource', 'https://management.azure.com/', '--output', 'json'],
+                             capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL, check=False)
+                token = None if result.returncode else json.loads(result.stdout).get('accessToken')
+            except (subprocess.TimeoutExpired, OSError, ValueError, AttributeError):
+                token = None
+            if not token:
+                raise _NoToken(expired)
+        else:
+            token = fetch(f"https://login.microsoftonline.com/{urllib.parse.quote(config['tenant_id'])}/oauth2/v2.0/token",
+                          data=urllib.parse.urlencode({'grant_type': 'client_credentials', 'client_id': config['client_id'],
+                                                       'client_secret': config['client_secret'], 'scope': 'https://management.azure.com/.default'}).encode())['access_token']
         body = {'type': 'ActualCost', 'timeframe': 'MonthToDate',
                 'dataset': {'granularity': 'None', 'aggregation': {'totalCost': {'name': 'Cost', 'function': 'Sum'}},
                             'filter': {'dimensions': {'name': 'ServiceName', 'operator': 'In', 'values': ['Foundry Models']}}}}
@@ -217,12 +249,17 @@ def bill(fetch=_fetch_json, now=None):
         total = sum(float(row[columns.index('Cost')]) for row in rows)
         currency = rows[0][columns.index('Currency')] if rows and 'Currency' in columns else 'USD'
         answer = {'state': 'ok', 'usd': round(total, 2), 'currency': currency, 'checked': int(now)}
+    except _NoToken as failure:
+        answer = {'state': 'error', 'hint': str(failure)}
     except urllib.error.HTTPError as failure:
-        answer = {'state': 'error', 'hint': f'Azure answered {failure.code}. Check the service principal has Cost Management Reader on the scope.'}
+        hint = ('Azure limits cost queries. Tether tries again in 5 minutes.' if failure.code == 429
+                else 'Check the signed-in account can read costs on the scope.' if auth == 'az'
+                else 'Check the service principal has Cost Management Reader on the scope.')
+        answer = {'state': 'error', 'hint': f'Azure answered {failure.code}. {hint}'}
     except (OSError, ValueError, KeyError, IndexError, TypeError):
         answer = {'state': 'error', 'hint': 'Could not read the Azure bill. Try again later.'}
     with _lock:
-        _bill.update(at=now, scope=config['scope'], answer=answer)
+        _bill.update(at=now, scope=config['scope'], auth=auth, answer=answer)
     return answer
 
 

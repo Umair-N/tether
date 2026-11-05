@@ -3,8 +3,10 @@ import datetime as dt
 import json
 import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
+import urllib.error
 from unittest import mock
 
 import foundry_spend
@@ -177,6 +179,118 @@ class Spend(unittest.TestCase):
         self.assertEqual(foundry_spend.bill(fetch, now=100)['usd'], 12.35)
         foundry_spend.bill(fetch, now=200)
         self.assertEqual(len(calls), 2, 'second call within the hour uses the cache')
+
+    def az_config(self, **changes):
+        foundry_spend.BILL_CONFIG.write_text(json.dumps({'auth': 'az', 'scope': 'subscriptions/x', **changes}))
+        foundry_spend.BILL_CONFIG.chmod(0o600)
+
+    @mock.patch.object(foundry_spend.shutil, 'which', return_value='/mock/az')
+    def test_bill_az(self, which):
+        self.az_config()
+        run = mock.Mock(return_value=subprocess.CompletedProcess([], 0, '{"accessToken": "t"}'))
+
+        def fetch(url, data=None, headers=None):
+            self.assertIn('/subscriptions/x/providers/Microsoft.CostManagement/query', url)
+            self.assertEqual(headers['Authorization'], 'Bearer t')
+            self.assertEqual(json.loads(data)['dataset']['filter'], {
+                'dimensions': {'name': 'ServiceName', 'operator': 'In', 'values': ['Foundry Models']}})
+            return {'properties': {'columns': [{'name': 'Cost'}, {'name': 'Currency'}], 'rows': [[12.345, 'USD']]}}
+
+        fetch = mock.Mock(side_effect=fetch)
+        answer = foundry_spend.bill(fetch, now=100, run=run)
+        self.assertEqual(answer, {'state': 'ok', 'usd': 12.35, 'currency': 'USD', 'checked': 100})
+        which.assert_called_once_with('az')
+        run.assert_called_once_with(
+            ['/mock/az', 'account', 'get-access-token', '--resource', 'https://management.azure.com/', '--output', 'json'],
+            capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL, check=False)
+        self.assertEqual(foundry_spend.bill(fetch, now=200, run=run), answer)
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(fetch.call_count, 1)
+        foundry_spend.bill(fetch, now=3700, run=run)
+        self.assertEqual(run.call_count, 2)
+
+    @mock.patch.object(foundry_spend.shutil, 'which', return_value=None)
+    def test_bill_az_binary_fallback_and_missing(self, which):
+        self.az_config()
+        run, fetch = mock.Mock(), mock.Mock()
+        with mock.patch.object(foundry_spend.paths, 'HOME', self.root):
+            self.assertEqual(foundry_spend.bill(fetch, now=100, run=run), {
+                'state': 'error', 'hint': 'Install the Azure CLI on this server, or use a service principal.'})
+            self.assertEqual(foundry_spend.bill(fetch, now=200, run=run)['state'], 'error')
+            self.assertEqual(which.call_count, 1)  # the error is cached
+            run.assert_not_called()
+            az = self.root / '.local/bin/az'
+            az.parent.mkdir(parents=True)
+            az.touch()
+            run.return_value = subprocess.CompletedProcess([], 1, '', 'private stderr')
+            self.assertIn('sign-in has expired', foundry_spend.bill(fetch, now=401, run=run)['hint'])
+            self.assertEqual(run.call_args.args[0][0], str(az))
+        fetch.assert_not_called()
+
+    @mock.patch.object(foundry_spend.shutil, 'which', return_value='/mock/az')
+    def test_bill_az_token_failures(self, which):
+        self.az_config()
+        fetch = mock.Mock()
+        failures = [subprocess.CompletedProcess([], 1, '', 'private stderr'),
+                    subprocess.CompletedProcess([], 0, '{}'),
+                    subprocess.CompletedProcess([], 0, 'invalid JSON'),
+                    subprocess.TimeoutExpired('az', 60), OSError('private detail')]
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__):
+                run = mock.Mock(side_effect=failure) if isinstance(failure, Exception) else mock.Mock(return_value=failure)
+                self.assertEqual(foundry_spend.bill(fetch, run=run), {
+                    'state': 'error', 'hint': 'The Azure CLI sign-in has expired. Run az login on this server.'})
+        fetch.assert_not_called()
+
+    def test_bill_az_config_validation(self):
+        run, fetch = mock.Mock(), mock.Mock()
+        for scope in (None, '', 123):
+            self.az_config(scope=scope)
+            self.assertEqual(foundry_spend.bill(fetch, run=run), {
+                'state': 'error', 'hint': 'azure-cost.json needs scope.'})
+        self.az_config()
+        foundry_spend.BILL_CONFIG.write_text('{"auth": "az"}')
+        self.assertIn('needs scope.', foundry_spend.bill(fetch, run=run)['hint'])
+        self.az_config()
+        foundry_spend.BILL_CONFIG.chmod(0o644)
+        self.assertIn('chmod 600', foundry_spend.bill(fetch, run=run)['hint'])
+        foundry_spend.BILL_CONFIG.chmod(0o600)
+        foundry_spend.BILL_CONFIG.write_text('{"scope": "subscriptions/x"}')
+        self.assertEqual(foundry_spend.bill(fetch, run=run)['hint'],
+                         'azure-cost.json needs tenant_id, client_id, client_secret and scope.')
+        run.assert_not_called()
+        fetch.assert_not_called()
+
+    @mock.patch.object(foundry_spend.shutil, 'which', return_value='/mock/az')
+    def test_bill_cache_refreshes_on_auth_or_scope_change(self, which):
+        sp = {'tenant_id': 't', 'client_id': 'c', 'client_secret': 's', 'scope': 'subscriptions/x'}
+        result = {'properties': {'columns': [{'name': 'Cost'}], 'rows': [[1]]}}
+        fetch = mock.Mock(side_effect=lambda url, **kwargs: {'access_token': 'sp'} if 'oauth2' in url else result)
+        run = mock.Mock(return_value=subprocess.CompletedProcess([], 0, '{"accessToken": "t"}'))
+        self.az_config()
+        foundry_spend.BILL_CONFIG.write_text(json.dumps(sp))
+        self.assertEqual(foundry_spend.bill(fetch, now=100, run=run)['checked'], 100)
+        self.az_config()
+        self.assertEqual(foundry_spend.bill(fetch, now=200, run=run)['checked'], 200)
+        self.az_config(scope='subscriptions/y')
+        self.assertEqual(foundry_spend.bill(fetch, now=300, run=run)['checked'], 300)
+        foundry_spend.BILL_CONFIG.write_text(json.dumps(sp))
+        self.assertEqual(foundry_spend.bill(fetch, now=400, run=run)['checked'], 400)
+        self.assertEqual(fetch.call_count, 6)
+        self.assertEqual(run.call_count, 2)
+
+    @mock.patch.object(foundry_spend.shutil, 'which', return_value='/mock/az')
+    def test_bill_http_error_hint_matches_auth(self, which):
+        run = mock.Mock(return_value=subprocess.CompletedProcess([], 0, '{"accessToken": "t"}'))
+        failure = urllib.error.HTTPError('https://example.invalid', 403, 'private detail', {}, None)
+        fetch = mock.Mock(side_effect=failure)
+        self.az_config()
+        self.assertEqual(foundry_spend.bill(fetch, now=100, run=run)['hint'],
+                         'Azure answered 403. Check the signed-in account can read costs on the scope.')
+        foundry_spend.BILL_CONFIG.write_text(json.dumps({
+            'tenant_id': 't', 'client_id': 'c', 'client_secret': 's', 'scope': 'subscriptions/x'}))
+        self.assertEqual(foundry_spend.bill(fetch, now=200, run=run)['hint'],
+                         'Azure answered 403. Check the service principal has Cost Management Reader on the scope.')
 
 
 if __name__ == '__main__':
