@@ -525,7 +525,11 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
   }, [])
 
   function talk() {
-    if (agent.current) { if (phase !== 'starting') togglePause(); return }  // Friday hears all the time; the button pauses it
+    if (agent.current) {  // Friday hears all the time: the button stops its reply, else pauses the mic
+      if (phase === 'speaking' || phase === 'thinking') agent.current.interrupt()
+      else if (phase !== 'starting') togglePause()
+      return
+    }
     const engine = voice.current
     if (!engine || phase === 'starting') return
     if (phase === 'speaking') { engine.stopSpeaking(); flow.current.listen(); return }
@@ -564,7 +568,7 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
 
   const working = agents.filter(pane => pane.state === 'Working').length
   const status = STATUS[phase]
-  const talkLabel = agentOn ? (muted ? 'Resume' : 'Pause') : phase === 'speaking' ? 'Interrupt' : phase === 'listening' ? 'Send now' : phase === 'paused' ? 'Resume' : 'Talk'
+  const talkLabel = agentOn ? (phase === 'speaking' || phase === 'thinking' ? 'Interrupt' : muted ? 'Resume' : 'Pause') : phase === 'speaking' ? 'Interrupt' : phase === 'listening' ? 'Send now' : phase === 'paused' ? 'Resume' : 'Talk'
   const picker = agents.map(pane => <button key={pane.id} type="button" role="menuitemradio" aria-checked={pane.id === targetId} className="live-pane" data-state={approvalOf(pane) ? 'asking' : pane.state === 'Working' ? 'working' : 'idle'} onClick={() => { setTargetId(pane.id); setMenu(false) }}>
     <i aria-hidden="true" /><span><b>{paneTitle(pane)}</b><small>{agentNames[pane.agent]}{approvalOf(pane) ? ' · needs your OK' : pane.state === 'Working' ? ' · working' : ''}</small></span><Check size={15} className="live-check" aria-hidden="true" />
   </button>)
@@ -610,7 +614,7 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
 
       <div className="live-controls">
         {!agentOn && <div className="live-ctl"><button type="button" className="live-round" aria-pressed={muted} aria-label={muted ? 'Resume listening' : 'Pause listening'} onClick={togglePause}>{muted ? <MicOff size={22} /> : <Mic size={22} />}</button><span>{muted ? 'Paused' : 'Pause'}</span></div>}
-        <div className="live-ctl live-talk" data-on={phase === 'listening'}><button ref={talkButton} type="button" className="live-round" aria-label={talkLabel} onClick={talk} disabled={phase === 'starting'} aria-pressed={agentOn ? muted : undefined}>{agentOn && muted ? <MicOff size={28} /> : <AudioLines size={28} />}</button><span>{talkLabel} <kbd>Space</kbd></span></div>
+        <div className="live-ctl live-talk" data-on={phase === 'listening'}><button ref={talkButton} type="button" className="live-round" aria-label={talkLabel} onClick={talk} disabled={phase === 'starting'} aria-pressed={agentOn && talkLabel !== 'Interrupt' ? muted : undefined}>{agentOn && muted && talkLabel !== 'Interrupt' ? <MicOff size={28} /> : <AudioLines size={28} />}</button><span>{talkLabel} <kbd>Space</kbd></span></div>
         <div className="live-ctl live-end"><button type="button" className="live-round" aria-label="End Live mode" onClick={onClose}><X size={22} /></button><span>End <kbd>Esc</kbd></span></div>
       </div>
     </section>

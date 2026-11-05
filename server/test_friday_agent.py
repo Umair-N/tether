@@ -1028,7 +1028,73 @@ class FridayAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(float(samples[0]), -1.0)
         self.assertGreater(session.stt_seconds, 0)
         recognizer.create_stream.return_value.result.text = '  '
-        self.assertEqual([f async for f in service.run_stt(b'\0\0')], [])
+        self.assertIsInstance([f async for f in service.run_stt(b'\0\0')][0], self.rt.EmptySTTSegmentFrame)
+
+    async def segment_pipeline(self, text, smart=True):
+        from pipecat.audio.turn.base_turn_analyzer import EndOfTurnState, BaseTurnParams
+        from pipecat.frames.frames import UserStoppedSpeakingFrame, InputAudioRawFrame
+        from pipecat.pipeline.pipeline import Pipeline
+        from pipecat.processors.aggregators.llm_context import LLMContext
+        from pipecat.processors.aggregators.llm_response_universal import LLMUserAggregator, LLMUserAggregatorParams
+        from pipecat.processors.frame_processor import FrameProcessor
+        from pipecat.tests.utils import run_test, SleepFrame
+        from pipecat.turns.user_turn_strategies import UserTurnStrategies
+
+        recognizer = Mock()
+        recognizer.create_stream.return_value.result.text = text
+        stt = self.rt.ParakeetSTT(recognizer, SimpleNamespace(stt_seconds=0))
+        analyzer = Mock(params=BaseTurnParams(), cleanup=AsyncMock(),
+            append_audio=Mock(return_value=EndOfTurnState.INCOMPLETE),
+            analyze_end_of_turn=AsyncMock(return_value=(EndOfTurnState.COMPLETE, None)))
+        stop = (self.rt.FridayTurnAnalyzerStop(turn_analyzer=analyzer) if smart
+                else self.rt.FridaySpeechTimeoutStop(user_speech_timeout=0))
+        context = LLMContext([])
+        user = LLMUserAggregator(context, params=LLMUserAggregatorParams(
+            empty_user_turn=None, user_turn_strategies=UserTurnStrategies(stop=[stop])))
+        captured = []
+
+        class Output(FrameProcessor):
+            async def process_frame(self, frame, direction):
+                await super().process_frame(frame, direction)
+                captured.append(frame)
+                await self.push_frame(frame, direction)
+
+        await asyncio.wait_for(run_test(Pipeline([stt, user, Output()]), frames_to_send=[
+            self.rt.BotStartedSpeakingFrame(), self.rt.VADUserStartedSpeakingFrame(),
+            InputAudioRawFrame(b'\0\0' * 1600, 16000, 1),
+            self.rt.VADUserStoppedSpeakingFrame(), SleepFrame(.25)]), 5)
+        return context.get_messages(), captured
+
+    async def test_empty_segment_ends_turn_without_watchdog_or_reply(self):
+        from pipecat.frames.frames import UserStoppedSpeakingFrame
+        for smart in (True, False):
+            with self.subTest(smart=smart):
+                messages, frames = await self.segment_pipeline('', smart)
+                self.assertTrue(any(isinstance(f, UserStoppedSpeakingFrame) for f in frames),
+                                'empty STT must stop within .25s, without the five-second watchdog')
+                self.assertFalse(any(isinstance(f, (self.rt.LLMContextFrame, self.rt.TTSSpeakFrame,
+                                                   self.rt.LLMFullResponseStartFrame)) for f in frames))
+                self.assertEqual(messages, [])
+
+    async def test_normal_segment_keeps_smart_turn_and_llm_path(self):
+        from pipecat.frames.frames import UserStoppedSpeakingFrame
+        messages, frames = await self.segment_pipeline('Hello Friday')
+        self.assertTrue(any(isinstance(f, UserStoppedSpeakingFrame) for f in frames))
+        self.assertEqual(sum(isinstance(f, self.rt.LLMContextFrame) for f in frames), 1)
+        self.assertEqual(messages, [{'role': 'user', 'content': 'Hello Friday'}])
+
+    async def test_empty_segment_ignores_stale_completion_and_preserves_earlier_words(self):
+        for strategy in (self.rt.FridayTurnAnalyzerStop(turn_analyzer=Mock()),
+                         self.rt.FridaySpeechTimeoutStop(user_speech_timeout=0)):
+            strategy.report_user_turn_stopped = AsyncMock()
+            for finalized, speaking, text in ((False, False, ''), (True, True, ''),
+                                               (True, False, 'Earlier words')):
+                frame = self.rt.EmptySTTSegmentFrame()
+                frame.finalized = finalized
+                strategy._vad_user_speaking, strategy._text = speaking, text
+                await strategy.process_frame(frame)
+                strategy.report_user_turn_stopped.assert_not_awaited()
+                self.assertEqual(strategy._text, text)
 
     async def test_parakeet_fixes_text_before_transcription_frame(self):
         recognizer = Mock()
@@ -1067,6 +1133,8 @@ class FridayAPITests(unittest.IsolatedAsyncioTestCase):
         session = friday.Session.__new__(friday.Session)
         session.rt = self.rt
         session.voice_mode = mode
+        session.event_generation = 0
+        session.events = friday.EventQueue()
         session.rtvi = Mock(send_server_message=AsyncMock())
         session.turn = 0
         session.new_turn()
@@ -1094,7 +1162,8 @@ class FridayAPITests(unittest.IsolatedAsyncioTestCase):
         class Output(FrameProcessor):
             async def process_frame(self, frame, direction):
                 await super().process_frame(frame, direction)
-                captured.append(frame)
+                if direction == FrameDirection.DOWNSTREAM:
+                    captured.append(frame)
                 await self.push_frame(frame, direction)
 
         session.output = Output()
@@ -1112,7 +1181,10 @@ class FridayAPITests(unittest.IsolatedAsyncioTestCase):
             synth(text)
             yield TTSAudioRawFrame(b'\x01\x00' * 480, 24000, 1, context_id=context_id)
 
-        processors = [Actions()]
+        actions = Actions()
+        session.aggregators = SimpleNamespace(user=lambda: actions, assistant=lambda: assistant)
+        session.worker = SimpleNamespace(queue_frame=actions.queue_frame)
+        processors = [actions]
         if user_turns:
             from pipecat.processors.aggregators.llm_response_universal import LLMUserAggregator, LLMUserAggregatorParams
             from pipecat.turns.user_turn_strategies import UserTurnStrategies
@@ -1120,8 +1192,8 @@ class FridayAPITests(unittest.IsolatedAsyncioTestCase):
             processors.append(LLMUserAggregator(session.context, params=LLMUserAggregatorParams(
                 user_turn_strategies=UserTurnStrategies(start=[self.rt.FridayUserTurnStartStrategy(session)],
                     stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0)]))))
-        pipeline = Pipeline(processors + [session.tts, session.output,
-                             LLMAssistantAggregator(session.context)])
+        assistant = LLMAssistantAggregator(session.context)
+        pipeline = Pipeline(processors + [session.tts, session.output, assistant])
         with patch.object(self.rt.PocketTTSService, 'run_tts', audio):
             await asyncio.wait_for(run_test(pipeline,
                 frames_to_send=[Action(f) if callable(f) else f for f in frames],
@@ -1335,6 +1407,137 @@ class FridayAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([m['d'] for m in messages if m['t'] == 'say_end'], [{'turn': 2, 'count': 1}])
         self.assertEqual(sum(isinstance(f, self.rt.BotStoppedSpeakingFrame) for f in frames), 1)
         synth.assert_not_called()
+
+    async def test_tap_interrupt_server_speech_without_user_turn_or_llm(self):
+        from pipecat.frames.frames import UserStartedSpeakingFrame
+        from pipecat.tests.utils import SleepFrame
+
+        async def interrupt(session):
+            await session.client_message('interrupt', {})
+
+        session, messages, frames, _ = await self.voice_pipeline('server', [
+            self.rt.BotStartedSpeakingFrame(), SleepFrame(), interrupt, SleepFrame()])
+        self.assertTrue(any(isinstance(f, self.rt.InterruptionFrame) for f in frames))
+        self.assertFalse(any(isinstance(f, (UserStartedSpeakingFrame, self.rt.LLMContextFrame)) for f in frames))
+        self.assertEqual([m for m in messages if m['t'] == 'interrupted'],
+                         [{'t': 'interrupted', 'd': {'turn': 1}}])
+        self.assertFalse(session.user_speaking)
+        self.assertFalse(session.bot_speaking)
+
+    async def test_tap_interrupt_client_stops_once_and_drops_later_sentences(self):
+        from pipecat.frames.frames import LLMTextFrame, UserStartedSpeakingFrame
+        from pipecat.tests.utils import SleepFrame
+
+        async def interrupt(session):
+            await session.client_message('spoken', {'turn': 1, 'state': 'start'})
+            await session.client_message('interrupt', {})
+
+        async def repeat(session):
+            await session.client_message('interrupt', {})
+
+        session, messages, frames, synth = await self.voice_pipeline('client', [
+            self.rt.LLMFullResponseStartFrame(), LLMTextFrame('Sent sentence. Buffered'), SleepFrame(),
+            interrupt, SleepFrame(), repeat, SleepFrame(), LLMTextFrame(' dropped sentence.'),
+            self.rt.LLMFullResponseEndFrame()])
+        self.assertEqual([m for m in messages if m['t'] == 'stop'], [{'t': 'stop', 'd': {'turn': 1}}])
+        self.assertEqual([m for m in messages if m['t'] == 'interrupted'],
+                         [{'t': 'interrupted', 'd': {'turn': 1}}])
+        self.assertEqual([m['d']['text'] for m in messages if m['t'] == 'say'], ['Sent sentence.'])
+        self.assertEqual(session.context.get_messages(), [{'role': 'assistant', 'content': 'Sent sentence.'}])
+        self.assertFalse(any(isinstance(f, (UserStartedSpeakingFrame, self.rt.LLMContextFrame)) for f in frames))
+        synth.assert_not_called()
+
+    async def test_tap_interrupt_idle_is_ignored(self):
+        async def interrupt(session):
+            await session.client_message('interrupt', {})
+
+        _, messages, frames, _ = await self.voice_pipeline('server', [interrupt])
+        self.assertEqual(messages, [])
+        self.assertFalse(any(isinstance(f, self.rt.InterruptionFrame) for f in frames))
+
+    async def test_tap_interrupt_llm_before_first_sentence(self):
+        from pipecat.frames.frames import LLMTextFrame
+        from pipecat.tests.utils import SleepFrame
+
+        async def interrupt(session):
+            await session.client_message('interrupt', {})
+
+        _, messages, frames, synth = await self.voice_pipeline('client', [
+            self.rt.LLMFullResponseStartFrame(), SleepFrame(), interrupt, SleepFrame(),
+            LLMTextFrame('Late sentence.'), self.rt.LLMFullResponseEndFrame()])
+        self.assertTrue(any(isinstance(f, self.rt.InterruptionFrame) for f in frames))
+        self.assertEqual([m['t'] for m in messages], ['interrupted', 'stop'])
+        synth.assert_not_called()
+
+    async def test_tap_interrupt_drops_queued_speech_before_it_starts(self):
+        from pipecat.tests.utils import SleepFrame
+
+        async def queued(session):
+            session.busy = True
+            await session.queue_event_frame(self.rt.TTSSpeakFrame('Queued current event.'))
+            await session.client_message('interrupt', {})
+
+        _, messages, frames, synth = await self.voice_pipeline('server', [queued, SleepFrame()])
+        synth.assert_not_called()
+        self.assertTrue(any(isinstance(f, self.rt.InterruptionFrame) for f in frames))
+        self.assertEqual([m['t'] for m in messages], ['interrupted'])
+
+    async def test_tap_interrupt_event_speech_preserves_next_queue_item(self):
+        from pipecat.tests.utils import SleepFrame
+
+        async def interrupt(session):
+            session.events.put('say', {'text': 'Next event.'})
+            await session.client_message('spoken', {'turn': 1, 'state': 'start'})
+            await session.client_message('interrupt', {})
+
+        async def next_event(session):
+            item = session.events.pop(session.user_speaking, session.bot_speaking, session.busy)
+            self.assertIsNotNone(item)
+            await session.aggregators.user().push_frame(self.rt.TTSSpeakFrame(item['data']['text']))
+
+        _, messages, frames, _ = await self.voice_pipeline('client', [
+            self.rt.TTSSpeakFrame('Current event.'), SleepFrame(), interrupt, SleepFrame(),
+            next_event, SleepFrame()])
+        self.assertTrue(any(isinstance(f, self.rt.InterruptionFrame) for f in frames))
+        self.assertEqual([m['d']['text'] for m in messages if m['t'] == 'say'], ['Current event.', 'Next event.'])
+        self.assertEqual([m for m in messages if m['t'] == 'stop'], [{'t': 'stop', 'd': {'turn': 1}}])
+
+    async def test_tap_during_event_health_wait_frees_queue(self):
+        session = friday.Session.__new__(friday.Session)
+        session.events, session.wake = friday.EventQueue(), asyncio.Event()
+        session.user_speaking = session.bot_speaking = session.busy = False
+        session.event_generation, session.offline_spoken = 0, False
+        session.new_turn, session.context = Mock(), Mock()
+        session.worker = Mock(queue_frame=AsyncMock())
+        session.rt = SimpleNamespace(TTSSpeakFrame=lambda text: SimpleNamespace(text=text),
+                                     LLMContextFrame=lambda context: SimpleNamespace(context=context))
+
+        async def health():
+            session.event_generation += 1  # the tap lands while the health check waits
+            return True
+
+        session.models = SimpleNamespace(llm_health=health)
+        event = {'id': 'e1', 'chat': 'ci', 'kind': 'done', 'priority': 'idle', 'text': 'Done.'}
+        session.events.put('event', event)
+        session.wake.set()
+        task = asyncio.create_task(session.pump())
+        try:
+            for _ in range(50):
+                await asyncio.sleep(0.01)
+                if not session.busy and not session.events.items:
+                    break
+            self.assertFalse(session.busy)
+            session.worker.queue_frame.assert_not_awaited()
+            session.events.put('say', {'text': 'Next.'})
+            session.wake.set()
+            for _ in range(50):
+                await asyncio.sleep(0.01)
+                if session.worker.queue_frame.await_count:
+                    break
+            self.assertEqual(session.worker.queue_frame.await_args.args[0].text, 'Next.')
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
     async def test_invalid_voice_data_is_ignored(self):
         session = friday.Session.__new__(friday.Session)
