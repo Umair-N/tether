@@ -103,13 +103,27 @@ button.live-chip:hover { background: var(--hover); }
 /* Title bar buttons: shrink to a bubble, full screen and back. */
 .live-window-buttons { display: inline-flex; gap: 2px; }
 .live .live-icon { display: grid; place-items: center; width: var(--control); height: var(--control); border-radius: var(--radius); color: var(--muted); }
+.live .live-icon { transition: transform .12s cubic-bezier(.23, 1, .32, 1), background-color .15s ease, color .15s ease; }
 .live .live-icon:hover { background: var(--hover); color: var(--text); }
+.live .live-icon:active, .live button.live-chip:active { transform: scale(.94); }
+.live button.live-chip { transition: transform .12s cubic-bezier(.23, 1, .32, 1), background-color .15s ease; }
 .live .live-grip { cursor: grab; touch-action: none; margin-left: -6px; }
 
 /* Window: a card over the app. The app stays usable around it. Its size is the container, so the
    orb and words scale with the window instead of the screen. */
-.live-window { inset: auto; left: 0; top: 0; z-index: 60; border: 1px solid var(--line); border-radius: var(--radius-xl);
-  box-shadow: 0 2px 6px rgb(0 0 0 / .1), 0 24px 60px rgb(0 0 0 / .28); animation: live-open .22s cubic-bezier(.23, 1, .32, 1) both; }
+/* Depth from tone, not a halo: a lighter band under the title bar fades into the page color, a self-colored
+   edge catches light on the top lip, and one tight shadow falls down. The edge takes the voice's color
+   while Friday listens or speaks, so the frame itself shows who has the turn. */
+.live-window { --live-edge: color-mix(in oklab, var(--text) 10%, transparent);
+  inset: auto; left: 0; top: 0; z-index: 60; border: 1px solid var(--live-edge); border-radius: var(--radius-xl);
+  background: linear-gradient(180deg, color-mix(in oklab, var(--surface) 80%, var(--bg)) 0, var(--bg) 140px);
+  box-shadow: inset 0 1px 0 color-mix(in oklab, white 9%, transparent), 0 1px 2px rgb(0 0 0 / .14), 0 18px 40px -18px rgb(0 0 0 / .55);
+  transition: border-color .3s ease, box-shadow .2s cubic-bezier(.23, 1, .32, 1); }
+.live-window[data-phase="listening"] { --live-edge: color-mix(in oklab, var(--live-you) 45%, transparent); }
+.live-window[data-phase="speaking"], .live-window[data-phase="thinking"] { --live-edge: color-mix(in oklab, var(--live-agent) 45%, transparent); }
+.live-window[data-asking="true"] { --live-edge: color-mix(in oklab, var(--attention) 60%, transparent); }
+/* Picked up: the shadow drops further, as if the window lifts. No scale, so edges stay under the pointer. */
+.live-window.moving { box-shadow: inset 0 1px 0 color-mix(in oklab, white 9%, transparent), 0 2px 4px rgb(0 0 0 / .14), 0 30px 56px -20px rgb(0 0 0 / .6); }
 .live-window .live-top { cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
 .live-window.moving, .live-window.moving * { cursor: grabbing; user-select: none; -webkit-user-select: none; }
 .live-window .live-stage { padding: 8px 14px 14px; grid-template-rows: auto minmax(0, 1fr) auto auto auto; }
@@ -127,6 +141,10 @@ button.live-chip:hover { background: var(--hover); }
 
 /* Resize: thin strips on each edge and corner, plus a visible, focusable grip at the bottom right. */
 .live-edge { position: absolute; z-index: 30; touch-action: none; }
+.live-edge::after { content: ''; position: absolute; border-radius: 99px; background: var(--live-you); opacity: 0; transition: opacity .15s ease; }
+.live-edge-n::after, .live-edge-s::after { left: 12%; right: 12%; top: calc(50% - 1px); height: 2px; }
+.live-edge-e::after, .live-edge-w::after { top: 12%; bottom: 12%; left: calc(50% - 1px); width: 2px; }
+@media (hover: hover) { .live-edge-n:hover::after, .live-edge-s:hover::after, .live-edge-e:hover::after, .live-edge-w:hover::after { opacity: .7; } }
 .live-edge-n, .live-edge-s { left: 14px; right: 14px; height: 8px; cursor: ns-resize; }
 .live-edge-n { top: -4px; } .live-edge-s { bottom: -4px; }
 .live-edge-e, .live-edge-w { top: 14px; bottom: 14px; width: 8px; cursor: ew-resize; }
@@ -140,26 +158,44 @@ button.live-chip:hover { background: var(--hover); }
 @media (pointer: coarse) { .live .live-grip-resize { width: 32px; height: 32px; } .live-edge-n, .live-edge-s { height: 16px; } .live-edge-n { top: -8px; } .live-edge-s { bottom: -8px; } }
 
 /* Bubble: the call keeps running and the orb stays alive in a small floating circle. Tap it to open, drag it anywhere. */
-.live-bubble { inset: auto; left: 0; top: 0; z-index: 60; border-radius: 50%; display: block; border: 1px solid var(--line);
-  background: radial-gradient(circle at 50% 40%, var(--surface), var(--bg));
-  box-shadow: 0 2px 6px rgb(0 0 0 / .12), 0 10px 28px rgb(0 0 0 / .24); animation: live-open .22s cubic-bezier(.23, 1, .32, 1) both; }
-.live-bubble .live-stage { position: absolute; inset: 0; display: block; padding: 0; pointer-events: none; }
+/* The bubble is a small live orb: a lit glass rim, a light that turns around it while Friday listens,
+   thinks or speaks, and a press that gives way under the finger. */
+.live-bubble { --live-ring: var(--live-you); --live-turn: 5s;
+  inset: auto; left: 0; top: 0; z-index: 60; border-radius: 50%; display: block; overflow: visible;
+  border: 1px solid color-mix(in oklab, var(--live-ring) 35%, transparent);
+  background: radial-gradient(circle at 50% 30%, color-mix(in oklab, var(--surface) 90%, white 6%), var(--bg) 75%);
+  box-shadow: inset 0 1px 0 color-mix(in oklab, white 14%, transparent), 0 2px 4px rgb(0 0 0 / .18), 0 10px 22px -8px color-mix(in oklab, var(--live-ring) 45%, black);
+  transition: scale .22s cubic-bezier(.23, 1, .32, 1), opacity .3s ease, border-color .3s ease; }
+.live-bubble[data-phase="speaking"] { --live-ring: var(--live-agent); --live-turn: 2.6s; }
+.live-bubble[data-phase="thinking"] { --live-ring: var(--live-agent); --live-turn: 1.1s; }
+.live-bubble[data-phase="paused"], .live-bubble[data-phase="idle"], .live-bubble[data-phase="starting"] { --live-ring: var(--muted); }
+/* The turning light: a conic sweep, cut to a 2px ring. Only its rotation animates. */
+.live-bubble::before { content: ''; position: absolute; inset: -3px; border-radius: 50%; pointer-events: none;
+  background: conic-gradient(from 0deg, transparent 0 55%, color-mix(in oklab, var(--live-ring) 90%, white) 85%, transparent 100%);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
+  animation: live-turn var(--live-turn) linear infinite; }
+.live-bubble[data-phase="paused"]::before, .live-bubble[data-phase="idle"]::before { animation: none; opacity: .35; }
+.live-bubble .live-stage { position: absolute; inset: 0; display: block; padding: 0; pointer-events: none; border-radius: 50%; overflow: hidden; }
 .live-bubble .live-stage > :not(.live-center), .live-bubble .live-status, .live-bubble .live-edge { display: none; }
 .live-bubble .live-center { position: absolute; inset: 0; gap: 0; }
 .live-bubble .live-orb { width: 210%; max-width: none; }
 .live .live-bubble-hit { position: absolute; inset: 0; z-index: 5; border-radius: 50%; cursor: grab; touch-action: none; }
 .live .live-bubble-hit:focus-visible { outline-offset: 4px; border-radius: 50%; }
-.live-bubble.moving { scale: 1.08; }
+@media (hover: hover) { .live-bubble:hover { scale: 1.06; } }
+.live-bubble:has(.live-bubble-hit:active) { scale: .94; transition-duration: .12s; }
+.live-bubble.moving, .live-bubble.moving:hover { scale: 1.1; }
 .live-bubble.moving .live-bubble-hit { cursor: grabbing; }
 /* A chat needs your OK: the ring pulses in the attention color until you open Friday. */
-.live-bubble[data-asking="true"] { border-color: var(--attention); }
+.live-bubble[data-asking="true"] { --live-ring: var(--attention); }
 .live-bubble[data-asking="true"]::after { content: ''; position: absolute; inset: -1px; border-radius: 50%; border: 2px solid var(--attention); pointer-events: none; animation: live-call 2s cubic-bezier(.23, 1, .32, 1) infinite; }
-.live-bubble[data-phase="paused"] { opacity: .75; }
+.live-bubble[data-phase="paused"] { opacity: .8; }
+@keyframes live-turn { to { rotate: 1turn; } }
 @keyframes live-call { 0% { opacity: .8; transform: scale(1); } 70%, 100% { opacity: 0; transform: scale(1.35); } }
-@keyframes live-open { from { opacity: 0; scale: .92; } to { opacity: 1; scale: 1; } }
 
 @media (prefers-reduced-motion: reduce) {
-  .live-reply, .live-window, .live-bubble { animation: none; }
-  .live-bubble[data-asking="true"]::after { animation: none; }
+  .live-reply { animation: none; }
+  .live-bubble::before, .live-bubble[data-asking="true"]::after { animation: none; }
+  .live-window, .live-bubble, .live .live-icon, .live button.live-chip { transition-property: opacity, border-color, background-color, color; }
 }
 .live:focus { outline: none; }

@@ -4,7 +4,7 @@ export type FloatMode = 'window' | 'bubble' | 'full'
 export type Rect = { x: number; y: number; w: number; h: number }
 export type Edge = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
 type Handlers = Pick<React.HTMLAttributes<HTMLElement>, 'onPointerDown' | 'onPointerMove' | 'onPointerUp' | 'onPointerCancel' | 'onKeyDown'>
-type Point = { x: number; y: number }
+export type Point = { x: number; y: number }
 type Options = { minW: number; minH: number; bubble: number; initial: () => Rect; initialMode?: FloatMode }
 type Place = { mode: FloatMode; rect: Rect; bubble: Point }
 type Drag = { id: number; target: HTMLElement; kind: 'move' | 'resize' | 'bubble'; edge?: Edge; x: number; y: number; rect: Rect; bubble: Point; moved: boolean }
@@ -83,6 +83,7 @@ export function useFloatingWindow(storageKey: string, options: Options): {
   mode: FloatMode
   setMode: (mode: FloatMode) => void
   rect: Rect
+  bubble: Point
   moving: boolean
   windowStyle: React.CSSProperties
   bubbleStyle: React.CSSProperties
@@ -194,7 +195,7 @@ export function useFloatingWindow(storageKey: string, options: Options): {
 
   const { mode, rect, bubble } = place
   return {
-    mode, setMode, rect, moving,
+    mode, setMode, rect, bubble, moving,
     windowStyle: mode === 'full' ? {} : { transform: `translate3d(${rect.x}px, ${rect.y}px, 0)`, width: rect.w, height: rect.h },
     bubbleStyle: { transform: `translate3d(${bubble.x}px, ${bubble.y}px, 0)`, width: size, height: size },
     move: handlers('move'),

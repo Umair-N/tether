@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { AudioLines, Check, ChevronDown, GripHorizontal, Maximize2, Mic, MicOff, Minimize2, Minus, X } from 'lucide-react'
 import { errorText, SESSION_NAME, type Api, type Approval, type ChatData, type Choice, type Pane, type SessionsData } from './api'
 import type { Command } from './CommandMenu'
@@ -6,7 +6,8 @@ import { agentNames, paneTitle } from './Sidebar'
 import { agentReady, FridayAgent, type AgentChatList, type AgentChats, type AgentEvent, type ToolHandler } from './fridayAgent'
 import { LiveVoice, sentences } from './liveVoice'
 import { useBackStep } from './backNav'
-import { useFloatingWindow, type Edge, type Rect } from './floatingWindow'
+import { useFloatingWindow, type Edge, type FloatMode, type Point, type Rect } from './floatingWindow'
+import { bloomFromBubble, foldToBubble, popBubble, settle, snapBubble } from './liveMotion'
 import { speakable } from './speech'
 import './Live.css'
 
@@ -51,9 +52,42 @@ const chatState = (pane: Pane) => approvalOf(pane) ? 'needs approval' : pane.nee
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 export function Live({ api, panes, selected, commands, onClose, reveal = 0 }: { api: Api; panes: Pane[]; selected?: Pane; commands: Command[]; onClose: () => void; reveal?: number }) {
-  const { mode, setMode, moving, windowStyle, bubbleStyle, move, resize, bubbleHandlers } = useFloatingWindow('tether.live-window.v1', { minW: 300, minH: 360, bubble: BUBBLE, initial: firstRect, initialMode: 'window' })
+  const { mode, setMode, moving, bubble, windowStyle, bubbleStyle, move, resize, bubbleHandlers } = useFloatingWindow('tether.live-window.v1', { minW: 300, minH: 360, bubble: BUBBLE, initial: firstRect, initialMode: 'window' })
   const root = useRef<HTMLDivElement>(null)
   const bubbleButton = useRef<HTMLButtonElement>(null)
+  // Motion between window, bubble and full screen. The fold plays first, then the mode changes; the layout
+  // effect below plays the arrival before the browser paints the new mode.
+  const folding = useRef<Animation | null>(null)
+  const folded = useRef(false)
+  const focusBubble = useRef(false)
+  function shrink(focus = false) {
+    if (mode === 'bubble' || folding.current) return
+    const fold = foldToBubble(root.current, bubble, BUBBLE)
+    let fallback = 0, over = false
+    const done = () => {
+      if (over) return
+      over = true
+      window.clearTimeout(fallback)
+      folded.current = !!fold
+      focusBubble.current = focus
+      setMode('bubble')
+    }
+    if (!fold) { done(); return }
+    folding.current = fold
+    fallback = window.setTimeout(done, 500)  // a hidden tab may never finish the animation
+    fold.finished.then(done, () => window.clearTimeout(fallback))
+  }
+  const shown = useRef<{ mode: FloatMode | null; bubble: Point }>({ mode: null, bubble })
+  useLayoutEffect(() => {
+    const el = root.current, prev = shown.current
+    shown.current = { mode, bubble }
+    if (prev.mode === null) { settle(el, true); return }
+    if (prev.mode === mode) { if (mode === 'bubble' && !moving) snapBubble(el, prev.bubble, bubble); return }
+    folding.current?.cancel(); folding.current = null
+    if (mode === 'bubble') { popBubble(el, folded.current); folded.current = false; if (focusBubble.current) bubbleButton.current?.focus(); focusBubble.current = false }
+    else if (prev.mode === 'bubble') bloomFromBubble(el, bubble, BUBBLE)
+    else settle(el)
+  }, [mode, bubble, moving])
   const agents = panes.filter(pane => pane.agent !== 'shell')
   const [targetId, setTargetId] = useState(() => (selected && selected.agent !== 'shell' ? selected : agents[0])?.id ?? '')
   const target = agents.find(pane => pane.id === targetId)
@@ -574,7 +608,7 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0 }: { 
     const key = (event: KeyboardEvent) => {
       const target = event.target as Element
       if (mode !== 'full' && !root.current?.contains(target)) return
-      if (event.key === 'Escape') { event.preventDefault(); if (menu) setMenu(false); else if (mode === 'full') setMode('window'); else if (mode === 'window') { setMode('bubble'); window.setTimeout(() => bubbleButton.current?.focus()) } }
+      if (event.key === 'Escape') { event.preventDefault(); if (menu) setMenu(false); else if (mode === 'full') setMode('window'); else if (mode === 'window') shrink(true) }
       else if (event.key === ' ' && mode !== 'bubble' && !target.closest('input, textarea, button, [role="menu"]')) { event.preventDefault(); talkButton.current?.click() }
     }
     window.addEventListener('keydown', key)
@@ -585,7 +619,7 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0 }: { 
   const lastMode = useRef(mode)
   useEffect(() => { if (lastMode.current === 'bubble' && mode !== 'bubble') root.current?.focus(); lastMode.current = mode }, [mode])
   // Back shrinks Friday to its bubble, like a call app. Only End stops the call.
-  useBackStep(mode !== 'bubble', () => setMode('bubble'))
+  useBackStep(mode !== 'bubble', () => shrink())
   const revealed = useRef(reveal)
   useEffect(() => { if (reveal !== revealed.current) { revealed.current = reveal; if (mode === 'bubble') setMode('window') } }, [reveal, mode, setMode])
   useEffect(() => { talkButton.current?.focus() }, [])
@@ -623,7 +657,7 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0 }: { 
           {menu && <div className="live-popover" role="menu" aria-label="Send voice commands to"><h3>Commands go to</h3>{picker.length ? picker : <p className="live-note">No agent chats are open.</p>}</div>}
         </span>
         <span className="live-window-buttons">
-          <button type="button" className="live-icon" aria-label="Shrink Friday to a bubble" title="Shrink to a bubble (Esc). The call stays on." onClick={() => setMode('bubble')}><Minus size={18} aria-hidden="true" /></button>
+          <button type="button" className="live-icon" aria-label="Shrink Friday to a bubble" title="Shrink to a bubble (Esc). The call stays on." onClick={() => shrink()}><Minus size={18} aria-hidden="true" /></button>
           {mode === 'full'
             ? <button type="button" className="live-icon" aria-label="Show Friday in a window" title="Window" onClick={() => setMode('window')}><Minimize2 size={16} aria-hidden="true" /></button>
             : <button type="button" className="live-icon" aria-label="Show Friday full screen" title="Full screen" onClick={() => setMode('full')}><Maximize2 size={16} aria-hidden="true" /></button>}

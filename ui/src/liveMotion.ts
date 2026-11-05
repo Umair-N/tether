@@ -1,0 +1,80 @@
+// Motion for the Friday window: the window folds into its bubble and the bubble blooms back into the window.
+// Only transform, opacity and clip-path move. Nothing waits for an animation to show content: every
+// animation runs without fill, so if it never runs the element sits in its normal, visible state.
+import type { Point } from './floatingWindow'
+
+const EASE_OUT = 'cubic-bezier(0.23, 1, 0.32, 1)'
+const EASE_DRAWER = 'cubic-bezier(0.32, 0.72, 0, 1)'
+const EASE_IN_OUT = 'cubic-bezier(0.65, 0, 0.35, 1)'
+
+/** An underdamped spring as a CSS linear() curve. zeta 0.55 overshoots about 12%, then settles by the end. */
+const spring = (zeta: number, points = 40) => {
+  const w = 6.4 / zeta
+  const wd = w * Math.sqrt(1 - zeta * zeta)
+  const at = (t: number) => 1 - Math.exp(-zeta * w * t) * (Math.cos(wd * t) + (zeta * w / wd) * Math.sin(wd * t))
+  const values = Array.from({ length: points + 1 }, (_, i) => i === points ? 1 : +at(i / points).toFixed(4))
+  return `linear(${values.join(', ')})`
+}
+const canSpring = typeof CSS !== 'undefined' && CSS.supports?.('animation-timing-function', 'linear(0, 1)')
+const SPRING_POP = canSpring ? spring(0.55) : EASE_OUT
+const SPRING_SNAP = canSpring ? spring(0.7) : EASE_OUT
+
+export const reducedMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
+const can = (el: HTMLElement | null): el is HTMLElement => !!el && typeof el.animate === 'function'
+
+/** The window's box at the bubble: scaled so its short side is the bubble, centered on the bubble. */
+const atBubble = (box: DOMRect, bubble: Point, size: number) => {
+  const s = size / Math.min(box.width, box.height)
+  const x = bubble.x + size / 2 - s * box.width / 2
+  const y = bubble.y + size / 2 - s * box.height / 2
+  return { transform: `translate(${x}px, ${y}px) scale(${s})`, clipPath: `circle(${Math.min(box.width, box.height) / 2}px at 50% 50%)` }
+}
+const atBox = (box: DOMRect) => ({ transform: `translate(${box.left}px, ${box.top}px) scale(1)`, clipPath: `circle(${Math.hypot(box.width, box.height) / 2 + 2}px at 50% 50%)` })
+
+/** Window or full screen folds into a circle and slides into the bubble's place. */
+export function foldToBubble(el: HTMLElement | null, bubble: Point, size: number): Animation | null {
+  if (!can(el) || reducedMotion()) return null
+  const box = el.getBoundingClientRect()
+  const from = atBox(box), to = atBubble(box, bubble, size)
+  return el.animate([
+    { ...from, transformOrigin: '0 0', opacity: 1 },
+    { opacity: 1, offset: 0.55 },
+    { ...to, transformOrigin: '0 0', opacity: 0.5 },
+  ], { duration: 260, easing: EASE_IN_OUT, fill: 'forwards' })
+}
+
+/** The bubble arrives with a small spring, so it reads as the same object the window turned into. */
+export function popBubble(el: HTMLElement | null, folded: boolean) {
+  if (!can(el)) return
+  if (reducedMotion()) { el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 150, easing: 'ease' }); return }
+  el.animate([{ scale: folded ? 0.92 : 0.85, opacity: folded ? 0.5 : 0 }, { scale: 1, opacity: 1 }], { duration: 420, easing: SPRING_POP })
+}
+
+/** The bubble blooms out into the window (or full screen) from where it sits. */
+export function bloomFromBubble(el: HTMLElement | null, bubble: Point, size: number) {
+  if (!can(el)) return
+  if (reducedMotion()) { el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 150, easing: 'ease' }); return }
+  const box = el.getBoundingClientRect()
+  const from = atBubble(box, bubble, size), to = atBox(box)
+  el.animate([
+    { ...from, transformOrigin: '0 0', opacity: 0.5 },
+    { opacity: 1, offset: 0.35 },
+    { ...to, transformOrigin: '0 0', opacity: 1 },
+  ], { duration: 300, easing: EASE_DRAWER })
+}
+
+/** Window to full screen and back: a short settle, centered, no travel. */
+export function settle(el: HTMLElement | null, opening = false) {
+  if (!can(el)) return
+  if (reducedMotion()) { el.animate([{ opacity: 0.4 }, { opacity: 1 }], { duration: 150, easing: 'ease' }); return }
+  el.animate(opening
+    ? [{ scale: 0.96, translate: '0 10px', opacity: 0 }, { scale: 1, translate: '0 0', opacity: 1 }]
+    : [{ scale: 0.97, opacity: 0.6 }, { scale: 1, opacity: 1 }], { duration: opening ? 260 : 200, easing: EASE_OUT })
+}
+
+/** After a drag the bubble snaps to the side. It travels there on a spring instead of jumping. */
+export function snapBubble(el: HTMLElement | null, from: Point, to: Point) {
+  const dx = from.x - to.x, dy = from.y - to.y
+  if (!can(el) || reducedMotion() || Math.hypot(dx, dy) < 24) return
+  el.animate([{ translate: `${dx}px ${dy}px` }, { translate: '0 0' }], { duration: 460, easing: SPRING_SNAP })
+}
