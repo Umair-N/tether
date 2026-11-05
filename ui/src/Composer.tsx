@@ -2,7 +2,7 @@ import { keyLabel } from './keys'
 import { history, loadHistory, remember } from './history'
 import { chatTitle } from './Sidebar'
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
-import { ArrowUp, Blocks, Camera, CornerDownLeft, FolderOpen, Smartphone, Image, Mic, Paperclip, Plus, Square, X, AtSign, Slash } from 'lucide-react'
+import { ArrowUp, Blocks, Camera, CornerDownLeft, FolderOpen, Smartphone, ImagePlus, Mic, Paperclip, Plus, Square, X, AtSign, Slash } from 'lucide-react'
 import { errorText } from './api'
 import type { Api, Pane } from './api'
 import { takeShared, doneShared, releaseShared } from './shared'
@@ -57,6 +57,9 @@ async function uploadFile(file: File, session: string, thread: string | null): P
 }
 
 interface ComposerProps { api: Api; pane: Pane; thread: string | null; disabled: boolean; onSend: (text: string) => Promise<boolean>; error: string; errorAction?: React.ReactNode; draft: string; setDraft: (text: string) => void; working: boolean; onStop: () => void; micOk: boolean; hint?: string; chime: boolean; options?: React.ReactNode; onTools: () => void; handsFree: boolean; listenRequest: number; sent?: string[] }
+// With no accept list, Chrome on Android opens the system app chooser (Camera, Camcorder, Media picker).
+// A list of document types opens the Files app directly. Photos and videos go through Gallery instead.
+const FILES_ACCEPT = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent) ? 'application/*,text/*' : undefined
 export function Composer({ api, pane, thread, disabled, onSend, error, errorAction, draft, setDraft, working, onStop, micOk, chime, options, onTools, hint, handsFree, listenRequest, sent = [] }: ComposerProps) {
   const host = useHost()
   const [menu, setMenu] = useState(false)
@@ -300,13 +303,17 @@ export function Composer({ api, pane, thread, disabled, onSend, error, errorActi
       const pasted = event.clipboardData.getData('text/plain'), box = event.currentTarget
       if (canAttach && !box.readOnly && longPaste(pasted)) { event.preventDefault(); setPastes(current => [...current, pasteOf(pasted, !draft.slice(0, box.selectionStart).trim())]) } }} ref={textarea} aria-label={pane.agent === 'shell' ? 'Run a command' : shellMode ? 'Shell command' : `Message ${chatTitle(pane)}`} aria-describedby={shellMode ? hintId : undefined} spellCheck={!shellMode} autoCapitalize={shellMode ? 'off' : undefined} autoCorrect={shellMode ? 'off' : undefined} placeholder={hint ?? (pane.agent === 'shell' ? 'Run a command' : `Message ${chatTitle(pane)}`)} rows={1} value={draft} readOnly={listening || transcribing || sending} disabled={disabled} onChange={event => setDraft(event.target.value)} /></div>
     <div className="composer-controls"><div>{canAttach && <div className="attach-container" ref={menuRef}>
-      <input ref={picker} type="file" multiple hidden onChange={event => { const chosen = Array.from(event.target.files ?? []); event.target.value = ''; void attach(chosen) }} />
-      <input ref={photos} type="file" accept="image/*" hidden onChange={event => { const chosen = Array.from(event.target.files ?? []); event.target.value = ''; void attach(chosen) }} />
+      <input ref={picker} type="file" multiple accept={FILES_ACCEPT} hidden onChange={event => { const chosen = Array.from(event.target.files ?? []); event.target.value = ''; void attach(chosen) }} />
+      <input ref={photos} type="file" multiple accept="image/*,video/*" hidden onChange={event => { const chosen = Array.from(event.target.files ?? []); event.target.value = ''; void attach(chosen) }} />
       <input ref={camera} type="file" accept="image/*" capture="environment" hidden onChange={event => { const chosen = Array.from(event.target.files ?? []); event.target.value = ''; void attach(chosen) }} />
       <button type="button" className="icon-button attach" aria-label="Add photos and files" aria-expanded={menu} disabled={disabled || sending || !!uploading} onClick={() => setMenu(!menu)}><Plus size={21} /></button>
-      {menu && <div className="attach-menu" role="menu">
-        <button role="menuitem" type="button" onClick={() => { setMenu(false); camera.current?.click() }}><Camera size={18} />Camera</button>
-        <button role="menuitem" type="button" onClick={() => { setMenu(false); picker.current?.click() }}><Image size={18} />Photos & files</button>
+      {menu && <><div className="attach-backdrop" aria-hidden="true" onClick={() => setMenu(false)} /><div className="attach-menu" role="menu" aria-label="Add to message" onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); setMenu(false) } }}>
+        <span className="attach-grip" aria-hidden="true" />
+        <div className="attach-tiles">
+          <button role="menuitem" type="button" onClick={() => { setMenu(false); photos.current?.click() }}><span><ImagePlus size={24} /></span>Gallery</button>
+          <button role="menuitem" type="button" onClick={() => { setMenu(false); camera.current?.click() }}><span><Camera size={24} /></span>Camera</button>
+          <button role="menuitem" type="button" onClick={() => { setMenu(false); picker.current?.click() }}><span><Paperclip size={24} /></span>Files</button>
+        </div>
         <button role="menuitem" type="button" onClick={() => void attachLatest()}><Smartphone size={18} />Latest screenshot</button>
         {hasFolder && <button role="menuitem" type="button" onClick={() => void changeFolder()}><FolderOpen size={18} />Change screenshot folder</button>}
         {pane.agent !== 'shell' && <>
@@ -314,7 +321,7 @@ export function Composer({ api, pane, thread, disabled, onSend, error, errorActi
           <button role="menuitem" type="button" onClick={() => insertTrigger('/')}><Slash size={18} />Commands & skills</button>
           <button role="menuitem" type="button" onClick={() => { setMenu(false); onTools() }}><Blocks size={18} />Plugins & MCP</button>
         </>}
-      </div>}
+      </div></>}
     </div>}{!uploading && !listening && !transcribing && options}<span className="composer-status" aria-live="polite">{uploading || (listening ? `Recording ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}` : transcribing ? 'Converting…' : pane.agent === 'shell' ? 'Terminal input' : shellMode ? 'Shell mode' : '')}</span>{!draft && !files.length && !pastes.length && pane.agent !== 'shell' && !listening && !transcribing && !uploading && <span className="composer-keys" aria-hidden="true"><span><kbd>↵</kbd> send</span><span><kbd>⇧↵</kbd> new line</span><span><kbd>/</kbd> commands</span><span><kbd>!</kbd> shell</span></span>}</div><div>
       {micOk && canRecord && (transcribing
         ? <button type="button" className="icon-button mic active" aria-label="Stop converting and keep the live text" onClick={() => converting.current?.abort()}><X size={19} /></button>

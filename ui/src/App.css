@@ -292,9 +292,26 @@ label.broadcast-row:hover { background: var(--hover); }
 .pane-tab-name { max-width: 18ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Composer + menu and stop button */
 .attach-container { position: relative; }
-.attach-menu { position: absolute; bottom: 52px; left: 0; z-index: 5; width: max-content; min-width: 210px; max-width: calc(100vw - 48px); padding: 6px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: 0 6px 24px #0000001f; }
-.attach-menu button { display: flex; align-items: center; gap: 12px; width: 100%; min-height: var(--control-lg); padding: 0 12px; border-radius: var(--radius); font-size: 15px; white-space: nowrap; text-align: left; }
+.attach-menu { position: absolute; bottom: 52px; left: 0; z-index: 5; width: max-content; min-width: 264px; max-width: calc(100vw - 48px); padding: 6px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: 0 6px 24px #0000001f; }
+.attach-menu > button { display: flex; align-items: center; gap: 12px; width: 100%; min-height: var(--control-lg); padding: 0 12px; border-radius: var(--radius); font-size: 15px; white-space: nowrap; text-align: left; }
 .attach-menu button svg { flex: none; }
+.attach-grip, .attach-backdrop { display: none; }
+.attach-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 2px 0 8px; margin-bottom: 6px; border-bottom: 1px solid var(--line); }
+.attach-tiles button { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 4px 0; border-radius: var(--radius); font-size: 13px; color: var(--text); }
+.attach-tiles button > span { display: grid; place-items: center; width: 100%; height: 56px; border-radius: var(--radius-lg); background: var(--hover); }
+.attach-tiles button:hover > span, .attach-tiles button:focus-visible > span { background: var(--line); }
+@media (max-width: 600px) {
+  .attach-backdrop { display: block; position: fixed; inset: 0; z-index: 40; background: #00000059; }
+  .attach-menu { position: fixed; inset: auto 0 0; z-index: 41; width: auto; max-width: none; max-height: 85dvh; overflow-y: auto; padding: 10px 16px max(16px, env(safe-area-inset-bottom)); border: 0; border-top: 1px solid var(--line); border-radius: var(--radius-xl) var(--radius-xl) 0 0; box-shadow: 0 -8px 32px #00000033; animation: attach-up .18s ease-out; }
+  .attach-grip { display: block; width: 36px; height: 4px; margin: 0 auto 14px; border-radius: 2px; background: var(--line); }
+  .attach-tiles { gap: 10px; padding-bottom: 14px; margin-bottom: 8px; }
+  .attach-tiles button { font-size: 15px; gap: 8px; }
+  .attach-tiles button > span { height: 76px; border-radius: 22px; }
+  .attach-tiles button svg { width: 28px; height: 28px; }
+  .attach-menu > button { min-height: 52px; font-size: 16px; }
+}
+@keyframes attach-up { from { transform: translateY(24px); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .attach-menu { animation: none; } }
 .attach-menu button:hover { background: var(--hover); }
 .stop-button { background: var(--text); color: var(--bg); }
 button.stop-button:not(:disabled):hover { background: var(--muted); }
