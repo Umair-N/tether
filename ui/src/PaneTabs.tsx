@@ -1,7 +1,9 @@
+import { createPortal } from 'react-dom'
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
 import { useWords } from './words'
 import { Plus } from 'lucide-react'
-import type { Pane } from './api'
+import type { Api, Pane } from './api'
+import { NewTask } from './NewTask'
 import { AgentIcon, needsYou, paneTitle, shownIndex } from './Sidebar'
 import { anchorOf, clipTitle } from './hooks'
 import type { Anchor } from './hooks'
@@ -21,6 +23,8 @@ interface Props {
   onPaneActions: (id: string, at?: Anchor) => void
   onSplit: (direction: 'right') => void
   onReorder: (ids: string[]) => void
+  api: Api
+  onUpdate: () => void
 }
 // One shared pill marks the active tab. A side swipe on the chat slides it toward the next tab with the finger.
 const SLIDE_CURVE = 'cubic-bezier(.2,.8,.2,1)'
@@ -66,7 +70,7 @@ const HOLD_MS = 350
 
 // Tabs for the panes of one session. Reorder: long-press a tab, then drag it (a mouse drags at once).
 // A long press without a drag opens the pane actions, as before. Only Tether's order changes; tmux panes stay put.
-export const PaneTabs = forwardRef<HTMLDivElement, Props>(function PaneTabs({ session, pane, onOpenPane, onPaneActions, onSplit, onReorder }, ref) {
+export const PaneTabs = forwardRef<HTMLDivElement, Props>(function PaneTabs({ session, pane, onOpenPane, onPaneActions, onSplit, onReorder, api, onUpdate }, ref) {
   const strip = useRef<HTMLDivElement>(null)
   const words = useWords()
   useImperativeHandle(ref, () => strip.current!)
@@ -76,6 +80,9 @@ export const PaneTabs = forwardRef<HTMLDivElement, Props>(function PaneTabs({ se
   const previewNow = useRef<string[] | null>(null)
   const setPreview = (next: string[] | null) => { previewNow.current = next; setPreviewState(next) }
   const [dragging, setDragging] = useState<string | null>(null)
+  const [taskAt, setTaskAt] = useState<Anchor | null>(null)
+  const [fresh, setFresh] = useState<string | null>(null)  // the tab a task just opened: it lands with a glow
+  useEffect(() => { if (!fresh) return; const timer = window.setTimeout(() => setFresh(null), 1600); return () => window.clearTimeout(timer) }, [fresh])
   const ids = session.panes.map(item => item.id)
   const order = ids.join()
   // Before paint: restore the strip scroll and put the pill on the active tab. Tab sizes change with names and state dots.
@@ -192,13 +199,16 @@ export const PaneTabs = forwardRef<HTMLDivElement, Props>(function PaneTabs({ se
   // While tabs are reordered, each tab draws its own highlight again.
   return <div className={preview ? 'pane-tabs' : 'pane-tabs has-pill'} ref={strip} role="tablist" aria-label={`Panes of ${session.name}`}>
     <span className="pane-tab-pill" aria-hidden="true" />
-    {shown.map(item => <button key={item.id} data-pane={item.id} role="tab" aria-selected={item.id === pane.id} className={[item.id === pane.id ? 'active' : '', dragging === item.id ? 'dragging' : ''].filter(Boolean).join(' ')}
+    {shown.map(item => <button key={item.id} data-pane={item.id} role="tab" aria-selected={item.id === pane.id} className={[item.id === pane.id ? 'active' : '', dragging === item.id ? 'dragging' : '', fresh === item.id ? 'task-new' : ''].filter(Boolean).join(' ')}
       onClick={() => { if (!suppressClick.current) onOpenPane(item) }}
       // A touch long press is handled above (drag, or actions on release). A right-click still opens the actions.
       onMouseEnter={clipTitle} onContextMenu={event => { event.preventDefault(); if (!drag.current?.touch && !suppressClick.current) onPaneActions(item.id, anchorOf(event)) }}>
       <AgentIcon agent={item.agent} icon={item.pane_icon} size={14} /><span className="pane-tab-name">{paneTitle(item)}</span>{shownIndex(item) && <span className="pane-index">{shownIndex(item)}</span>}
       {item.state === 'Working' || needsYou(item.state) ? <span className={`state-dot ${item.state === 'Working' ? 'working' : 'approval'}`} aria-label={item.state === 'Working' ? 'Working' : 'Needs you'} /> : null}
     </button>)}
-    <button className="tab-add" aria-label={words.newRight} title={words.newRight} onClick={() => onSplit('right')}><Plus size={16} /></button>
+    <button className="tab-add" aria-label={`${words.newRight} with a task`} title={`${words.newRight} with a task`} aria-haspopup="dialog" aria-expanded={!!taskAt}
+      onClick={event => { const box = event.currentTarget.getBoundingClientRect(); setTaskAt({ x: box.right - 360, y: box.bottom + 6 }) }}><Plus size={16} /></button>
+    {taskAt && createPortal(<NewTask api={api} pane={pane} at={taskAt} onClose={() => setTaskAt(null)} onEmpty={() => { setTaskAt(null); onSplit('right') }}
+      onCreated={id => { setTaskAt(null); setFresh(id); onUpdate() }} />, document.body)}
   </div>
 })
