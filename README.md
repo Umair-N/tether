@@ -297,3 +297,15 @@ It keeps tokens, preferences, configuration, chat data, and agent transcripts.
 Failure restores checkout units, settings, and saved state, then restarts the checkout services.
 The checkout stays untouched, including local changes. After success, the user can remove it.
 Set `TETHER_REPO` to choose another release repository. The default is `incmak/tether`.
+
+
+## Share storage
+
+Share stores personal files under `TETHER_HOME/share` (default `~/.tether/share`). Set `TETHER_SHARE` to use another folder.
+The authenticated `/mobile/api/share/` API supports uploads, downloads, thumbnails, trash, and private chat exports.
+The default quota is 50 GiB, and the file limit is 2 GiB. Set `TETHER_SHARE_QUOTA_BYTES` or `TETHER_SHARE_MAX_BYTES` to override them.
+Uploads require 20 GiB of free disk space after reservation. Two uploads can run at once.
+Startup reconciliation purges trash after 30 days and expires incomplete uploads after 24 hours.
+Trash counts against quota. Purge removes the file's thumbnails and exports; exports survive trash and restore.
+Use `python3 server/agent_share_cli.py put PATH`, `list`, `stat ID`, or `path ID` for local access.
+Back up the catalog and objects together while Share is idle. The Files explorer cannot change the managed Share folder.
