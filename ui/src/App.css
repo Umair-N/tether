@@ -614,13 +614,7 @@ dialog::backdrop { background: #11110e66; }
 .working-line { align-items: flex-start; }
 .working-line > .state-dot { margin-top: 5px; flex: none; }
 .work-glyph { flex: none; width: 14px; height: 18px; contain: strict; text-align: center; color: var(--accent); font-size: 15px; line-height: 18px; }
-.work-verb { position: relative; display: inline-block; color: var(--accent) !important; }
-/* The shimmer: a soft window slides right while the lighter copy inside it slides left by the same amount, so the copy stays on the text. Both are transforms, so the GPU runs them without style or paint work. */
-.work-glint { position: absolute; top: 0; bottom: 0; left: 0; width: 40%; overflow: hidden; pointer-events: none; -webkit-mask-image: linear-gradient(90deg, transparent, #000 50%, transparent); mask-image: linear-gradient(90deg, transparent, #000 50%, transparent); animation: glint-window 2.2s linear infinite; will-change: transform; }
-.work-glint > span { position: absolute; top: 0; left: 0; white-space: nowrap; color: color-mix(in srgb, var(--accent) 35%, var(--bg)); animation: glint-text 2.2s linear infinite; will-change: transform; }
-@keyframes glint-window { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
-@keyframes glint-text { from { transform: translateX(40%); } to { transform: translateX(-100%); } }
-@media (prefers-reduced-motion: reduce) { .work-glint { display: none; } }
+.work-verb { color: var(--accent) !important; }
 .running-title small { font-size: inherit; color: var(--muted); }
 .working-line > span { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .working-line strong { color: var(--text); font-weight: 500; }
