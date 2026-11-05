@@ -50,7 +50,6 @@ export function NewTask({ api, pane, at, onClose, onEmpty, onCreated }: { api: A
   }
   return <dialog {...modal} {...popover} className={pending ? 'sheet popover task-pop working' : 'sheet popover task-pop'} aria-labelledby="task-title"
     onCancel={event => { event.stopPropagation(); if (!pending) modal.onCancel(event); else event.preventDefault() }}>
-    <span className="task-sheen" aria-hidden="true" />
     <form onSubmit={create}>
       <div className="task-head"><h2 id="task-title">New tab with a task</h2><button type="button" className="task-empty" disabled={pending} onClick={onEmpty}>Empty tab</button></div>
       <div className="task-field">

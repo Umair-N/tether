@@ -1,27 +1,10 @@
-/* The + popover on the tab strip (NewTask.tsx). It grows out of the + with one light sweep and a border shimmer.
-   While the new tab starts, the shimmer runs on the border and the Create button. Reduced motion keeps it still. */
-@property --task-turn { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
+/* The + popover on the tab strip (NewTask.tsx). It grows out of the +. No shimmer: Mak asked for none.
+   Reduced motion keeps it still. */
 
 .sheet.popover.task-pop { width: 360px; padding: 0; overflow: hidden; border-radius: 16px; background: var(--surface); transform-origin: top right;
   box-shadow: 0 1px 0 #ffffff0d inset, 0 2px 6px #00000014, 0 22px 56px #00000033;
   animation: task-grow .32s cubic-bezier(.23, 1, .32, 1); }
 @keyframes task-grow { from { opacity: 0; transform: translateY(-6px) scale(.94); } }
-
-/* Border shimmer: a conic light runs once around the edge, then fades. */
-.task-pop::before { content: ''; position: absolute; inset: 0; z-index: 2; padding: 1px; border-radius: inherit; pointer-events: none;
-  background: conic-gradient(from var(--task-turn), transparent 0 62%, color-mix(in srgb, var(--accent) 70%, #fff) 78%, #fff 82%, transparent 92%);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
-  animation: task-ring 1.1s cubic-bezier(.45, 0, .2, 1) .05s both; }
-@keyframes task-ring { from { --task-turn: 0deg; opacity: 1; } 80% { opacity: 1; } to { --task-turn: 360deg; opacity: 0; } }
-.task-pop.working::before { animation: task-ring-loop 1.6s linear infinite; }
-@keyframes task-ring-loop { to { --task-turn: 360deg; } }
-
-/* One diagonal band of light across the popover as it opens. */
-.task-sheen { position: absolute; inset: 0; z-index: 1; pointer-events: none; overflow: hidden; border-radius: inherit; }
-.task-sheen::after { content: ''; position: absolute; top: -20%; bottom: -20%; left: 0; width: 45%;
-  background: linear-gradient(100deg, transparent, color-mix(in srgb, var(--accent) 14%, transparent) 40%, #ffffff3d 50%, color-mix(in srgb, var(--accent) 14%, transparent) 60%, transparent);
-  transform: translateX(-120%) skewX(-12deg); animation: task-sweep .95s cubic-bezier(.4, 0, .2, 1) .12s; }
-@keyframes task-sweep { to { transform: translateX(330%) skewX(-12deg); } }
 
 .task-pop form { position: relative; display: grid; gap: 12px; padding: 14px; }
 .task-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -54,33 +37,23 @@
 
 .task-error { margin: -4px 2px 0; font-size: 12.5px; }
 
-/* Create: a light glint on press, a steady sweep while the tab starts. */
-.task-create { position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 40px; border-radius: 10px; font-weight: 550; transition: transform .12s, filter .15s; }
+/* Create: presses in a little; a spinner shows while the tab starts. */
+.task-create { position: relative; display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 40px; border-radius: 10px; font-weight: 550; transition: transform .12s; }
 .task-create:active:not(:disabled) { transform: scale(.98); }
-.task-create::after { content: ''; position: absolute; inset: 0; pointer-events: none; transform: translateX(-110%);
-  background: linear-gradient(100deg, transparent 20%, #ffffff59 50%, transparent 80%); }
-.task-create:active::after { animation: task-glint .5s ease-out; }
-.task-pop.working .task-create { filter: saturate(1.1); }
 .task-pop.working .task-create:disabled { opacity: 1; }
-.task-pop.working .task-create::after { animation: task-glint 1.3s cubic-bezier(.4, 0, .2, 1) infinite; }
-@keyframes task-glint { to { transform: translateX(110%); } }
 .task-spin { animation: spin 1s linear infinite; }
 
-/* The + itself: it turns while the popover is open, and sends a ring of light out on the click. */
+/* The + itself: it turns while the popover is open. */
 .pane-tabs .tab-add svg { transition: transform .3s cubic-bezier(.3, 1.4, .5, 1); }
 .pane-tabs .tab-add[aria-expanded="true"] { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .pane-tabs .tab-add[aria-expanded="true"] svg { transform: rotate(45deg); }
-.pane-tabs .tab-add[aria-expanded="true"]::after { content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent); animation: task-ping .6s cubic-bezier(.2, .8, .2, 1) forwards; }
-@keyframes task-ping { from { opacity: 1; transform: scale(.85); } to { opacity: 0; transform: scale(1.5); } }
 /* The new tab lands with a short glow. */
 .pane-tabs button.task-new { animation: task-land 1.4s ease-out; }
 @keyframes task-land { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 50%, transparent); } 100% { box-shadow: 0 0 0 10px transparent; } }
 
 @media (max-width: 480px) { .sheet.popover.task-pop { width: calc(100vw - 16px); } }
 @media (prefers-reduced-motion: reduce) {
-  .sheet.popover.task-pop, .task-pop::before, .task-sheen::after, .task-create::after, .pane-tabs .tab-add[aria-expanded="true"]::after, .pane-tabs button.task-new, .task-spin { animation: none !important; }
-  .task-pop::before { opacity: 0; }
+  .sheet.popover.task-pop, .pane-tabs button.task-new, .task-spin { animation: none !important; }
   .pane-tabs .tab-add svg, .task-switch input::after { transition: none; }
 }
 
