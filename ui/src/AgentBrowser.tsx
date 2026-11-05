@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { Bot, ChevronDown, Globe, Hand, KeyRound, X } from 'lucide-react'
+import { Bot, ChevronDown, CircleSlash, Globe, Hand, KeyRound, X } from 'lucide-react'
 import { errorText } from './api'
 import type { Api, Pane, SignedBrowserAccess } from './api'
 import type { BrowserAskRow } from './needs'
@@ -21,10 +21,12 @@ interface AgentBrowserWire {
 type SetupState = 'ok' | 'missing' | 'none' | 'manual'
 export interface AgentBrowserStatus extends Omit<AgentBrowserWire, 'agents'> {
   agents: { pane: string | null; tabs: AgentTab[]; since: number }[]
-  // Signed-in browser: agents' requests waiting for Mak, and the grants running now (server/signed_access.py).
-  signed: Pick<SignedBrowserAccess, 'requests' | 'grants'>
+  // Signed-in browser: agents' requests waiting for Mak, the grants running now, and grants that ended
+  // without Mak's End (server/signed_access.py).
+  signed: Pick<SignedBrowserAccess, 'requests' | 'grants' | 'ended'>
 }
-const NO_SIGNED = { requests: [], grants: [] }
+const NO_SIGNED = { requests: [], grants: [], ended: [] }
+const pickSigned = (access: SignedBrowserAccess) => ({ requests: access.requests ?? [], grants: access.grants ?? [], ended: access.ended ?? [] })
 
 export const WATCH_EVENT = 'tether-browser-watch'
 export const TAB_KEY = 'tether-browser-tab'
@@ -56,7 +58,7 @@ async function poll(api: Api) {
   let wire: AgentBrowserWire | null = null
   try { wire = await api<AgentBrowserWire>('browser/agents') } catch { /* off or old server */ }
   // Does not start Chrome. Older servers answer 404: no requests.
-  try { const access = await api<SignedBrowserAccess>('browser/signed/access'); signed = { requests: access.requests ?? [], grants: access.grants ?? [] } } catch { signed = NO_SIGNED }
+  try { const access = await api<SignedBrowserAccess>('browser/signed/access'); signed = pickSigned(access) } catch { signed = NO_SIGNED }
   await accept(api, wire)
 }
 function subscribe(api: Api) {
@@ -78,9 +80,9 @@ export function useAgentBrowser(api: Api) {
   if (!sub) { sub = subscribe(api); subscribers.set(api, sub) }
   return useSyncExternalStore(sub, () => status)
 }
-async function answerSigned(api: Api, path: 'allow' | 'deny' | 'end', id: string) {
+async function answerSigned(api: Api, path: 'allow' | 'deny' | 'end' | 'dismiss', id: string) {
   const access = await api<SignedBrowserAccess>(`browser/signed/${path}`, { id })
-  signed = { requests: access.requests, grants: access.grants }
+  signed = pickSigned(access)
   if (status) { status = { ...status, signed }; emit() }
 }
 export async function changeAgentBrowser(api: Api, path: 'browser/agents' | 'browser/ask/dismiss' | 'browser/agents/setup', body: unknown) {
@@ -125,8 +127,11 @@ export function agentBrowserItems(api: Api, state: AgentBrowserStatus | null, pa
   const ask = state?.asks.find(item => item.pane === pane) ?? null
   const signedAsk = state?.signed.requests.find(item => item.pane === pane)
   const grant = state?.signed.grants.find(item => item.pane === pane)
+  // Rows run oldest to newest: show the newest one.
+  const ended = state?.signed.ended.filter(item => item.pane === pane).pop()
   const signedItems = signedAsk ? [{ id: 'browser-signed-ask', label: signedAsk.browser === 'mac' ? 'Wants Chrome on your Mac' : 'Wants your signed-in browser', active: true, content: <SignedAskCard api={api} request={signedAsk} /> }]
-    : grant ? [{ id: 'browser-signed', label: grant.browser === 'mac' ? 'Using Chrome on your Mac' : 'Using your signed-in browser', active: true, content: <SignedGrantCard api={api} grant={grant} /> }] : []
+    : grant ? [{ id: 'browser-signed', label: grant.browser === 'mac' ? 'Using Chrome on your Mac' : 'Using your signed-in browser', active: true, content: <SignedGrantCard api={api} grant={grant} /> }]
+    : ended ? [{ id: 'browser-signed-ended', label: 'Access ended', active: true, content: <SignedEndedCard api={api} ended={ended} /> }] : []
   if (!tabs.length && !ask) return signedItems
   const first = tabs.find(tab => tab.url && tab.url !== 'about:blank') ?? tabs[0]
   const label = ask ? 'Needs you in the browser' : first ? `Browsing ${hostOf(first.url) || 'a page'}` : 'Browser'
@@ -135,6 +140,7 @@ export function agentBrowserItems(api: Api, state: AgentBrowserStatus | null, pa
 
 type SignedRequest = AgentBrowserStatus['signed']['requests'][number]
 type SignedGrant = AgentBrowserStatus['signed']['grants'][number]
+type SignedEnded = AgentBrowserStatus['signed']['ended'][number]
 
 /** An agent asks to drive one tab of the signed-in browser. It waits up to 2 minutes for this answer. */
 function SignedAskCard({ api, request }: { api: Api; request: SignedRequest }) {
@@ -291,5 +297,20 @@ function StaleAgents({ panes }: { panes: string[] }) {
     <p>{one ? `${names[0]} started before this was on.` : `${names.length} agents started before this was on.`} {one ? 'Restart it to use the shared browser.' : 'Restart an agent to let it use the shared browser.'}</p>
     {!one && <button type="button" className="agent-browser-names" aria-expanded={open} onClick={() => setOpen(value => !value)}>{open ? 'Hide names' : 'Show names'}</button>}
     {!one && open && <ul>{names.map((name, index) => <li key={panes[index]}>{name}</li>)}</ul>}
+  </div>
+}
+
+/** A grant ended without Mak's End: say why. The agent gets the same reason (HTTP 410 or WebSocket close 4000). */
+function SignedEndedCard({ api, ended }: { api: Api; ended: SignedEnded }) {
+  const [error, setError] = useState('')
+  return <div className="agent-browser-card">
+    <ul className="agent-browser-tabs">
+      <li className="ended">
+        <CircleSlash size={15} aria-hidden="true" />
+        <span><strong>{ended.browser === 'mac' ? 'Chrome on your Mac' : 'Signed-in browser'}</strong><small>{ended.message}</small></span>
+        <button type="button" className="secondary" onClick={() => void answerSigned(api, 'dismiss', ended.id).catch(failure => setError(errorText(failure)))}>Dismiss</button>
+      </li>
+    </ul>
+    {error && <p className="error" role="alert">{error}</p>}
   </div>
 }

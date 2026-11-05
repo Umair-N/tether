@@ -280,8 +280,9 @@ class Transport:
     def message(self, message):
         self.send(1, json.dumps(message).encode())
 
-    def close(self, code=1000):
-        self.send(8, struct.pack('!H', code))
+    def close(self, code=1000, reason=''):
+        text = reason.encode('utf-8')[:123].decode('utf-8', errors='ignore').encode('utf-8')
+        self.send(8, struct.pack('!H', code) + text)
 
     def abort(self):
         self.closed = True

@@ -14,7 +14,7 @@ FRAME_INTERVAL = 1 / 30  # at most 30 frames a second per viewer
 STREAM_LIFETIME = 600
 KEEPALIVE = 15
 POST_NAMES = {'new', 'close', 'navigate', 'history', 'input', 'device', 'agents', 'agents/setup', 'ask/dismiss',
-              'signed/allow', 'signed/deny', 'signed/end'}
+              'signed/allow', 'signed/deny', 'signed/end', 'signed/dismiss'}
 
 
 def handles(path):
@@ -88,6 +88,8 @@ def post(handler, the_browser=None, the_proxy=None, the_setup=None, signed_brows
                 result = access.allow(body.get('id'), body.get('minutes'))
             elif name == 'signed/deny':
                 result = access.deny(body.get('id'))
+            elif name == 'signed/dismiss':
+                result = access.dismiss(body.get('id'))
             else:
                 result = access.end(body.get('id'))
             handler.respond(200, _tag(result, browser_id))

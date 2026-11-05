@@ -214,7 +214,7 @@ class Device:
                     slot['reply'] = message
                     slot['event'].set()
             if kind == 'ended' and self.broker.access:
-                self.broker.access.extension_end(self, message.get('id'))
+                self.broker.access.extension_end(self, message.get('id'), message.get('reason'))
         elif kind == 'event':
             self.broker.browser.conn.event(self, message)
         elif kind == 'tab':
@@ -515,7 +515,7 @@ class MacAccess(signed.Access):
                     self.browser.order.append(target)
                     self.grants[ident] = grant
                     self._mark(grant, tab)
-                    grant.timer = threading.Timer(max(0, grant.row['expires'] - self.clock()), self.end, args=(ident,))
+                    grant.timer = threading.Timer(max(0, grant.row['expires'] - self.clock()), self.end, args=(ident, 'expired'))
                     grant.timer.daemon = True
                     grant.timer.start()
                     self._answer(slot, {'ok': True, 'browser': 'mac', 'cdp': self.url(grant), 'tab': target,
@@ -532,7 +532,7 @@ class MacAccess(signed.Access):
                     self.reserved.discard(ident)
         return self.state()
 
-    def end(self, ident):
+    def end(self, ident, reason='tether_end'):
         if not isinstance(ident, str):
             raise ValueError('Choose a grant.')
         # Revoke authority and enqueue detach before taking Browser.lock. A slow page
@@ -540,7 +540,7 @@ class MacAccess(signed.Access):
         with self.lock:
             grant = self.grants.pop(ident, None)
             if grant:
-                grant.active = False
+                self._retire(grant, reason)
                 grant.timer.cancel()
             clients = [client for client in self.clients if client.grant is grant]
             self.browser._bump()
@@ -556,17 +556,17 @@ class MacAccess(signed.Access):
             self.browser.remove(grant.row['tab'])
         return self.state()
 
-    def extension_end(self, device, ident):
+    def extension_end(self, device, ident, reason='unknown'):
         with self.lock:
             grant = self.grants.get(ident)
             if not grant or grant.device is not device:
                 return
-            grant.active = False
+            self._retire(grant, reason)
             for client in list(self.clients):
                 if client.grant is grant:
                     client.revoke()
         # The reader cannot wait on a lock held by a command that awaits a reply.
-        threading.Thread(target=self.end, args=(ident,), daemon=True, name='mac-grant-end').start()
+        threading.Thread(target=self.end, args=(ident, reason), daemon=True, name='mac-grant-end').start()
 
     def disconnect(self, device):
         with self.lock:
@@ -575,7 +575,7 @@ class MacAccess(signed.Access):
                 if slot.get('binding') is device:
                     self._answer(slot, {'ok': False, 'reason': 'denied'})
         for ident in ids:
-            self.extension_end(device, ident)
+            self.extension_end(device, ident, 'connection_lost')
 
 
 class RoutedAccess:
@@ -590,6 +590,7 @@ class RoutedAccess:
         request_lock = threading.RLock()
         for access in (server, mac):
             access.request_lock, access.request_peers = request_lock, [server, mac]
+        mac.history = server.history
 
     def ask(self, reason, pane, duration=15, url=None, browser='auto'):
         if browser not in ('auto', 'mac', 'server'):
@@ -599,7 +600,12 @@ class RoutedAccess:
 
     def state(self):
         states = [self.server.state(), self.mac.state()]
-        return {key: [row for state in states for row in state[key]] for key in ('requests', 'grants')}
+        return {**{key: [row for state in states for row in state[key]] for key in ('requests', 'grants')},
+                'ended': self.server.history.state()}
+
+    def dismiss(self, ident):
+        self.mac.dismiss(ident)  # MacBrowser._bump also wakes the server panel stream.
+        return self.state()
 
     def _owner(self, ident):
         if not isinstance(ident, str):

@@ -18,8 +18,15 @@ export interface SignedBrowserGrant {
   browser: SignedBrowserSource
   id: string; pane: string; agent: string; tab: string; expires: number; reason: string
 }
-/** GET signed/access and POST signed/allow, signed/deny, signed/end. No CDP token is exposed to the panel. */
-export interface SignedBrowserAccess { browser: 'signed'; requests: SignedBrowserRequest[]; grants: SignedBrowserGrant[] }
+export interface SignedBrowserEnded {
+  id: string; pane: string; agent: string; browser: SignedBrowserSource; reason: string; message: string; at: number
+}
+/** GET signed/access and POST signed/allow, signed/deny, signed/end, signed/dismiss. No CDP token is exposed to the panel. */
+export interface SignedBrowserAccess {
+  browser: 'signed'; requests: SignedBrowserRequest[]; grants: SignedBrowserGrant[]; ended: SignedBrowserEnded[]
+}
+/** POST signed/dismiss {id} removes an ended row and returns SignedBrowserAccess. */
+export interface SignedBrowserDismiss { id: string }
 export interface SignedBrowserDecision { id: string; minutes?: number }
 export type SignedBrowserAskResult = { ok: true; browser: SignedBrowserSource; cdp: string; tab: string; expires: number }
   | { ok: false; reason: 'denied' | 'timeout' | 'request failed' }
@@ -56,7 +63,7 @@ export interface BrowserTabs extends BrowserSelection {
   running: boolean; version: number; tabs: BrowserTab[]; browsers: BrowserAvailability[]
   presets: { id: string; label: string; width: number; height: number; touch: boolean }[]
   nav?: { back: boolean; forward: boolean }
-  requests?: SignedBrowserRequest[]; grants?: SignedBrowserGrant[]
+  requests?: SignedBrowserRequest[]; grants?: SignedBrowserGrant[]; ended?: SignedBrowserEnded[]
 }
 /** SSE tabs events carry the selected browser's state, without the browser switch list. */
 export type BrowserStreamTabs = Omit<BrowserTabs, 'browsers'>

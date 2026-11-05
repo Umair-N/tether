@@ -4,6 +4,7 @@ The private-context proxy cannot isolate a default context. This proxy instead o
 an explicit target set and synthesizes discovery/auto-attach for that set only.
 No browser-wide auto-attach or discovery command from an agent reaches Chrome.
 """
+import hashlib
 import hmac
 from http.server import ThreadingHTTPServer
 import re
@@ -49,6 +50,66 @@ PAGE_METHODS = {
 }
 PAGE_ALLOWED = {domain + '.' + method for domain, methods in PAGE_METHODS.items() for method in methods.split()}
 REQUEST_SECONDS = 120
+END_MESSAGES = {
+    'debugger_detached': "Chrome's debugging bar was closed.",
+    'tab_closed': 'The tab was closed.',
+    'expired': 'The time ran out.',
+    'action_stop': 'It was stopped from the Chrome extension.',
+    'local_stop': 'It was stopped from the Chrome extension.',
+    'tether_end': 'It was ended in Tether.',
+    'connection_lost': 'Chrome disconnected.',
+    'heartbeat_lost': 'Chrome disconnected.',
+    'connection_changed': 'Chrome disconnected.',
+    'backpressure': 'Too many commands at once.',
+    'command_limit': 'Too many commands at once.',
+    'stream_backpressure': 'Too many commands at once.',
+    'attach_failed': 'Chrome did not allow the debugger.',
+    'browser_stopped': 'The browser stopped.',
+}
+
+
+def end_message(reason):
+    return END_MESSAGES.get(reason, 'Access ended.')
+
+
+class EndedGrants:
+    """Shared panel history and hashed capability tombstones, held only in memory."""
+    def __init__(self, clock):
+        self.clock = clock
+        self.lock = threading.RLock()
+        self.rows, self.tokens = [], {}
+
+    def _prune(self):
+        now = self.clock()
+        self.rows = [row for row in self.rows if now - row['at'] < 600][-20:]
+        self.tokens = {key: row for key, row in self.tokens.items() if now - row['at'] < 3600}
+
+    def record(self, grant, source, reason):
+        with self.lock:
+            self._prune()
+            row = {key: grant.row[key] for key in ('id', 'pane', 'agent')}
+            row.update(browser=source, reason=reason, message=end_message(reason), at=self.clock())
+            self.tokens[hashlib.sha256(grant.token.encode()).digest()] = row
+            if reason != 'tether_end':
+                self.rows = (self.rows + [row])[-20:]
+
+    def state(self):
+        with self.lock:
+            self._prune()
+            return [dict(row) for row in self.rows]
+
+    def dismiss(self, ident):
+        if not isinstance(ident, str):
+            raise ValueError('Choose an ended grant.')
+        with self.lock:
+            self._prune()
+            self.rows = [row for row in self.rows if row['id'] != ident]
+
+    def lookup(self, token):
+        with self.lock:
+            self._prune()
+            row = self.tokens.get(hashlib.sha256(token.encode()).digest())
+            return dict(row) if row else None
 
 
 def minutes(value):
@@ -65,6 +126,7 @@ class Grant:
         self.targets = {target}
         self.extra = 0
         self.active = True
+        self.end_reason = None
         self.timer = None
         self.emulation = {}  # Shared across reconnects and concurrent sockets; used by the p12 handoff.
 
@@ -83,6 +145,7 @@ class Access:
         self.request_lock, self.request_peers = self.lock, [self]
         self.pending, self.grants, self.reserved = {}, {}, set()
         self.clients = set()
+        self.history = EndedGrants(clock)
         self.config = {'port': 0}
         self.httpd = self.thread = None
         self.stopped = False
@@ -104,7 +167,20 @@ class Access:
     def state(self):
         with self.lock:
             return {'requests': [dict(slot['row']) for slot in self.pending.values()],
-                    'grants': [dict(grant.row) for grant in self.grants.values() if self.valid(grant)]}
+                    'grants': [dict(grant.row) for grant in self.grants.values() if self.valid(grant)],
+                    'ended': self.history.state()}
+
+    def dismiss(self, ident):
+        self.history.dismiss(ident)
+        self.browser._bump()
+        return self.state()
+
+    def _retire(self, grant, reason):
+        # Call under Access.lock. The first end wins, including a later extension echo.
+        if grant.end_reason is None:
+            grant.end_reason = reason if isinstance(reason, str) and reason else 'unknown'
+            grant.active = False
+            self.history.record(grant, self.browser_id, grant.end_reason)
 
     def valid(self, grant):
         return not self.stopped and grant.active and self.clock() < grant.row['expires']
@@ -198,7 +274,7 @@ class Access:
                         raise ValueError('That request is no longer pending.')
                     self.grants[ident] = grant
                     self._mark(grant, self.browser.tab(row['id']))
-                    grant.timer = threading.Timer(max(0, grant.row['expires'] - self.clock()), self.end, args=(ident,))
+                    grant.timer = threading.Timer(max(0, grant.row['expires'] - self.clock()), self.end, args=(ident, 'expired'))
                     grant.timer.daemon = True
                     grant.timer.start()
                     grant.row['browser'] = self.browser_id
@@ -218,14 +294,14 @@ class Access:
         tab.agent_client = grant
         self.browser._bump()
 
-    def end(self, ident):
+    def end(self, ident, reason='tether_end'):
         if not isinstance(ident, str):
             raise ValueError('Choose a grant.')
         # Revoke without Browser.lock so a slow in-flight CDP call cannot delay expiry.
         with self.lock:
             grant = self.grants.pop(ident, None)
             if grant:
-                grant.active = False
+                self._retire(grant, reason)
                 grant.timer.cancel()
             clients = [client for client in self.clients if client.grant is grant]
             self.browser._bump()
@@ -246,7 +322,7 @@ class Access:
         with self.lock:
             grants, self.grants = list(self.grants.values()), {}
             for grant in grants:
-                grant.active = False
+                self._retire(grant, 'browser_stopped')
                 grant.timer.cancel()
             for slot in list(self.pending.values()):
                 self._answer(slot, {'ok': False, 'reason': 'denied'})
@@ -267,11 +343,11 @@ class Access:
                     threading.Thread(target=self.adopt, args=(grant, target, info), daemon=True,
                                      name='signed-popup-adopt').start()
                 if method == 'Target.targetDestroyed' and target == grant.row['tab']:
-                    grant.active = False
+                    self._retire(grant, 'tab_closed')
                     for client in list(self.clients):
                         if client.grant is grant:
                             client.revoke()
-                    threading.Thread(target=self.end, args=(grant.row['id'],), daemon=True, name='signed-grant-end').start()
+                    threading.Thread(target=self.end, args=(grant.row['id'], 'tab_closed'), daemon=True, name='signed-grant-end').start()
             clients = list(self.clients)
         for client in clients:
             client.target_event(method, params)
@@ -298,7 +374,7 @@ class Access:
     def stop(self):
         self.stopped = True
         for ident in list(self.grants):
-            self.end(ident)
+            self.end(ident, 'browser_stopped')
         self.browser_stopped()
         if self.httpd:
             self.httpd.shutdown()
@@ -523,12 +599,21 @@ class Client(cdp.AgentClient):
             self.transport.message(message)
 
     def revoke(self):
+        if self.closed:
+            return
+        with self.proxy.lock:
+            if self.grant.end_reason is None:
+                reason = 'expired' if self.proxy.clock() >= self.grant.row['expires'] else 'unknown'
+                self.proxy._retire(self.grant, reason)
         self.closed = True
         if self.transport:
-            self.transport.close(1000)
+            # The writer sends the close frame and then shuts down the socket.
+            self.transport.close(4000, 'Access ended: ' + end_message(self.grant.end_reason))
             abort = getattr(self.transport, 'abort', None)
-            if abort:
-                abort()  # Do not let a slow reader delay revocation behind queued frames.
+            if abort:  # A slow reader must not hold the socket open behind queued frames.
+                timer = threading.Timer(2, abort)
+                timer.daemon = True
+                timer.start()
 
     def cleanup(self):
         self.closed = True
@@ -552,9 +637,20 @@ class Handler(cdp.Handler):
             return None
         with proxy.lock:
             self.grant = next((grant for grant in proxy.grants.values()
-                               if proxy.valid(grant) and hmac.compare_digest(grant.token.encode(), pieces[2].encode())), None)
+                               if hmac.compare_digest(grant.token.encode(), pieces[2].encode())), None)
+            if self.grant and not proxy.valid(self.grant):
+                proxy._retire(self.grant, 'expired')
+                for client in list(proxy.clients):
+                    if client.grant is self.grant:
+                        client.revoke()
+                self.grant = None
         if self.grant is None:
-            self.respond(404, {})
+            ended = proxy.history.lookup(pieces[2])
+            if ended:
+                self.respond(410, {'error': 'Signed-in browser access ended: ' + ended['message'],
+                                   'reason': ended['reason']})
+            else:
+                self.respond(404, {})
             return None
         return '/cdp'
 

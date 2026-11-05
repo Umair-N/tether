@@ -1,4 +1,5 @@
 """Signed grant lifecycle and fail-closed CDP scope. No live browser, profile, or tmux writes."""
+import base64
 import io
 import json
 import os
@@ -6,6 +7,8 @@ from pathlib import Path
 import queue
 import shutil
 import signal
+import socket
+import struct
 import subprocess
 import tempfile
 import threading
@@ -31,6 +34,98 @@ def wait_for(predicate, seconds=3):
             return
         time.sleep(.01)
     raise AssertionError('Timed out waiting for isolated test state')
+
+
+def open_grant_socket(test, access, grant):
+    """An actual loopback CDP upgrade; no Chrome or user sockets."""
+    sock = socket.create_connection(('127.0.0.1', access.config['port']), timeout=2)
+    test.addCleanup(sock.close)
+    stream = sock.makefile('rb')
+    test.addCleanup(stream.close)
+    sock.sendall((f'GET /cdp-signed/{grant.token} HTTP/1.1\r\n'
+                  f"Host: 127.0.0.1:{access.config['port']}\r\n"
+                  'Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n'
+                  'Sec-WebSocket-Key: YWJjZGVmZ2hpamtsbW5vcA==\r\n\r\n').encode())
+    test.assertIn(b'101', stream.readline())
+    while stream.readline() != b'\r\n':
+        pass
+    wait_for(lambda: any(client.transport for client in access.clients))
+    return stream
+
+
+def assert_grant_close(test, stream, message):
+    head = stream.read(2)
+    test.assertEqual(head[0] & 0x0f, 8)
+    test.assertLessEqual(head[1], 125)
+    payload = stream.read(head[1])
+    test.assertEqual(struct.unpack('!H', payload[:2])[0], 4000)
+    test.assertEqual(payload[2:].decode(), 'Access ended: ' + message)
+    test.assertEqual(stream.read(1), b'')
+
+
+def assert_ended_http(test, url, reason, message):
+    # Upgrade requests must receive the same JSON error before any 101 response.
+    for headers in ({}, {'Upgrade': 'websocket', 'Connection': 'Upgrade', 'Sec-WebSocket-Version': '13',
+                          'Sec-WebSocket-Key': base64.b64encode(b'abcdefghijklmnop').decode()}):
+        with test.assertRaises(HTTPError) as error:
+            urlopen(Request(url.replace('ws:', 'http:'), headers=headers), timeout=2)
+        with error.exception as response:
+            test.assertEqual(response.code, 410)
+            test.assertEqual(json.load(response), {'error': 'Signed-in browser access ended: ' + message,
+                                                  'reason': reason})
+
+
+class EndedHistoryTests(unittest.TestCase):
+    def test_shared_limit_ten_minute_retention_and_fallback(self):
+        now = [1000]
+        server = signed.Access(browser.Browser(signed=True), clock=lambda: now[0])
+        # Mac and server share one cap, including dismiss and retention.
+        import mac_browser
+        mac = mac_browser.MacAccess(mac_browser.Broker(), clock=lambda: now[0])
+        routed = mac_browser.RoutedAccess(server, mac)
+        for index in range(25):
+            owner = mac if index % 2 else server
+            grant = signed.Grant(dict(id=str(index), pane='%12', agent='codex', reason='Task'), 'tab', 1, now[0])
+            with owner.lock:
+                owner._retire(grant, 'future_reason')
+                owner._retire(grant, 'tether_end')  # First cause survives repeats.
+            now[0] += 1
+        rows = routed.state()['ended']
+        self.assertEqual([row['id'] for row in rows], [str(index) for index in range(5, 25)])
+        self.assertEqual({row['browser'] for row in rows}, {'mac', 'server'})
+        self.assertEqual(rows[-1]['message'], 'Access ended.')
+        self.assertEqual(rows[-1]['reason'], 'future_reason')
+        versions = (server.browser.version, mac.browser.version)
+        self.assertEqual(len(routed.dismiss('24')['ended']), 19)
+        self.assertGreater(server.browser.version, versions[0])
+        self.assertGreater(mac.browser.version, versions[1])
+        self.assertIsNotNone(mac.history.lookup(grant.token))
+        now[0] = 1605  # Row 5 expires at exactly ten minutes.
+        self.assertEqual(routed.state()['ended'][0]['id'], '6')
+        now[0] = 1624
+        self.assertEqual(routed.state()['ended'], [])
+        self.assertIsNotNone(server.history.lookup(grant.token))
+        now[0] = 4624
+        self.assertIsNone(server.history.lookup(grant.token))
+        self.assertEqual(server.history.tokens, {})
+
+    def test_reason_table(self):
+        groups = [
+            (('debugger_detached',), "Chrome's debugging bar was closed."),
+            (('tab_closed',), 'The tab was closed.'),
+            (('expired',), 'The time ran out.'),
+            (('action_stop', 'local_stop'), 'It was stopped from the Chrome extension.'),
+            (('tether_end',), 'It was ended in Tether.'),
+            (('connection_lost', 'heartbeat_lost', 'connection_changed'), 'Chrome disconnected.'),
+            (('backpressure', 'command_limit', 'stream_backpressure'), 'Too many commands at once.'),
+            (('attach_failed',), 'Chrome did not allow the debugger.'),
+            (('browser_stopped',), 'The browser stopped.'),
+            (('unknown',), 'Access ended.'),
+        ]
+        for codes, message in groups:
+            for code in codes:
+                with self.subTest(code=code):
+                    self.assertEqual(signed.end_message(code), message)
 
 
 class SignedChrome(Chrome):
@@ -125,7 +220,7 @@ class AccessTests(Requests, unittest.TestCase):
         self.assertEqual(next_result, [{'ok': False, 'reason': 'denied'}])
         self.access.request_seconds = .05
         self.assertEqual(self.access.ask('Timeout', '%1'), {'ok': False, 'reason': 'timeout'})
-        self.assertEqual(self.access.state(), {'requests': [], 'grants': []})
+        self.assertEqual(self.access.state(), {'requests': [], 'grants': [], 'ended': []})
 
     def test_validation_shortening_limit_and_exact_contract(self):
         for duration in (0, 61, True, 1.2, '15'):
@@ -232,7 +327,61 @@ class AccessTests(Requests, unittest.TestCase):
             self.client(grant)
         with self.assertRaises(HTTPError) as error:
             urlopen(self.access.url(grant).replace('ws:', 'http:'), timeout=2)
-        self.assertEqual(error.exception.code, 404)
+        self.assertEqual(error.exception.code, 410)
+
+    def test_expiry_rows_socket_http_dismiss_and_tombstone_lifetime(self):
+        now = [time.time()]
+        self.access.clock = self.access.history.clock = lambda: now[0]
+        grant, result = self.grant(duration=1)
+        stream = open_grant_socket(self, self.access, grant)
+        grant.timer.cancel()
+        now[0] = grant.row['expires']
+        grant.timer.function(*grant.timer.args)
+        message = 'The time ran out.'
+        assert_grant_close(self, stream, message)
+        assert_ended_http(self, result['cdp'], 'expired', message)
+        handler = FakeHandler(browser_api.PREFIX + 'signed/access')
+        browser_api.get(handler, signed_browser=self.real)
+        row = handler.replies[0][1]['ended'][0]
+        self.assertEqual(row, dict(id=grant.row['id'], pane='%12', agent='codex', browser='server',
+                                   reason='expired', message=message, at=now[0]))
+        self.assertNotIn(grant.token, json.dumps(handler.replies))
+        self.assertNotIn(grant.token, repr(self.access.history.__dict__))
+        handler = FakeHandler(browser_api.PREFIX + 'signed/dismiss', {'id': row['id']})
+        browser_api.post(handler, signed_browser=self.real)
+        self.assertEqual(handler.replies, [(200, dict(browser='signed', requests=[], grants=[], ended=[]))])
+        assert_ended_http(self, result['cdp'], 'expired', message)  # Dismiss does not restore access.
+        now[0] += 3599
+        assert_ended_http(self, result['cdp'], 'expired', message)
+        now[0] += 1
+        for url in (result['cdp'], result['cdp'].rsplit('/', 1)[0] + '/unknown'):
+            with self.assertRaises(HTTPError) as error:
+                urlopen(url.replace('ws:', 'http:'), timeout=2)
+            error.exception.close()
+            self.assertEqual(error.exception.code, 404)
+
+    def test_tab_close_stop_and_tether_end_reasons(self):
+        grant, result = self.grant()
+        self.access.target_event('Target.targetDestroyed', {'targetId': grant.row['tab']})
+        wait_for(lambda: grant.row['id'] not in self.access.grants)
+        self.assertEqual(self.access.state()['ended'][0]['reason'], 'tab_closed')
+        assert_ended_http(self, result['cdp'], 'tab_closed', 'The tab was closed.')
+        other, result = self.grant()
+        handler = FakeHandler(browser_api.PREFIX + 'signed/end', {'id': other.row['id']})
+        browser_api.post(handler, signed_browser=self.real)
+        self.assertEqual(handler.replies[0][0], 200)
+        self.assertEqual(len(self.access.state()['ended']), 1)
+        assert_ended_http(self, result['cdp'], 'tether_end', 'It was ended in Tether.')
+        last, result = self.grant()
+        self.real.stop()
+        self.assertEqual(self.access.state()['ended'][-1]['reason'], 'browser_stopped')
+        assert_ended_http(self, result['cdp'], 'browser_stopped', 'The browser stopped.')
+
+    def test_expired_token_is_explained_before_timer_callback(self):
+        grant, result = self.grant()
+        grant.row['expires'] = time.time() - 1
+        assert_ended_http(self, result['cdp'], 'expired', 'The time ran out.')
+        self.assertEqual(self.access.state()['ended'][0]['reason'], 'expired')
 
     def test_timer_tab_close_browser_stop_and_handoff(self):
         grant, result = self.grant()

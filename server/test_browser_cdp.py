@@ -54,7 +54,7 @@ class Chrome(FakeChrome):
 
 class Capture:
     def __init__(self):
-        self.messages, self.closes = [], []
+        self.messages, self.closes, self.close_reasons = [], [], []
         self.changed = threading.Condition()
 
     def message(self, message):
@@ -62,8 +62,9 @@ class Capture:
             self.messages.append(message)
             self.changed.notify_all()
 
-    def close(self, code=1000):
+    def close(self, code=1000, reason=''):
         self.closes.append(code)
+        self.close_reasons.append(reason)
 
     def reply(self, ident):
         with self.changed:
@@ -89,6 +90,19 @@ def masked(opcode, payload=b'', final=True):
 
 
 class FramingTests(unittest.TestCase):
+    def test_close_reason_fits_utf8_control_frame(self):
+        transport = object.__new__(cdp.Transport)
+        transport.send = Mock()
+        for reason in ('Access ended: The tab was closed.', 'Access ended: ' + '界' * 80):
+            transport.close(4000, reason)
+            opcode, payload = transport.send.call_args.args
+            self.assertEqual(opcode, 8)
+            self.assertEqual(struct.unpack('!H', payload[:2])[0], 4000)
+            self.assertLessEqual(len(payload), 125)
+            text = payload[2:].decode('utf-8')
+            self.assertTrue(reason.startswith(text))
+            self.assertGreaterEqual(len(payload), min(len(reason.encode()) + 2, 123))
+
     def read(self, data, limit=cdp.MAX_MESSAGE):
         controls = []
         messages = list(cdp.websocket_messages(io.BytesIO(data), lambda *args: controls.append(args), limit))

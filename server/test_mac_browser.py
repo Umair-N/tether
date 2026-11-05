@@ -20,7 +20,7 @@ import signed_access as signed
 from test_browser import FakeHandler
 from test_browser_cdp import Capture
 from test_browser_device import playwright_modules
-from test_signed_access import wait_for
+from test_signed_access import wait_for, open_grant_socket, assert_grant_close, assert_ended_http
 
 ORIGIN = 'chrome-extension://' + 'a' * 32
 
@@ -361,6 +361,61 @@ class RealContextTests(GrantHarness, unittest.TestCase):
 
 
 class GrantTests(GrantHarness, unittest.TestCase):
+    def test_extension_end_reason_row_http_and_open_socket(self):
+        signed.Access._listen(self.access)
+        grant = self.grant()
+        url = self.access.url(grant)
+        stream = open_grant_socket(self, self.access, grant)
+        self.device.handle({'type': 'ended', 'epoch': self.device.epoch, 'id': grant.row['id'],
+                            'reason': 'debugger_detached'})
+        message = "Chrome's debugging bar was closed."
+        assert_grant_close(self, stream, message)
+        wait_for(lambda: grant.row['id'] not in self.access.grants)
+        self.assertEqual(grant.end_reason, 'debugger_detached')
+        row = self.access.state()['ended'][0]
+        self.assertEqual(row, dict(id=grant.row['id'], pane='%12', agent='agent', browser='mac',
+                                   reason='debugger_detached', message=message, at=row['at']))
+        assert_ended_http(self, url, 'debugger_detached', message)
+        panel = FakeHandler(browser_api.PREFIX + 'signed/access')
+        browser_api.get(panel, signed_browser=self.broker.browser)
+        self.assertNotIn(grant.token, json.dumps(panel.replies))
+        self.assertEqual(panel.replies[0][1]['ended'], [row])
+        panel = FakeHandler(browser_api.PREFIX + 'signed/dismiss', {'id': grant.row['id']})
+        browser_api.post(panel, signed_browser=self.broker.browser)
+        self.assertEqual(panel.replies[0][1]['ended'], [])
+        assert_ended_http(self, url, 'debugger_detached', message)
+
+    def test_tether_end_wins_over_extension_echo(self):
+        signed.Access._listen(self.access)
+        grant = self.grant()
+        url = self.access.url(grant)
+        client, output = self.client(grant)
+        # Echo arrives synchronously while Tether sends its end command.
+        send = self.transport.message
+        def echo(message):
+            send(message)
+            if message['type'] == 'end':
+                self.device.handle({'type': 'ended', 'epoch': self.device.epoch, 'id': message['id'],
+                                    'reason': 'debugger_detached'})
+        self.transport.message = echo
+        self.access.end(grant.row['id'])
+        self.assertEqual(grant.end_reason, 'tether_end')
+        self.assertTrue(client.closed)
+        self.assertEqual(output.closes, [4000])
+        self.assertEqual(output.close_reasons, ['Access ended: It was ended in Tether.'])
+        self.assertEqual(self.access.state()['ended'], [])
+        assert_ended_http(self, url, 'tether_end', 'It was ended in Tether.')
+
+    def test_expiry_and_disconnect_reasons(self):
+        grant = self.grant()
+        grant.timer.cancel()
+        grant.timer.function(*grant.timer.args)
+        self.assertEqual(self.access.state()['ended'][0]['reason'], 'expired')
+        grant = self.grant()
+        self.device.close()
+        wait_for(lambda: not self.access.grants)
+        self.assertEqual(self.access.state()['ended'][-1]['reason'], 'connection_lost')
+
     def test_context_subscription_replay_disable_detach_and_removal(self):
         grant = self.grant()
         conn = self.broker.browser.conn

@@ -10,6 +10,8 @@
 .agent-browser-tabs span { flex: 1; min-width: 0; display: flex; flex-direction: column; font-size: 14px; }
 .agent-browser-tabs :is(strong, small) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-browser-tabs small { color: var(--muted); font-size: 12px; }
+/* An ended grant: the reason is the point, so it wraps. */
+.agent-browser-tabs li.ended small { white-space: normal; text-wrap: pretty; }
 
 .browser-agent { display: flex; align-items: center; gap: 6px; margin: -2px 10px 6px; font-size: 12px; color: var(--muted); }
 .browser-agent > svg { flex: none; color: var(--accent); }

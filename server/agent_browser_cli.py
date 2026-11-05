@@ -21,6 +21,7 @@ Tether runs one shared browser that the user can watch from desktop or phone.
 - Limit: 3 tabs. Close tabs you no longer need.
 - ask-signed uses Mak's Mac Chrome when connected, after Mak allows access; otherwise it uses the server signed browser.
 - Ask for signed-in access only for a task Mak asked for.
+- If the signed CDP URL returns 410 or its socket closes with "Access ended", tell Mak the reason in chat. Ask again only if the task still needs access.
 - If you need the user in the browser (2FA code, captcha, a password you must not see), run `{command}`, then wait for the user to reply in chat.
 - Sign-ins: the test browser is headless. Ask for signed-in access when the task needs Mak's account; Mak signs in through the panel.'''
 

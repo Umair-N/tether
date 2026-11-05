@@ -14,6 +14,13 @@ import agent_browser_cli
 
 
 class NoteTests(unittest.TestCase):
+    def test_note_explains_ended_signed_access(self):
+        text = agent_browser_cli.note()
+        self.assertIn('signed CDP URL returns 410', text)
+        self.assertIn('socket closes with "Access ended"', text)
+        self.assertIn('tell Mak the reason in chat', text)
+        self.assertIn('Ask again only if the task still needs access.', text)
+
     def test_note_contains_absolute_ask_command(self):
         text = agent_browser_cli.note()
         command = text.rsplit('`', 2)[1]
