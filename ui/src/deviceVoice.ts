@@ -123,18 +123,35 @@ class SystemEngine implements Engine<string> {
       this.voice ??= systemVoice()  // Android often lists its voices late.
       if (this.voice) utterance.voice = this.voice
       utterance.lang = this.voice?.lang ?? 'en-US'
-      utterance.onend = () => { this.speaking = false; resolve() }
+      // Android can drop speech with no error. No start in 2 s means silence: fail over to the server voice.
+      let started = false
+      const silent = () => { this.speaking = false; reject(new Error('The device voice did not start.')) }
+      const watchdog = setTimeout(() => {
+        if (started) return
+        if (this.stopped) { this.speaking = false; resolve(); return }
+        speechSynthesis.cancel()
+        silent()
+      }, 2000)
+      utterance.onstart = () => { started = true }
+      utterance.onend = () => {
+        clearTimeout(watchdog)
+        this.speaking = false
+        if (started || this.stopped) resolve(); else silent()
+      }
       utterance.onerror = event => {
+        clearTimeout(watchdog)
         this.speaking = false
         if (event.error === 'interrupted' || event.error === 'canceled') resolve()
         else reject(new Error(`The device voice failed: ${event.error}.`))
       }
       this.speaking = true
+      this.stopped = false
       speechSynthesis.speak(utterance)
     })
   }
 
-  stop() { speechSynthesis.cancel() }
+  private stopped = false
+  stop() { this.stopped = true; speechSynthesis.cancel() }
   level() { return this.speaking ? 0.12 + Math.random() * 0.08 : 0 }
   close() { this.stop() }
 }
