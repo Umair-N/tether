@@ -41,6 +41,8 @@ import push
 import shortcuts
 import prefs_sync
 import codex_provider
+import delegate
+import review_links
 import foundry_spend
 import transcribe
 import tts
@@ -119,6 +121,7 @@ def monitor_notices():
                     NOTIFIER.observe(entry, shared_status(entry))
             except Exception:  # one odd pane must never stop the monitor for everyone
                 continue
+        review_links.observe(entries, shared_status, send_text, last_reply)
         time.sleep(2)
 
 
@@ -224,7 +227,7 @@ def sessions():
 
 # Writes that add, remove or rename tmux panes or sessions. After one succeeds, the next list must come from tmux,
 # so a page that refreshes right away sees the new pane (or no longer sees the closed one).
-TMUX_WRITES = {'/mobile/api/split', '/mobile/api/fork', '/mobile/api/resume', '/mobile/api/shell', '/mobile/api/session',
+TMUX_WRITES = {'/mobile/api/split', '/mobile/api/fork', '/mobile/api/delegate', '/mobile/api/resume', '/mobile/api/shell', '/mobile/api/session',
                '/mobile/api/tmux-sessions', '/mobile/api/rename', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/side-shell',
                '/mobile/api/side-shell/end', '/mobile/api/start', '/mobile/api/merge'}
 
@@ -739,6 +742,18 @@ def snapshot(config=None):
     metrics = codex_metrics(config, state['usage'], state.get('model', ''), state.get('effort', ''), state.get('credits'))
     return {'messages': terminal_replies.merge(config, merge_quota_notices(dict(config, agent='codex'), activity.group_actions(activity.merge(list(messages))))), 'dropped': state['dropped'], 'busy': busy, 'thread': config['thread'], 'usage': metrics,
             'agent': 'codex', 'writable': config.get('writable', True), 'session': config.get('id'), 'footer': footer.codex(metrics)}
+
+
+def last_reply(entry):
+    """The most recent assistant text for a review request; missing history is harmless."""
+    try:
+        for message in reversed(snapshot(entry)['messages']):
+            text = message.get('text')
+            if message.get('role') == 'assistant' and isinstance(text, str) and text.strip():
+                return text
+    except Exception:
+        pass
+    return ''
 
 
 def submit(message, config=None):
@@ -1302,7 +1317,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.respond(403, {'error': 'Reload the page and try again.'})
             return
         if self.path not in ('/mobile/api/ask-hook', '/mobile/api/ask-answer', '/mobile/api/ask-engage', '/mobile/api/message', '/mobile/api/broadcast', '/mobile/api/approval', '/mobile/api/menu', '/mobile/api/prompt-action', '/mobile/api/start', '/mobile/api/session', '/mobile/api/tmux-sessions', '/mobile/api/key', '/mobile/api/clear-draft', '/mobile/api/unqueue', '/mobile/api/mode', '/mobile/api/type',
-                         '/mobile/api/push/subscribe', '/mobile/api/push/unsubscribe', '/mobile/api/push/test', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/shortcuts', '/mobile/api/prefs', '/mobile/api/codex-provider', '/mobile/api/model-options', '/mobile/api/model', '/mobile/api/rename', '/mobile/api/merge', '/mobile/api/shell', '/mobile/api/upload', '/mobile/api/transcribe', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/refresh', '/mobile/api/accounts/switch') and not browser_api.handles(self.path) and not projects_api.handles(self.path) and not codex_level.handles(self.path) and not tts.handles(self.path) and not friday_proxy.handles(self.path) and not live_mode.handles(self.path):
+                         '/mobile/api/push/subscribe', '/mobile/api/push/unsubscribe', '/mobile/api/push/test', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/shortcuts', '/mobile/api/prefs', '/mobile/api/codex-provider', '/mobile/api/model-options', '/mobile/api/model', '/mobile/api/rename', '/mobile/api/merge', '/mobile/api/shell', '/mobile/api/upload', '/mobile/api/transcribe', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/delegate', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/refresh', '/mobile/api/accounts/switch') and not browser_api.handles(self.path) and not projects_api.handles(self.path) and not codex_level.handles(self.path) and not tts.handles(self.path) and not friday_proxy.handles(self.path) and not live_mode.handles(self.path):
             self.respond(404, {'error': 'Not found'})
             return
         # Reject unauthenticated and cross-origin submissions.
@@ -1339,7 +1354,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             size = int(self.headers.get('Content-Length', '0'))
-            if not 0 < size <= (262144 if self.path in ('/mobile/api/shortcuts', '/mobile/api/prefs') else 65536):
+            if not 0 < size <= (262144 if self.path in ('/mobile/api/shortcuts', '/mobile/api/prefs', '/mobile/api/delegate') else 65536):
                 self.respond(413, {'error': 'Message is too large.'})
                 return
             body = json.loads(self.rfile.read(size))
@@ -1526,6 +1541,15 @@ class Handler(BaseHTTPRequestHandler):
                     new_pane = new_window_after(pane, subprocess.run)
                 self.respond(201, {'pane': new_pane})
                 return
+            if self.path == '/mobile/api/delegate':
+                entries = sessions()
+                entry = delegate.validate(body, entries)
+                folder = agent_folder(entry)
+                with SEND_LOCK:
+                    pane, name = delegate.start(entry, body, folder if folder and os.path.isdir(folder) else str(paths.HOME),
+                                                run=subprocess.run, recent=lambda: snapshot(entry).get('messages') or [])
+                self.respond(201, {'pane': pane, 'name': name})
+                return
             if self.path == '/mobile/api/fork':
                 pane = body.get('session')
                 if not isinstance(pane, str) or not re.fullmatch(r'%[0-9]+', pane):
@@ -1676,7 +1700,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.respond(200, {'accepted': True, 'delivery': send_text(config, message)})
         except (ValueError, UnicodeError) as exc:
-            self.respond(400, {'error': str(exc) if self.path in ('/mobile/api/session', '/mobile/api/broadcast', '/mobile/api/merge', '/mobile/api/model', '/mobile/api/shell', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/mode', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/menu', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/refresh', '/mobile/api/accounts/switch') else 'Invalid message.'})
+            self.respond(400, {'error': str(exc) if self.path in ('/mobile/api/session', '/mobile/api/broadcast', '/mobile/api/merge', '/mobile/api/model', '/mobile/api/shell', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/delegate', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/mode', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/menu', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/refresh', '/mobile/api/accounts/switch') else 'Invalid message.'})
         except (OSError, RuntimeError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
             # The journal keeps why a send was refused; the access log shows only "503".
             print(f'{self.path} refused: {type(exc).__name__}: {str(exc)[:200]}', file=sys.stderr, flush=True)

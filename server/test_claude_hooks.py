@@ -40,6 +40,7 @@ class HookTests(unittest.TestCase):
         return claude_hooks.overlay(self.config, self.screen, now)
 
     def test_turn_tool_and_mode_contract(self):
+        self.screen.update(spinner=None, running=None)
         self.feed('UserPromptSubmit', permission_mode='acceptEdits', effort={'level': 'xhigh'})
         self.feed('PreToolUse', 101, tool_name='Bash', tool_use_id='tool-1', tool_input={'command': 'npm test'})
         result = self.read()
@@ -54,6 +55,54 @@ class HookTests(unittest.TestCase):
         self.assertIsNotNone(self.read(112)['spinner'])
         self.feed('Stop', 113)
         self.assertIsNone(self.read(114)['spinner'])
+
+    def test_busy_hook_keeps_screen_spinner(self):
+        self.screen['spinner'] = {'verb': 'Misting…', 'detail': '1m 8s · ↓ 3.1k tokens'}
+        self.feed('UserPromptSubmit')
+        self.assertEqual(self.read()['spinner'], self.screen['spinner'])
+
+    def test_idle_hook_clears_screen_spinner(self):
+        self.feed('Stop')
+        self.assertIsNone(self.read()['spinner'])
+
+    def test_tool_description_becomes_running_title(self):
+        self.screen['running'] = None
+        for tool_name in ('Bash', 'Agent'):
+            with self.subTest(tool_name=tool_name):
+                self.feed('PreToolUse', tool_name=tool_name, tool_use_id='one',
+                          tool_input={'command': 'ls', 'description': '  List\nfiles  '})
+                stored = json.loads((self.cache / 'hooks/abc123.json').read_text())
+                self.assertEqual(stored['tools']['one']['description'], 'List files')
+                self.assertEqual(self.read()['running'],
+                                 {'title': 'List files', 'command': 'ls', 'elapsed': '10s'})
+
+    def test_tool_without_description_uses_tool_name(self):
+        self.screen['running'] = None
+        self.feed('PreToolUse', tool_name='Bash', tool_use_id='one', tool_input={'command': 'ls'})
+        stored = json.loads((self.cache / 'hooks/abc123.json').read_text())
+        self.assertEqual(stored['tools']['one']['description'], '')
+        self.assertEqual(self.read()['running'], {'title': 'Bash', 'command': 'ls', 'elapsed': '10s'})
+
+    def test_screen_running_title_wins_but_hook_command_and_elapsed_remain(self):
+        self.screen['running'] = {'title': 'Exact terminal text', 'command': 'screen command', 'elapsed': '99s'}
+        self.feed('PreToolUse', tool_name='Bash', tool_input={'command': 'ls', 'description': 'List files'})
+        self.assertEqual(self.read()['running'],
+                         {'title': 'Exact terminal text', 'command': 'ls', 'elapsed': '10s'})
+
+    def test_empty_screen_title_falls_back_to_hook_description(self):
+        self.screen['running']['title'] = ''
+        self.feed('PreToolUse', tool_name='Agent', tool_input={'description': 'Find files'})
+        self.assertEqual(self.read()['running'],
+                         {'title': 'Find files', 'command': 'Find files', 'elapsed': '10s'})
+
+    def test_old_tool_state_without_description_uses_tool_name(self):
+        self.screen['running'] = None
+        self.feed('PreToolUse', tool_name='Bash', tool_use_id='one', tool_input={'command': 'ls'})
+        target = self.cache / 'hooks/abc123.json'
+        state = json.loads(target.read_text())
+        del state['tools']['one']['description']
+        target.write_text(json.dumps(state))
+        self.assertEqual(self.read()['running'], {'title': 'Bash', 'command': 'ls', 'elapsed': '10s'})
 
     def test_failures_waiting_and_idle(self):
         self.feed('UserPromptSubmit')
@@ -90,6 +139,7 @@ class HookTests(unittest.TestCase):
         self.assertIsNotNone(self.read()['spinner'])
 
     def test_overlapping_tools_complete_by_identity(self):
+        self.screen['running'] = None
         self.feed('PreToolUse', tool_name='Bash', tool_use_id='one')
         self.feed('PreToolUse', 101, tool_name='Read', tool_use_id='two')
         self.feed('PostToolUse', 102, tool_use_id='one')
@@ -186,6 +236,7 @@ class HookTests(unittest.TestCase):
         self.assertIsNone(self.read()['spinner'])
 
     def test_newer_transcript_invalidates_missing_hooks_but_not_streaming(self):
+        self.screen['running'] = None
         self.feed('UserPromptSubmit', permission_mode='acceptEdits', effort={'level': 'max'})
         self.feed('PreToolUse', 101, tool_name='Bash', tool_use_id='one')
         record = {'type': 'assistant', 'timestamp': '1970-01-01T00:01:45Z',
@@ -260,6 +311,7 @@ class HookTests(unittest.TestCase):
         self.assertIsNone(self.read()['spinner'])
 
     def test_open_tool_has_no_age_limit_and_post_tool_restores_turn_limit(self):
+        self.screen['running'] = None
         self.feed('UserPromptSubmit')
         self.feed('PreToolUse', 101, tool_name='Bash', tool_use_id='one', tool_input={'command': 'test suite'})
         for now in (701, 3701):

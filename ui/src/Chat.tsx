@@ -153,6 +153,19 @@ const terminalPanes = new Set<string>()
 
 // ttyd's page exposes its xterm.js terminal as window.term. Only the parts used here.
 const PREVIEW_HOLD_MS = 1600  // longer than one 1.5 s poll, so one stray sample in polling mode stays hidden too
+// Claude Code's own spinner: a star that grows and shrinks. A text glyph, so it takes the accent color like the terminal.
+const GLYPHS = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢']
+function WorkGlyph() {
+  const ref = useRef<HTMLSpanElement>(null)
+  useEffect(() => {
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+    let at = 0
+    const timer = window.setInterval(() => { at = (at + 1) % GLYPHS.length; if (ref.current) ref.current.textContent = GLYPHS[at] }, 120)
+    return () => window.clearInterval(timer)
+  }, [])
+  return <span ref={ref} className="work-glyph" aria-hidden="true">✻</span>
+}
+
 function useSteadyPreview(text: string | undefined) {
   const since = useRef(0)  // when the current run of preview text started; 0 = no preview
   const [, wake] = useState(0)
@@ -575,7 +588,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     }
     readFooter.current = read
     read()
-    const timer = setInterval(read, 5000)
+    const timer = setInterval(read, state === 'Working' ? 1000 : 5000)  // while Claude works, its verb, tokens and tool change every second
     return () => {
       live = false; clearInterval(timer)
       readFooter.current = () => {}
@@ -706,7 +719,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
       {slot && <button type="button" className="icon-button slot-button" aria-label={slot.zoomed ? 'Show all slots (Alt+Z)' : 'Zoom this slot (Alt+Z)'} title={slot.zoomed ? 'Show all slots (Alt+Z)' : 'Zoom this slot (Alt+Z)'} onClick={slot.onZoom}>{slot.zoomed ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button>}
       {slot?.onClose && <button type="button" className="icon-button slot-button" aria-label="Close this slot (Alt+X)" title="Close this slot (Alt+X)" onClick={slot.onClose}><X size={16} /></button>}
     </header>
-    {session && session.panes.length > 1 && <PaneTabs ref={tabs} session={session} pane={pane} onOpenPane={onOpenPane} onPaneActions={onPaneActions} onSplit={onSplit} onReorder={onReorder} />}
+    {session && session.panes.length > 1 && <PaneTabs ref={tabs} session={session} pane={pane} onOpenPane={onOpenPane} onPaneActions={onPaneActions} onSplit={onSplit} onReorder={onReorder} api={api} onUpdate={onUpdate} />}
     {term && data?.attention?.askBridge && <AskBar agent={agentNames[activePane.agent]} disabled={!writable || acting} onOpen={() => setTerm(false)} onTerminal={() => askAnswer(data.attention!.askBridge!, null)} />}
     {term ? <LiveTerminal paneId={activePane.id} onChat={() => setTerm(false)} /> : <>
     {(offline || (error && data)) && <div className="reconnect-banner" role="status"><WifiOff size={15} /><span>{offline ? 'You are offline. Tether reconnects when the network is back.' : `Cannot reach ${host}. Reconnecting…`}</span><button type="button" onClick={() => void refresh()}>Retry now</button></div>}
@@ -741,7 +754,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     {tools && <Tools api={api} pane={activePane} onClose={() => setTools(false)} onPick={text => { setDraft(text); setTools(false) }} />}
     {data?.login_result && <p className="login-result" role={data.login_result.phase === 'failed' ? 'alert' : 'status'}>{data.login_result.message}</p>}
     {state !== 'Working' && doneIn?.pane === pane.id && <div className="working-line done-line" role="status"><span className="done-check"><Check size={12} strokeWidth={3} /></span><span><strong>Done in {formatElapsed(doneIn.seconds)}</strong></span></div>}
-    {state === 'Working' && <div className="working-line" role="status"><span className="state-dot working" /><span><span className="working-head"><strong>{footer.spinner?.verb ?? 'Working…'}</strong>{footer.spinner?.detail ? <small>{footer.spinner.detail}</small> : workingSince && <Elapsed since={workingSince.at} />}</span>{footer.running && <span className="running-tool"><Terminal size={13} /><span>{footer.running.title}<code>{footer.running.command}</code></span><small>{footer.running.elapsed}</small></span>}{footer.denied && <span className="running-tool denied-tool"><ShieldAlert size={13} /><span>{footer.denied.text}{footer.denied.reason && <small>{footer.denied.reason}</small>}</span></span>}</span></div>}
+    {state === 'Working' && <div className="working-line" role="status"><WorkGlyph /><span><span className="working-head"><strong className="work-verb">{footer.spinner?.verb ?? 'Working…'}</strong>{footer.spinner?.detail ? <small>{footer.spinner.detail}</small> : workingSince && <Elapsed since={workingSince.at} />}</span>{footer.running && <span className="running-tool"><Terminal size={13} /><span><span className="running-title">{footer.running.title}{footer.running.elapsed && <small> · {footer.running.elapsed}</small>}</span>{footer.running.command && footer.running.command !== footer.running.title && <code>{footer.running.command}</code>}</span></span>}{footer.denied && <span className="running-tool denied-tool"><ShieldAlert size={13} /><span>{footer.denied.text}{footer.denied.reason && <small>{footer.denied.reason}</small>}</span></span>}</span></div>}
     <StatusStack priorityKey={data?.approval ? `approval:${(data.approval as Approval).id}` : data?.attention ? `attention:${data.attention.id}` : data?.plan ? `plan:${data.plan.id}` : footer.heads_up ? 'heads' : browserAsk ? `browser-ask:${browserAsk.id}` : ''} chips={(footer.goal || !!footer.tasks?.length || (footer.suggestion && !draft.trim() && state !== 'Working')) ? <>{(footer.goal || !!footer.tasks?.length) ? <div className="live-chips">{footer.goal && <button type="button" className="live-chip" aria-haspopup="dialog" onClick={() => setLiveSheet('goal')}><Target size={14} />Goal active{footer.goal !== 'active' ? ` · ${footer.goal}` : ''}<ChevronRight size={13} /></button>}{footer.tasks?.map(task => <button type="button" key={task} className="live-chip" aria-haspopup="dialog" onClick={() => setLiveSheet('tasks')}><Layers size={14} />{taskLabel(task)}<ChevronRight size={13} /></button>)}</div> : null}{(footer.suggestion && !draft.trim() && state !== 'Working' ? <button type="button" className="prompt-suggestion" title="Use this suggested prompt" onClick={() => setDraft(footer.suggestion ?? '')}><CornerDownRight size={15} /><span>{footer.suggestion}</span></button> : null)}</> : null} items={[
       { id: 'action', label: data?.plan ? 'Review plan' : data?.approval ? `${agentNames[activePane.agent]} needs permission` : data?.attention?.reason === 'panel' || data?.attention?.reason === 'info' ? `${agentNames[activePane.agent]} panel open` : `${agentNames[activePane.agent]} needs attention`, active: !!(data?.approval || data?.attention || data?.plan), content: <>{data && (data.approval != null || data.attention || data.plan) && <ChoiceDock key={(data.approval as Approval | null)?.id ?? data.attention?.id ?? 'choice'} approval={data.approval as Approval | null} attention={data.attention ?? null} plan={data.plan} agent={agentNames[activePane.agent]} disabled={!writable || acting} onChoose={choose} onKey={key => void sendKey(key)} onAction={action => promptAction(data.attention!, action)} onAsk={askAnswer} onAskEngage={askEngage} onType={(text, loginUrl) => write('type', { session: activePane.id, thread: data?.thread ?? null, text, enter: true, ...loginUrl ? { login_url: loginUrl } : {} })} />}</> },
       { id: 'heads', label: '✦ Heads up', active: !!footer.heads_up, content: <>{footer.heads_up && <HeadsUp card={footer.heads_up} disabled={!writable || acting} onKey={headsUpKey} onChat={note => { setDraft(note); requestAnimationFrame(() => { const box = panelRef.current?.querySelector<HTMLTextAreaElement>('.composer textarea'); box?.focus(); box?.setSelectionRange(box.value.length, box.value.length) }) }} />}</> },
