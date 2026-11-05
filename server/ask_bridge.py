@@ -6,6 +6,7 @@ Exit 0 with empty stdout leaves Claude's native permission flow unchanged.
 import hashlib
 import hmac
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -21,8 +22,11 @@ import paths
 
 HOOK_PATH = '/mobile/api/ask-hook'
 ANSWER_PATH = '/mobile/api/ask-answer'
+ENGAGE_PATH = '/mobile/api/ask-engage'
 WAIT_SECONDS = 30
-MAX_WAIT_SECONDS = 120
+MAX_NOTICE_SECONDS = 120
+IDLE = 60
+MAX_WAIT = 590
 WATCH_WINDOW = 60
 WATCH_GRACE = 10
 LEASE_SECONDS = 5
@@ -47,7 +51,7 @@ def enabled():
 
 def wait_seconds():
     value = install_settings().get('ask_bridge_wait', WAIT_SECONDS)
-    return max(5, min(MAX_WAIT_SECONDS, value)) if type(value) is int else WAIT_SECONDS
+    return max(5, min(MAX_NOTICE_SECONDS, value)) if type(value) is int else WAIT_SECONDS
 
 
 def identity(entry):
@@ -171,10 +175,10 @@ class Conflict(Exception):
 
 
 class Pending:
-    def __init__(self, clock=time.time, monotonic=time.monotonic, last_watched=lambda pane: float('-inf')):
+    def __init__(self, clock=time.time, monotonic=time.monotonic, watching=lambda pane, window: False):
         self.clock = clock
         self.monotonic = monotonic
-        self.last_watched = last_watched
+        self.watching = watching
         self.lock = threading.Lock()
         self.records = {}
 
@@ -183,7 +187,7 @@ class Pending:
         for key, item in list(self.records.items()):
             if item['expires'] <= now or (item['state'] in ('pending', 'answered') and
                     (item['lease'] <= now or not process_alive(item['pid'], item['started']) or
-                     self.monotonic() - self.last_watched(item['identity'][0]) >= WATCH_GRACE)):
+                     not self.watching(item['identity'][0], WATCH_GRACE))):
                 self.records.pop(key)
 
     def register(self, entry, body):
@@ -195,7 +199,7 @@ class Pending:
         questions = questions_input(body.get('tool_input'))
         with self.lock:
             self.prune()
-            if self.monotonic() - self.last_watched(entry['id']) >= WATCH_WINDOW:
+            if not self.watching(entry['id'], WATCH_WINDOW):
                 return {'wait': 0}
             started = hook_process(body.get('pid'), entry['owner_pid'])
             if (len(self.records) >= MAX_PENDING or any(item['nonce'] == nonce or
@@ -207,7 +211,8 @@ class Pending:
             seconds = wait_seconds()
             self.records[identifier] = dict(identity=identity(entry), nonce=nonce,
                 tool_use_id=tool_id, questions=json.loads(json.dumps(questions)),
-                pid=body['pid'], started=started, expires=now + seconds,
+                pid=body['pid'], started=started, registered=now, expires=now + seconds,
+                engaged=float('-inf'),  # Monotonic time of the last accepted form activity.
                 lease=now + LEASE_SECONDS, state='pending')
             return dict(id=identifier, nonce=nonce, expires=now + seconds, wait=seconds)
 
@@ -230,8 +235,20 @@ class Pending:
                 answers = item.pop('answers')
                 item['state'] = 'delivered'
                 item.pop('questions', None)
-                return {'state': 'answered', 'answers': answers}
+                return {'state': 'answered', 'answers': answers, 'expires': item['expires']}
             raise Conflict()
+
+    def engage(self, entry, body):
+        with self.lock:
+            item = self.lookup(entry, body)
+            if item['state'] != 'pending':
+                raise Conflict()
+            now = self.monotonic()
+            if now - item['engaged'] >= 1:
+                item['expires'] = min(item['registered'] + MAX_WAIT,
+                                      max(item['expires'], self.clock() + IDLE))
+                item['engaged'] = now
+            return {'expires': item['expires']}
 
     def retire(self, entry, body):
         with self.lock:
@@ -270,7 +287,7 @@ class Pending:
             for item_id, item in self.records.items():
                 if item['identity'] == identity(entry) and item['state'] == 'pending':
                     return dict(id=item_id, nonce=item['nonce'],
-                                questions=json.loads(json.dumps(item['questions'])), expires=item['expires'])
+                                questions=json.loads(json.dumps(item['questions'])), expires=item['expires'], idle=IDLE)
         return None
 
 
@@ -290,7 +307,7 @@ def overlay(entry, status):
 
 
 def handles(path):
-    return path in (HOOK_PATH, ANSWER_PATH)
+    return path in (HOOK_PATH, ANSWER_PATH, ENGAGE_PATH)
 
 
 def serve(handler, body, choose):
@@ -312,6 +329,8 @@ def serve(handler, body, choose):
         socket = verify_entry(entry)
         if handler.path == ANSWER_PATH:
             result = pending.answer(entry, body)
+        elif handler.path == ENGAGE_PATH:
+            result = pending.engage(entry, body)
         else:
             action = body.get('action')
             operation = {'register': pending.register, 'poll': pending.poll, 'retire': pending.retire}.get(action)
@@ -327,7 +346,7 @@ def serve(handler, body, choose):
         handler.respond(409, {'error': 'The ask is no longer available.'})
 
 
-def hook(data, request=None, wait=time.sleep, clock=time.monotonic):
+def hook(data, request=None, wait=time.sleep, clock=time.monotonic, wall_clock=time.time):
     """Return a decision only after an answer; all other paths return None."""
     if (not isinstance(data, dict) or data.get('hook_event_name') != 'PreToolUse'
             or data.get('tool_name') != 'AskUserQuestion' or data.get('agent_id')):
@@ -365,12 +384,23 @@ def hook(data, request=None, wait=time.sleep, clock=time.monotonic):
         seconds = registered.get('wait')
         if type(seconds) is not int or seconds <= 0:
             return None
-        deadline = started + min(seconds, MAX_WAIT_SECONDS)
+        hard_deadline = started + MAX_WAIT
+
+        def current_deadline(reply):
+            expires = reply.get('expires')
+            if type(expires) not in (int, float) or not math.isfinite(expires):
+                raise ValueError('Invalid ask expiry.')
+            return min(hard_deadline, clock() + expires - wall_clock())
+
         body = {key: body[key] for key in ('session', 'nonce')}
         body['id'] = registered['id']
         try:
+            deadline = min(started + min(seconds, MAX_NOTICE_SECONDS), current_deadline(registered))
             while clock() < deadline:
                 result = request(dict(body, action='poll'))
+                deadline = current_deadline(result)
+                if clock() >= deadline:
+                    return None
                 if result.get('state') == 'answered':
                     answers = answer_input(questions, result['answers'])
                     if clock() >= deadline:
@@ -379,7 +409,7 @@ def hook(data, request=None, wait=time.sleep, clock=time.monotonic):
                             'permissionDecision': 'allow', 'updatedInput': dict(data['tool_input'], answers=answers)}}
                 if result.get('state') != 'pending':
                     return None
-                wait(.5)
+                wait(min(.5, max(0, deadline - clock())))
         finally:
             try:
                 request(dict(body, action='retire'))

@@ -462,8 +462,8 @@ class InstallTests(unittest.TestCase):
         data = json.loads(settings.read_text())
         bridge = data['hooks']['PreToolUse'][-1]
         self.assertEqual(bridge['matcher'], 'AskUserQuestion')
-        self.assertEqual(bridge['hooks'][0]['timeout'], 40)
-        self.assertEqual(bridge['hooks'][0]['statusMessage'], 'Answer on phone · back to terminal in 30 s')
+        self.assertEqual(bridge['hooks'][0]['timeout'], 600)
+        self.assertEqual(bridge['hooks'][0]['statusMessage'], 'Answer on phone · back here when the phone stops')
         self.assertTrue(self.plan()['options']['ask_bridge'])
         self.assertEqual(data['hooks']['PreToolUse'][:-1], original['hooks']['PreToolUse'])
         for event, groups in original['hooks'].items():
@@ -498,13 +498,13 @@ class InstallTests(unittest.TestCase):
             groups = json.loads(settings.read_text())['hooks']['PreToolUse']
             self.assertEqual(len(groups), 1)
             hook = groups[0]['hooks'][0]
-            self.assertEqual(hook['timeout'], seconds + 10)
-            self.assertEqual(hook['statusMessage'], f'Answer on phone · back to terminal in {seconds} s')
+            self.assertEqual(hook['timeout'], 600)
+            self.assertEqual(hook['statusMessage'], 'Answer on phone · back here when the phone stops')
         old = json.loads(settings.read_text())
-        old['hooks']['PreToolUse'][0]['hooks'][0]['timeout'] = 600
+        old['hooks']['PreToolUse'][0]['hooks'][0]['timeout'] = 40
         settings.write_text(json.dumps(old))
         self.apply(self.plan())
-        self.assertEqual(json.loads(settings.read_text())['hooks']['PreToolUse'][0]['hooks'][0]['timeout'], 130)
+        self.assertEqual(json.loads(settings.read_text())['hooks']['PreToolUse'][0]['hooks'][0]['timeout'], 600)
         self.apply(self.plan('--no-ask-bridge'))
         self.assertEqual(json.loads(settings.read_text()), {'hooks': {}})
 

@@ -42,8 +42,10 @@ class StoreTests(unittest.TestCase):
     def setUp(self):
         self.now = 1000
         self.watched = {'%9': self.now, '%10': self.now}
+        self.streams = set()
         self.store = bridge.Pending(lambda: self.now, lambda: self.now,
-                                    lambda pane: self.watched.get(pane, float('-inf')))
+                                    lambda pane, window: pane in self.streams or
+                                    self.store.monotonic() - self.watched.get(pane, float('-inf')) < window)
         settings = patch.object(bridge, 'install_settings', return_value={})
         settings.start()
         self.addCleanup(settings.stop)
@@ -60,6 +62,102 @@ class StoreTests(unittest.TestCase):
         store = bridge.Pending()
         self.assertEqual(store.register(ENTRY, self.registration), {'wait': 0})
         self.assertEqual(store.records, {})
+
+    def test_engage_extends_deadline_and_attention(self):
+        self.now += 2
+        self.assertEqual(self.store.engage(ENTRY, self.ask), {'expires': self.now + 60})
+        shown = self.store.attention(ENTRY)
+        self.assertEqual(shown['expires'], self.now + 60)
+        self.assertEqual(shown['idle'], 60)
+
+    def test_engage_rate_limit_uses_monotonic_time_per_record(self):
+        monotonic = [self.now]
+        self.store.monotonic = lambda: monotonic[0]
+        first = self.store.engage(ENTRY, self.ask)['expires']
+        self.now += 2
+        monotonic[0] += .999
+        self.assertEqual(self.store.engage(ENTRY, self.ask)['expires'], first)
+        other = self.store.register(dict(ENTRY, id='%10'),
+                                    dict(self.registration, nonce='another-12345678901234567890'))
+        self.assertEqual(self.store.engage(dict(ENTRY, id='%10'), other)['expires'], self.now + 60)
+        monotonic[0] = 1001
+        self.assertEqual(self.store.engage(ENTRY, self.ask)['expires'], self.now + 60)
+
+    def test_engage_never_shortens_long_notice(self):
+        self.store.records.clear()
+        with patch.object(bridge, 'wait_seconds', return_value=120):
+            ask = self.store.register(ENTRY, self.registration)
+        self.assertEqual(self.store.engage(ENTRY, ask), {'expires': self.now + 120})
+
+    def test_engage_caps_at_registration_plus_max_wait(self):
+        self.streams.add('%9')
+        registered = self.now
+        for elapsed in range(0, 590, 4):
+            self.now = registered + elapsed
+            self.store.poll(ENTRY, self.ask)
+            self.assertEqual(self.store.engage(ENTRY, self.ask)['expires'],
+                             min(registered + 590, self.now + 60))
+        self.now = registered + 590
+        with self.assertRaises(bridge.Conflict):
+            self.store.engage(ENTRY, self.ask)
+
+    def test_stream_alone_never_renews_notice(self):
+        self.streams.add('%9')
+        for _ in range(29):
+            self.now += 1
+            self.assertEqual(self.store.poll(ENTRY, self.ask)['expires'], 1030)
+        self.now += 1
+        with self.assertRaises(bridge.Conflict):
+            self.store.poll(ENTRY, self.ask)
+
+    def test_closed_stream_stops_within_grace_after_last_poll(self):
+        self.streams.add('%9')
+        self.now += 2
+        self.streams.clear()
+        for _ in range(7):
+            self.now += 1
+            self.assertEqual(self.store.poll(ENTRY, self.ask)['state'], 'pending')
+        self.now += 1
+        with self.assertRaises(bridge.Conflict):
+            self.store.poll(ENTRY, self.ask)
+
+    def test_hook_uses_renewed_deadline_and_accepts_later_answer(self):
+        for answer in (False, True):
+            with self.subTest(answer=answer):
+                self.now = 1000
+                self.store.records.clear()
+                self.streams.add('%9')
+                def request(body):
+                    if body['action'] == 'poll':
+                        if self.now == 1000:
+                            self.store.engage(ENTRY, body)
+                        if answer and self.now == 1040:
+                            self.store.answer(ENTRY, dict(body, answers=ANSWERS, requestId='later'))
+                    return getattr(self.store, body['action'])(ENTRY, body)
+                def wait(delay):
+                    self.now += delay
+                with patch.dict(os.environ, TMUX_PANE='%9'):
+                    result = bridge.hook(DATA, request, wait, clock=lambda: self.now, wall_clock=lambda: self.now)
+                self.assertEqual(self.now, 1040 if answer else 1060)
+                if answer:
+                    self.assertEqual(result['hookSpecificOutput']['permissionDecision'], 'allow')
+                else:
+                    self.assertIsNone(result)
+                self.assertIsNone(self.store.attention(ENTRY))
+
+    def test_stream_with_old_poll_passes_gate_and_keeps_wait(self):
+        with patch.dict(server.WATCHED, {'%9': self.now - 100}, clear=True), \
+                patch.dict(server.WATCHING, {'%9': 1}, clear=True), \
+                patch.object(server.time, 'monotonic', side_effect=lambda: self.now):
+            store = bridge.Pending(lambda: self.now, lambda: self.now, watching=server.ask_watching)
+            ask = store.register(ENTRY, self.registration)
+            self.assertEqual(ask['wait'], 30)
+            for _ in range(4):
+                self.now += 4
+                self.assertEqual(store.poll(ENTRY, ask)['state'], 'pending')
+            server.WATCHING['%9'] = 0
+            with self.assertRaises(bridge.Conflict):
+                store.poll(ENTRY, ask)
 
     def test_watch_window_is_per_pane_and_monotonic(self):
         self.store.records.clear()
@@ -97,7 +195,7 @@ class StoreTests(unittest.TestCase):
         def wait(delay):
             self.now += delay
         with patch.dict(os.environ, TMUX_PANE='%9'):
-            self.assertIsNone(bridge.hook(DATA, request, wait=wait, clock=lambda: self.now))
+            self.assertIsNone(bridge.hook(DATA, request, wait=wait, clock=lambda: self.now, wall_clock=lambda: self.now))
         self.assertEqual(self.now - started, 10)
         self.assertEqual(self.store.records, {})
 
@@ -147,7 +245,7 @@ class StoreTests(unittest.TestCase):
 
     def test_attention_is_complete_and_does_not_mutate_payload(self):
         shown = self.store.attention(ENTRY)
-        self.assertEqual(set(shown), {'id', 'nonce', 'questions', 'expires'})
+        self.assertEqual(set(shown), {'id', 'nonce', 'questions', 'expires', 'idle'})
         self.assertEqual(shown['questions'], QUESTIONS)
         shown['questions'][0]['question'] = 'changed'
         self.assertEqual(self.store.attention(ENTRY)['questions'], QUESTIONS)
@@ -266,9 +364,10 @@ class HookTests(unittest.TestCase):
         def request(body):
             calls.append(body)
             if body['action'] == 'register':
-                return {'id': 'ask-1', 'wait': 30}
+                return {'id': 'ask-1', 'wait': 30, 'expires': time.time() + 30}
             if body['action'] == 'poll':
-                return {'state': 'pending'} if len(calls) == 2 else {'state': 'answered', 'answers': ANSWERS}
+                return dict({'state': 'pending'} if len(calls) == 2 else
+                            {'state': 'answered', 'answers': ANSWERS}, expires=time.time() + 30)
             return {'state': 'retired'}
         wait = Mock()
         original = copy.deepcopy(DATA)
@@ -286,9 +385,14 @@ class HookTests(unittest.TestCase):
         self.assertEqual(output['updatedInput'], dict(DATA['tool_input'], answers=dict(ANSWERS, **{'Which features?': 'Search, Export'})))
 
     def test_timeout_retires_before_empty_stdout_exit_zero(self):
-        clock = Mock(side_effect=[0, 0, bridge.WAIT_SECONDS])
-        request = Mock(side_effect=[{'id': 'ask', 'wait': 30}, {'state': 'pending'}, {'state': 'retired'}])
-        self.assertIsNone(bridge.hook(DATA, request, wait=Mock(), clock=clock))
+        now = [0]
+        def wait(delay):
+            now[0] += delay
+        def response(body):
+            return {'id': 'ask', 'wait': 30, 'state': 'pending', 'expires': 30}
+        request = Mock(side_effect=response)
+        self.assertIsNone(bridge.hook(DATA, request, wait=wait, clock=lambda: now[0], wall_clock=lambda: now[0]))
+        self.assertEqual(now[0], 30)
         self.assertEqual(request.call_args.args[0]['action'], 'retire')
         with patch.object(bridge, 'hook', return_value=None), patch('sys.stdin', io.StringIO(json.dumps(DATA))), \
                 contextlib.redirect_stdout(io.StringIO()) as stdout:
@@ -297,10 +401,10 @@ class HookTests(unittest.TestCase):
 
     def test_failures_never_emit_allow_or_answers(self):
         for request in [Mock(side_effect=ConnectionRefusedError),
-                        Mock(side_effect=[{'id': 'ask', 'wait': 30}, KeyboardInterrupt, {}]),
-                        Mock(side_effect=[{'id': 'ask', 'wait': 30}, TimeoutError, {}]),
-                        Mock(side_effect=[{'id': 'ask', 'wait': 30}, {'state': 'retired'}, {}]),
-                        Mock(side_effect=[{'id': 'ask', 'wait': 30}, {'state': 'answered', 'answers': {}}, {}])]:
+                        Mock(side_effect=[{'id': 'ask', 'wait': 30, 'expires': time.time() + 30}, KeyboardInterrupt, {}]),
+                        Mock(side_effect=[{'id': 'ask', 'wait': 30, 'expires': time.time() + 30}, TimeoutError, {}]),
+                        Mock(side_effect=[{'id': 'ask', 'wait': 30, 'expires': time.time() + 30}, {'state': 'retired'}, {}]),
+                        Mock(side_effect=[{'id': 'ask', 'wait': 30, 'expires': time.time() + 30}, {'state': 'answered', 'answers': {}, 'expires': time.time() + 30}, {}])]:
             self.assertIsNone(bridge.hook(DATA, request, wait=Mock()))
         request = Mock()
         self.assertIsNone(bridge.hook(dict(DATA, agent_id='child'), request))
@@ -313,17 +417,36 @@ class HookTests(unittest.TestCase):
             self.assertEqual(request.call_count, 1)
             wait.assert_not_called()
 
-    def test_hook_uses_configured_wait_and_caps_untrusted_server_wait(self):
-        for seconds, cap in [(5, 5), (47, 47), (999, 120)]:
+    def test_hook_uses_deadline_and_caps_untrusted_server_renewals(self):
+        for seconds, cap in [(5, 5), (47, 47), (999, 590)]:
             now = [0]
             def wait(delay):
                 now[0] += delay
             def request(body):
                 if body['action'] == 'register':
-                    return {'id': 'ask', 'wait': seconds}
-                return {'state': 'pending'}
-            self.assertIsNone(bridge.hook(DATA, request, wait=wait, clock=lambda: now[0]))
+                    return {'id': 'ask', 'wait': seconds, 'expires': seconds}
+                return {'state': 'pending', 'expires': seconds}
+            self.assertIsNone(bridge.hook(DATA, request, wait=wait, clock=lambda: now[0], wall_clock=lambda: now[0]))
             self.assertEqual(now[0], cap)
+
+    def test_invalid_or_late_expiry_never_allows(self):
+        for expires in [None, True, '60', float('inf'), float('nan'), 0]:
+            request = Mock(side_effect=[{'id': 'ask', 'wait': 30, 'expires': expires}, {}])
+            self.assertIsNone(bridge.hook(DATA, request, wait=Mock(), clock=lambda: 0, wall_clock=lambda: 0))
+            self.assertEqual(request.call_args.args[0]['action'], 'retire')
+        for result in [{'state': 'pending'}, {'state': 'answered', 'answers': ANSWERS, 'expires': 0}]:
+            request = Mock(side_effect=[{'id': 'ask', 'wait': 30, 'expires': 30}, result, {}])
+            self.assertIsNone(bridge.hook(DATA, request, wait=Mock(), clock=lambda: 0, wall_clock=lambda: 0))
+            self.assertEqual(request.call_args.args[0]['action'], 'retire')
+
+    def test_poll_that_finishes_after_expiry_never_allows(self):
+        now = [0]
+        def request(body):
+            if body['action'] == 'register':
+                return {'id': 'ask', 'wait': 30, 'expires': 30}
+            now[0] = 31
+            return {'state': 'answered', 'answers': ANSWERS, 'expires': 30}
+        self.assertIsNone(bridge.hook(DATA, request, clock=lambda: now[0], wall_clock=lambda: now[0]))
 
     def test_server_down_subprocess_falls_through_fast_and_does_not_write(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -354,11 +477,11 @@ class HookTests(unittest.TestCase):
 class RouteTests(unittest.TestCase):
     setUp = StoreTests.setUp
     # Reuse the isolated record for the real server handler, never a terminal.
-    def post(self, body, path=bridge.ANSWER_PATH, **headers):
+    def post(self, body, path=bridge.ANSWER_PATH, bridge_enabled=True, **headers):
         value = handler(path, body)
         value.client_address = ('127.0.0.1', 1234)
         value.headers.update(headers)
-        with patch.object(bridge, 'enabled', return_value=True), patch.object(bridge, 'pending', self.store), \
+        with patch.object(bridge, 'enabled', return_value=bridge_enabled), patch.object(bridge, 'pending', self.store), \
                 patch.object(server, 'choose', return_value=ENTRY), patch.object(bridge, 'verify_entry', return_value='') as verify:
             value.do_POST()
         return value.send_response.call_args.args[0], json.loads(value.wfile.getvalue()), verify
@@ -368,6 +491,40 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(self.post(self.answer)[0], 200)
         self.assertEqual(self.post(dict(self.answer, requestId='tap-2'))[0], 409)
         self.assertEqual(self.post(dict(self.answer, answers={}))[0], 409)
+
+    def test_engage_route_extends_rate_limits_and_rejects_stale_requests(self):
+        status, body, _ = self.post(dict(self.ask, session='%9'), bridge.ENGAGE_PATH)
+        self.assertEqual((status, body), (200, {'expires': self.now + 60}))
+        self.now += .5
+        self.assertEqual(self.post(dict(self.ask, session='%9'), bridge.ENGAGE_PATH)[:2], (status, body))
+        self.assertEqual(self.post(dict(self.ask, session='%9', nonce='wrong'), bridge.ENGAGE_PATH)[0], 409)
+        self.assertEqual(self.post(dict(self.ask, session='%9', id='old'), bridge.ENGAGE_PATH)[0], 409)
+        self.assertEqual(self.post(dict(self.ask, session='%9'), bridge.ENGAGE_PATH, bridge_enabled=False)[0], 409)
+        self.assertEqual(self.post(self.answer)[0], 200)
+        self.assertEqual(self.post(dict(self.ask, session='%9'), bridge.ENGAGE_PATH)[0], 409)
+
+    def test_engage_route_rejects_expired_or_handed_off_record(self):
+        self.assertEqual(self.post(dict(self.answer, answers=None))[0], 200)
+        self.assertEqual(self.post(dict(self.ask, session='%9'), bridge.ENGAGE_PATH)[0], 409)
+        self.now += 30
+        self.assertEqual(self.post(dict(self.ask, session='%9'), bridge.ENGAGE_PATH)[0], 409)
+
+    def test_engage_route_cannot_revive_an_expired_pending_record(self):
+        self.streams.add('%9')
+        self.now += 30
+        self.store.records[self.ask['id']]['lease'] = self.now + 5
+        self.assertEqual(self.post(dict(self.ask, session='%9'), bridge.ENGAGE_PATH)[0], 409)
+
+    def test_engage_uses_answer_auth_origin_and_write_checks(self):
+        value = handler(bridge.ENGAGE_PATH, dict(self.ask, session='%9'))
+        value.deny.return_value = True
+        with patch.object(bridge, 'serve') as serve:
+            value.do_POST()
+        serve.assert_not_called()
+        for headers in [{'Origin': 'https://evil.test'}, {'X-Codex-Mobile': '0'}]:
+            status, _, verify = self.post(dict(self.ask, session='%9'), bridge.ENGAGE_PATH, **headers)
+            self.assertEqual(status, 403)
+            verify.assert_not_called()
 
     def test_auth_origin_and_write_header_precede_bridge(self):
         value = handler(bridge.ANSWER_PATH, self.answer)
@@ -409,10 +566,10 @@ class RouteTests(unittest.TestCase):
 
 class WatchPollTests(unittest.TestCase):
     def test_only_visible_chat_polls_count_for_the_selected_pane(self):
-        store = bridge.Pending(monotonic=lambda: 100, last_watched=server.last_watched)
+        store = bridge.Pending(monotonic=lambda: 100, watching=server.ask_watching)
         registration = dict(session_id=ENTRY['thread'], nonce='nonce-12345678901234567890',
                             tool_use_id='tool-1', tool_input=DATA['tool_input'], pid=456)
-        with patch.dict(server.WATCHED, clear=True), patch.dict(server.WATCHING, {'%9': 1}, clear=True), \
+        with patch.dict(server.WATCHED, clear=True), patch.dict(server.WATCHING, clear=True), \
                 patch.object(server.time, 'monotonic', return_value=100), \
                 patch.object(server, 'choose', return_value=ENTRY), patch.object(server, 'chat_payload', return_value={}), \
                 patch.object(bridge, 'hook_process', return_value='start'), patch.object(bridge, 'install_settings', return_value={}):
@@ -423,7 +580,7 @@ class WatchPollTests(unittest.TestCase):
                 self.assertEqual(store.register(ENTRY, registration), {'wait': 0})
             value = handler('/mobile/api/chat?session=%259&watch=1', method='GET')
             value.do_GET()
-            self.assertEqual(server.last_watched('%9'), 100)
+            self.assertTrue(server.ask_watching('%9', bridge.WATCH_WINDOW))
             self.assertEqual(store.register(ENTRY, registration)['wait'], 30)
             self.assertEqual(store.register(dict(ENTRY, id='%10'), registration), {'wait': 0})
 
@@ -441,7 +598,7 @@ class HttpRoundtripTests(unittest.TestCase):
             token = home / 'token'
             token.write_text('isolated-test-token')
             state = home / 'install.json'
-            store = bridge.Pending(last_watched=server.last_watched)
+            store = bridge.Pending(watching=server.ask_watching)
             entry = dict(ENTRY, owner_pid=os.getpid(), process_start='mocked-owner')
             class QuietHandler(server.Handler):
                 def log_message(self, *_):
@@ -458,6 +615,7 @@ class HttpRoundtripTests(unittest.TestCase):
                     patch.object(server, 'choose', return_value=entry), patch.object(bridge, 'verify_entry', return_value=''), \
                     patch.object(auth, 'TOKEN_FILE', token), patch.object(auth, 'MODE', 'token'), \
                     patch.dict(server.WATCHED, {'%9': time.monotonic()} if watched else {}, clear=True), \
+                    patch.dict(server.WATCHING, clear=True), \
                     patch.object(store, 'register', wraps=store.register) as register, \
                     patch.object(store, 'poll', wraps=store.poll) as poll:
                 worker.start()
@@ -489,9 +647,23 @@ class HttpRoundtripTests(unittest.TestCase):
                     connection = http.client.HTTPConnection('127.0.0.1', httpd.server_port, timeout=3)
                     try:
                         url = f'http://127.0.0.1:{httpd.server_port}'
+                        headers = {'Origin': url, 'X-Codex-Mobile': '1',
+                                   'Cookie': auth.COOKIE + '=' + auth.session_value()}
+                        engage = dict(session='%9', id=ask['id'], nonce=ask['nonce'])
+                        for changed, expected in [({'Cookie': ''}, 401),
+                                                  ({'Origin': 'https://evil.test'}, 403),
+                                                  ({'X-Codex-Mobile': '0'}, 403), ({}, 200)]:
+                            connection.request('POST', bridge.ENGAGE_PATH, json.dumps(engage),
+                                               headers=dict(headers, **changed))
+                            response = connection.getresponse()
+                            self.assertEqual(response.status, expected)
+                            body = json.loads(response.read())
+                            if expected == 200:
+                                self.assertEqual(set(body), {'expires'})
+                                self.assertGreater(body['expires'], ask['expires'])
+                                self.assertEqual(store.attention(entry)['expires'], body['expires'])
                         connection.request('POST', bridge.ANSWER_PATH, json.dumps(dict(session='%9', id=ask['id'], nonce=ask['nonce'],
-                            answers=ANSWERS, requestId='http-tap')), headers={'Origin': url, 'X-Codex-Mobile': '1',
-                            'Cookie': auth.COOKIE + '=' + auth.session_value()})
+                            answers=ANSWERS, requestId='http-tap')), headers=headers)
                         response = connection.getresponse()
                         self.assertEqual(response.status, 200)
                         self.assertEqual(json.loads(response.read()), {'status': 'submitted'})

@@ -181,7 +181,7 @@ def parser():
     result.add_argument('--updates', choices=('notify', 'auto', 'off'))
     result.add_argument('--release-current', type=Path, help=argparse.SUPPRESS)
     result.add_argument('--defer-restart', action='store_true', help=argparse.SUPPRESS)
-    result.add_argument('--ask-bridge-wait', type=int, help='Phone answer wait in seconds (5..120; default 30)')
+    result.add_argument('--ask-bridge-wait', type=int, help='Time for the phone to start answering, in seconds (5..120; default 30)')
     for name in ('terminal', 'voice', 'push', 'hooks', 'ask-bridge', 'resources', 'build-ui'):
         result.add_argument('--' + name, action=argparse.BooleanOptionalAction, default=None)
     return result
@@ -201,10 +201,10 @@ def claude_hook_entries(repo):
             for event in events}
 
 
-def ask_bridge_entries(repo, wait=30):
+def ask_bridge_entries(repo):
     return {'PreToolUse': {'matcher': 'AskUserQuestion', 'hooks': [{
         'type': 'command', 'command': shlex.join([sys.executable, str(repo / 'server/ask_bridge.py')]),
-        'timeout': wait + 10, 'statusMessage': f'Answer on phone · back to terminal in {wait} s'}]}}
+        'timeout': 600, 'statusMessage': 'Answer on phone · back here when the phone stops'}]}}
 
 
 def merge_claude_hooks(data, entries, remove=False):
@@ -478,7 +478,7 @@ def make_plan(args, repo=ROOT, home=None):
     settings = home / '.claude/settings.json'
     if settings.parent.is_dir():
         bridge_remove = args.uninstall or not options['ask_bridge']
-        entries = ask_bridge_entries(old_repo if args.uninstall else service_repo, options['ask_bridge_wait'])
+        entries = ask_bridge_entries(old_repo if args.uninstall else service_repo)
         old_entries = ask_bridge_entries(old_repo) if relocating else None
         try:
             data = json.loads(settings.read_text()) if settings.exists() else {}
