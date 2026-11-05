@@ -36,7 +36,7 @@ function secondsLeft(expires: number) { return Math.max(0, Math.round(expires - 
 
 // Claude's question, sent to the phone by the ask bridge before the terminal draws it. Answers go back as data, not keys.
 // "Answer in the terminal" gives the question back at once. The question stays here while the person uses the form:
-// opening it and each tap or keystroke renew the server's deadline. Only a pause sends it back by itself.
+// each tap or keystroke renews the server's deadline. Showing the form does not: only use proves a person is answering.
 export function AskForm({ ask, disabled, onAnswer, onEngage }: { ask: AskBridge; disabled: boolean; onAnswer: (answers: Answers | null) => Promise<string | null>; onEngage?: () => Promise<number | null> }) {
   const [picked, setPicked] = useState<Record<number, string[]>>({})
   const [other, setOther] = useState<Record<number, string>>({})
@@ -50,13 +50,11 @@ export function AskForm({ ask, disabled, onAnswer, onEngage }: { ask: AskBridge;
   useEffect(() => { setPicked({}); setOther({}); setFailed(''); setRenewed(0); lastEngage.current = 0 }, [ask.id, ask.nonce])
   useEffect(() => { const timer = setInterval(() => setLeft(secondsLeft(expires)), 1000); setLeft(secondsLeft(expires)); return () => clearInterval(timer) }, [expires])
   // At most one call per 5 s. A hidden page never renews: a phone left on a desk must not hold the question.
-  const engage = useCallback(() => {
+  const engage = useCallback(() => {  // at most one call per 5 s
     if (!onEngage || document.visibilityState !== 'visible' || Date.now() - lastEngage.current < 5000) return
     lastEngage.current = Date.now()
     void onEngage().then(next => { if (next) setRenewed(old => Math.max(old, next)) })
   }, [onEngage])
-  useEffect(() => { engage() }, [engage, ask.id, ask.nonce])
-  useEffect(() => { document.addEventListener('visibilitychange', engage); return () => document.removeEventListener('visibilitychange', engage) }, [engage])
   const answerOf = (at: number) => {
     const typed = other[at]?.trim()
     const labels = picked[at] ?? []
@@ -95,7 +93,7 @@ export function AskForm({ ask, disabled, onAnswer, onEngage }: { ask: AskBridge;
           <input type="text" value={other[at] ?? ''} disabled={off} maxLength={2000} onChange={event => { const value = event.target.value; setOther(old => ({ ...old, [at]: value })); if (!multi && value.trim()) setPicked(old => ({ ...old, [at]: [] })) }} /></label>
       </fieldset>
     })}
-    <p className="ask-form-time" role="timer" aria-live="off">{left === 0 ? 'The question is back in the terminal.' : onEngage ? `Stays here while you answer. Back to the terminal after ${ask.idle ?? 60} s without a tap (${left} s left).` : `The question goes back to the terminal in ${left} s.`}</p>
+    <p className="ask-form-time" role="timer" aria-live="off">{left === 0 ? 'The question is back in the terminal.' : onEngage ? renewed ? `Stays here while you answer. Back to the terminal after ${ask.idle ?? 60} s without a tap (${left} s left).` : `Back to the terminal in ${left} s unless you tap here. Each tap keeps it here ${ask.idle ?? 60} s more.` : `The question goes back to the terminal in ${left} s.`}</p>
     {failed && <p className="info-error" role="alert">{failed}</p>}
     <div className="ask-form-actions">
       <button type="submit" className="primary" disabled={off || missing !== -1}>{busy === 'send' ? 'Sending…' : ask.questions.length > 1 ? 'Send answers' : 'Send answer'}</button>
@@ -103,4 +101,19 @@ export function AskForm({ ask, disabled, onAnswer, onEngage }: { ask: AskBridge;
     </div>
     {missing !== -1 && ask.questions.length > 1 && <p className="ask-form-hint">Answer question {missing + 1} to send.</p>}
   </form>
+}
+
+// Tether's terminal view hides the form, but the terminal itself shows only a spinner while the bridge waits.
+// This bar says where the question is and gives it back to the terminal in one tap.
+export function AskBar({ agent, disabled, onOpen, onTerminal }: { agent: string; disabled: boolean; onOpen: () => void; onTerminal: () => Promise<string | null> }) {
+  const [busy, setBusy] = useState(false)
+  const [failed, setFailed] = useState('')
+  return <div className="ask-bar" role="status">
+    <p>{agent} asks a question. It is waiting in the chat view, not in the terminal.</p>
+    <div className="ask-form-actions">
+      <button type="button" className="primary" onClick={onOpen}>Answer in chat</button>
+      <button type="button" disabled={disabled || busy} onClick={() => { setBusy(true); setFailed(''); void onTerminal().then(error => setFailed(error ?? '')).finally(() => setBusy(false)) }}>{busy ? 'Sending…' : 'Show in terminal'}</button>
+    </div>
+    {failed && <p className="info-error" role="alert">{failed}</p>}
+  </div>
 }

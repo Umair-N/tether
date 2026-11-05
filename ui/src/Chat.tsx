@@ -26,6 +26,7 @@ import { State } from './NewSession'
 import { Linked, Message, convertMessage } from './Messages'
 import { Composer } from './Composer'
 import { ChoiceDock, HeadsUp, taskLabel, SessionInfo, LiveSheet, SearchSheet } from './Dock'
+import { AskBar } from './ChoiceExtras'
 import { LiveTerminal } from './Terminal'
 import { WORKSPACE_QUERY } from './workspace'
 import { useHost } from './host'
@@ -677,6 +678,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
       {slot?.onClose && <button type="button" className="icon-button slot-button" aria-label="Close this slot (Alt+X)" title="Close this slot (Alt+X)" onClick={slot.onClose}><X size={16} /></button>}
     </header>
     {session && session.panes.length > 1 && <PaneTabs ref={tabs} session={session} pane={pane} onOpenPane={onOpenPane} onPaneActions={onPaneActions} onSplit={onSplit} onReorder={onReorder} />}
+    {term && data?.attention?.askBridge && <AskBar agent={agentNames[activePane.agent]} disabled={!writable || acting} onOpen={() => setTerm(false)} onTerminal={() => askAnswer(data.attention!.askBridge!, null)} />}
     {term ? <LiveTerminal paneId={activePane.id} onChat={() => setTerm(false)} /> : <>
     {(offline || (error && data)) && <div className="reconnect-banner" role="status"><WifiOff size={15} /><span>{offline ? 'You are offline. Tether reconnects when the network is back.' : `Cannot reach ${host}. Reconnecting…`}</span><button type="button" onClick={() => void refresh()}>Retry now</button></div>}
     <div className="chat-pager"><div className="chat-page" ref={page}>
