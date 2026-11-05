@@ -13,6 +13,7 @@ import type { Prefs } from './prefs'
 import { DRAG_PANE, DRAG_SESSION } from './workspace'
 import { shareUsage } from './usage'
 import { useHost } from './host'
+import { HostMenu } from './HostMenu'
 import { UpdateBanner } from './UpdateBanner'
 import { Elapsed } from './Notices'
 import { ShellList } from './ShellList'
@@ -363,7 +364,7 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
       <RunningNow sessions={sessions} selected={selected} onOpen={onOpen} />
       <UpdateBanner />
       <Usage api={api} />
-      <div className="footer-row"><span className="state-dot" aria-hidden="true" /><span>{host}</span><button className="icon-button" aria-label="Settings" onClick={onSettings}><Settings size={18} /></button></div>
+      <div className="footer-row"><HostMenu host={host} hosts={prefs.hosts ?? []} onChange={hosts => update(() => ({ hosts }))} /><button className="icon-button" aria-label="Settings" onClick={onSettings}><Settings size={18} /></button></div>
     </footer>
   </div>
 }
