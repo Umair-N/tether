@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import sys
 import time
 
@@ -23,7 +24,16 @@ def capture(data):
 
 
 if __name__ == '__main__':
+    raw = sys.stdin.buffer.read()
     try:
-        capture(json.load(sys.stdin))
-    except (OSError, ValueError, TypeError):
+        capture(json.loads(raw))
+    except Exception:
         pass
+    if len(sys.argv) == 3 and sys.argv[1] == '--then':
+        try:
+            result = subprocess.run(sys.argv[2], shell=True, input=raw,
+                                    stdout=subprocess.PIPE, timeout=10)
+        except (subprocess.TimeoutExpired, OSError):
+            sys.exit(1)
+        sys.stdout.buffer.write(result.stdout)
+        sys.exit(result.returncode)
