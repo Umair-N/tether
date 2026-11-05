@@ -252,7 +252,8 @@ def bill(fetch=_fetch_json, now=None, run=subprocess.run):
     except _NoToken as failure:
         answer = {'state': 'error', 'hint': str(failure)}
     except urllib.error.HTTPError as failure:
-        hint = ('Check the signed-in account can read costs on the scope.' if auth == 'az'
+        hint = ('Azure limits cost queries. Tether tries again in 5 minutes.' if failure.code == 429
+                else 'Check the signed-in account can read costs on the scope.' if auth == 'az'
                 else 'Check the service principal has Cost Management Reader on the scope.')
         answer = {'state': 'error', 'hint': f'Azure answered {failure.code}. {hint}'}
     except (OSError, ValueError, KeyError, IndexError, TypeError):
