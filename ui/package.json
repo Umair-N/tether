@@ -16,6 +16,7 @@
     "@pipecat-ai/small-webrtc-transport": "1.11.0",
     "@ricky0123/vad-web": "^0.0.31",
     "lucide-react": "^1.66.0",
+    "pdfjs-dist": "6.4.299",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-markdown": "^10.1.0",

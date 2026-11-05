@@ -19,6 +19,10 @@
 .sh-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 16px 96px; }
 .sh-day { position: sticky; top: 0; z-index: 2; padding: 10px 0 8px; background: var(--surface); font-size: 13px; font-weight: 650; color: var(--muted); }
 .sh-note { margin: 4px 0; color: var(--muted); font-size: 13px; }
+.sh-resume { display: flex; align-items: center; gap: 10px; margin: 4px 0 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--bubble); color: var(--accent); }
+.sh-resume > span { display: grid; flex: 1; min-width: 0; color: var(--text); font-size: 13px; }
+.sh-resume b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.sh-resume small { color: var(--muted); font-size: 12px; }
 .sh-empty { padding: 48px 16px; text-align: center; color: var(--muted); }
 .sh-more { height: 1px; }
 .sh-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
@@ -83,6 +87,7 @@
 .sh-up-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sh-up-meta { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .sh-up-meta.error { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--error); }
+.sh-uploads header > span.sh-up-wait { color: var(--error); }
 .sh-uploads li.sh-up-more { display: block; color: var(--muted); font-size: 12px; }
 .sh-ok { flex: none; color: var(--accent); }
 .sh-warn { flex: none; color: var(--error); }
@@ -121,6 +126,11 @@
 .sh-view-image img { display: block; max-width: 100%; max-height: 62vh; margin: 0 auto; }
 .sh-view-video { display: block; width: 100%; max-height: 62vh; background: #000; }
 .sh-view-pdf { display: block; width: 100%; height: 62vh; border: 0; background: #fff; }
+.sh-view:has(.sh-pdf) { display: block; }
+.sh-pdf { display: flex; flex-direction: column; align-items: center; gap: 12px; max-height: 62vh; padding: 12px; overflow-y: auto; overscroll-behavior: contain; }
+.sh-pdf:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.sh-pdf-page { display: block; width: 100%; height: auto; background: #fff; border-radius: 2px; box-shadow: 0 1px 3px rgb(0 0 0 / .18); }
+.sh-pdf-count { margin: 0; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .sh-view-text { width: 100%; max-height: 62vh; margin: 0; padding: 14px; overflow: auto; align-self: stretch; background: #fbfaf6; color: #3b3a36; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .sh-view-none { display: grid; justify-items: center; gap: 8px; padding: 32px 16px; color: var(--muted); text-align: center; }
 .sh-view-none audio { width: 100%; max-width: 320px; }

@@ -95,6 +95,10 @@ export async function inspect(file: File): Promise<{ meta: UploadMeta; thumb?: B
       await once(video, 'seeked')
       return { meta, thumb: await draw(video, video.videoWidth, video.videoHeight) ?? undefined }
     }
+    if (file.type === 'application/pdf' || /\.pdf$/i.test(file.name)) {
+      const { pdfThumb } = await import('./sharePdf')
+      return { meta: {}, thumb: await pdfThumb(url) ?? undefined }
+    }
     return { meta: {} }
   } catch {
     return { meta: {} }
@@ -117,4 +121,105 @@ function draw(source: CanvasImageSource, width: number, height: number) {
   canvas.width = Math.max(1, Math.round(width * scale)); canvas.height = Math.max(1, Math.round(height * scale))
   canvas.getContext('2d')?.drawImage(source, 0, 0, canvas.width, canvas.height)
   return new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.8))
+}
+
+// Resumable uploads: POST share/uploads, then 8 MiB chunks to share/uploads/<id>?offset=N (server/share_api.py).
+export interface ShareUpload { id: string; name: string; size: number; offset: number; mime: string; created: string; expires: number }
+export const CHUNK = 8 * 1024 * 1024
+export const listUploads = (signal?: AbortSignal) => request<{ uploads: ShareUpload[] }>('share/uploads', undefined, signal).then(r => r.uploads)
+export const cancelUpload = (id: string) => request<{ ok: true }>(`share/uploads/${encodeURIComponent(id)}/cancel`, {})
+export type Wait = 'offline' | 'retrying' | null
+
+const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
+  const t = setTimeout(resolve, ms)
+  signal?.addEventListener('abort', () => { clearTimeout(t); reject(new DOMException('Upload stopped.', 'AbortError')) }, { once: true })
+})
+const online = (signal?: AbortSignal) => navigator.onLine ? Promise.resolve() : new Promise<void>((resolve, reject) => {
+  window.addEventListener('online', () => resolve(), { once: true })
+  signal?.addEventListener('abort', () => reject(new DOMException('Upload stopped.', 'AbortError')), { once: true })
+})
+
+function sendChunk(id: string, offset: number, body: Blob, onProgress: (sent: number) => void, signal?: AbortSignal) {
+  return new Promise<{ status: number; data: { upload?: ShareUpload; file?: ShareFile; offset?: number; error?: string } }>((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `${BASE}uploads/${encodeURIComponent(id)}?offset=${offset}`)
+    write(xhr)
+    xhr.upload.onprogress = event => onProgress(event.loaded)
+    const done = () => { let data = {}; try { data = JSON.parse(xhr.responseText) } catch { /* not JSON */ } resolve({ status: xhr.status, data }) }
+    xhr.onload = done; xhr.onerror = done; xhr.ontimeout = done
+    xhr.onabort = () => reject(new DOMException('Upload stopped.', 'AbortError'))
+    signal?.addEventListener('abort', () => xhr.abort(), { once: true })
+    xhr.send(body)
+  })
+}
+
+/**
+ * Sends a file in chunks and survives dropped connections and server restarts: it waits for the network, asks the
+ * server for its offset, and goes on from there. Pass `resume` to continue a session from an earlier page load.
+ * Returns null when the server has no resumable route (an older server), so the caller can use uploadShare.
+ */
+export async function uploadResumable(file: File, meta: UploadMeta, onProgress: (sent: number) => void, onWait: (wait: Wait) => void,
+  signal?: AbortSignal, resume?: ShareUpload): Promise<ShareFile | null> {
+  let session = resume
+  if (!session) {
+    try {
+      session = (await request<{ upload: ShareUpload }>('share/uploads', { name: file.name, size: file.size, mime: file.type || 'application/octet-stream', ...meta }, signal)).upload
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) return null
+      throw e
+    }
+  }
+  let offset = session.offset, tries = 0
+  onProgress(offset)
+  while (true) {
+    await online(signal)
+    const end = Math.min(file.size, offset + CHUNK)
+    const { status, data } = await sendChunk(session.id, offset, file.slice(offset, end), sent => onProgress(offset + sent), signal)
+    if (status === 200 && data.file) { onWait(null); return data.file }
+    if (status === 200 && data.upload) { offset = data.upload.offset; tries = 0; onWait(null); onProgress(offset); continue }
+    if (status === 409 && typeof data.offset === 'number') { offset = data.offset; onProgress(offset); continue }
+    // Lost connection, a restart (502/503) or a busy disk: wait and ask again. Anything else is final.
+    if (status === 0 || status >= 500 || status === 409) {
+      onWait(navigator.onLine ? 'retrying' : 'offline')
+      await sleep(Math.min(30_000, 1000 * 2 ** Math.min(tries++, 5)), signal)
+      if (navigator.onLine) {
+        const fresh = await request<{ upload: ShareUpload }>(`share/uploads/${encodeURIComponent(session.id)}`, undefined, signal).catch((e: unknown) => e)
+        if (signal?.aborted) throw new DOMException('Upload stopped.', 'AbortError')
+        if (fresh instanceof ApiError && fresh.status === 404) throw new ApiError(404, 'The server lost this upload. Add the file again.')
+        if (fresh && typeof fresh === 'object' && 'upload' in fresh) { offset = (fresh as { upload: ShareUpload }).upload.offset; onProgress(offset) }
+      }
+      continue
+    }
+    throw new ApiError(status, data.error || `Upload failed (${status}).`)
+  }
+}
+
+/** One thumbnail at a time for files that have none (files an agent added). Failed ids are not tried again. */
+const tried = new Set<string>()
+let chain: Promise<unknown> = Promise.resolve()
+export function backfillThumb(file: ShareFile): Promise<ShareFile | null> {
+  if (file.has_thumb || tried.has(file.id)) return Promise.resolve(null)
+  if (!(file.kind === 'pdf' || file.kind === 'video' || (file.kind === 'image' && file.size > 400_000))) return Promise.resolve(null)
+  tried.add(file.id)
+  const job = chain.then(async () => {
+    const url = rawUrl(file.id)
+    let blob: Blob | null = null
+    if (file.kind === 'pdf') blob = await (await import('./sharePdf')).pdfThumb(url)
+    else if (file.kind === 'image') {
+      const bitmap = await fetch(url, { credentials: 'same-origin' }).then(r => r.ok ? r.blob() : null).then(b => b && createImageBitmap(b)).catch(() => null)
+      if (bitmap) { blob = await draw(bitmap, bitmap.width, bitmap.height); bitmap.close() }
+    } else {
+      const video = document.createElement('video')
+      video.preload = 'metadata'; video.muted = true; video.src = url
+      try {
+        await once(video, 'loadedmetadata')
+        video.currentTime = Math.min(1, (video.duration || 0) / 3)
+        await once(video, 'seeked')
+        if (video.videoWidth) blob = await draw(video, video.videoWidth, video.videoHeight)
+      } catch { /* the browser cannot play this video */ } finally { video.removeAttribute('src'); video.load() }
+    }
+    return blob ? await putThumb(file.id, blob).catch(() => null) : null
+  })
+  chain = job.catch(() => null)
+  return job.catch(() => null)
 }

@@ -1,10 +1,12 @@
 // Share: your own file store in Tether. Library grid by day, a preview pane, an upload queue and a "From agents" strip.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, Bot, Check, ChevronsRight, Download, ExternalLink, File, FileText, Film, Image as ImageIcon, MessageSquarePlus, Music, Pencil, Plus, RotateCcw, Search, Trash2, TriangleAlert, Upload, X } from 'lucide-react'
 import { errorText } from './api'
 import { ImageViewer, type Media } from './ImageViewer'
-import { inspect, listShare, putThumb, rawUrl, renameShare, restoreShare, shareToChat, textPreview, thumbUrl, trashShare, uploadShare, type ShareFile, type ShareFilter, type ShareKind, type ShareUsage } from './shareApi'
+import { backfillThumb, cancelUpload, CHUNK, inspect, listShare, listUploads, putThumb, rawUrl, renameShare, restoreShare, shareToChat, textPreview, thumbUrl, trashShare, uploadResumable, uploadShare, type ShareFile, type ShareFilter, type ShareKind, type ShareUpload, type ShareUsage, type Wait } from './shareApi'
 import './Share.css'
+
+const PdfView = lazy(() => import('./SharePdfView').then(m => ({ default: m.PdfView })))
 
 const DAY = 864e5
 const time = (file: ShareFile) => Date.parse(file.created)
@@ -27,7 +29,7 @@ const VIEWS: { id: View; label: string }[] = [
 ]
 const PARALLEL = 2
 
-type Upload = { key: string; file: globalThis.File; sent: number; state: 'waiting' | 'sending' | 'done' | 'failed'; error?: string }
+type Upload = { key: string; file: globalThis.File; sent: number; state: 'waiting' | 'sending' | 'done' | 'failed'; error?: string; wait?: Wait; resume?: ShareUpload }
 type Toast = { text: string; undo?: () => void }
 
 /** The first lines of a text file, read with a Range request so a tile costs about 2 KB. */
@@ -51,15 +53,34 @@ function usePage(file: ShareFile, on: boolean) {
   return on ? text : null
 }
 
-function Thumb({ file }: { file: ShareFile }) {
+/** Makes a thumbnail in the browser when the tile comes near view and the file has none (files an agent added). */
+function useBackfill(file: ShareFile, update?: (file: ShareFile) => void) {
+  const ref = useRef<HTMLSpanElement>(null)
+  useEffect(() => {
+    const target = ref.current
+    if (!update || file.has_thumb || !target) return
+    let live = true
+    const observer = new IntersectionObserver(entries => {
+      if (!entries[0].isIntersecting) return
+      observer.disconnect()
+      void backfillThumb(file).then(changed => { if (live && changed) update(changed) })
+    }, { rootMargin: '200px' })
+    observer.observe(target)
+    return () => { live = false; observer.disconnect() }
+  }, [file, update])
+  return ref
+}
+
+function Thumb({ file, update }: { file: ShareFile; update?: (file: ShareFile) => void }) {
   const Icon = KIND_ICON[file.kind]
   const page = usePage(file, file.kind === 'text')
   const [broken, setBroken] = useState(false)
+  const ref = useBackfill(file, update)
   const src = !broken && (file.has_thumb ? thumbUrl(file) : file.kind === 'image' ? rawUrl(file.id) : '')
-  if (src) return <span className="sh-thumb"><img src={src} alt="" loading="lazy" decoding="async" onError={() => setBroken(true)} />
+  if (src) return <span ref={ref} className="sh-thumb"><img src={src} alt="" loading="lazy" decoding="async" onError={() => setBroken(true)} />
     {file.kind === 'video' && file.duration != null && <span className="sh-length">{clock(file.duration)}</span>}</span>
-  if (page) return <span className="sh-thumb sh-page"><span className="sh-page-text">{page}</span>{ext(file.name) && <b className={`sh-ext k-${file.kind}`}>{ext(file.name)}</b>}</span>
-  return <span className={`sh-thumb sh-doc k-${file.kind}`}><Icon size={22} strokeWidth={1.5} aria-hidden="true" />{ext(file.name) && <b>{ext(file.name)}</b>}</span>
+  if (page) return <span ref={ref} className="sh-thumb sh-page"><span className="sh-page-text">{page}</span>{ext(file.name) && <b className={`sh-ext k-${file.kind}`}>{ext(file.name)}</b>}</span>
+  return <span ref={ref} className={`sh-thumb sh-doc k-${file.kind}`}><Icon size={22} strokeWidth={1.5} aria-hidden="true" />{ext(file.name) && <b>{ext(file.name)}</b>}</span>
 }
 
 function Ring({ value, size: px = 22 }: { value: number; size?: number }) {
@@ -69,8 +90,11 @@ function Ring({ value, size: px = 22 }: { value: number; size?: number }) {
   </svg>
 }
 
+const WAIT_TEXT: Record<NonNullable<Wait>, string> = { offline: 'Waiting for a connection', retrying: 'Connection lost. Trying again…' }
+
 function Uploads({ list, close }: { list: Upload[]; close: () => void }) {
   const left = list.filter(u => u.state === 'waiting' || u.state === 'sending')
+  const wait = left.find(u => u.wait)?.wait
   const failed = list.filter(u => u.state === 'failed')
   const total = list.reduce((sum, u) => sum + u.file.size, 0), sent = list.reduce((sum, u) => sum + (u.state === 'done' ? u.file.size : u.sent), 0)
   const n = (count: number) => `${count} ${count === 1 ? 'file' : 'files'}`
@@ -79,12 +103,12 @@ function Uploads({ list, close }: { list: Upload[]; close: () => void }) {
     <header aria-live="polite">
       {left.length ? <Ring value={total ? sent / total : 0} /> : failed.length ? <TriangleAlert size={18} className="sh-warn" aria-hidden="true" /> : <Check size={18} className="sh-ok" aria-hidden="true" />}
       <b>{left.length ? `Adding ${n(list.length)}` : failed.length ? `${n(failed.length)} not added` : `Added ${n(list.length)}`}</b>
-      {left.length > 0 ? <span>{size(sent)} of {size(total)}</span>
+      {left.length > 0 ? <span className={wait ? 'sh-up-wait' : undefined}>{wait ? WAIT_TEXT[wait] : `${size(sent)} of ${size(total)}`}</span>
         : failed.length > 0 && <button type="button" className="icon-button sm" onClick={close} aria-label="Close uploads"><X size={15} /></button>}
     </header>
     {shown.length > 0 && <ul>{shown.slice(0, 3).map(u => <li key={u.key}>
       <span className="sh-up-name">{u.file.name}</span>
-      <span className={u.state === 'failed' ? 'sh-up-meta error' : 'sh-up-meta'}>{u.state === 'failed' ? u.error : u.state === 'waiting' ? 'Waiting' : `${size(u.sent)} of ${size(u.file.size)}`}</span>
+      <span className={u.state === 'failed' ? 'sh-up-meta error' : 'sh-up-meta'}>{u.state === 'failed' ? u.error : u.state === 'waiting' ? 'Waiting' : u.wait ? `Paused at ${size(u.sent)} of ${size(u.file.size)}` : `${size(u.sent)} of ${size(u.file.size)}`}</span>
       {u.state === 'failed' ? <TriangleAlert size={15} className="sh-warn" aria-hidden="true" /> : <Ring value={u.file.size ? u.sent / u.file.size : 0} size={18} />}
     </li>)}{shown.length > 3 && <li className="sh-up-more">and {shown.length - 3} more</li>}</ul>}
   </aside>
@@ -104,7 +128,7 @@ function Preview({ file, view }: { file: ShareFile; view: (file: ShareFile) => v
   if (file.kind === 'audio') return <div className="sh-view-none"><Music size={40} strokeWidth={1.4} aria-hidden="true" /><audio controls preload="metadata" src={rawUrl(file.id)} /></div>
   if (file.kind === 'text') return text == null ? <div className="sh-view-none">Loading…</div>
     : <pre className="sh-view-text" tabIndex={0}>{text || 'This file is empty.'}</pre>
-  if (file.kind === 'pdf') return <iframe className="sh-view-pdf" src={rawUrl(file.id)} title={`Preview of ${file.name}`} />
+  if (file.kind === 'pdf') return <Suspense fallback={<div className="sh-view-none">Loading…</div>}><PdfView url={rawUrl(file.id)} name={file.name} /></Suspense>
   return <div className="sh-view-none"><File size={40} strokeWidth={1.4} aria-hidden="true" />{ext(file.name) && <b>{ext(file.name)}</b>}<span>No preview. Download it to open.</span></div>
 }
 
@@ -174,6 +198,7 @@ export function Share({ wide, onAddToMessage }: { wide: boolean; onAddToMessage?
   const [viewing, setViewing] = useState<Media | null>(null)
   const [toast, setToast] = useState<Toast | null>(null)
   const [dragging, setDragging] = useState(false)
+  const [unfinished, setUnfinished] = useState<ShareUpload[]>([])
   const input = useRef<HTMLInputElement>(null)
   const more = useRef<HTMLDivElement>(null)
   const loadingMore = useRef(false)
@@ -200,6 +225,11 @@ export function Share({ wide, onAddToMessage }: { wide: boolean; onAddToMessage?
   }, [load])
   useEffect(() => { const stop = new AbortController(); void loadAgents(stop.signal); return () => stop.abort() }, [loadAgents])
   const refresh = () => { void load(); void loadAgents() }
+  useEffect(() => { const stop = new AbortController(); listUploads(stop.signal).then(setUnfinished, () => {}); return () => stop.abort() }, [])
+  const update = useCallback((changed: ShareFile) => {
+    setFiles(list => list.map(f => f.id === changed.id ? changed : f))
+    setAgentFiles(list => list.map(f => f.id === changed.id ? changed : f))
+  }, [])
 
   // Load the next page when the end of the grid scrolls into view.
   useEffect(() => {
@@ -230,12 +260,13 @@ export function Share({ wide, onAddToMessage }: { wide: boolean; onAddToMessage?
       void (async () => {
         try {
           const { meta, thumb } = await inspect(u.file)
-          let file = await uploadShare(u.file, meta, sent => set({ sent }))
+          const chunked = u.resume || u.file.size > CHUNK ? await uploadResumable(u.file, meta, sent => set({ sent }), wait => set({ wait }), undefined, u.resume) : null
+          let file = chunked ?? await uploadShare(u.file, meta, sent => set({ sent }))
           if (thumb) file = await putThumb(file.id, thumb).catch(() => file)
           setFiles(list => [file, ...list.filter(f => f.id !== file.id)])
           setUsage(value => value && { ...value, used: value.used + file.size, count: value.count + 1 })
-          set({ state: 'done', sent: u.file.size })
-        } catch (e) { set({ state: 'failed', error: errorText(e) }) }
+          set({ state: 'done', sent: u.file.size, wait: null })
+        } catch (e) { set({ state: 'failed', error: errorText(e), wait: null }) }
       })()
     }
   }, [uploads])
@@ -249,9 +280,16 @@ export function Share({ wide, onAddToMessage }: { wide: boolean; onAddToMessage?
   const add = (list: FileList | globalThis.File[] | null) => {
     if (!list?.length) return
     if (trash) setView('all')
-    const stamp = Date.now()
-    setUploads(current => [...current.filter(u => u.state !== 'done'), ...[...list].map((file, i) => ({ key: `${stamp}-${i}`, file, sent: 0, state: 'waiting' as const }))])
+    const stamp = Date.now(), open = [...unfinished]
+    const next = [...list].map((file, i) => {
+      const at = open.findIndex(s => s.name === file.name && s.size === file.size)
+      const resume = at >= 0 ? open.splice(at, 1)[0] : undefined
+      return { key: `${stamp}-${i}`, file, sent: resume?.offset ?? 0, state: 'waiting' as const, resume }
+    })
+    setUnfinished(open)
+    setUploads(current => [...current.filter(u => u.state !== 'done'), ...next])
   }
+  const discard = () => { const list = unfinished; setUnfinished([]); for (const s of list) void cancelUpload(s.id).catch(() => {}) }
 
   const byId = (ids: string[]) => ids.map(id => files.find(f => f.id === id)).filter((f): f is ShareFile => !!f)
   const forget = (ids: string[]) => {
@@ -333,15 +371,22 @@ export function Share({ wide, onAddToMessage }: { wide: boolean; onAddToMessage?
             <span className="sh-agent-icon"><Bot size={16} aria-hidden="true" /></span>
             <span className="sh-agent-text"><span><b>{agentName(list[0])}</b> sent {list[0].name}{list.length > 1 ? ` and ${list.length - 1} more` : ''}</span>
               <small>{ago(time(list[0]))}</small></span>
-            <span className="sh-agent-thumbs">{list.slice(0, 3).map(f => <Thumb key={f.id} file={f} />)}</span>
+            <span className="sh-agent-thumbs">{list.slice(0, 3).map(f => <Thumb key={f.id} file={f} update={update} />)}</span>
           </button>)}
         </section>}
+        {!trash && unfinished.length > 0 && <div className="sh-resume" role="status">
+          <Upload size={16} aria-hidden="true" />
+          <span><b>{unfinished.length === 1 ? `${unfinished[0].name} did not finish` : `${unfinished.length} uploads did not finish`}</b>
+            <small>{unfinished.length === 1 ? `${size(unfinished[0].offset)} of ${size(unfinished[0].size)} sent. Add the same file to go on.` : 'Add the same files to go on from where they stopped.'}</small></span>
+          <button type="button" className="secondary sm" onClick={() => input.current?.click()}>Resume</button>
+          <button type="button" className="ghost sm" onClick={discard}>Discard</button>
+        </div>}
         {trash && files.length > 0 && <p className="sh-note">Files in Trash are deleted for good after 30 days.</p>}
         {groups.map(([label, list]) => <section key={label}>
           <h2 className="sh-day">{label}</h2>
           <ul className="sh-grid">{list.map(file => <li key={file.id} className={[picked.includes(file.id) && 'picked', file.id === openId && 'open'].filter(Boolean).join(' ') || undefined}>
             <button type="button" className="sh-tile" onClick={() => selecting ? toggle(file.id) : open(file)} aria-label={`${file.name}, ${KIND_LABEL[file.kind]}, ${size(file.size)}`}>
-              <Thumb file={file} />{!(file.has_thumb || file.kind === 'image') && <span className="sh-tile-name">{file.name}</span>}
+              <Thumb file={file} update={update} />{!(file.has_thumb || file.kind === 'image') && <span className="sh-tile-name">{file.name}</span>}
             </button>
             <button type="button" className="sh-check" aria-label={`Select ${file.name}`} aria-pressed={picked.includes(file.id)} onClick={() => toggle(file.id)}><span><Check size={14} strokeWidth={3} /></span></button>
           </li>)}</ul>
