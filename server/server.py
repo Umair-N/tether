@@ -1761,7 +1761,8 @@ if __name__ == '__main__':
     host = os.environ.get('MOBILE_TMUX_HOST', '127.0.0.1')
     port = int(os.environ.get('MOBILE_TMUX_PORT', '7683'))
     auth.check_startup(host)
-    browser_cdp.start(notify)
+    browser_cdp.start(notify, agent_finder=lambda pane: next(
+        (entry['agent'] for entry in sessions() if entry['id'] == pane), 'agent'))
     if auth.MODE == 'token':
         print('Mobile Tmux listening on http://%s:%d/mobile/ -- sign in with the token in %s' % (host, port, auth.TOKEN_FILE), flush=True)
         auth.token()

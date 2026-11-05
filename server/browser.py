@@ -303,6 +303,7 @@ class Tab:
         self.owner = owner
         self.controller = 'agent' if mode == 'agent' else 'user'
         self.agent_client = None
+        self.grant = None
         self.url, self.title = 'about:blank', ''
         self.preset = 'desktop'
         self.size = DESKTOP
@@ -322,6 +323,8 @@ class Tab:
         if self.mode == 'agent':
             row['owner'] = self.owner or {'pane': None}
             row['controller'] = self.controller
+            if self.grant:
+                row['grant'] = self.grant
         return row
 
 
@@ -498,10 +501,13 @@ class Browser:
 
     def state(self):
         with self.lock:
-            return {'running': self.running(), 'version': self.version,
+            state = {'running': self.running(), 'version': self.version,
                     'tabs': [self.tabs[target].row() for target in self.order if target in self.tabs],
                     'presets': [{'id': key, 'label': value['label'], 'width': value['width'], 'height': value['height'],
                                  'touch': value['mobile']} for key, value in PRESETS.items()]}
+            if self.signed:
+                state.update(self.agent_proxy.state() if self.agent_proxy else {'requests': [], 'grants': []})
+            return state
 
     def list_tabs(self):
         self.ensure()

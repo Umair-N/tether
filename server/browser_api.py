@@ -12,7 +12,8 @@ PREFIX = '/mobile/api/browser/'
 FRAME_INTERVAL = 1 / 15  # at most 15 frames a second per viewer
 STREAM_LIFETIME = 600
 KEEPALIVE = 15
-POST_NAMES = {'new', 'close', 'navigate', 'history', 'input', 'device', 'agents', 'agents/setup', 'ask/dismiss'}
+POST_NAMES = {'new', 'close', 'navigate', 'history', 'input', 'device', 'agents', 'agents/setup', 'ask/dismiss',
+              'signed/allow', 'signed/deny', 'signed/end'}
 
 
 def handles(path):
@@ -24,10 +25,14 @@ def get(handler, the_browser=None, the_proxy=None, the_setup=None, signed_browse
     query = parse_qs(parts.query)
     name = parts.path[len(PREFIX):]
     browser_id = query.get('browser', ['test'])[0]
+    if name == 'signed/access':
+        browser_id = 'signed'
     try:
         the_browser = _select(browser_id, the_browser, signed_browser)
         _user_only(browser_id, name)
-        if name == 'agents':
+        if name == 'signed/access':
+            handler.respond(200, _tag(_signed_access(the_browser, the_proxy).state(), browser_id))
+        elif name == 'agents':
             handler.respond(200, _agent_state(_proxy(the_proxy), the_setup))
         elif name == 'tabs':
             state = the_browser.list_tabs()
@@ -57,12 +62,24 @@ def post(handler, the_browser=None, the_proxy=None, the_setup=None, signed_brows
         if not isinstance(body, dict):
             raise ValueError('Invalid request.')
         browser_id = body.get('browser', browser_id)
+        if name.startswith('signed/'):
+            browser_id = 'signed'
         the_browser = _select(browser_id, the_browser, signed_browser)
         if name not in POST_NAMES:
             handler.respond(404, _tag({'error': 'Not found'}, browser_id))
             return
         _user_only(browser_id, name)
         tab = body.get('tab')
+        if name.startswith('signed/'):
+            access = _signed_access(the_browser, the_proxy)
+            if name == 'signed/allow':
+                result = access.allow(body.get('id'), body.get('minutes'))
+            elif name == 'signed/deny':
+                result = access.deny(body.get('id'))
+            else:
+                result = access.end(body.get('id'))
+            handler.respond(200, _tag(result, browser_id))
+            return
         if name not in ('new', 'agents', 'agents/setup', 'ask/dismiss') and not isinstance(tab, str):
             raise ValueError('Choose a tab.')
         if name == 'agents':
@@ -138,6 +155,16 @@ def _proxy(the_proxy):
     if proxy is None:
         raise browser.BrowserError('Agent browser is unavailable.')
     return proxy
+
+
+def _signed_access(the_browser, the_proxy=None):
+    access = the_browser.agent_proxy
+    if access is None:
+        proxy = the_proxy or browser_cdp.PROXY
+        access = proxy.signed_access if proxy else None
+    if access is None or access.browser is not the_browser:
+        raise browser.BrowserError('Signed browser access is unavailable.')
+    return access
 
 
 def _agent_state(proxy, the_setup=None, state=None):

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Agent access to Tether's shared browser, using only the standard library."""
+import argparse
 import json
 import os
 import re
@@ -18,8 +19,10 @@ Tether runs one shared browser that the user can watch from desktop or phone.
 - Playwright MCP already uses it. Do not pass --isolated or launch another browser.
 - In scripts, connect instead of launching: Node `chromium.connectOverCDP(process.env.TETHER_CDP_URL)`, Python `p.chromium.connect_over_cdp(os.environ["TETHER_CDP_URL"])`. Use `browser.contexts[0]`. You get a private context; the user's logins are not in it.
 - Limit: 3 tabs. Close tabs you no longer need.
+- Tether also has a signed-in browser. Agents use it only through ask-signed, after Mak allows access.
+- Ask for signed-in access only for a task Mak asked for.
 - If you need the user in the browser (2FA code, captcha, a password you must not see), run `{command}`, then wait for the user to reply in chat.
-- Sign-ins: this browser is headless and agent-controlled, so Google and most other login pages refuse it ("This browser or app may not be secure"). Do not ask the user to sign in here. Tell the user which account the task needs and stop; they sign in in their own browser.'''
+- Sign-ins: the test browser is headless. Ask for signed-in access when the task needs Mak's account; Mak signs in through the panel.'''
 
 
 def endpoint(cdp, action):
@@ -34,6 +37,8 @@ def endpoint(cdp, action):
 
 def main(args=None):
     args = sys.argv[1:] if args is None else args
+    if args and args[0] == 'ask-signed':
+        return ask_signed(args[1:])
     if args == ['hook']:
         try:
             sys.stdin.read()
@@ -85,6 +90,46 @@ def main(args=None):
         reason = f'HTTP {exc.code}' if isinstance(exc, HTTPError) else 'shared browser request failed'
         print(('off: ' if status else 'Tether browser error: ') + reason)
         return 1
+
+
+def ask_signed(args):
+    class Parser(argparse.ArgumentParser):
+        def error(self, message):
+            raise ValueError(message)
+    try:
+        parser = Parser(add_help=False)
+        parser.add_argument('text')
+        parser.add_argument('--minutes', type=int, default=15)
+        parser.add_argument('--url')
+        values = parser.parse_args(args)
+        if not values.text.strip() or not 1 <= values.minutes <= 60:
+            raise ValueError('Invalid signed browser request.')
+        body = {'text': values.text, 'minutes': values.minutes}
+        if values.url is not None:
+            body['url'] = values.url
+        pane = os.environ.get('TMUX_PANE', '')
+        if re.fullmatch(r'%[0-9]+', pane):
+            body['pane'] = pane
+        request = Request(endpoint(os.environ.get('TETHER_CDP_URL', ''), 'ask-signed'),
+                          data=json.dumps(body).encode(), headers={'Content-Type': 'application/json'})
+        with urlopen(request, timeout=125) as response:
+            result = json.load(response)
+        if not isinstance(result, dict) or type(result.get('ok')) is not bool:
+            raise ValueError('Invalid signed browser response.')
+        if result['ok']:
+            if (not isinstance(result.get('cdp'), str) or not isinstance(result.get('tab'), str)
+                    or type(result.get('expires')) not in (int, float)):
+                raise ValueError('Invalid signed browser grant.')
+        elif result.get('reason') not in ('denied', 'timeout'):
+            raise ValueError('Invalid signed browser response.')
+        print(json.dumps(result, separators=(',', ':')))
+        return 0 if result['ok'] else 1
+    except TimeoutError:
+        result = {'ok': False, 'reason': 'timeout'}
+    except Exception:
+        result = {'ok': False, 'reason': 'request failed'}
+    print(json.dumps(result, separators=(',', ':')))
+    return 1
 
 
 if __name__ == '__main__':

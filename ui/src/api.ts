@@ -1,5 +1,5 @@
 export type Agent = 'claude' | 'codex' | 'antigravity' | 'shell'
-/** Omit browser for the existing test browser. Signed-in tabs always use mode: 'saved'. */
+/** Omit browser for the existing test browser. Approved signed tabs use mode: 'agent'. */
 export type BrowserId = 'test' | 'signed'
 export interface BrowserSelection { browser?: BrowserId }
 export interface BrowserAvailability { id: BrowserId; label: string; running: boolean; available: boolean; reason: string }
@@ -7,11 +7,24 @@ export interface BrowserTab {
   id: string; url: string; title: string; preset: string; mode: 'private' | 'saved' | 'agent'
   width: number; height: number; touch: boolean
   owner?: { pane: string | null }; controller?: 'user' | 'agent'
+  grant?: { id: string; expires: number }
 }
+export interface SignedBrowserRequest {
+  id: string; pane: string; agent: string; reason: string; minutes: number; url: string | null; created: number
+}
+export interface SignedBrowserGrant {
+  id: string; pane: string; agent: string; tab: string; expires: number; reason: string
+}
+/** GET signed/access and POST signed/allow, signed/deny, signed/end. No CDP token is exposed to the panel. */
+export interface SignedBrowserAccess { browser: 'signed'; requests: SignedBrowserRequest[]; grants: SignedBrowserGrant[] }
+export interface SignedBrowserDecision { id: string; minutes?: number }
+export type SignedBrowserAskResult = { ok: true; cdp: string; tab: string; expires: number }
+  | { ok: false; reason: 'denied' | 'timeout' | 'request failed' }
 export interface BrowserTabs extends BrowserSelection {
   running: boolean; version: number; tabs: BrowserTab[]; browsers: BrowserAvailability[]
   presets: { id: string; label: string; width: number; height: number; touch: boolean }[]
   nav?: { back: boolean; forward: boolean }
+  requests?: SignedBrowserRequest[]; grants?: SignedBrowserGrant[]
 }
 /** SSE tabs events carry the selected browser's state, without the browser switch list. */
 export type BrowserStreamTabs = Omit<BrowserTabs, 'browsers'>

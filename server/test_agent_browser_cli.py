@@ -129,6 +129,38 @@ class CliTests(unittest.TestCase):
             self.assertEqual(request.call_args.kwargs, {'timeout': 5})
             output.assert_called_once_with('off: shared browser request failed')
 
+    def test_signed_allow_deny_timeout_and_flags(self):
+        grant = {'ok': True, 'cdp': 'ws://127.0.0.1:123/cdp-signed/approved-token', 'tab': 'tab-id', 'expires': 1800000000}
+        for result, expected in ((grant, 0), ({'ok': False, 'reason': 'denied'}, 1),
+                                 ({'ok': False, 'reason': 'timeout'}, 1)):
+            self.result = result
+            run = self.run_cli('ask-signed', 'Read the task account', '--minutes', '10', '--url', 'https://example.test')
+            self.assertEqual((run.returncode, run.stderr), (expected, ''))
+            self.assertEqual(json.loads(run.stdout), result)
+            self.assertEqual(len(run.stdout.splitlines()), 1)
+            self.assertEqual(self.requests[-1][:3], ('POST', '/ask-signed/test-token',
+                             {'text': 'Read the task account', 'minutes': 10, 'url': 'https://example.test'}))
+        self.result = grant
+        run = subprocess.run([sys.executable, agent_browser_cli.__file__, 'ask-signed', 'Task'], capture_output=True,
+                             text=True, timeout=7, env=dict(os.environ, TETHER_CDP_URL=self.url, TMUX_PANE='%12'))
+        self.assertEqual(run.returncode, 0)
+        self.assertEqual(self.requests[-1][2], {'text': 'Task', 'minutes': 15, 'pane': '%12'})
+
+    def test_signed_wait_timeout_validation_and_redacted_errors(self):
+        with mock.patch.dict(os.environ, TETHER_CDP_URL=self.url), \
+                mock.patch.object(agent_browser_cli, 'urlopen', side_effect=TimeoutError) as request, \
+                mock.patch('builtins.print') as output:
+            self.assertEqual(agent_browser_cli.main(['ask-signed', 'Task']), 1)
+            self.assertEqual(request.call_args.kwargs, {'timeout': 125})
+            self.assertEqual(json.loads(output.call_args.args[0]), {'ok': False, 'reason': 'timeout'})
+        before = len(self.requests)
+        for args in ((), ('Task', '--minutes', '61'), ('Task', '--minutes', '0'), ('',), ('Task', '--unknown')):
+            run = self.run_cli('ask-signed', *args)
+            self.assertEqual((run.returncode, run.stderr), (1, ''))
+            self.assertEqual(json.loads(run.stdout), {'ok': False, 'reason': 'request failed'})
+            self.assertNotIn('test-token', run.stdout)
+        self.assertEqual(len(self.requests), before)
+
 
 if __name__ == '__main__':
     unittest.main()

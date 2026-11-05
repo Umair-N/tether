@@ -557,6 +557,7 @@ class Proxy:
         self.major = None
         self.httpd = self.thread = None
         self.stopped = False
+        self.signed_access = None
         self.browser.agent_proxy = self
         if self.browser.product:
             self.version_checked(self.browser.product)
@@ -623,6 +624,8 @@ class Proxy:
         if self.stopped:
             return
         self.stopped = True
+        if self.signed_access:
+            self.signed_access.stop()
         self.sync_env(clear=True)
         self.browser_stopped()
         if self.httpd:
@@ -776,11 +779,12 @@ class Handler(BaseHTTPRequestHandler):
             if len(proxy.clients) >= MAX_CLIENTS:
                 self.respond(503, {})
                 return
-            client = AgentClient(proxy, None, None)
+            client = self.create_client(proxy)
             proxy.clients.add(client)  # reserve a slot before Chromium starts
         transport = None
         try:
-            client.pane = proxy.pane_finder(self.client_address[1], proxy.config['port'])
+            if client.pane is None:
+                client.pane = proxy.pane_finder(self.client_address[1], proxy.config['port'])
             client.open()
             self.send_response(101)
             self.send_header('Upgrade', 'websocket')
@@ -792,6 +796,8 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             self.connection.settimeout(None)
             transport = client.transport = Transport(self.connection)
+            if client.closed:
+                raise browser.BrowserError('That connection has ended.')
             for raw in websocket_messages(self.rfile, transport.send):
                 try:
                     message = json.loads(raw)
@@ -814,11 +820,14 @@ class Handler(BaseHTTPRequestHandler):
                 transport.writer.join(timeout=2)
                 transport.abort()
 
+    def create_client(self, proxy):
+        return AgentClient(proxy, None, None)
+
     def do_POST(self):
         route = self.route()
         if route is None:
             return
-        if route != '/ask':
+        if route not in ('/ask', '/ask-signed'):
             self.respond(404, {})
             return
         try:
@@ -833,7 +842,13 @@ class Handler(BaseHTTPRequestHandler):
             pane = body.get('pane')
             if pane is None:
                 pane = self.server.proxy.pane_finder(self.client_address[1], self.server.proxy.config['port'])
-            self.respond(200, self.server.proxy.ask(body.get('text'), pane))
+            if route == '/ask-signed':
+                access = self.server.proxy.signed_access
+                if access is None:
+                    raise ValueError('Signed browser access is unavailable.')
+                self.respond(200, access.ask(body.get('text'), pane, body.get('minutes', 15), body.get('url')))
+            else:
+                self.respond(200, self.server.proxy.ask(body.get('text'), pane))
         except (ValueError, UnicodeError) as exc:
             self.respond(400, {'error': str(exc)})
 
@@ -841,7 +856,9 @@ class Handler(BaseHTTPRequestHandler):
 PROXY = None
 
 
-def start(notifier):
+def start(notifier, agent_finder=lambda pane: 'agent'):
     global PROXY
+    import signed_access
     PROXY = Proxy(notifier=notifier).start(shutdown_hooks=True)
+    PROXY.signed_access = signed_access.Access(notifier=notifier, agent_finder=agent_finder)
     return PROXY
