@@ -62,7 +62,7 @@
 }
 .icon-button.sm { width: var(--control-sm); height: var(--control-sm); border-radius: var(--radius-sm); }
 .icon-button.lg { width: var(--control-lg); height: var(--control-lg); }
-.icon-button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
+.icon-button[aria-pressed="true"] { background: var(--hover); color: var(--text); }
 
 /* Field: a search box or one-line input. The frame shows focus, not the input. */
 .text-field, .sidebar-search, .search-field {

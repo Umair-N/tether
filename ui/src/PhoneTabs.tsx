@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { AudioLines, Folder, Globe, Inbox, MessageCircle, SquareTerminal } from 'lucide-react'
+import { AudioLines, Folder, Globe, Images, MessageCircle, SquareTerminal } from 'lucide-react'
 import { ASSISTANT } from './Live'
 import type { Screen } from './Rail'
 import { toggleButton } from './phoneScreen'
@@ -11,7 +11,7 @@ import './ExplorerPhone.css'
 const TABS: { id: Screen; label: string; icon: typeof Folder }[] = [
   { id: 'chats', label: 'Chats', icon: MessageCircle },
   { id: 'files', label: 'Files', icon: Folder },
-  { id: 'share', label: 'Share', icon: Inbox },
+  { id: 'share', label: 'Share', icon: Images },
   { id: 'terminals', label: 'Terminals', icon: SquareTerminal },
 ]
 

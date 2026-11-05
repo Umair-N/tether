@@ -1,4 +1,4 @@
-import { AudioLines, Folder, Inbox, MessageCircle, SquareTerminal } from 'lucide-react'
+import { AudioLines, Folder, Images, MessageCircle, SquareTerminal } from 'lucide-react'
 import { ASSISTANT } from './Live'
 import { keyLabel } from './keys'
 
@@ -7,7 +7,7 @@ const SCREENS: { id: Screen; label: string; key: string; icon: typeof Folder }[]
   { id: 'chats', label: 'Chats', key: '⌘1', icon: MessageCircle },
   { id: 'files', label: 'Files', key: '⌘2', icon: Folder },
   { id: 'terminals', label: 'Terminals', key: '⌘3', icon: SquareTerminal },
-  { id: 'share', label: 'Share', key: '⌘4', icon: Inbox },
+  { id: 'share', label: 'Share', key: '⌘4', icon: Images },
 ]
 
 /** The desktop left rail: Chats, Files, Terminals and Share. The phone does not show it. */

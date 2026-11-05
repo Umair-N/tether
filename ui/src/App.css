@@ -414,6 +414,7 @@ a { -webkit-touch-callout: default; }
 .attach { color: var(--muted); }
 .attachments { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; margin: -4px 0 10px; padding: 0; }
 .send-button { width: var(--control-lg); height: var(--control-lg); padding: 9px; border-radius: 50%; }
+.send-button:not(.run-button, .stop-button) svg { width: 21px; height: 21px; }
 .mic { color: var(--muted); }
 .mic.active { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .composer-error { font-size: 13px; line-height: 1.5; margin: 9px 6px 0; }
