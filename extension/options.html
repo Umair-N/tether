@@ -1,0 +1,10 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect Chrome to Tether</title><link rel="stylesheet" href="style.css"><main>
+<p class="eyebrow">TETHER</p><h1>Connect this browser</h1>
+<p>Use the same Tether address as your phone. Get a pairing code from Tether’s browser settings.</p>
+<form><label for="origin">Tether URL</label><input id="origin" type="url" required placeholder="https://tether.example" spellcheck="false">
+<label for="code">One-time pairing code</label><input id="code" required autocomplete="off" spellcheck="false" maxlength="64">
+<label class="check"><input id="confirm" type="checkbox"> Also confirm on this Mac</label>
+<p class="small">Tether asks you to Allow each task. You can stop control from the extension icon or Chrome’s debugger banner.</p>
+<button class="primary">Pair browser</button></form>
+<p id="status" role="status"></p><button id="save" type="button">Save confirmation setting</button></main><script type="module" src="options.js"></script></html>

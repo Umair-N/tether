@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
-import { ArrowLeft, ArrowRight, Bot, Check, ChevronDown, Crosshair, FlaskConical, HatGlasses, Keyboard, KeyRound, Monitor, PenLine, PictureInPicture2, Plus, RotateCw, Send, Smartphone, Square, Tablet, Trash2, Type, UserRound, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Bot, Check, ChevronDown, Crosshair, FlaskConical, HatGlasses, Keyboard, KeyRound, Laptop, Monitor, PenLine, PictureInPicture2, Plus, RotateCw, Send, Smartphone, Square, Tablet, Trash2, Type, UserRound, X } from 'lucide-react'
 import { errorText } from './api'
 import type { Api, BrowserAvailability, BrowserId, Pane } from './api'
 import { usePaneLabel, WATCH_EVENT } from './AgentBrowser'
 import { useHost } from './host'
+import { MacPairing } from './MacPairing'
 import './BrowserPanel.css'
 
 // Same shape as PanelProps in src/panels.ts (frame lane); kept here until the lanes merge.
@@ -76,22 +77,24 @@ const onPhone = () => typeof matchMedia === 'function' && matchMedia('(pointer: 
 const savedNote = (host: string) => `Saved logins · readable by agents on ${host}`
 const signedNote = (host: string) => `Your sign-ins · agents cannot drive this browser, but can read its files on ${host}`
 const WHICH_KEY = 'tether-browser-which'
-const tabKey = (which: BrowserId) => which === 'signed' ? 'tether-browser-tab-signed' : 'tether-browser-tab'
+const tabKey = (which: BrowserId) => which === 'test' ? 'tether-browser-tab' : `tether-browser-tab-${which}`
+const asBrowser = (value: unknown): BrowserId => value === 'signed' || value === 'mac' ? value : 'test'
 const BROWSERS: { id: BrowserId; label: string; note: string; icon: typeof UserRound }[] = [
   { id: 'test', label: 'Test', note: 'Agents can use it. No sign-ins.', icon: FlaskConical },
   { id: 'signed', label: 'Signed in', note: 'Google Chrome with your sign-ins. Agents cannot use it.', icon: UserRound },
+  { id: 'mac', label: 'Mac Chrome', note: 'Chrome on your Mac. Agents use a tab only after you allow it.', icon: Laptop },
 ]
 
 /** Two server browsers: 'test' (headless, agents can drive it) and 'signed' (headed Google Chrome, people only).
  * Each choice mounts its own view, so a switch closes the old stream and keeps tab choices apart. */
 export function BrowserPanel(props: BrowserPanelProps) {
-  const [which, setWhich] = useState<BrowserId>(() => { try { return localStorage.getItem(WHICH_KEY) === 'signed' ? 'signed' : 'test' } catch { return 'test' } })
+  const [which, setWhich] = useState<BrowserId>(() => { try { return asBrowser(localStorage.getItem(WHICH_KEY)) } catch { return 'test' } })
   const change = (id: BrowserId) => { setWhich(id); try { localStorage.setItem(WHICH_KEY, id) } catch { /* private mode */ } }
   // "Watch" opens an agent tab: in the test browser, or in the signed-in browser when Mak allowed it (detail.browser).
   useEffect(() => {
     const onWatch = (event: Event) => {
       const detail = (event as CustomEvent<{ tab: string; browser?: BrowserId }>).detail
-      const target = detail.browser === 'signed' ? 'signed' : 'test'
+      const target = asBrowser(detail.browser)
       if (which === target) return
       try { localStorage.setItem(tabKey(target), detail.tab) } catch { /* private mode */ }
       change(target)
@@ -106,8 +109,8 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
   const host = useHost()
   // Every request names the signed-in browser; headed Chrome can take longer than 10 s to start.
   const api: Api = which === 'test' ? baseApi : (path, body, signal, method, timeout) => baseApi(
-    body === undefined ? `${path}${path.includes('?') ? '&' : '?'}browser=signed` : path,
-    body === undefined ? undefined : { ...(body as object), browser: 'signed' }, signal, method, timeout ?? 30000)
+    body === undefined ? `${path}${path.includes('?') ? '&' : '?'}browser=${which}` : path,
+    body === undefined ? undefined : { ...(body as object), browser: which }, signal, method, timeout ?? 30000)
   const [browsers, setBrowsers] = useState<BrowserAvailability[]>([])
   const switchMenu = useMenu()
   const [tabs, setTabs] = useState<BrowserTab[]>([])
@@ -166,6 +169,13 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
   async function load() {
     try { apply(await api<BrowserState>('browser/tabs')); setFailure('') } catch (error) { setFailure(errorText(error)) } finally { setLoaded(true) }
   }
+  // An empty Mac view has no stream, so check for a newly allowed tab every few seconds.
+  const macEmpty = which === 'mac' && loaded && !tabs.length
+  useEffect(() => {
+    if (!active || !macEmpty) return
+    const timer = window.setInterval(() => void load(), 4000)
+    return () => clearInterval(timer)
+  }, [active, macEmpty]) // eslint-disable-line react-hooks/exhaustive-deps
   // Start the browser only when the panel is first shown.
   useEffect(() => { if (active && !loaded) void load() }, [active]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (tab && tab.id !== current) choose(tab.id) }, [tab?.id]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -226,7 +236,7 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
   const streamHeight = Math.min(2560, Math.max(160, Math.ceil(stage.height * devicePixelRatio / 64) * 64))
   useEffect(() => {
     if (!active || !visible || !tabId || noting || !stage.width) return
-    const source = new EventSource(`/mobile/api/browser/stream?tab=${encodeURIComponent(tabId)}&w=${streamWidth}&h=${streamHeight}&cssw=${Math.max(1, stage.width)}&cssh=${Math.max(1, stage.height)}${which === 'signed' ? '&browser=signed' : ''}`)
+    const source = new EventSource(`/mobile/api/browser/stream?tab=${encodeURIComponent(tabId)}&w=${streamWidth}&h=${streamHeight}&cssw=${Math.max(1, stage.width)}&cssh=${Math.max(1, stage.height)}${which === 'test' ? '' : `&browser=${which}`}`)
     source.addEventListener('frame', event => { pending.current = JSON.parse((event as MessageEvent).data); setLive(true); if (!decoding.current) void paint() })
     source.addEventListener('tabs', event => apply(JSON.parse((event as MessageEvent).data)))
     source.addEventListener('closed', () => void load())
@@ -509,18 +519,24 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
     {switchMenu.open && <div className="browser-menu" role="menu">
       {BROWSERS.map(item => {
         const row = browsers.find(entry => entry.id === item.id)
-        const off = row ? !row.available : false
+        const off = row && item.id !== 'mac' ? !row.available : false
         return <button key={item.id} type="button" role="menuitemradio" aria-checked={item.id === which} autoFocus={item.id === which} disabled={off}
           onClick={() => { switchMenu.setOpen(false); if (item.id !== which) onSwitch(item.id) }}>
-          <item.icon size={16} /><span>{item.label} browser<small>{off ? row?.reason : item.note}</small></span>{item.id === which && <Check size={16} />}
+          <item.icon size={16} /><span>{item.label} browser<small>{off || (row && !row.available) ? row?.reason : item.note}</small></span>{item.id === which && <Check size={16} />}
         </button>
       })}
     </div>}
   </div>
 
-  if (!loaded) return <div className="browser-panel"><p className="browser-empty">{active ? (which === 'signed' ? 'Starting Google Chrome…' : 'Starting the browser…') : ''}</p></div>
+  if (!loaded) return <div className="browser-panel"><p className="browser-empty">{active ? (which === 'signed' ? 'Starting Google Chrome…' : which === 'mac' ? 'Connecting to your Mac…' : 'Starting the browser…') : ''}</p></div>
   if (failure && !tabs.length) return <div className="browser-panel"><div className="browser-empty"><p>{failure}</p><button type="button" className="browser-text-button" onClick={() => { setLoaded(false); void load() }}>Try again</button>
-    {which === 'signed' && <button type="button" className="browser-text-button" onClick={() => onSwitch('test')}>Use the test browser</button>}</div></div>
+    {which !== 'test' && <button type="button" className="browser-text-button" onClick={() => onSwitch('test')}>Use the test browser</button>}</div></div>
+
+  // Mac Chrome opens tabs only through Allow, so an empty Mac view is the pairing card.
+  if (which === 'mac' && !tabs.length) return <div className="browser-panel">
+    <div className="browser-tabs" role="toolbar" aria-label="Browser">{switcher}</div>
+    <MacPairing api={baseApi} connected={!!browsers.find(row => row.id === 'mac')?.available} />
+  </div>
 
   return <div className="browser-panel" onKeyDown={event => { if (noting && event.key === 'Escape' && !event.defaultPrevented) stopNotes() }}>
     <div className="browser-tabs" role="tablist" aria-label="Browser tabs">
@@ -535,13 +551,13 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
           <button type="button" className="browser-tab-close" aria-label={`Close ${name}`} onClick={() => void closeTab(item.id)}><X size={14} /></button>
         </div>
       })}
-      <div className="browser-menu-anchor" ref={tabMenu.ref} onKeyDown={tabMenu.onKeyDown}>
+      {which !== 'mac' && <div className="browser-menu-anchor" ref={tabMenu.ref} onKeyDown={tabMenu.onKeyDown}>
         <button type="button" className="browser-icon" aria-label="New tab" aria-haspopup={which === 'signed' ? undefined : 'menu'} aria-expanded={which === 'signed' ? undefined : tabMenu.open} onClick={() => which === 'signed' ? void newTab('saved') : tabMenu.setOpen(!tabMenu.open)}><Plus size={17} /></button>
         {tabMenu.open && <div className="browser-menu" role="menu">
           <button type="button" role="menuitem" autoFocus onClick={() => void newTab('private')}><HatGlasses size={16} /><span>New private tab<small>Logins go away when the tab closes</small></span></button>
           <button type="button" role="menuitem" onClick={() => void newTab('saved')}><KeyRound size={16} /><span>New saved tab<small>{savedNote(host)}</small></span></button>
         </div>}
-      </div>
+      </div>}
       {onPopOut && <button type="button" className="browser-icon browser-popout" aria-label="Open the browser in its own window" title="Open in a window" onClick={onPopOut}><PictureInPicture2 size={17} /></button>}
     </div>
 

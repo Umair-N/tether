@@ -68,6 +68,7 @@ import window_size
 import projects_api
 import codex_level
 import browser_api
+import mac_browser
 import browser_cdp
 import updates
 
@@ -1062,6 +1063,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split('?', 1)[0]
+        if path == mac_browser.PREFIX + 'connect':
+            mac_browser.upgrade(self)
+            return
         if path in ('/chat', '/', '/mobile', '/mobile/'):  # old home-screen icons open /mobile/: send them to the new UI
             self.send_response(301)
             self.send_header('Location', '/chat/')
@@ -1277,6 +1281,9 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(503, {'error': 'The conversation is currently unavailable.'})
 
     def do_POST(self):
+        if self.path == mac_browser.PREFIX + 'exchange':
+            mac_browser.exchange(self)
+            return
         if self.path == '/mobile/login':
             self.do_login()
             return

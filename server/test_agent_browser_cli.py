@@ -139,12 +139,16 @@ class CliTests(unittest.TestCase):
             self.assertEqual(json.loads(run.stdout), result)
             self.assertEqual(len(run.stdout.splitlines()), 1)
             self.assertEqual(self.requests[-1][:3], ('POST', '/ask-signed/test-token',
-                             {'text': 'Read the task account', 'minutes': 10, 'url': 'https://example.test'}))
+                             {'text': 'Read the task account', 'minutes': 10, 'url': 'https://example.test', 'browser': 'auto'}))
         self.result = grant
         run = subprocess.run([sys.executable, agent_browser_cli.__file__, 'ask-signed', 'Task'], capture_output=True,
                              text=True, timeout=7, env=dict(os.environ, TETHER_CDP_URL=self.url, TMUX_PANE='%12'))
         self.assertEqual(run.returncode, 0)
-        self.assertEqual(self.requests[-1][2], {'text': 'Task', 'minutes': 15, 'pane': '%12'})
+        self.assertEqual(self.requests[-1][2], {'text': 'Task', 'minutes': 15, 'pane': '%12', 'browser': 'auto'})
+        self.run_cli('ask-signed', 'Task', '--browser', 'mac')
+        self.assertEqual(self.requests[-1][2]['browser'], 'mac')
+        self.run_cli('ask-signed', 'Task', '--browser', 'server')
+        self.assertEqual(self.requests[-1][2]['browser'], 'server')
 
     def test_signed_wait_timeout_validation_and_redacted_errors(self):
         with mock.patch.dict(os.environ, TETHER_CDP_URL=self.url), \

@@ -15,6 +15,7 @@ import secrets
 import select
 import signal
 import socket
+import ssl
 import struct
 import subprocess
 import threading
@@ -276,7 +277,10 @@ class Transport:
                         if left <= 0 or not select.select([], [self.sock], [], left)[1]:
                             raise TimeoutError('WebSocket write timed out.')
                         try:
-                            written = self.sock.send(remaining, socket.MSG_DONTWAIT)
+                            # TLS sockets reject MSG_DONTWAIT. Their existing read/write timeout
+                            # bounds sends; raw loopback sockets retain nonblocking writes.
+                            written = (self.sock.send(remaining) if isinstance(self.sock, ssl.SSLSocket)
+                                       else self.sock.send(remaining, socket.MSG_DONTWAIT))
                         except BlockingIOError:
                             continue
                         if not written:
@@ -852,7 +856,8 @@ class Handler(BaseHTTPRequestHandler):
                 access = self.server.proxy.signed_access
                 if access is None:
                     raise ValueError('Signed browser access is unavailable.')
-                self.respond(200, access.ask(body.get('text'), pane, body.get('minutes', 15), body.get('url')))
+                self.respond(200, access.ask(body.get('text'), pane, body.get('minutes', 15), body.get('url'),
+                                            **({'browser': body['browser']} if 'browser' in body else {})))
             else:
                 self.respond(200, self.server.proxy.ask(body.get('text'), pane))
         except (ValueError, UnicodeError) as exc:
@@ -865,6 +870,9 @@ PROXY = None
 def start(notifier, agent_finder=lambda pane: 'agent'):
     global PROXY
     import signed_access
+    import mac_browser
     PROXY = Proxy(notifier=notifier).start(shutdown_hooks=True)
-    PROXY.signed_access = signed_access.Access(notifier=notifier, agent_finder=agent_finder)
+    PROXY.signed_access = mac_browser.RoutedAccess(
+        signed_access.Access(notifier=notifier, agent_finder=agent_finder),
+        mac_browser.MacAccess(mac_browser.BROKER, notifier=notifier, agent_finder=agent_finder))
     return PROXY

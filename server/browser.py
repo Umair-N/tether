@@ -513,7 +513,8 @@ class Browser:
                     'presets': [{'id': key, 'label': value['label'], 'width': value['width'], 'height': value['height'],
                                  'touch': value['mobile']} for key, value in PRESETS.items()]}
             if self.signed:
-                state.update(self.agent_proxy.state() if self.agent_proxy else {'requests': [], 'grants': []})
+                state.update(getattr(self.agent_proxy, 'panel_state', self.agent_proxy.state)()
+                             if self.agent_proxy else {'requests': [], 'grants': []})
             return state
 
     def list_tabs(self):
@@ -1058,7 +1059,7 @@ def frame_event(frame, browser_id='test'):
     head = json.dumps({'seq': seq, 'width': metadata.get('deviceWidth'), 'height': metadata.get('deviceHeight'),
                        'top': metadata.get('offsetTop', 0),
                        **{key: metadata[key] for key in ('scrollOffsetX', 'scrollOffsetY', 'pageScaleFactor') if key in metadata},
-                       **({'browser': 'signed'} if browser_id == 'signed' else {})})
+                       **({'browser': browser_id} if browser_id in ('signed', 'mac') else {})})
     return ('event: frame\ndata: ' + head[:-1] + ',"jpeg":"' + data + '"}\n\n').encode()
 
 

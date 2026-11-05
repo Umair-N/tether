@@ -19,7 +19,7 @@ Tether runs one shared browser that the user can watch from desktop or phone.
 - Playwright MCP already uses it. Do not pass --isolated or launch another browser.
 - In scripts, connect instead of launching: Node `chromium.connectOverCDP(process.env.TETHER_CDP_URL)`, Python `p.chromium.connect_over_cdp(os.environ["TETHER_CDP_URL"])`. Use `browser.contexts[0]`. You get a private context; the user's logins are not in it.
 - Limit: 3 tabs. Close tabs you no longer need.
-- Tether also has a signed-in browser. Agents use it only through ask-signed, after Mak allows access.
+- ask-signed uses Mak's Mac Chrome when connected, after Mak allows access; otherwise it uses the server signed browser.
 - Ask for signed-in access only for a task Mak asked for.
 - If you need the user in the browser (2FA code, captcha, a password you must not see), run `{command}`, then wait for the user to reply in chat.
 - Sign-ins: the test browser is headless. Ask for signed-in access when the task needs Mak's account; Mak signs in through the panel.'''
@@ -101,10 +101,12 @@ def ask_signed(args):
         parser.add_argument('text')
         parser.add_argument('--minutes', type=int, default=15)
         parser.add_argument('--url')
+        parser.add_argument('--browser', choices=('auto', 'mac', 'server'), default='auto')
         values = parser.parse_args(args)
         if not values.text.strip() or not 1 <= values.minutes <= 60:
             raise ValueError('Invalid signed browser request.')
         body = {'text': values.text, 'minutes': values.minutes}
+        body['browser'] = values.browser
         if values.url is not None:
             body['url'] = values.url
         pane = os.environ.get('TMUX_PANE', '')

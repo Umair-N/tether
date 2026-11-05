@@ -1,0 +1,616 @@
+"""Paired outbound Chrome transport and one-tab signed grants. No local Chrome process."""
+import base64
+import hashlib
+import hmac
+import json
+import re
+import secrets
+import threading
+import time
+from urllib.parse import urlsplit
+
+import browser
+import browser_cdp as cdp
+import paths
+import signed_access as signed
+
+PREFIX = '/mobile/api/browser/extension/'
+ORIGIN = re.compile(r'chrome-extension://[a-p]{32}')
+PAGE_ALLOWED = (signed.PAGE_ALLOWED - {'Network.getCookies', 'DOM.setFileInputFiles'}) | {
+    'Page.startScreencast', 'Page.stopScreencast', 'Page.screencastFrameAck'}
+
+
+def check_command(method, params):
+    if method not in PAGE_ALLOWED or not isinstance(params, dict):
+        raise browser.BrowserError('Not allowed through Mac browser access.')
+    # A debugger session can only address the approved tab. Never forward routing selectors.
+    def check(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in ('targetId', 'browserContextId', 'sessionId') and not (
+                        method == 'Page.screencastFrameAck' and key == 'sessionId' and value is params):
+                    raise browser.BrowserError('Outside this Mac tab.')
+                check(item)
+        elif isinstance(value, list):
+            for item in value:
+                check(item)
+    check(params)
+    if method == 'Page.navigate':
+        browser.normalize_url(params.get('url'))
+
+
+class Broker:
+    def __init__(self, store=None, clock=time.time):
+        self.store = store or paths.CONFIG / 'browser-devices.json'
+        self.clock = clock
+        self.lock = threading.RLock()
+        self.codes, self.connections = {}, {}
+        self.devices = None  # Lazy: importing the server does not touch real configuration.
+        self.browser = MacBrowser(self)
+        self.access = None
+
+    def load(self):
+        if self.devices is None:
+            try:
+                self.devices = json.loads(self.store.read_text())
+                if not isinstance(self.devices, dict):
+                    raise ValueError('Invalid device store.')
+                self.store.chmod(0o600)
+            except FileNotFoundError:
+                self.devices = {}
+        return self.devices
+
+    def pair(self):
+        with self.lock:
+            now = self.clock()
+            self.codes = {code: expiry for code, expiry in self.codes.items() if expiry > now}
+            if len(self.codes) >= 16:
+                raise ValueError('Too many pairing codes. Wait five minutes.')
+            code = secrets.token_hex(8).upper()
+            self.codes[code] = now + 300
+            return {'code': code, 'expires': now + 300}
+
+    def exchange(self, code, origin, name):
+        if not isinstance(origin, str) or not ORIGIN.fullmatch(origin):
+            raise ValueError('Invalid extension Origin.')
+        if not isinstance(name, str) or not name.strip() or len(name) > 80:
+            raise ValueError('Device name must contain 1 to 80 characters.')
+        with self.lock:
+            if not isinstance(code, str) or self.codes.pop(code, 0) <= self.clock():
+                raise ValueError('Pairing code expired or already used.')
+            devices = self.load()
+            if len(devices) >= 16:
+                raise ValueError('Revoke an old browser first.')
+            ident, token = secrets.token_urlsafe(12), secrets.token_urlsafe(32)
+            devices[ident] = {'id': ident, 'name': name.strip(), 'origin': origin,
+                              'hash': hashlib.sha256(token.encode()).hexdigest(), 'lastSeen': self.clock(), 'chrome': ''}
+            cdp.save_config(self.store, devices)
+            return {'id': ident, 'token': token}
+
+    def authenticate(self, token, origin):
+        if not isinstance(token, str) or len(token) != 43 or not isinstance(origin, str) or not ORIGIN.fullmatch(origin):
+            raise ValueError('Invalid device credentials.')
+        digest = hashlib.sha256(token.encode()).hexdigest()
+        with self.lock:
+            row = next((row for row in self.load().values() if row['origin'] == origin
+                        and hmac.compare_digest(row['hash'], digest)), None)
+            if row is None:
+                raise ValueError('Invalid device credentials.')
+            return row['id']
+
+    def rows(self):
+        with self.lock:
+            return [{'id': row['id'], 'name': row['name'], 'connected': row['id'] in self.connections,
+                     'lastSeen': row['lastSeen'], 'chrome': row['chrome']} for row in self.load().values()]
+
+    def revoke(self, ident):
+        with self.lock:
+            if not isinstance(ident, str) or ident not in self.load():
+                raise ValueError('Choose a paired browser.')
+            self.devices.pop(ident)
+            cdp.save_config(self.store, self.devices)
+            connection = self.connections.get(ident)
+        if connection:
+            connection.close()
+        return {'devices': self.rows()}
+
+    def connected(self):
+        with self.lock:
+            return next((conn for conn in reversed(list(self.connections.values())) if not conn.closed), None)
+
+    def register(self, ident, transport, chrome):
+        with self.lock:
+            if ident not in self.load():
+                raise ValueError('Device revoked.')
+            old = self.connections.get(ident)
+        if old:
+            old.close()
+        with self.lock:
+            if ident not in self.load():
+                raise ValueError('Device revoked.')
+            conn = Device(self, ident, transport)
+            self.connections[ident] = conn
+            self.devices[ident].update(lastSeen=self.clock(), chrome=str(chrome)[:200])
+            cdp.save_config(self.store, self.devices)
+            return conn
+
+    def disconnected(self, conn):
+        with self.lock:
+            if self.connections.get(conn.ident) is conn:
+                self.connections.pop(conn.ident)
+            if conn.ident in self.load():
+                self.devices[conn.ident]['lastSeen'] = self.clock()
+        if self.access:
+            self.access.disconnect(conn)
+
+    def stop(self):
+        for conn in list(self.connections.values()):
+            conn.close()
+        if self.access:
+            self.access.stop()
+
+
+class Device:
+    def __init__(self, broker, ident, transport):
+        self.broker, self.ident, self.transport = broker, ident, transport
+        self.epoch = secrets.token_urlsafe(16)
+        self.lock = threading.RLock()
+        self.waiters = {}
+        self.ended = set()
+        self.closed = False
+
+    def send(self, message):
+        if self.closed or self.transport.closed:
+            raise browser.BrowserError('Mac browser disconnected. Ask again.')
+        self.transport.message(dict(message, epoch=self.epoch))
+
+    def request(self, message, timeout=15):
+        ident = message.get('id') or secrets.token_urlsafe(16)
+        slot = {'event': threading.Event(), 'reply': None, 'grant': message.get('grant', ident)}
+        with self.lock:
+            if len(self.waiters) >= 128:
+                raise browser.BrowserError('Too many Mac commands.')
+            self.waiters[ident] = slot
+        try:
+            self.send(dict(message, id=ident))
+            if not slot['event'].wait(timeout):
+                # Uncertain delivery must never leave authority available for a retry.
+                self.close()
+                raise browser.BrowserError('Mac command timed out. Ask again.')
+            reply = slot['reply']
+            if not reply or reply.get('type') in ('error', 'ended'):
+                raise browser.BrowserError('Mac command refused or grant ended.')
+            return reply
+        finally:
+            with self.lock:
+                self.waiters.pop(ident, None)
+
+    def cancel_grant(self, ident):
+        with self.lock:
+            self.ended.add(ident)
+            for slot in self.waiters.values():
+                if slot['grant'] == ident:
+                    slot['reply'] = {'type': 'ended'}
+                    slot['event'].set()
+
+    def handle(self, message):
+        if not isinstance(message, dict) or message.get('epoch') != self.epoch:
+            raise ValueError('Invalid connection epoch.')
+        kind = message.get('type')
+        if kind == 'ping':
+            with self.broker.lock:
+                if self.ident in self.broker.load():
+                    self.broker.devices[self.ident]['lastSeen'] = self.broker.clock()
+            self.send({'type': 'pong'})
+        elif kind in ('result', 'granted', 'error', 'ended'):
+            with self.lock:
+                if kind == 'ended':
+                    self.cancel_grant(message.get('id'))
+                slot = self.waiters.get(message.get('id'))
+                if slot:
+                    slot['reply'] = message
+                    slot['event'].set()
+            if kind == 'ended' and self.broker.access:
+                self.broker.access.extension_end(self, message.get('id'))
+        elif kind == 'event':
+            self.broker.browser.conn.event(self, message)
+        elif kind == 'tab':
+            target = self.broker.browser.native_targets.get(message.get('tab'))
+            tab = self.broker.browser.tabs.get(target)
+            grant = tab.agent_client if tab else None
+            if grant and grant.device is self and message.get('grant') == grant.row['id']:
+                tab.url, tab.title = str(message.get('url', tab.url))[:8192], str(message.get('title', tab.title))[:1000]
+                self.broker.browser._bump()
+        else:
+            raise ValueError('Invalid extension message.')
+
+    def close(self):
+        with self.lock:
+            if self.closed:
+                return
+            self.closed = True
+            for slot in self.waiters.values():
+                slot['event'].set()
+        self.transport.abort()
+        self.broker.disconnected(self)
+
+
+class Connection:
+    """Synthesize browser targets; all real commands address one extension-created tabId."""
+    closed = False
+
+    def __init__(self, owner):
+        self.owner = owner
+        self.sessions, self.sinks = {}, {}
+        self.lock = threading.RLock()
+
+    def register_sink(self, session, sink):
+        with self.lock:
+            self.sinks[session] = sink
+
+    def unregister_sink(self, session):
+        with self.lock:
+            self.sinks.pop(session, None)
+
+    def info(self, target):
+        tab = self.owner.tab(target)
+        return {'targetId': target, 'type': 'page', 'title': tab.title, 'url': tab.url,
+                'attached': True, 'browserContextId': 'signed-default', 'canAccessOpener': False}
+
+    def call(self, method, params=None, session=None, timeout=15):
+        params = params or {}
+        if method == 'Browser.getVersion':
+            conn = self.owner.broker.connected()
+            chrome = self.owner.broker.devices.get(conn.ident, {}).get('chrome', '') if conn else ''
+            product = re.search(r'(?:Chrome|Chromium)/[0-9.]+', chrome)
+            return {'protocolVersion': '1.3', 'product': product[0] if product else 'Chrome/118.0.0.0', 'revision': '',
+                    'userAgent': chrome or 'Chrome/118.0.0.0', 'jsVersion': ''}
+        if method == 'Target.getTargetInfo':
+            return {'targetInfo': self.info(params.get('targetId') or self.sessions.get(session))}
+        if method == 'Target.attachToTarget':
+            self.owner.tab(params.get('targetId'))
+            ident = secrets.token_urlsafe(12)
+            self.sessions[ident] = params['targetId']
+            return {'sessionId': ident}
+        if method == 'Target.detachFromTarget':
+            self.sessions.pop(params.get('sessionId'), None)
+            return {}
+        if method in ('Target.closeTarget', 'Target.activateTarget'):
+            target = params.get('targetId')
+            method = 'Page.close' if method == 'Target.closeTarget' else 'Page.bringToFront'
+        else:
+            target = self.sessions.get(session)
+        tab = self.owner.tab(target)
+        if method in ('Page.close', 'Page.bringToFront'):
+            params = {}
+        check_command(method, params)
+        grant = tab.agent_client
+        if (not grant or not self.owner.agent_proxy.valid(grant) or grant.device.closed
+                or grant.row['id'] in grant.device.ended):
+            raise browser.BrowserError('That Mac grant has ended.')
+        if method in ('Page.close', 'Page.bringToFront'):
+            params = {}
+        reply = grant.device.request({'type': 'command', 'grant': grant.row['id'], 'tab': grant.tab_id,
+                                      'method': method, 'params': params}, timeout)
+        return reply.get('result') or {}
+
+    def send(self, method, params=None, session=None):
+        # Only housekeeping uses fire-and-forget; no thread or command queue is needed for ACKs.
+        target = self.sessions.get(session)
+        tab = self.owner.tabs.get(target)
+        grant = tab.agent_client if tab else None
+        if grant and self.owner.agent_proxy.valid(grant):
+            check_command(method, params or {})
+            try:
+                grant.device.send({'type': 'command', 'id': secrets.token_urlsafe(16), 'grant': grant.row['id'],
+                                   'tab': grant.tab_id, 'method': method, 'params': params or {}})
+            except browser.BrowserError:
+                pass
+
+    def event(self, device, message):
+        target = self.owner.native_targets.get(message.get('tab'))
+        tab = self.owner.tabs.get(target)
+        grant = tab.agent_client if tab else None
+        if (not grant or grant.device is not device or message.get('grant') != grant.row['id']
+                or not self.owner.agent_proxy.valid(grant)):
+            return
+        method, params = message.get('method'), message.get('params')
+        if not isinstance(method, str) or not isinstance(params, dict) or method.startswith(('Target.', 'Browser.')):
+            return
+        # Existing p18 path acknowledges on receipt and replaces the single newest-frame slot.
+        self.owner._event(method, params, tab.session)
+        with self.lock:
+            sinks = [(session, sink) for session, sink in self.sinks.items() if self.sessions.get(session) == target]
+        for session, sink in sinks:
+            if method != 'Page.screencastFrame':  # panel owns the cast and its acknowledgments
+                sink({'method': method, 'params': params, 'sessionId': session})
+
+
+class MacBrowser(browser.Browser):
+    def __init__(self, broker):
+        super().__init__(signed=True)
+        self.broker = broker
+        self.conn = Connection(self)
+        self.native_targets = {}
+
+    def running(self):
+        return self.broker.connected() is not None
+
+    def _bump(self):
+        super()._bump()
+        if hasattr(self, 'peer_browser'):
+            self.peer_browser._bump()
+
+    def ensure(self):
+        if not self.running():
+            raise browser.BrowserError('Mac Chrome is disconnected.')
+
+    def list_tabs(self):
+        return self.state()  # never create a tab outside an Allow decision
+
+    def new_tab(self, *args, **kwargs):
+        raise ValueError('Ask for Mac browser access to open a tab.')
+
+    def close_tab(self, target):
+        self.conn.call('Target.closeTarget', {'targetId': target})
+        return self.state()
+
+    def stop(self):
+        self.broker.stop()
+
+    def remove(self, target):
+        with self.lock:
+            tab = self.tabs.pop(target, None)
+            if tab:
+                self.native_targets = {native: known for native, known in self.native_targets.items() if known != target}
+                self._cancel_motion(tab)
+                self.by_session.pop(tab.session, None)
+                self.order.remove(target)
+                for session, attached in list(self.conn.sessions.items()):
+                    if attached == target:
+                        self.conn.sessions.pop(session, None)
+                        self.conn.unregister_sink(session)
+                with tab.changed:
+                    tab.changed.notify_all()
+                self._bump()
+
+
+class MacAccess(signed.Access):
+    browser_id = 'mac'
+    page_allowed = PAGE_ALLOWED - {'Page.startScreencast', 'Page.stopScreencast', 'Page.screencastFrameAck'}
+
+    def __init__(self, broker, **kwargs):
+        super().__init__(broker.browser, **kwargs)
+        self.broker = broker
+        broker.access = self
+
+    def ask(self, reason, pane, duration=15, url=None):
+        if not self.broker.connected():
+            raise ValueError('Mac Chrome is disconnected. Ask again or choose server.')
+        return super().ask(reason, pane, duration, url)
+
+    def request_binding(self):
+        device = self.broker.connected()
+        if not device:
+            raise ValueError('Mac Chrome is disconnected. Ask again.')
+        return device
+
+    def allow(self, ident, duration=None):
+        with self.browser.lock:
+            with self.lock:
+                slot = self._request(ident)
+                duration = slot['row']['minutes'] if duration is None else signed.minutes(duration)
+                if duration > slot['row']['minutes']:
+                    raise ValueError('Allow may shorten the requested time only.')
+                if self.grants or self.reserved:
+                    raise ValueError('End the active Mac grant first.')
+                device = slot['binding']
+                if device.closed:
+                    raise browser.BrowserError('Mac Chrome disconnected. Ask again.')
+                self.reserved.add(ident)
+            try:
+                self._listen()
+                reply = device.request({'type': 'grant', 'id': ident, 'reason': slot['row']['reason'],
+                                        'minutes': duration, 'url': slot['row']['url']}, timeout=65)
+                if (type(reply.get('tab')) is not int or not isinstance(reply.get('target'), str)
+                        or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', reply['target'])):
+                    raise browser.BrowserError('Invalid Mac tab.')
+                target = reply['target']  # Playwright requires root target id == the main frame id.
+                grant = signed.Grant(slot['row'], target, duration, self.clock())
+                grant.row['browser'] = 'mac'
+                grant.row['expires'] = min(grant.row['expires'], reply.get('expires', 0) / 1000)
+                grant.device, grant.tab_id = device, reply['tab']
+                with self.lock:
+                    if (slot['event'].is_set() or time.monotonic() >= slot['deadline'] or self.stopped or device.closed
+                            or ident in device.ended or grant.row['expires'] <= self.clock()):
+                        raise browser.BrowserError('That Mac request has ended.')
+                    session = secrets.token_urlsafe(12)
+                    tab = browser.Tab(target, session, mode='agent')
+                    self.browser.tabs[target] = self.browser.by_session[session] = tab
+                    self.browser.conn.sessions[session] = target
+                    self.browser.native_targets[reply['tab']] = target
+                    self.browser.order.append(target)
+                    self.grants[ident] = grant
+                    self._mark(grant, tab)
+                    grant.timer = threading.Timer(max(0, grant.row['expires'] - self.clock()), self.end, args=(ident,))
+                    grant.timer.daemon = True
+                    grant.timer.start()
+                    self._answer(slot, {'ok': True, 'browser': 'mac', 'cdp': self.url(grant), 'tab': target,
+                                        'expires': grant.row['expires']})
+            except Exception:
+                if not device.closed:
+                    device.send({'type': 'end', 'id': ident})
+                with self.lock:
+                    if not slot['event'].is_set():
+                        self._answer(slot, {'ok': False, 'reason': 'denied'})
+                raise
+            finally:
+                with self.lock:
+                    self.reserved.discard(ident)
+        return self.state()
+
+    def end(self, ident):
+        if not isinstance(ident, str):
+            raise ValueError('Choose a grant.')
+        # Revoke authority and enqueue detach before taking Browser.lock. A slow page
+        # command must not delay local Stop, expiry, or disconnect invalidation.
+        with self.lock:
+            grant = self.grants.pop(ident, None)
+            if grant:
+                grant.active = False
+                grant.timer.cancel()
+            clients = [client for client in self.clients if client.grant is grant]
+            self.browser._bump()
+        for client in clients:
+            client.revoke()
+        if grant and not grant.device.closed:
+            grant.device.cancel_grant(ident)
+            try:
+                grant.device.send({'type': 'end', 'id': ident})
+            except browser.BrowserError:
+                pass
+        if grant:
+            self.browser.remove(grant.row['tab'])
+        return self.state()
+
+    def extension_end(self, device, ident):
+        with self.lock:
+            grant = self.grants.get(ident)
+            if not grant or grant.device is not device:
+                return
+            grant.active = False
+            for client in list(self.clients):
+                if client.grant is grant:
+                    client.revoke()
+        # The reader cannot wait on a lock held by a command that awaits a reply.
+        threading.Thread(target=self.end, args=(ident,), daemon=True, name='mac-grant-end').start()
+
+    def disconnect(self, device):
+        with self.lock:
+            ids = [ident for ident, grant in self.grants.items() if grant.device is device]
+            for slot in list(self.pending.values()):
+                if slot.get('binding') is device:
+                    self._answer(slot, {'ok': False, 'reason': 'denied'})
+        for ident in ids:
+            self.extension_end(device, ident)
+
+
+class RoutedAccess:
+    """Choose the browser at request time. Never move an existing request or grant."""
+    def __init__(self, server, mac):
+        self.server, self.mac = server, mac
+        self.browser = server.browser
+        server.panel_state = self.state
+        mac.panel_state = self.state
+        mac.browser.peer_browser = server.browser
+        self.allow_lock = threading.RLock()
+        request_lock = threading.RLock()
+        for access in (server, mac):
+            access.request_lock, access.request_peers = request_lock, [server, mac]
+
+    def ask(self, reason, pane, duration=15, url=None, browser='auto'):
+        if browser not in ('auto', 'mac', 'server'):
+            raise ValueError('Choose auto, mac, or server.')
+        access = self.mac if browser == 'mac' or browser == 'auto' and self.mac.broker.connected() else self.server
+        return access.ask(reason, pane, duration, url)
+
+    def state(self):
+        states = [self.server.state(), self.mac.state()]
+        return {key: [row for state in states for row in state[key]] for key in ('requests', 'grants')}
+
+    def _owner(self, ident):
+        if not isinstance(ident, str):
+            raise ValueError('Choose a request or grant.')
+        with self.mac.lock:
+            return self.mac if ident in self.mac.pending or ident in self.mac.grants else self.server
+
+    def allow(self, ident, duration=None):
+        with self.allow_lock:
+            if len(self.server.grants) + len(self.mac.grants) >= 2:
+                raise ValueError('End a grant first (the limit is 2).')
+            self._owner(ident).allow(ident, duration)
+        return self.state()
+
+    def deny(self, ident):
+        self._owner(ident).deny(ident)
+        return self.state()
+
+    def end(self, ident):
+        self._owner(ident).end(ident)
+        return self.state()
+
+    def stop(self):
+        self.mac.broker.stop()
+        self.server.stop()
+
+
+def upgrade(handler, broker=None):
+    """Only this device-authenticated route bypasses cookie auth. Token never enters a URL."""
+    broker = broker or BROKER
+    handler.close_connection = True
+    origin = handler.headers.get('Origin', '')
+    key = handler.headers.get('Sec-WebSocket-Key', '')
+    try:
+        valid = len(base64.b64decode(key, validate=True)) == 16
+    except ValueError:
+        valid = False
+    if (not ORIGIN.fullmatch(origin) or len(handler.headers.get_all('Origin', [])) != 1):
+        handler.respond(403, {'error': 'Invalid extension Origin.'})
+        return
+    if (not valid or handler.headers.get('Upgrade', '').lower() != 'websocket'
+            or 'upgrade' not in [part.strip() for part in handler.headers.get('Connection', '').lower().split(',')]
+            or handler.headers.get('Sec-WebSocket-Version') != '13'):
+        handler.respond(400, {'error': 'WebSocket required.'})
+        return
+    transport = device = None
+    try:
+        handler.protocol_version = 'HTTP/1.1'
+        handler.send_response(101)
+        handler.send_header('Upgrade', 'websocket')
+        handler.send_header('Connection', 'Upgrade')
+        accept = base64.b64encode(hashlib.sha1((key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').encode()).digest()).decode()
+        handler.send_header('Sec-WebSocket-Accept', accept)
+        handler.end_headers()
+        handler.wfile.flush()
+        handler.close_connection = True
+        handler.connection.settimeout(5)
+        transport = cdp.Transport(handler.connection)
+        messages = cdp.websocket_messages(handler.rfile, transport.send, limit=cdp.MAX_MESSAGE)
+        hello = json.loads(next(messages))
+        if not isinstance(hello, dict) or hello.get('type') != 'hello':
+            raise ValueError('Authenticate first.')
+        ident = broker.authenticate(hello.get('token'), origin)
+        device = broker.register(ident, transport, hello.get('chrome', ''))
+        device.send({'type': 'ready'})
+        handler.connection.settimeout(30)
+        for raw in messages:
+            device.handle(json.loads(raw))
+    except (ValueError, TypeError, EOFError, StopIteration, OSError, cdp.WebSocketError, browser.BrowserError):
+        pass
+    finally:
+        if device:
+            device.close()
+        if transport:
+            transport.abort()
+            transport.writer.join(timeout=2)
+
+
+def exchange(handler, broker=None):
+    broker = broker or BROKER
+    handler.close_connection = True
+    try:
+        origin = handler.headers.get('Origin', '')
+        if not ORIGIN.fullmatch(origin) or len(handler.headers.get_all('Origin', [])) != 1:
+            raise ValueError('Invalid extension Origin.')
+        size = int(handler.headers.get('Content-Length', '0'))
+        if not 0 < size <= 4096:
+            raise ValueError('Invalid pairing request.')
+        handler.connection.settimeout(5)
+        body = json.loads(handler.rfile.read(size))
+        result = broker.exchange(body.get('code'), origin, body.get('name', 'Mac Chrome'))
+        handler.respond(200, result)
+    except (ValueError, AttributeError, UnicodeError):
+        handler.respond(403, {'error': 'Pairing refused. Use a fresh code from Tether.'})
+
+
+BROKER = Broker()

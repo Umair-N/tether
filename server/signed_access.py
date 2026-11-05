@@ -70,6 +70,8 @@ class Grant:
 
 
 class Access:
+    browser_id = 'server'
+    page_allowed = PAGE_ALLOWED
     def __init__(self, the_browser=None, notifier=lambda *a, **k: None, agent_finder=lambda pane: 'agent',
                  clock=time.time, request_seconds=REQUEST_SECONDS):
         self.browser = the_browser or browser.SIGNED_BROWSER
@@ -78,6 +80,7 @@ class Access:
         self.notifier, self.agent_finder, self.clock = notifier, agent_finder, clock
         self.request_seconds = request_seconds
         self.lock = threading.RLock()
+        self.request_lock, self.request_peers = self.lock, [self]
         self.pending, self.grants, self.reserved = {}, {}, set()
         self.clients = set()
         self.config = {'port': 0}
@@ -106,6 +109,9 @@ class Access:
     def valid(self, grant):
         return not self.stopped and grant.active and self.clock() < grant.row['expires']
 
+    def request_binding(self):
+        return None
+
     def ask(self, reason, pane, duration=15, url=None):
         if not isinstance(reason, str) or not reason.strip() or len(reason) > 300:
             raise ValueError('Ask text must contain 1 to 300 characters.')
@@ -117,15 +123,18 @@ class Access:
                 raise ValueError('Invalid URL.')
             url = browser.normalize_url(url)
         row = dict(id=secrets.token_urlsafe(16), pane=pane, agent=self.agent_finder(pane), reason=reason.strip(),
-                   minutes=duration, url=url, created=self.clock())
+                   minutes=duration, url=url, created=self.clock(), browser=self.browser_id)
         slot = {'row': row, 'event': threading.Event(), 'result': {'ok': False, 'reason': 'denied'},
                 'deadline': time.monotonic() + self.request_seconds}
-        with self.lock:
+        with self.request_lock, self.lock:
             if self.stopped:
                 return slot['result']
-            for old in list(self.pending.values()):
-                if old['row']['pane'] == pane:
-                    self._answer(old, {'ok': False, 'reason': 'denied'})
+            slot['binding'] = self.request_binding()
+            for peer in self.request_peers:
+                with peer.lock:
+                    for old in list(peer.pending.values()):
+                        if old['row']['pane'] == pane:
+                            peer._answer(old, {'ok': False, 'reason': 'denied'})
             self.pending[row['id']] = slot
             self.browser._bump()
         payload = {'title': 'Agent wants signed-in browser access',
@@ -192,7 +201,9 @@ class Access:
                     grant.timer = threading.Timer(max(0, grant.row['expires'] - self.clock()), self.end, args=(ident,))
                     grant.timer.daemon = True
                     grant.timer.start()
-                    self._answer(slot, {'ok': True, 'cdp': self.url(grant), 'tab': row['id'], 'expires': grant.row['expires']})
+                    grant.row['browser'] = self.browser_id
+                    self._answer(slot, {'ok': True, 'browser': self.browser_id, 'cdp': self.url(grant),
+                                        'tab': row['id'], 'expires': grant.row['expires']})
             finally:
                 with self.lock:
                     self.reserved.discard(ident)
@@ -394,7 +405,7 @@ class Client(cdp.AgentClient):
                 # Playwright always sends this during connectOverCDP. Acknowledge without
                 # changing Chrome's browser-wide deny policy or enabling download events.
                 self.result(message)
-            elif session and method in PAGE_ALLOWED:
+            elif session and method in self.proxy.page_allowed:
                 if method == 'Network.getCookies' and params.get('urls'):
                     raise ValueError('Cookie reads use this page only; omit urls.')
                 if method == 'Page.navigate':
@@ -406,6 +417,8 @@ class Client(cdp.AgentClient):
                         return
                     target = self.sessions[session]
                     tab = self.proxy.browser.tabs.get(target)
+                    if self.proxy.browser_id == 'mac' and tab and tab.controller == 'user':
+                        raise ValueError('The user controls this tab. Give back control first.')
                     emulation = (method.startswith(('Emulation.', 'Network.emulate'))
                                  or method in ('Network.setUserAgentOverride', 'Network.overrideNetworkState'))
                     if emulation and tab and tab.controller == 'user':
@@ -455,6 +468,8 @@ class Client(cdp.AgentClient):
             self.conn.call(method, {'sessionId': real})
             self.result(message)
         elif method in ('Target.closeTarget', 'Target.activateTarget') and not session:
+            if self.proxy.browser_id == 'mac' and self.proxy.browser.tab(params['targetId']).controller == 'user':
+                raise ValueError('The user controls this tab. Give back control first.')
             self.result(message, self.conn.call(method, {'targetId': params['targetId']}))
         elif method == 'Target.createTarget' and not session:
             with self.proxy.browser.lock:
