@@ -322,19 +322,22 @@ def runtime_types():
     from pipecat.audio.vad.vad_analyzer import VADAnalyzer, VADParams
     from pipecat.audio.turn.smart_turn.base_smart_turn import BaseSmartTurn
     from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
-    from pipecat.frames.frames import (BotStartedSpeakingFrame, BotStoppedSpeakingFrame,
+    from pipecat.frames.frames import (BotStartedSpeakingFrame, BotStoppedSpeakingFrame, DataFrame,
         FunctionCallResultFrame, InterruptionFrame, LLMContextFrame, LLMFullResponseEndFrame,
         LLMFullResponseStartFrame, LLMAssistantPushAggregationFrame, MetricsFrame,
         TTSSpeakFrame, TTSStartedFrame, TTSStoppedFrame, TTSTextFrame, TranscriptionFrame,
         InterimTranscriptionFrame, VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame)
     from pipecat.metrics.metrics import TTFBMetricsData
     from pipecat.observers.base_observer import BaseObserver
+    from pipecat.processors.frame_processor import FrameDirection
     from pipecat.processors.frameworks.rtvi.observer import RTVIFunctionCallReportLevel, RTVIObserverParams
     from pipecat.services.stt_service import SegmentedSTTService
     from pipecat.services.pocket_tts.tts import PocketTTSService
     from pipecat.services.tts_service import TTSService
     from pipecat.services.openai.llm import OpenAILLMService
     from pipecat.transcriptions.language import Language
+    from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import TurnAnalyzerUserTurnStopStrategy
+    from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import SpeechTimeoutUserTurnStopStrategy
     from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
     from pipecat.utils.time import time_now_iso8601
 
@@ -375,6 +378,26 @@ def runtime_types():
                     # Preserve today's transcription fallback if VAD missed speech.
                     await self.report_user_turn_started()
 
+    class EmptySTTSegmentFrame(DataFrame):
+        """Segment completion without words; never a transcription/turn start."""
+        finalized = False
+
+    class EmptySegmentStopMixin:
+        async def process_frame(self, frame):
+            if isinstance(frame, EmptySTTSegmentFrame):
+                # SegmentedSTT can finish an old segment after speech resumes.
+                # Earlier words still use the normal Smart Turn/timeout path.
+                if frame.finalized and not self._vad_user_speaking and not self._text:
+                    await self.report_user_turn_stopped()
+                return
+            await super().process_frame(frame)
+
+    class FridayTurnAnalyzerStop(EmptySegmentStopMixin, TurnAnalyzerUserTurnStopStrategy):
+        pass
+
+    class FridaySpeechTimeoutStop(EmptySegmentStopMixin, SpeechTimeoutUserTurnStopStrategy):
+        pass
+
     class ParakeetSTT(SegmentedSTTService):
         def __init__(self, recognizer, session):
             super().__init__(sample_rate=16000, audio_passthrough=True)
@@ -391,6 +414,11 @@ def runtime_types():
             self.recognizer.decode_stream(stream)
             return fix_transcript(stream.result.text.strip())
 
+        async def push_frame(self, frame, direction=FrameDirection.DOWNSTREAM):
+            if isinstance(frame, EmptySTTSegmentFrame):
+                frame.finalized = self._transcribing_segment == self._segment_count
+            await super().push_frame(frame, direction)
+
         async def run_stt(self, audio):
             start = time.monotonic()
             await self.start_processing_metrics()
@@ -399,6 +427,8 @@ def runtime_types():
                 self.session.stt_seconds += time.monotonic() - start
                 if text:
                     yield TranscriptionFrame(text, self._user_id, time_now_iso8601())
+                else:
+                    yield EmptySTTSegmentFrame()
             finally:
                 await self.stop_processing_metrics()
 
@@ -436,6 +466,12 @@ def runtime_types():
             self.voice_open = True
             self.voice_client = self.session.voice_mode == 'client'
             self.voice_cancelled = self.voice_speaking = self.voice_playback_ended = False
+
+        async def process_frame(self, frame, direction):
+            if (hasattr(frame, 'friday_event_generation')
+                    and frame.friday_event_generation != self.session.event_generation):
+                return
+            await super().process_frame(frame, direction)
 
         async def _handle_llm_response_start(self, frame):
             self.begin_voice_turn()
@@ -495,10 +531,11 @@ def runtime_types():
             was_speaking = self.voice_speaking
             client_turn = self.voice_client or (self.voice_open and self.session.voice_mode == 'client')
             if client_turn and not self.voice_cancelled and not self.voice_playback_ended:
-                self.voice_cancelled = True
                 self.voice_speaking = False
                 await self.session.rtvi.send_server_message(
                     {'t': 'stop', 'd': {'turn': self.voice_turn}})
+            self.voice_cancelled = True
+            self.voice_open = False
             await super()._handle_interruption(frame, direction)
             if was_speaking:
                 await self.session.output.broadcast_frame(BotStoppedSpeakingFrame)
@@ -545,6 +582,12 @@ def runtime_types():
             self._active_run = ContextVar('friday_tool_run', default=None)
             self._thought_signatures = {}
             self._request_roles = ''
+
+        async def process_frame(self, frame, direction):
+            if (hasattr(frame, 'friday_event_generation')
+                    and frame.friday_event_generation != self.session.event_generation):
+                return
+            await super().process_frame(frame, direction)
 
         async def get_chat_completions(self, context):
             stream = await super().get_chat_completions(context)
@@ -702,7 +745,8 @@ def runtime_types():
                 s.stop_time = f.timestamp - f.stop_secs
                 # Keep the queue gated until STT and the turn analyzer release
                 # the user turn, not just until the short VAD pause ends.
-            elif isinstance(f, LLMContextFrame):
+            elif (isinstance(f, LLMContextFrame) and data.direction == FrameDirection.DOWNSTREAM
+                  and data.source is not s.aggregators.assistant()):
                 s.user_speaking = False
                 s.busy = True
             elif isinstance(f, LLMFullResponseStartFrame):
@@ -710,7 +754,12 @@ def runtime_types():
                 s.busy = True
             elif isinstance(f, LLMFullResponseEndFrame):
                 s.llm_running = False
+                if s.tts.voice_cancelled and not s.bot_speaking:
+                    s.busy = False
             elif isinstance(f, BotStartedSpeakingFrame):
+                # A tap can overtake the start broadcast from spoken(start).
+                if s.tts.voice_client and not s.tts.voice_speaking:
+                    return
                 s.bot_speaking = True
                 if not s.reported:
                     await s.report_metrics()
@@ -788,8 +837,6 @@ class Session:
         from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair, LLMUserAggregatorParams
         from pipecat.processors.frameworks.rtvi.processor import RTVIProcessor
         from pipecat.turns.user_turn_strategies import UserTurnStrategies
-        from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import TurnAnalyzerUserTurnStopStrategy
-        from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import SpeechTimeoutUserTurnStopStrategy
         from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
         from pipecat.transports.base_transport import TransportParams
 
@@ -800,6 +847,7 @@ class Session:
         self.events = EventQueue()
         self.wake = asyncio.Event()
         self.user_speaking = self.bot_speaking = self.busy = self.llm_running = False
+        self.event_generation = 0
         self.offline_spoken = False
         self.voice_mode = 'server'
         self.turn = 0
@@ -815,9 +863,10 @@ class Session:
             tools.append(FunctionSchema(f['name'], f['description'], f['parameters']['properties'], f['parameters']['required']))
             self.llm.register_function(f['name'], self.llm.handle_browser_tool, cancel_on_interruption=False)
         self.context = LLMContext(prefix['messages'], tools=ToolsSchema(standard_tools=tools))
-        stop = (TurnAnalyzerUserTurnStopStrategy(turn_analyzer=rt.SharedSmartTurn(models.smart_turn))
-                if models.smart_turn is not None else SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0))
+        stop = (rt.FridayTurnAnalyzerStop(turn_analyzer=rt.SharedSmartTurn(models.smart_turn))
+                if models.smart_turn is not None else rt.FridaySpeechTimeoutStop(user_speech_timeout=0))
         self.aggregators = LLMContextAggregatorPair(self.context, user_params=LLMUserAggregatorParams(
+            empty_user_turn=None,
             vad_analyzer=rt.SharedVAD(models.vad, vad_stop(os.environ, models.smart_turn is not None)),
             user_turn_strategies=UserTurnStrategies(stop=[stop])))  # b12 start strategy off: turns stalled live 20:17
         transport = SmallWebRTCTransport(connection, TransportParams(
@@ -908,6 +957,18 @@ class Session:
             if data.get('mode') in ('client', 'server'):
                 self.voice_mode = data['mode']
                 await self.rtvi.send_server_message({'t': 'voice', 'd': {'mode': self.voice_mode}})
+        elif kind == 'interrupt':
+            pending_voice = (not self.tts.voice_cancelled and (
+                self.tts.voice_open or (self.tts.voice_client and self.tts.voice_count
+                                       and not self.tts.voice_playback_ended)))
+            if (self.bot_speaking or self.llm_running or pending_voice
+                    or (self.busy and not self.user_speaking)):
+                turn = self.tts.voice_turn or self.turn
+                self.event_generation += 1
+                # The same bidirectional broadcast used by LLMUserAggregator
+                # on barge-in. It flushes pending speech and cancels LLM/TTS.
+                await self.aggregators.user().broadcast_interruption()
+                await self.rtvi.send_server_message({'t': 'interrupted', 'd': {'turn': turn}})
         elif kind == 'spoken':
             await self.tts.spoken(data)
         elif kind == 'state':
@@ -917,6 +978,16 @@ class Session:
             del self.notes[:-5]
         elif self.events.put(kind, data):
             self.wake.set()
+
+    def release_event(self):
+        # A tap cancelled this event before it reached the pipeline: free the queue for the next one.
+        self.busy = False
+        self.wake.set()
+
+    async def queue_event_frame(self, frame):
+        # A tap can overtake a frame still in the worker's input queue.
+        frame.friday_event_generation = self.event_generation
+        await self.worker.queue_frame(frame)
 
     async def pump(self):
         while True:
@@ -932,13 +1003,20 @@ class Session:
             self.busy = True
             self.new_turn()
             data = item['data']
+            generation = self.event_generation
             if item['type'] == 'say':
-                await self.worker.queue_frame(self.rt.TTSSpeakFrame(data['text']))
+                await self.queue_event_frame(self.rt.TTSSpeakFrame(data['text']))
             elif await self.models.llm_health():
+                if generation != self.event_generation:
+                    self.release_event()
+                    continue
                 self.context.add_message({'role': 'user', 'content': EVENT_PREFIX
                     + json.dumps({k: data[k] for k in ('chat', 'kind', 'text')}, separators=(',', ':'))})
-                await self.worker.queue_frame(self.rt.LLMContextFrame(self.context))
+                await self.queue_event_frame(self.rt.LLMContextFrame(self.context))
             else:
+                if generation != self.event_generation:
+                    self.release_event()
+                    continue
                 if self.offline_spoken:
                     self.busy = False
                     self.wake.set()

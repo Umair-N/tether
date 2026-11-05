@@ -144,13 +144,15 @@ export class FridayAgent {
     this.client = null
   }
 
-  send(t: 'state' | 'event' | 'say' | 'note' | 'voice' | 'spoken', d: unknown) {
+  send(t: 'state' | 'event' | 'say' | 'note' | 'voice' | 'spoken' | 'interrupt', d: unknown) {
     try { this.client?.sendClientMessage(t, d) } catch { /* not connected yet */ }
   }
   state(chats: AgentChats) { this.send('state', chats) }
   event(event: AgentEvent) { this.send('event', event) }
   say(text: string) { this.send('say', { text }) }
   note(text: string) { this.send('note', { text }) }
+  /** Stop Friday now. Phones on speaker often hide the user's voice from the server, so a tap must work too. */
+  interrupt() { this.send('interrupt', {}); this.voice.stop(); this.setTurn('listening') }
 
   private setTurn(turn: AgentTurn) {
     if (this.turn === turn) return
