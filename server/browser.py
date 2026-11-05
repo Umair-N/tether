@@ -691,6 +691,8 @@ class Browser:
     def _start_cast(self, tab, size):
         if tab.controller == 'agent':
             self._agent_size(tab)
+        if tab.casting:  # headed Chrome refuses a second start ("Screencast is already active"); headless allows it
+            self.conn.call('Page.stopScreencast', session=tab.session)
         tab.casting = size
         self.conn.call('Page.startScreencast', {'format': 'jpeg', 'quality': QUALITY, 'maxWidth': size[0], 'maxHeight': size[1],
                                                 'everyNthFrame': 1}, tab.session)
@@ -698,10 +700,11 @@ class Browser:
     def _restart_cast(self, tab):
         if tab.casting:
             self.conn.call('Page.stopScreencast', session=tab.session)
+            size, tab.casting = tab.casting, None
             # Flush the resized compositor before streaming. Otherwise Chromium can label a desktop-shaped JPEG
             # with the new phone dimensions, even though the page already lays out at the phone width.
             self.conn.call('Page.captureScreenshot', {'format': 'jpeg', 'quality': QUALITY}, tab.session)
-            self._start_cast(tab, tab.casting)
+            self._start_cast(tab, size)
 
     def ack(self, tab, frame):
         """Tell Chromium a frame reached a viewer, so it may send the next one. Every frame of one screencast carries the

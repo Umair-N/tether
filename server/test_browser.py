@@ -277,6 +277,15 @@ class FakePipeTests(unittest.TestCase):
             time.sleep(.01)
         self.assertTrue(self.fake.sent('Page.stopScreencast'))
 
+    def test_new_stream_size_stops_the_running_screencast_first(self):
+        # Headed Chrome (the signed-in browser) answers "Screencast is already active" to a second start.
+        self.browser.list_tabs()
+        self.browser.watch('T1', 960, 1280)
+        self.browser.watch('T1', 1024, 1344)
+        casts = [command['method'] for command in self.fake.commands if command['method'] in ('Page.startScreencast', 'Page.stopScreencast')]
+        self.assertEqual(casts, ['Page.startScreencast', 'Page.stopScreencast', 'Page.startScreencast'])
+        self.assertEqual(self.fake.sent('Page.startScreencast')[-1]['params']['maxHeight'], 1344)
+
     def test_target_destroyed_and_info_changed(self):
         self.browser.list_tabs()
         self.browser.new_tab()
