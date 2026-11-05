@@ -592,7 +592,8 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     }
     if (!ok) { cardError.current = true; throw new Error('not taken') }
   }
-  const model = activePane.agent === 'codex' ? footer.model : footer.status?.split('|')[0].trim()
+  // Claude: the model from its status-line JSON; a custom status line's first part when Tether's status line is not set.
+  const model = footer.model || (activePane.agent === 'codex' ? '' : footer.status?.split('|')[0].trim())
   const context = footer.context ? String(Math.round(footer.context.percent)) : /ctx\s+(\d+)%/.exec(footer.status ?? '')?.[1]
   const currentMode = modeBusy || modeKey(footer.mode)
   async function chooseMode(target: string) {

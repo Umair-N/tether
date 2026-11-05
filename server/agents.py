@@ -467,6 +467,17 @@ def ask_questions(part):
     return {'id': part.get('id'), 'questions': questions} if questions and part.get('id') else None
 
 
+def claude_model(thread):
+    """Claude's model name from its status-line JSON (claude_usage.py). Empty when no Tether status line ran."""
+    if not isinstance(thread, str) or not re.fullmatch(r'[a-zA-Z0-9-]+', thread):
+        return ''
+    try:
+        model = json.loads((METRICS / (thread + '.json')).read_text()).get('model')
+    except (OSError, ValueError, AttributeError):
+        return ''
+    return str(model.get('display_name') or model.get('id') or '') if isinstance(model, dict) else ''
+
+
 def claude_snapshot(entry, clean):
     def consume(state, index, record):
         claude_consume(state['messages'], index, record, clean)

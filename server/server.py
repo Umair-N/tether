@@ -1153,6 +1153,7 @@ class Handler(BaseHTTPRequestHandler):
                                                      'elapsed': claude_hooks.elapsed(tool['started'], now)}
                 if config['agent'] == 'claude' and not config.get('ambiguous'):
                     result['heads_up'] = footer.card_note(result.get('heads_up'), config.get('thread'), screen=screen)
+                    result['model'] = agents.claude_model(config.get('thread'))
                 self.respond(200, result)
             elif path == '/mobile/api/shell-output':
                 query = parse_qs(urlsplit(self.path).query)
