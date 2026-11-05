@@ -23,12 +23,14 @@ import { PanelColumn, PanelTools } from './PanelColumn'
 import { PANELS, TOOLBAR_PANELS, extraPanels, togglePanelKind } from './panels'
 import type { PanelKind, SetPanels } from './panels'
 import type { Side } from './workspace'
+import { withoutShells } from './sideShells'
 import type { DesktopLayout, SidePin } from './prefs'
 import { CommandMenu } from './CommandMenu'
 import type { Command } from './CommandMenu'
 import { Shortcuts } from './Shortcuts'
 import { StatusBar } from './StatusBar'
-import { toggleTerminal } from './keys'
+import { toggleTerminal, toggleVoice } from './keys'
+import { copyPaneName, nameKindOf } from './CopyNames'
 import { Rail } from './Rail'
 import type { Screen } from './Rail'
 import { Explorer } from './Explorer'
@@ -274,9 +276,9 @@ function App() {
     update(current => ({ layout: withDesk(current.layout, deskKey, { ...deskFor(current.layout, deskKey), panes: storeSlots(list, list), focus: list.indexOf(pane.id) }) }))
   }
   // The global key handler reads the workspace through this ref, so it does not re-subscribe on each render.
-  const workspaceKeys = useRef<{ count: number; focus: number; focusSlot: (index: number) => void; setCount: (count: DesktopLayout['count']) => void; closeSlot: (index: number) => void; toggleZoom: () => void; toggleSidebar: () => void; togglePanel: (kind: PanelKind) => void; sideChat: () => void } | null>(null)
+  const workspaceKeys = useRef<{ count: number; focus: number; focusSlot: (index: number) => void; setCount: (count: DesktopLayout['count']) => void; closeSlot: (index: number) => void; toggleZoom: () => void; toggleSidebar: () => void; togglePanel: (kind: PanelKind) => void; sideChat: () => void; pane?: Pane } | null>(null)
   useEffect(() => {
-    workspaceKeys.current = view ? { count: slotPanes.length, focus: view.focus, focusSlot, setCount, closeSlot, toggleZoom, toggleSidebar: () => setDesk({ sidebar: !desk.sidebar }), togglePanel: kind => togglePanelKind(setPanels, kind), sideChat: () => void sideChat() } : null
+    workspaceKeys.current = view ? { count: slotPanes.length, focus: view.focus, focusSlot, setCount, closeSlot, toggleZoom, toggleSidebar: () => setDesk({ sidebar: !desk.sidebar }), togglePanel: kind => togglePanelKind(setPanels, kind), sideChat: () => void sideChat(), pane } : null
   })
   useEffect(() => {
     const open = (id: unknown) => {
@@ -347,7 +349,12 @@ function App() {
       if (event.altKey && !event.ctrlKey && !event.metaKey && (event.code === 'BracketRight' || event.code === 'BracketLeft')) {
         if (pinKeys.current(event.code === 'BracketRight' ? 1 : -1)) { event.preventDefault(); return }
       }
-      // The Files and Share screens handle their own keys; the hidden workspace must not take them.
+      // ⌥V turns voice input on or off, also while typing. Read event.code: Alt+V types √ on a Mac.
+      if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.code === 'KeyV' && !document.querySelector('dialog[open]')) {
+        if (toggleVoice()) event.preventDefault()
+        return
+      }
+      // The Files and Share screens handle its own keys; the hidden workspace must not take them.
       if (rail?.files) return
       if (slots && !document.querySelector('dialog[open]')) {
         // Browsers keep Cmd+1-9, Cmd+W and Cmd+N, so slot keys use Alt. Read event.code: Alt+letter types a symbol on a Mac.
@@ -366,6 +373,9 @@ function App() {
           if (event.code === 'KeyT') return act(toggleTerminal)
           if (event.code === 'KeyN') return act(() => setNewSession(true))
         }
+        // ⌥⇧S, C, P and T copy a name of the focused pane: the pane menu's Copy name keys (CopyNames.tsx).
+        const copyKind = event.altKey && event.shiftKey && !mod ? nameKindOf(event.code) : undefined
+        if (copyKind && slots.pane) { const target = slots.pane; return act(() => void copyPaneName(target, copyKind).then(setNotice)) }
         if (event.key === '?' && !typing && !mod && !event.altKey) return act(() => setMenu('shortcuts'))
       }
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'k') {
@@ -413,6 +423,13 @@ function App() {
     setPanels(current => ({ cols: addPanel(panelCols(current), { id: newPanelId(), kind: 'terminal', folder, fresh: true }) }))
     chooseScreen('chats')
   }
+  // The sidebar Shells list: show a shell in a Terminal panel (once), and close the panels of shells that ended.
+  const openShell = (shell: string) => {
+    setPanels(current => panelCols(current).some(col => col.items.some(item => item.kind === 'terminal' && item.pane === shell)) ? {}
+      : { cols: addPanel(panelCols(current), { id: newPanelId(), kind: 'terminal', pane: shell }) })
+    chooseScreen('chats')
+  }
+  const shellsEnded = (panes: string[]) => setPanels(current => withoutShells(current, panes))
   const openPane = (target: Pane) => {
     update(current => ({ selected: target.id, lastPane: { ...current.lastPane, [target.tmux_session]: target.id } }))
     setDrawer(false)
@@ -499,7 +516,7 @@ function App() {
   }
   const canMessage = sessions.some(item => item.panes.some(p => p.agent !== 'shell' && p.writable))
   const words = useMemo(() => wordsFor(prefs.tmuxWords), [prefs.tmuxWords])
-  const sidebarProps = { api, sessions, marks, onMarks: loadMarks, selected: pane?.id, slots: multi ? view?.slots : undefined, drag: !!view, prefs, update, loading, error, onRetry: () => void refresh(), onOpen: openPane, onNew: () => { setDrawer(false); setNewSession(true) }, onActions: (item: Session, remove?: boolean, at?: Anchor) => { if (remove) setDrawer(false); setMenuAt(view ? at : undefined); setActionsDelete(!!remove); setActions(item.id) }, onPaneActions: (item: Pane, at?: Anchor) => { setDrawer(false); setMenuAt(view ? at : undefined); setPaneActions(item.id) }, onPastChat: pickPastChat, onSettings: () => { setDrawer(false); setSettings(true) }, onCommandMenu: view ? () => setMenu('commands') : undefined, onMessageAll: canMessage ? () => { setDrawer(false); setAgentsPage('message') } : undefined, onAddPane: (item: Session) => { const target = item.panes.find(entry => entry.id === prefs.lastPane[item.id]) ?? item.panes[0]; void split('right', target) } }
+  const sidebarProps = { api, sessions, marks, onMarks: loadMarks, selected: pane?.id, slots: multi ? view?.slots : undefined, drag: !!view, prefs, update, loading, error, onRetry: () => void refresh(), onOpen: openPane, onNew: () => { setDrawer(false); setNewSession(true) }, onActions: (item: Session, remove?: boolean, at?: Anchor) => { if (remove) setDrawer(false); setMenuAt(view ? at : undefined); setActionsDelete(!!remove); setActions(item.id) }, onPaneActions: (item: Pane, at?: Anchor) => { setDrawer(false); setMenuAt(view ? at : undefined); setPaneActions(item.id) }, onPastChat: pickPastChat, onSettings: () => { setDrawer(false); setSettings(true) }, onCommandMenu: view ? () => setMenu('commands') : undefined, onMessageAll: canMessage ? () => { setDrawer(false); setAgentsPage('message') } : undefined, onOpenShell: view ? openShell : undefined, onShellsEnded: shellsEnded, onAddPane: (item: Session) => { const target = item.panes.find(entry => entry.id === prefs.lastPane[item.id]) ?? item.panes[0]; void split('right', target) } }
   // The command menu runs the same actions as the keys. A command shows only when it would do something now.
   const commands: Command[] = view ? [
     ...(slotPanes.length < 3 ? [{ label: 'Split right', key: '⌘\\', run: () => setCount(Math.max(2, slotPanes.length + 1) as DesktopLayout['count']) }] : []),

@@ -35,8 +35,11 @@ def _month_start(now):
 
 
 def _events(path):
-    """[(time, long, input, cached, cache_write, output)] for one Foundry session log, or [] for any other provider."""
-    events, previous = [], None
+    """[(time, long, input, cached, cache_write, output, model)] for a Foundry log, or [] for other providers.
+
+    Model is None before the first turn_context.
+    """
+    events, previous, model = [], None, None
     with open(path, 'rb') as handle:
         first = handle.readline()
         try:
@@ -46,11 +49,14 @@ def _events(path):
         if meta.get('model_provider') != PROVIDER:
             return []
         for line in handle:
-            if b'"token_count"' not in line:
+            if b'"token_count"' not in line and b'"turn_context"' not in line:
                 continue
             try:
                 entry = json.loads(line)
             except ValueError:
+                continue
+            if entry.get('type') == 'turn_context':
+                model = (entry.get('payload') or {}).get('model')
                 continue
             info = (entry.get('payload') or {}).get('info') or {}
             total, last = info.get('total_token_usage'), info.get('last_token_usage') or {}
@@ -63,7 +69,7 @@ def _events(path):
             previous = now
             if not any(value > 0 for value in delta):
                 continue
-            events.append((entry.get('timestamp') or '', int(last.get('input_tokens') or 0) > LONG_CONTEXT, *delta))
+            events.append((entry.get('timestamp') or '', int(last.get('input_tokens') or 0) > LONG_CONTEXT, *delta, model))
     return events
 
 
@@ -82,12 +88,13 @@ def _logs(now, root):
 
 
 def usage(now=None, root=None):
-    """Foundry tokens this month and today, split by price tier."""
+    """Foundry tokens this month and today, split by price tier and model."""
     now = now or dt.datetime.now(dt.timezone.utc)
     root = Path(root or paths.CODEX / 'sessions')
     month, today = f'{now:%Y-%m}', f'{now:%Y-%m-%d}'
     blank = lambda: {'input': 0, 'cached': 0, 'cache_write': 0, 'output': 0, 'requests': 0}
-    out = {'month': {'short': blank(), 'long': blank()}, 'today': {'short': blank(), 'long': blank()}, 'sessions': 0}
+    windows = lambda: {'month': {'short': blank(), 'long': blank()}, 'today': {'short': blank(), 'long': blank()}}
+    out = {**windows(), 'sessions': 0, 'by_model': {}}
     with _lock:
         for path in _logs(now, root):
             try:
@@ -99,18 +106,21 @@ def usage(now=None, root=None):
             except OSError:
                 continue
             counted = False
-            for stamp, long, input_tokens, cached, cache_write, output in events:
+            for stamp, long, input_tokens, cached, cache_write, output, model in events:
                 if not stamp.startswith(month):
                     continue
                 counted = True
+                if model not in out['by_model']:
+                    out['by_model'][model] = windows()
                 for window in ('month', 'today') if stamp.startswith(today) else ('month',):
-                    tier = out[window]['long' if long else 'short']
-                    # input_tokens includes cached and cache-write tokens; each is priced on its own.
-                    tier['input'] += max(0, input_tokens - cached - cache_write)
-                    tier['cached'] += cached
-                    tier['cache_write'] += cache_write
-                    tier['output'] += output
-                    tier['requests'] += 1
+                    for totals in (out, out['by_model'][model]):
+                        tier = totals[window]['long' if long else 'short']
+                        # input_tokens includes cached and cache-write tokens; each is priced on its own.
+                        tier['input'] += max(0, input_tokens - cached - cache_write)
+                        tier['cached'] += cached
+                        tier['cache_write'] += cache_write
+                        tier['output'] += output
+                        tier['requests'] += 1
             out['sessions'] += counted
     return out
 
@@ -123,19 +133,23 @@ def _fetch_json(url, data=None, headers=None, timeout=20):
 
 def prices(model, fetch=_fetch_json, now=None):
     """USD per 1M tokens for `model` at Global Standard: {'short': {...}, 'long': {...}}, cached for a day. None if unknown."""
-    now = now or time.time()
+    now = time.time() if now is None else now
     name = (model or '').removeprefix('gpt-')
     try:
         saved = json.loads(PRICES_FILE.read_text())
-        if saved.get('model') == name and now - saved.get('at', 0) < 86400:
-            return saved['prices']
-    except (OSError, ValueError, KeyError):
-        saved = None
+    except (OSError, ValueError):
+        saved = {}
+    models = saved.get('models') or {}
+    if saved.get('model') and saved.get('prices'):
+        models[f"gpt-{saved['model']}"] = {'at': saved.get('at', 0), 'prices': saved['prices']}
+    cached = models.get(model) or {}
+    if now - cached.get('at', 0) < 86400 and cached.get('prices'):
+        return cached['prices']
     try:
         query = urllib.parse.urlencode({'$filter': f"serviceName eq 'Foundry Models' and armRegionName eq 'eastus2' and contains(skuName, '{name} ')"})
         items = fetch(f'{PRICES_URL}?{query}').get('Items') or []
     except (OSError, ValueError):
-        return saved['prices'] if saved else None
+        return cached.get('prices')
     meters = {'Inp': 'input', 'Cd Inp': 'cached', 'Cd Wr': 'cache_write', 'Opt': 'output'}
     table = {'short': {}, 'long': {}}
     for item in items:
@@ -147,9 +161,10 @@ def prices(model, fetch=_fetch_json, now=None):
         if tier in ('ShortCo', 'LongCo') and meter in meters:
             table['short' if tier == 'ShortCo' else 'long'][meters[meter]] = float(item['retailPrice'])
     if any(len(table[tier]) < 4 for tier in table):
-        return saved['prices'] if saved else None
+        return cached.get('prices')
     PRICES_FILE.parent.mkdir(parents=True, exist_ok=True)
-    PRICES_FILE.write_text(json.dumps({'model': name, 'at': now, 'prices': table}))
+    models[model] = {'at': now, 'prices': table}
+    PRICES_FILE.write_text(json.dumps({'models': models}))
     return table
 
 
@@ -192,7 +207,8 @@ def bill(fetch=_fetch_json, now=None):
                       data=urllib.parse.urlencode({'grant_type': 'client_credentials', 'client_id': config['client_id'],
                                                    'client_secret': config['client_secret'], 'scope': 'https://management.azure.com/.default'}).encode())['access_token']
         body = {'type': 'ActualCost', 'timeframe': 'MonthToDate',
-                'dataset': {'granularity': 'None', 'aggregation': {'totalCost': {'name': 'Cost', 'function': 'Sum'}}}}
+                'dataset': {'granularity': 'None', 'aggregation': {'totalCost': {'name': 'Cost', 'function': 'Sum'}},
+                            'filter': {'dimensions': {'name': 'ServiceName', 'operator': 'In', 'values': ['Foundry Models']}}}}
         scope = config['scope'].strip('/')
         result = fetch(f'https://management.azure.com/{scope}/providers/Microsoft.CostManagement/query?api-version={COST_API}',
                        data=json.dumps(body).encode(), headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'})
@@ -214,7 +230,32 @@ def report(model):
     now = dt.datetime.now(dt.timezone.utc)
     tokens = usage(now)
     table = prices(model)
+    by_model = {}
+    for name, windows in tokens['by_model'].items():
+        name = model if name is None else name
+        if name not in by_model:
+            by_model[name] = {window: {tier: dict(bucket) for tier, bucket in tiers.items()}
+                              for window, tiers in windows.items()}
+        else:
+            for window, tiers in windows.items():
+                for tier, bucket in tiers.items():
+                    for kind, value in bucket.items():
+                        by_model[name][window][tier][kind] += value
+    tables = {model: table}
+    models, month_usd, today_usd, known = [], 0.0, 0.0, True
+    for name, windows in by_model.items():
+        if name not in tables:
+            tables[name] = prices(name)
+        model_table = tables[name]
+        usd = cost(windows['month'], model_table) if model_table else None
+        if usd is None:
+            known = False
+        else:
+            month_usd += usd
+            today_usd += cost(windows['today'], model_table)
+        models.append({'model': name, 'usd': round(usd, 2) if usd is not None else None, 'tokens': windows['month']})
+    models.sort(key=lambda row: (row['usd'] is not None, row['usd'] or 0), reverse=True)
     estimate = {'tokens': tokens['month'], 'today_tokens': tokens['today'], 'sessions': tokens['sessions'], 'prices': table,
-                'usd': round(cost(tokens['month'], table), 2) if table else None,
-                'today_usd': round(cost(tokens['today'], table), 2) if table else None}
+                'usd': round(month_usd, 2) if known else None,
+                'today_usd': round(today_usd, 2) if known else None, 'models': models}
     return {'month': f'{now:%B %Y}', 'budget': BUDGET, 'estimate': estimate, 'bill': bill()}

@@ -1,3 +1,4 @@
+import { keyLabel } from './keys'
 import { history, loadHistory, remember } from './history'
 import { chatTitle } from './Sidebar'
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
@@ -317,7 +318,7 @@ export function Composer({ api, pane, thread, disabled, onSend, error, errorActi
     </div>}{!uploading && !listening && !transcribing && options}<span className="composer-status" aria-live="polite">{uploading || (listening ? `Recording ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}` : transcribing ? 'Converting…' : pane.agent === 'shell' ? 'Terminal input' : shellMode ? 'Shell mode' : '')}</span>{!draft && !files.length && !pastes.length && pane.agent !== 'shell' && !listening && !transcribing && !uploading && <span className="composer-keys" aria-hidden="true"><span><kbd>↵</kbd> send</span><span><kbd>⇧↵</kbd> new line</span><span><kbd>/</kbd> commands</span><span><kbd>!</kbd> shell</span></span>}</div><div>
       {micOk && canRecord && (transcribing
         ? <button type="button" className="icon-button mic active" aria-label="Stop converting and keep the live text" onClick={() => converting.current?.abort()}><X size={19} /></button>
-        : <button type="button" className={`icon-button mic ${listening ? 'active' : ''}`} aria-label={listening ? 'Stop recording' : 'Start voice input'} aria-pressed={listening} disabled={disabled || sending} onClick={() => void toggleMic()}>{listening ? <Square size={18} /> : <Mic size={20} />}</button>)}
+        : <button type="button" className={`icon-button mic ${listening ? 'active' : ''}`} aria-label={listening ? 'Stop recording' : 'Start voice input'} aria-pressed={listening} aria-keyshortcuts="Alt+V" title={`${listening ? 'Stop recording' : 'Voice input'} (${keyLabel('⌥V')})`} disabled={disabled || sending} onClick={() => void toggleMic()}>{listening ? <Square size={18} /> : <Mic size={20} />}</button>)}
       {working && !draft.trim() && !files.length && !pastes.length
         ? <button type="button" className="primary send-button stop-button" aria-label={pane.agent === 'shell' ? 'Stop command (Ctrl+C)' : 'Stop response (Esc)'} disabled={disabled} onClick={onStop}><Square size={15} fill="currentColor" /></button>
         : shellMode

@@ -3,7 +3,7 @@ import { AudioLines, Check, ChevronDown, Mic, MicOff, X } from 'lucide-react'
 import { errorText, SESSION_NAME, type Api, type Approval, type ChatData, type Choice, type Pane, type SessionsData } from './api'
 import type { Command } from './CommandMenu'
 import { agentNames, paneTitle } from './Sidebar'
-import { agentReady, FridayAgent, type AgentChats, type AgentEvent, type ToolHandler } from './fridayAgent'
+import { agentReady, FridayAgent, type AgentChatList, type AgentChats, type AgentEvent, type ToolHandler } from './fridayAgent'
 import { LiveVoice, sentences } from './liveVoice'
 import { speakable } from './speech'
 import './Live.css'
@@ -58,6 +58,9 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
   const agent = useRef<FridayAgent | null>(null)  // set when the local Friday worker runs; else `voice` does the old phrase loop
   const [agentOn, setAgentOn] = useState(false)
   const canvas = useRef<HTMLCanvasElement>(null)
+  const words = useRef<HTMLDivElement>(null)
+  // Keep the newest words in view when a long reply scrolls.
+  useEffect(() => { const box = words.current; if (box) box.scrollTop = box.scrollHeight }, [said, reply.text, problem])
   const talkButton = useRef<HTMLButtonElement>(null)
   const phaseNow = useRef<Phase>('starting')
   const talking = useRef(false)  // the person is mid-phrase: hold announcements until they pause
@@ -240,7 +243,7 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
 
   // The tools Friday's brain calls. They run here, with the page's own sign-in, and reply in short facts.
   const tools = useRef<Record<string, ToolHandler>>({
-    list_chats: async () => ({ ...chats() }),
+    list_chats: async () => ({ ...chatList() }),
     send_to_chat: async ({ chat, prompt }) => {
       const pane = findPane(live.current.agents, String(chat ?? '')) ?? (chat ? undefined : live.current.target)
       if (!pane) return { error: `No chat called ${chat}.` }
@@ -280,9 +283,18 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
     },
   })
   /** The chats as Friday sees them: name, agent, state, and what each needs from you. */
+  function needsOf(pane: Pane) { return pane.needs?.text ?? (approvalOf(pane) ? shortText(approvalOf(pane)!.text, 140) : '') }
+  /** Prompt state: only what matters now. Names of idle chats come from list_chats. */
   function chats(): AgentChats {
     const { agents, target } = live.current
-    return { chats: agents.map(pane => ({ name: paneTitle(pane), agent: agentNames[pane.agent], state: chatState(pane), needs: pane.needs?.text ?? (approvalOf(pane) ? shortText(approvalOf(pane)!.text, 140) : '') })), target: target ? paneTitle(target) : '' }
+    const needs = agents.filter(pane => needsOf(pane)).map(pane => ({ chat: paneTitle(pane), needs: needsOf(pane) }))
+    const busy = agents.filter(pane => !needsOf(pane) && chatState(pane) !== 'idle').map(pane => paneTitle(pane))
+    return { target: target ? paneTitle(target) : '', busy, needs, idle: agents.length - busy.length - needs.length }
+  }
+  /** Every chat, one short line each: "name, agent, state". */
+  function chatList(): AgentChatList {
+    const { agents, target } = live.current
+    return { target: target ? paneTitle(target) : '', chats: agents.map(pane => `${paneTitle(pane)}, ${agentNames[pane.agent]}, ${needsOf(pane) ? 'needs you' : chatState(pane)}`) }
   }
 
   // Start: the Friday agent when its worker runs, else the phrase loop. Then a short briefing.
@@ -575,11 +587,11 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
       <div className="live-center">
         <div className="live-orb">
           <canvas ref={canvas} aria-hidden="true" onClick={talk} />
-          <div className="live-status" aria-live="polite">{status}{working ? <span> · {working} working</span> : null}</div>
         </div>
+        <div className="live-status" aria-live="polite">{status}{working ? <span> · {working} working</span> : null}</div>
       </div>
 
-      <div className="live-words" aria-live="polite">
+      <div ref={words} className="live-words" aria-live="polite">
         {said && <p className="live-said">“{said}”</p>}
         {reply.text && <p className="live-reply"><span className="live-who">{reply.who}</span>{reply.text}</p>}
         {problem && <p className="live-problem" role="alert">{problem}</p>}

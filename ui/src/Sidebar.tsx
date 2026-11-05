@@ -15,6 +15,7 @@ import { shareUsage } from './usage'
 import { useHost } from './host'
 import { UpdateBanner } from './UpdateBanner'
 import { Elapsed } from './Notices'
+import { ShellList } from './ShellList'
 import { useWords } from './words'
 
 export const agentNames: Record<Agent, string> = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity', shell: 'Shell' }
@@ -75,7 +76,8 @@ export const paneTitle = (pane: Pane) => pane.pane_name || pane.agent_name || ag
 export const paneIndex = (pane: Pane) => pane.label.includes(':') ? pane.label.slice(pane.label.lastIndexOf(':') + 1) : '0.0'
 /** The pane index for display: empty when the pane has a name of its own. */
 export const shownIndex = (pane: Pane) => pane.pane_name || pane.agent_name ? '' : paneIndex(pane)
-const sessionName = (pane: Pane) => pane.label.includes(':') ? pane.label.slice(0, pane.label.lastIndexOf(':')) : pane.label
+/** The tmux session name: the label without the window.pane suffix it gets when the session has more than one pane. */
+export const sessionName = (pane: Pane) => pane.label.includes(':') ? pane.label.slice(0, pane.label.lastIndexOf(':')) : pane.label
 
 export function groupSessions(panes: Pane[]): Session[] {
   const byId = new Map<string, Pane[]>()
@@ -160,7 +162,7 @@ function RunningNow({ sessions, selected, onOpen }: { sessions: Session[]; selec
   </section>
 }
 
-type Section = 'pinned' | 'agents' | 'terminals' | 'archived' | 'past'
+type Section = 'pinned' | 'agents' | 'terminals' | 'shells' | 'archived' | 'past'
 // What a sidebar drag carries: a whole session, or one pane of a session with several panes.
 type Carry = { session: string; pane?: string }
 // The server's answer to a merge: the session that now holds the moved panes, for the rename prompt.
@@ -192,11 +194,15 @@ interface Props {
   /** Sessions whose project gives agents context, and panes that started with an older version. */
   marks?: ProjectMarks
   onMarks?: () => void
+  /** Desktop workspace: a Shells row opens that shell in a Terminal panel. */
+  onOpenShell?: (pane: string) => void
+  /** Shells that ended from the Shells list: their panels close. */
+  onShellsEnded?: (panes: string[]) => void
   /** The + on a session row: a new tab (tmux pane) in that session. */
   onAddPane?: (session: Session) => void
 }
 
-export function Sidebar({ api, sessions, selected, prefs, update, loading, error, onRetry, onOpen, onNew, onActions, onPaneActions, onPastChat, onSettings, onClose, slots, drag, onCommandMenu, onMessageAll, marks, onMarks, onAddPane }: Props) {
+export function Sidebar({ api, sessions, selected, prefs, update, loading, error, onRetry, onOpen, onNew, onActions, onPaneActions, onPastChat, onSettings, onClose, slots, drag, onCommandMenu, onMessageAll, marks, onMarks, onOpenShell, onShellsEnded, onAddPane }: Props) {
   const host = useHost()
   const [query, setQuery] = useState('')
   const [reorder, setReorder] = useState<Section | null>(null)
@@ -344,6 +350,7 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
           ? <SessionList items={group.items} reorder={reorder === group.key} selected={selected} prefs={prefs} update={update} onOpen={onOpen} onActions={onActions} onPaneActions={onPaneActions} onMove={ids => moveWithin(group.items, ids)} pinned={group.key === 'pinned'} slots={slots ?? []} canDrag={!!drag} api={api} carry={carry} onCarry={startCarry} onDrop={dropOn} onHold={holdStart} touchOver={touchOver} renaming={renameRow} onRenamed={renamed} marks={marks} onAddPane={onAddPane} />
           : <p className="group-empty">{loading ? 'Finding sessions…' : group.key === 'terminals' ? 'No plain terminals. Create one with New session.' : 'Nothing here yet.'}</p>)}
       </section>)}
+      <ShellList api={api} open={isOpen('shells')} onToggle={() => toggle('shells')} onOpenShell={onOpenShell} onEnded={panes => onShellsEnded?.(panes)} />
       {carry?.pane && <div className={`new-session-drop ${overNew ? 'over' : ''}`} onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setOverNew(true) }} onDragLeave={() => setOverNew(false)} onDrop={event => { event.preventDefault(); merge('break', carry.pane!) }}><Plus size={14} aria-hidden="true" />New session</div>}
       <section className="group">
         <div className="group-head"><button className="group-toggle" aria-expanded={isOpen('past')} onClick={() => toggle('past')}>Past chats<ChevronRight size={14} className="chevron" /></button></div>

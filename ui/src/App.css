@@ -709,7 +709,7 @@ button.live-chip:active { background: var(--line); }
 .terminal-toggle { margin-left: auto; }
 .terminal-toggle + .keys-container { margin-left: 0; }
 .terminal-toggle.active { background: var(--accent-soft, color-mix(in srgb, currentColor 12%, transparent)); }
-.live-terminal-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.live-terminal-wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .terminal-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 16px; border-bottom: 1px solid var(--line); font-size: 13px; color: var(--muted); }
 .terminal-bar label { display: flex; align-items: center; gap: 8px; }
 .terminal-bar select { font: inherit; font-size: 14px; color: var(--text); background: var(--surface, transparent); border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 8px; min-height: 32px; }
@@ -720,8 +720,13 @@ button.live-chip:active { background: var(--line); }
 .live-terminal-box { position: relative; flex: 1; min-height: 0; display: flex; overflow-x: auto; overflow-y: hidden; background: #000; }
 .live-terminal-box.selecting { overflow: hidden; }
 .selecting .live-terminal { visibility: hidden; }
+.terminal-copied { position: absolute; right: 16px; bottom: 12px; margin: 0; padding: 4px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface, var(--bg)); color: var(--text); font-size: 13px; pointer-events: none; opacity: 0; transition: opacity 150ms ease-out; }
+.terminal-copied.shown { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .terminal-copied { transition: none; } }
 .terminal-selection-hint { margin: 0; padding: 6px 16px; font-size: 13px; color: var(--muted); }
-.terminal-select-text { position: absolute; inset: 0; width: 100%; height: 100%; resize: none; border: 0; border-radius: 0; margin: 0; padding: 12px; background: var(--bg); color: var(--text); font: 16px/1.5 monospace; white-space: pre; user-select: text; -webkit-user-select: text; }
+/* Wraps on screen only: a long URL stays one line in the copied text. */
+.terminal-select-text { position: absolute; inset: 0; overflow: auto; margin: 0; padding: 12px; background: var(--bg); color: var(--text); font: 14px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; -webkit-touch-callout: default; }
+.terminal-select-text a { color: var(--accent); text-decoration: underline; -webkit-user-drag: none; } /* a drag that starts on a link selects text */
 .terminal-select-text::selection { background: var(--accent); color: var(--bg); }
 .terminal-select-text:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .live-terminal { flex: 1 0 auto; width: 100%; min-height: 0; border: 0; background: #000; display: block; padding-bottom: env(safe-area-inset-bottom); }
@@ -1499,6 +1504,12 @@ button.live-chip:active { background: var(--line); }
 
 .notification-levels { margin: 0 4px 4px 20px; border-left: 1px solid var(--line); padding-left: 4px; }
 .notification-levels button > span { flex: 1; }
+.copy-names { margin: 0 4px 4px 20px; border-left: 1px solid var(--line); padding-left: 4px; }
+.copy-names button { min-width: 0; }
+.copy-names .copy-names-label { flex: none; }
+.copy-names .copy-names-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; text-align: right; }
+.copy-names .copy-names-value + kbd { margin-left: 0; }
+.copy-names .copy-names-done { color: var(--accent); }
 .notification-levels button[aria-pressed="true"] { color: var(--accent); background: var(--hover); }
 .notification-delivery fieldset { min-width: 0; margin: 0; padding: 10px 0; border: 0; border-top: 1px solid var(--line); }
 .notification-delivery legend { padding: 0; font-size: 13px; line-height: 1.4; }
@@ -1508,3 +1519,22 @@ button.live-chip:active { background: var(--line); }
 .bang-run > small { display: flex; align-items: center; gap: 6px; color: var(--muted); font: 12px/1.5 var(--font-sans, system-ui); margin-bottom: 6px; }
 .bang-run .bang-stop { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; width: auto; height: var(--control-sm); padding: 0 10px; border-radius: var(--radius); color: var(--text); font-size: 12px; font-weight: 600; }
 .bang-run pre { margin: 0; max-height: 40dvh; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Sidebar Shells: the shells behind Terminal panels. A filled dot: a program runs. A ring: idle. */
+.shell-group-actions { display: flex; }
+.group-edit.danger-text { color: var(--error); }
+.group-edit:disabled { opacity: .5; }
+.state-dot.shell-busy { width: 8px; height: 8px; background: var(--accent); }
+.shell-state { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
+.shell-static { cursor: default; }
+.shell-static:hover { background: none; }
+.shell-end { flex: none; width: 32px; height: 32px; color: var(--muted); }
+.shell-end:hover { color: var(--text); }
+.shell-confirm { display: grid; gap: 10px; margin: 2px 4px 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); font-size: 13px; }
+.shell-confirm p { margin: 0; line-height: 1.5; }
+.shell-confirm-buttons { display: flex; justify-content: flex-end; gap: 8px; }
+.shell-confirm-buttons button { min-height: 34px; padding: 0 14px; border-radius: 999px; font-size: 13px; }
+.shell-error { margin: 0 10px 8px; font-size: 13px; }
+@media (pointer: coarse) {
+  .shell-end { width: 44px; height: 44px; }
+  .shell-confirm-buttons button { min-height: 44px; }
+}

@@ -14,6 +14,7 @@ import files
 SESSION = 'tether-shells'
 PANE = re.compile(r'%[0-9]+')
 FORMAT = '#{pane_id}\t#{session_name}\t#{@tether_folder}'
+SHELLS = {'bash', 'zsh', 'sh', 'dash', 'fish', 'ksh', 'tcsh', 'csh'}
 
 
 def _tmux(run, *args):
@@ -22,15 +23,28 @@ def _tmux(run, *args):
 
 def _panes(run):
     """(pane id, folder) for the first pane of each shell window. Empty when the session does not exist."""
-    result = _tmux(run, 'list-panes', '-s', '-t', '=' + SESSION, '-f', '#{&&:#{==:#{@zoom_for},},#{!=:#{window_name},tether-zoom}}', '-F', FORMAT)
+    return [(fields[0], fields[2]) for fields in _pane_rows(run)]
+
+
+def _pane_rows(run, include_command=False):
+    """Read owned shell panes, with an optional current-command field."""
+    format_text = FORMAT + ('\t#{pane_current_command}' if include_command else '')
+    result = _tmux(run, 'list-panes', '-s', '-t', '=' + SESSION, '-f', '#{&&:#{==:#{@zoom_for},},#{!=:#{window_name},tether-zoom}}', '-F', format_text)
     if result.returncode:
         return []
     out = []
     for line in result.stdout.splitlines():
-        fields = line.split('\t', 2)
-        if len(fields) == 3 and fields[1] == SESSION and PANE.fullmatch(fields[0]):
-            out.append((fields[0], fields[2]))
+        fields = line.split('\t', 3 if include_command else 2)
+        if len(fields) == (4 if include_command else 3) and fields[1] == SESSION and PANE.fullmatch(fields[0]):
+            out.append(fields)
     return out
+
+
+def list_shells(run=subprocess.run):
+    """Shell windows in tmux order, with their current command and idle state."""
+    return [{'pane': pane, 'folder': folder, 'command': command,
+             'idle': command.removeprefix('-') in SHELLS, 'monitor': folder == ''}
+            for pane, _, folder, command in _pane_rows(run, include_command=True)]
 
 
 def literal(text):
@@ -116,3 +130,24 @@ def end_shell(pane, run=subprocess.run):
     result = _tmux(run, 'kill-window', '-t', pane)
     if result.returncode:
         raise RuntimeError(result.stderr.strip() or 'Could not end the shell.')
+
+
+def end_shells(which, run=subprocess.run):
+    """Close idle or all shell windows, re-checking ownership for each pane."""
+    if which not in ('idle', 'all'):
+        raise ValueError('Choose which shells to end.')
+    ended, errors = [], []
+    for shell in list_shells(run):
+        if which == 'idle' and not shell['idle']:
+            continue
+        try:
+            end_shell(shell['pane'], run)
+        except ValueError:
+            continue
+        except RuntimeError as exc:
+            errors.append(str(exc))
+        else:
+            ended.append(shell['pane'])
+    if errors and not ended:
+        raise RuntimeError('; '.join(errors))
+    return ended

@@ -6,9 +6,98 @@ import subprocess
 import tempfile
 import time
 import unittest
+from unittest.mock import Mock
 
 import paths
 import side_shells
+
+
+class ShellListTests(unittest.TestCase):
+    rows = ('%23\ttether-shells\t/projects\tbash\n'
+            '%24\ttether-shells\t/other\t-zsh\n'
+            '%25\ttether-shells\t/projects\tpython3\n'
+            '%26\ttether-shells\t\tbtop\n')
+
+    def fake_run(self, rows=None, missing=(), failed=()):
+        def run(command, **kwargs):
+            action = command[1]
+            if action == 'list-panes':
+                output = self.rows if rows is None else rows
+                if command[-1] == side_shells.FORMAT:
+                    output = '\n'.join(line.rsplit('\t', 1)[0] for line in output.splitlines())
+                return subprocess.CompletedProcess(command, 0, output, '')
+            pane = command[command.index('-t') + 1]
+            if action == 'display-message':
+                return subprocess.CompletedProcess(command, 0, 'work' if pane in missing else side_shells.SESSION, '')
+            self.assertEqual(action, 'kill-window')
+            return subprocess.CompletedProcess(command, int(pane in failed), '', 'Could not end ' + pane if pane in failed else '')
+        return Mock(side_effect=run)
+
+    def kills(self, run):
+        return [call.args[0] for call in run.call_args_list if call.args[0][1] == 'kill-window']
+
+    def test_list_shells_parses_commands_and_excludes_other_sessions(self):
+        run = self.fake_run(self.rows + '%27\twork\t/projects\tsh\n')
+        self.assertEqual(side_shells.list_shells(run), [
+            {'pane': '%23', 'folder': '/projects', 'command': 'bash', 'idle': True, 'monitor': False},
+            {'pane': '%24', 'folder': '/other', 'command': '-zsh', 'idle': True, 'monitor': False},
+            {'pane': '%25', 'folder': '/projects', 'command': 'python3', 'idle': False, 'monitor': False},
+            {'pane': '%26', 'folder': '', 'command': 'btop', 'idle': False, 'monitor': True},
+        ])
+        self.assertEqual(run.call_args.args[0], [paths.TMUX, 'list-panes', '-s', '-t', '=tether-shells', '-f',
+                         '#{&&:#{==:#{@zoom_for},},#{!=:#{window_name},tether-zoom}}', '-F',
+                         '#{pane_id}\t#{session_name}\t#{@tether_folder}\t#{pane_current_command}'])
+        self.assertEqual(side_shells._panes(run), [('%23', '/projects'), ('%24', '/other'),
+                                                  ('%25', '/projects'), ('%26', '')])
+
+    def test_list_shells_returns_empty_when_session_is_absent(self):
+        run = Mock(return_value=subprocess.CompletedProcess([], 1, '', 'no session'))
+        self.assertEqual(side_shells.list_shells(run), [])
+
+    def test_only_one_login_prefix_is_removed(self):
+        run = self.fake_run('%23\ttether-shells\t/projects\t--bash\n')
+        self.assertFalse(side_shells.list_shells(run)[0]['idle'])
+
+    def test_end_idle_shells_only(self):
+        run = self.fake_run()
+        self.assertEqual(side_shells.end_shells('idle', run), ['%23', '%24'])
+        self.assertEqual(self.kills(run), [[paths.TMUX, 'kill-window', '-t', '%23'],
+                                          [paths.TMUX, 'kill-window', '-t', '%24']])
+
+    def test_end_all_shells_skips_a_pane_that_is_no_longer_owned(self):
+        run = self.fake_run(missing=('%24',))
+        self.assertEqual(side_shells.end_shells('all', run), ['%23', '%25', '%26'])
+        self.assertEqual(self.kills(run), [[paths.TMUX, 'kill-window', '-t', pane]
+                                          for pane in ('%23', '%25', '%26')])
+
+    def test_end_all_shells(self):
+        run = self.fake_run()
+        self.assertEqual(side_shells.end_shells('all', run), ['%23', '%24', '%25', '%26'])
+        self.assertEqual(len(self.kills(run)), 4)
+
+    def test_end_shells_rejects_invalid_selection_before_listing(self):
+        run = self.fake_run()
+        with self.assertRaisesRegex(ValueError, '^Choose which shells to end\\.$'):
+            side_shells.end_shells('bogus', run)
+        run.assert_not_called()
+
+    def test_end_shells_continues_after_failure_when_another_pane_ends(self):
+        run = self.fake_run(failed=('%23',))
+        self.assertEqual(side_shells.end_shells('idle', run), ['%24'])
+        self.assertEqual(len(self.kills(run)), 2)
+
+    def test_end_shells_collects_failures_when_no_pane_ends(self):
+        run = self.fake_run(failed=('%23', '%24'))
+        with self.assertRaisesRegex(RuntimeError, 'Could not end %23; Could not end %24'):
+            side_shells.end_shells('idle', run)
+        self.assertEqual(len(self.kills(run)), 2)
+
+    def test_end_shells_returns_empty_when_nothing_can_end(self):
+        for rows, missing in (('', ()), (self.rows, ('%23', '%24', '%25', '%26'))):
+            with self.subTest(rows=rows):
+                run = self.fake_run(rows, missing=missing)
+                self.assertEqual(side_shells.end_shells('all', run), [])
+                self.assertEqual(self.kills(run), [])
 
 
 @unittest.skipUnless(shutil.which(paths.TMUX) or os.path.exists(paths.TMUX), 'tmux is not installed')

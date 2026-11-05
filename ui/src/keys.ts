@@ -7,6 +7,14 @@ export function toggleTerminal() {
   document.querySelector<HTMLButtonElement>('.slot.focused .terminal-toggle')?.click()
 }
 
+/** Voice input on or off in the focused slot's message box (⌥V). Returns false when no mic button can take it. */
+export function toggleVoice() {
+  const pick = (scope: string) => [...document.querySelectorAll<HTMLButtonElement>(`${scope} form.composer .mic`)].find(button => button.offsetParent && !button.disabled)
+  const button = pick('.slot.focused') ?? pick('')
+  button?.click()
+  return !!button
+}
+
 /**
  * Fuzzy match for the command menu. Each word of the query must be in the text, as a whole string or letter by letter.
  * A higher score is a better match; null is no match.

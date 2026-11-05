@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Environment=LD_LIBRARY_PATH=%h/.local/share/tether/llama
-ExecStart=%h/.local/share/tether/llama/llama-server -m %h/.local/share/tether/friday-models/Qwen3.5-2B-Q4_K_M.gguf --host 127.0.0.1 --port 7687 -t 8 -c 8192 --jinja -np 2 --cache-reuse 256
+ExecStart=%h/.local/share/tether/llama/llama-server -m %h/.local/share/tether/friday-models/Qwen3.5-2B-Q4_K_M.gguf --host 127.0.0.1 --port 7687 -t 6 -c 8192 --jinja -np 2 --cache-reuse 256
 Restart=always
 RestartSec=3
 Nice=5
