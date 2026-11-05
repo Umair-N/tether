@@ -152,6 +152,7 @@ def update(state, data, now):
         tool = tool if isinstance(tool, dict) else {}
         state.setdefault('tools', {})[short(data.get('tool_use_id')) or short(data.get('tool_name'))] = {
             'title': short(data.get('tool_name')),
+            **({'description': short(tool.get('description'))} if state.get('agent') != 'codex' else {}),
             'command': next((short(tool.get(key)) for key in ('command', 'description', 'file_path', 'pattern', 'query') if short(tool.get(key))), ''),
             'started': now}
     elif event in ('PostToolUse', 'PostToolUseFailure', 'PermissionDenied'):
@@ -407,10 +408,14 @@ def overlay(config, result, now=None, screen_read_at=None):
             merged['spinner'] = None
             merged['running'] = None
             if state.get('busy') and not state.get('waiting') and not bridge_waiting:
-                merged['spinner'] = {'verb': 'Working…', 'detail': elapsed(state.get('started', reported), now)}
+                merged['spinner'] = result.get('spinner')
+                if merged['spinner'] is None:
+                    merged['spinner'] = {'verb': 'Working…', 'detail': elapsed(state.get('started', reported), now)}
                 if tools:
                     tool = max(tools.values(), key=lambda item: item['started'])
                     merged['running'] = {key: tool[key] for key in ('title', 'command')}
+                    merged['running']['title'] = ((result.get('running') or {}).get('title')
+                                                  or tool.get('description', '') or tool['title'])
                     merged['running']['elapsed'] = elapsed(tool['started'], now)
         tasks_at = state.get('tasks_at', reported)
         # A Stop list stays true until the next Stop, so a newer transcript does not expire it.

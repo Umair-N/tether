@@ -613,6 +613,11 @@ dialog::backdrop { background: #11110e66; }
 /* Live parts of Claude's screen: spinner, running tool, Heads up card, goal and task chips. */
 .working-line { align-items: flex-start; }
 .working-line > .state-dot { margin-top: 5px; flex: none; }
+.work-glyph { flex: none; width: 14px; text-align: center; color: var(--accent); font-size: 15px; line-height: 18px; }
+.work-verb { background: linear-gradient(90deg, var(--accent) 0%, var(--accent) 40%, color-mix(in srgb, var(--accent) 35%, var(--bg)) 50%, var(--accent) 60%, var(--accent) 100%); background-size: 250% 100%; -webkit-background-clip: text; background-clip: text; color: transparent !important; animation: verb-shimmer 2.2s linear infinite; }
+@keyframes verb-shimmer { from { background-position: 100% 0; } to { background-position: -150% 0; } }
+@media (prefers-reduced-motion: reduce) { .work-verb { animation: none; background: none; color: var(--accent) !important; } }
+.running-title small { font-size: inherit; color: var(--muted); }
 .working-line > span { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .working-line strong { color: var(--text); font-weight: 500; }
 .working-line small { font-size: 12px; }
