@@ -14,7 +14,7 @@ import paths
 
 FILE = paths.CACHE / 'prefs.json'
 KEYS = {'pinned': list, 'sidePins': list, 'order': list, 'paneOrder': dict, 'sort': str, 'seen': dict, 'collapsed': dict,
-        'showPaths': bool, 'liveReplyPreview': bool, 'voiceOff': bool, 'voiceSound': bool, 'theme': str, 'scheme': str, 'drafts': dict,
+        'showPaths': bool, 'tmuxWords': bool, 'liveReplyPreview': bool, 'voiceOff': bool, 'voiceSound': bool, 'theme': str, 'scheme': str, 'drafts': dict,
         'archived': dict, 'layout': dict, 'repos': dict, 'files.pinned': list}
 MAX_SEEN = 500
 MAX_DRAFTS = 200

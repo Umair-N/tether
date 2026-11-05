@@ -514,6 +514,8 @@ def usage_summary(now=None, live_age=None):
     With live_age, a live Codex check no older than that many seconds replaces a saved report that is older."""
     now = now or time.time()
     claude = None
+    claude_switched = saved_accounts.switched_at('claude')
+    codex_switched = saved_accounts.switched_at('codex')
     from agents import METRICS
     try:
         files = sorted(METRICS.glob('*.json'), key=lambda path: path.stat().st_mtime, reverse=True)[:20]
@@ -523,6 +525,8 @@ def usage_summary(now=None, live_age=None):
         try:
             data = json.loads(path.read_text())
         except (OSError, ValueError):
+            continue
+        if claude_switched and (epoch_of(data.get('reported_at')) or 0) < claude_switched:
             continue
         rates = data.get('rate_limits') or {}
         windows = [{'label': {'five_hour': '5h', 'seven_day': '7d'}.get(name, name.replace('_', ' ')),
@@ -537,7 +541,7 @@ def usage_summary(now=None, live_age=None):
         windows, reported = saved['windows'], saved.get('reported_at')
     except (OSError, ValueError, KeyError, TypeError):
         windows, reported = recent_rates()
-    if windows:
+    if windows and (not codex_switched or (epoch_of(reported) or 0) >= codex_switched):
         codex = {'windows': [dict(w, label={'168h': '7d'}.get(w.get('label'), w.get('label'))) for w in windows], 'reported_at': reported}
     errors = {}
     if live_age is not None:
@@ -548,15 +552,21 @@ def usage_summary(now=None, live_age=None):
         result = live_usage.check(live_age)
         worker.join(45)
         report = claude_live.get('report')
-        if report and report['windows'] and (epoch_of((claude or {}).get('reported_at')) or 0) <= report['reported_at']:
+        if report and report['windows'] and report['reported_at'] >= claude_switched and (epoch_of((claude or {}).get('reported_at')) or 0) <= report['reported_at']:
             claude = dict(report, windows=[dict(window) for window in report['windows']])
         if claude_live.get('error'):
             errors['claude'] = claude_live['error']
         report = result.get('report')
-        if report and report['windows'] and (epoch_of((codex or {}).get('reported_at')) or 0) <= report['reported_at']:
+        if report and report['windows'] and report['reported_at'] >= codex_switched and (epoch_of((codex or {}).get('reported_at')) or 0) <= report['reported_at']:
             codex = dict(report, windows=[dict(window) for window in report['windows']], source='live')
         if result.get('error'):
             errors['codex'] = result['error']
+    if claude is None and claude_switched:
+        for account in saved_accounts.snapshot()['claude']:
+            if account.get('active') and account.get('windows'):
+                claude = {'windows': [dict(window, resets_at=epoch_of(window.get('resets_at'))) for window in account['windows']],
+                          'reported_at': claude_switched or time.time(), 'source': 'account'}
+                break
     for report in (claude, codex):  # a window that has reset since the report is back at 0%
         for window in (report or {}).get('windows', []):
             if isinstance(window.get('resets_at'), (int, float)) and window['resets_at'] <= now:

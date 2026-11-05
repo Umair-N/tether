@@ -3,11 +3,20 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
+import time
 
 import paths
 
 AGENTS = ('claude', 'codex')
 _snapshot = None
+
+
+def switched_at(agent) -> float:
+    try:
+        return float(json.loads((paths.CACHE / 'account_switch.json').read_text()).get(agent, 0))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return 0.0
 
 
 def snapshot():
@@ -73,4 +82,21 @@ def switch(agent, number, run=subprocess.run):
     if result.returncode != 0:
         detail = next((line.strip() for line in reversed((result.stderr or result.stdout or '').splitlines()) if line.strip()), '')
         raise ValueError(f'Could not switch: {detail[:200]}' if detail else 'Could not switch. Run "ccswap list" on the server to see why.')
+    stamps = {name: switched_at(name) for name in AGENTS}
+    stamps[agent] = time.time()
+    paths.CACHE.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile('w', dir=paths.CACHE, delete=False) as temporary:
+        os.fchmod(temporary.fileno(), 0o600)
+        json.dump(stamps, temporary)
+    try:
+        os.replace(temporary.name, paths.CACHE / 'account_switch.json')
+    finally:
+        if os.path.exists(temporary.name):
+            os.unlink(temporary.name)
+    if agent == 'claude':
+        import claude_probe
+        claude_probe._usage.update(at=0, report=None, error=None)
+    else:
+        import live_usage
+        live_usage._cache.clear()
     return listing(run)

@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
+import { useWords } from './words'
 import { Plus } from 'lucide-react'
 import type { Pane } from './api'
 import { AgentIcon, needsYou, paneTitle, shownIndex } from './Sidebar'
@@ -67,6 +68,7 @@ const HOLD_MS = 350
 // A long press without a drag opens the pane actions, as before. Only Tether's order changes; tmux panes stay put.
 export const PaneTabs = forwardRef<HTMLDivElement, Props>(function PaneTabs({ session, pane, onOpenPane, onPaneActions, onSplit, onReorder }, ref) {
   const strip = useRef<HTMLDivElement>(null)
+  const words = useWords()
   useImperativeHandle(ref, () => strip.current!)
   const drag = useRef<Drag | null>(null)
   const suppressClick = useRef(false)
@@ -197,6 +199,6 @@ export const PaneTabs = forwardRef<HTMLDivElement, Props>(function PaneTabs({ se
       <AgentIcon agent={item.agent} icon={item.pane_icon} size={14} /><span className="pane-tab-name">{paneTitle(item)}</span>{shownIndex(item) && <span className="pane-index">{shownIndex(item)}</span>}
       {item.state === 'Working' || needsYou(item.state) ? <span className={`state-dot ${item.state === 'Working' ? 'working' : 'approval'}`} aria-label={item.state === 'Working' ? 'Working' : 'Needs you'} /> : null}
     </button>)}
-    <button className="tab-add" aria-label="New pane right" title="New pane right" onClick={() => onSplit('right')}><Plus size={16} /></button>
+    <button className="tab-add" aria-label={words.newRight} title={words.newRight} onClick={() => onSplit('right')}><Plus size={16} /></button>
   </div>
 })

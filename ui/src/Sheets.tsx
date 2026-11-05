@@ -1,4 +1,5 @@
 import { playChime, prepareChime } from './sound'
+import { useWords, count } from './words'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Archive, ArchiveRestore, ArrowDown, BookMarked, ArrowUp, Bell, Check, Columns2, GitFork, History, LayoutDashboard, Merge, ArrowRightLeft, Plus, PanelBottom, PanelRight, Pencil, Pin, PinOff, Shapes, Sparkles, RotateCw, Rows2, Square, Trash2, X } from 'lucide-react'
 import { SESSION_NAME, SESSION_NAME_HELP, canFork, creditsLabel, errorText, usageLabel } from './api'
@@ -111,6 +112,7 @@ export function SessionActions({ api, session, pane, pinned, archived, canMoveUp
   api: Api; session: Session; pane: string; pinned: boolean; archived: boolean; canMoveUp: boolean; canMoveDown: boolean; startDelete?: boolean; at?: Anchor; place?: Place; targets: Session[]; marks?: ProjectMarks; onMarks?: () => void
   onPin: () => void; onArchive: () => void; onMove: (step: -1 | 1) => void; onProject: () => void; onDone: (newPane?: string, direction?: 'right' | 'down') => void; onClose: () => void
 }) {
+  const words = useWords()
   const [renaming, setRenaming] = useState(false)
   const [confirming, setConfirming] = useState(startDelete)
   // "Merge into…": choose a session, then confirm, as a drop of the whole session asks first.
@@ -138,18 +140,18 @@ export function SessionActions({ api, session, pane, pinned, archived, canMoveUp
   const split = (direction: 'right' | 'down') => run(async () => (await api<{ pane: string }>('split', { session: pane, direction })).pane, direction)
   return <dialog {...dialog} aria-labelledby="actions-title">
     <div className="sheet-heading"><h2 id="actions-title">{session.name}</h2>{!at && <button type="button" className="icon-button" aria-label="Close" disabled={pending} onClick={onClose}><X /></button>}</div>
-    <p className="sheet-sub">{session.panes.length === 1 ? '1 pane' : `${session.panes.length} panes`} · {session.dir}</p>
+    <p className="sheet-sub">{count(words, session.panes.length)} · {session.dir}</p>
     {merging === 'pick'
       ? <SessionPicker label={`Merge ${session.name} into`} targets={targets.filter(target => target.id !== session.id)} pending={pending} onPick={target => { setKeep(null); setMerging(target) }} onCancel={() => setMerging(null)} />
       : merging
       ? <div className="confirm-box" role="alertdialog" aria-labelledby="merge-session-title">
-          <p id="merge-session-title"><strong>Merge {session.name} into {merging.name}?</strong> {session.panes.length === 1 ? 'Its pane moves' : `Its ${session.panes.length} panes move`} there, and {session.name} closes.</p>
+          <p id="merge-session-title"><strong>Merge {session.name} into {merging.name}?</strong> {session.panes.length === 1 ? `Its ${words.pane} moves` : `Its ${count(words, session.panes.length)} move`} there, and {session.name} closes.</p>
           {keepNeeded(marks, session.id, merging.id) && <KeepChoice source={session} target={merging} value={keep} disabled={pending} onChange={setKeep} />}
           <div className="sheet-buttons"><button type="button" className="secondary" autoFocus disabled={pending} onClick={() => setMerging('pick')}>Cancel</button><button type="button" className="primary" disabled={pending || (keepNeeded(marks, session.id, merging.id) && !keep)} onClick={() => void run(async () => { await api('merge', { kind: 'session', source: session.id, target: merging.id, ...(keep && { keep }) }); return undefined })}>{pending ? 'Merging…' : 'Merge'}</button></div>
         </div>
       : confirming
       ? <div className="confirm-box" role="alertdialog" aria-labelledby="delete-session-title">
-          <p id="delete-session-title"><strong>Delete {session.name}?</strong> This ends all {session.panes.length === 1 ? 'of its 1 pane' : `${session.panes.length} panes`} and stops anything running in them. You cannot undo this.</p>
+          <p id="delete-session-title"><strong>Delete {session.name}?</strong> This ends {session.panes.length === 1 ? `its ${words.pane}` : `all ${count(words, session.panes.length)}`} and stops anything running in them. You cannot undo this.</p>
           <div className="sheet-buttons"><button type="button" className="secondary" disabled={pending} onClick={() => setConfirming(false)}>Cancel</button><button type="button" className="danger" disabled={pending} onClick={() => void run(async () => { await api('tmux-sessions', { session: session.id }, undefined, 'DELETE'); return undefined })}>{pending ? 'Deleting…' : 'Delete session'}</button></div>
         </div>
       : renaming
@@ -169,8 +171,8 @@ export function SessionActions({ api, session, pane, pinned, archived, canMoveUp
           <button disabled={pending} onClick={() => setMerging('pick')}><Merge size={18} />Merge into…</button>
           <hr />
           <PlaceItems place={place} pending={pending} onClose={onClose} />
-          <button disabled={pending} onClick={() => void split('right')}><Columns2 size={18} />New pane right<kbd>Ctrl-b %</kbd></button>
-          <button disabled={pending} onClick={() => void split('down')}><Rows2 size={18} />New pane below<kbd>Ctrl-b "</kbd></button>
+          <button disabled={pending} onClick={() => void split('right')}><Columns2 size={18} />{words.newRight}{words.tmux && <kbd>Ctrl-b %</kbd>}</button>
+          <button disabled={pending} onClick={() => void split('down')}><Rows2 size={18} />{words.newBelow}{words.tmux && <kbd>Ctrl-b "</kbd>}</button>
           <hr />
           <button className="danger-item" disabled={pending} onClick={() => setConfirming(true)}><Trash2 size={18} />Delete session</button>
         </div>}
@@ -181,6 +183,7 @@ export function SessionActions({ api, session, pane, pinned, archived, canMoveUp
 export function PaneActions({ api, session, pane, at, place, targets, onFork, onDone, onClose }: {
   api: Api; session: Session | undefined; pane: Pane; at?: Anchor; place?: Place; targets: Session[]; onFork?: () => void; onDone: (newPane?: string, direction?: 'right' | 'down') => void; onClose: () => void
 }) {
+  const words = useWords()
   const [mode, setMode] = useState<'menu' | 'rename' | 'icon' | 'close' | 'move'>('menu')
   const [name, setName] = useState(pane.pane_name ?? '')
   const [pending, setPending] = useState(false)
@@ -201,14 +204,14 @@ export function PaneActions({ api, session, pane, at, place, targets, onFork, on
   const title = [paneTitle(pane), shownIndex(pane)].filter(Boolean).join(' · ')
   return <dialog {...dialog} aria-labelledby="pane-title">
     <div className="sheet-heading"><h2 id="pane-title">{title}</h2>{!at && <button type="button" className="icon-button" aria-label="Close" disabled={pending} onClick={onClose}><X /></button>}</div>
-    <p className="sheet-sub">Pane in {session?.name ?? pane.label} · {pane.dir}</p>
+    <p className="sheet-sub">{words.Pane} in {session?.name ?? pane.label} · {pane.dir}</p>
     {mode === 'move'
-      ? <SessionPicker label="Move this pane to" targets={targets.filter(target => target.id !== pane.tmux_session)} pending={pending} onCancel={() => setMode('menu')}
+      ? <SessionPicker label={`Move this ${words.pane} to`} targets={targets.filter(target => target.id !== pane.tmux_session)} pending={pending} onCancel={() => setMode('menu')}
           onPick={target => void run(async () => { await api('merge', { kind: 'pane', source: pane.id, target: target.id }); return undefined })}
           extra={!last && <button disabled={pending} onClick={() => void run(async () => { await api('merge', { kind: 'break', source: pane.id }); return undefined })}><Plus size={18} />New session</button>} />
       : mode === 'rename'
       ? <form className="rename-form" onSubmit={event => { event.preventDefault(); void rename() }}>
-          <label htmlFor="pane-name-input">Pane name</label>
+          <label htmlFor="pane-name-input">{words.Pane} name</label>
           <input id="pane-name-input" autoFocus value={name} maxLength={40} disabled={pending} autoComplete="off" placeholder={paneTitle({ ...pane, pane_name: '' })} onChange={event => setName(event.target.value)} />
           <p className="hint">{pane.agent === 'claude' || pane.agent === 'codex' ? `${agentNames[pane.agent]} gets the same name. ` : ''}{last ? 'The session takes it too. ' : ''}Leave it empty to show the agent name again.</p>
           <div className="sheet-buttons"><button type="button" className="secondary" disabled={pending} onClick={() => setMode('menu')}>Cancel</button><button className="primary" disabled={pending}>{pending ? 'Saving…' : 'Save'}</button></div>
@@ -217,20 +220,20 @@ export function PaneActions({ api, session, pane, at, place, targets, onFork, on
       ? <IconPicker api={api} pane={pane} pending={pending} run={run} onBack={() => setMode('menu')} />
       : mode === 'close'
       ? <div className="confirm-box" role="alertdialog" aria-labelledby="close-pane-title">
-          <p id="close-pane-title"><strong>Close this pane?</strong> {last ? `It is the last pane, so this also ends the session ${session?.name ?? ''}.` : 'This stops anything running in it.'} You cannot undo this.</p>
-          <div className="sheet-buttons"><button type="button" className="secondary" disabled={pending} onClick={() => setMode('menu')}>Cancel</button><button type="button" className="danger" disabled={pending} onClick={() => void run(async () => { await api('session', { pane: pane.id }, undefined, 'DELETE'); return undefined })}>{pending ? 'Closing…' : 'Close pane'}</button></div>
+          <p id="close-pane-title"><strong>Close this {words.pane}?</strong> {last ? `It is the last ${words.pane}, so this also ends the session ${session?.name ?? ''}.` : 'This stops anything running in it.'} You cannot undo this.</p>
+          <div className="sheet-buttons"><button type="button" className="secondary" disabled={pending} onClick={() => setMode('menu')}>Cancel</button><button type="button" className="danger" disabled={pending} onClick={() => void run(async () => { await api('session', { pane: pane.id }, undefined, 'DELETE'); return undefined })}>{pending ? 'Closing…' : `Close ${words.pane}`}</button></div>
         </div>
       : <div className="action-list">
-          <button disabled={pending} onClick={() => setMode('rename')}><Pencil size={18} />Rename pane</button>
+          <button disabled={pending} onClick={() => setMode('rename')}><Pencil size={18} />Rename {words.pane}</button>
           <button disabled={pending} onClick={() => setMode('icon')}><Shapes size={18} />Change icon</button>
           <button disabled={pending} onClick={() => setMode('move')}><ArrowRightLeft size={18} />Move to session…</button>
           <hr />
           <PlaceItems place={place} pending={pending} onClose={onClose} />
-          <button disabled={pending} onClick={() => void split('right')}><Columns2 size={18} />New pane right<kbd>Ctrl-b %</kbd></button>
-          <button disabled={pending} onClick={() => void split('down')}><Rows2 size={18} />New pane below<kbd>Ctrl-b "</kbd></button>
+          <button disabled={pending} onClick={() => void split('right')}><Columns2 size={18} />{words.newRight}{words.tmux && <kbd>Ctrl-b %</kbd>}</button>
+          <button disabled={pending} onClick={() => void split('down')}><Rows2 size={18} />{words.newBelow}{words.tmux && <kbd>Ctrl-b "</kbd>}</button>
           {onFork && canFork(pane) && <button disabled={pending} onClick={onFork}><GitFork size={18} />New chat from this</button>}
           <hr />
-          <button className="danger-item" disabled={pending} onClick={() => setMode('close')}><Trash2 size={18} />Close pane<kbd>Ctrl-b x</kbd></button>
+          <button className="danger-item" disabled={pending} onClick={() => setMode('close')}><Trash2 size={18} />Close {words.pane}{words.tmux && <kbd>Ctrl-b x</kbd>}</button>
         </div>}
     {error && <p className="error" role="alert">{error}</p>}
   </dialog>
@@ -457,6 +460,7 @@ export function Settings({ api, prefs, update, onReload, onClose }: { api: Api; 
       <Choice legend="Order" name="sort" value={prefs.sort} options={[['smart', 'Smart'], ['manual', 'Manual']]} onChange={sort => update(() => ({ sort }))} />
       <p className="setting-note">{prefs.sort === 'smart' ? 'Needs you, then Done, then Working, then the most recent.' : 'Your order. Use Reorder in the sidebar.'}</p>
       {toggle('Folder paths', 'Folder under each session name.', prefs.showPaths, showPaths => update(() => ({ showPaths })))}
+      {toggle('tmux words', 'Say pane, split and Ctrl-b keys instead of tab.', prefs.tmuxWords, tmuxWords => update(() => ({ tmuxWords })))}
       {toggle('Live reply preview', 'Show Claude’s reply as it arrives.', prefs.liveReplyPreview, liveReplyPreview => update(() => ({ liveReplyPreview })))}
       {toggle('Agents bubble', 'Floating button that lists working agents. Drag it anywhere.', prefs.agentBubble, agentBubble => update(() => ({ agentBubble })))}
     </section>

@@ -235,12 +235,17 @@ label.broadcast-row:hover { background: var(--hover); }
 .session-list .state-dot { width: 8px; height: 8px; border-width: 1.5px; }
 .session-list .state-dot.idle { background: transparent; border: 0; box-shadow: inset 0 0 0 1.5px var(--line); opacity: 1; animation: none; }
 .slot-key { flex: none; font: 11px ui-monospace, SFMono-Regular, monospace; color: var(--muted); }
+/* The + on a session row: a new tab in that session. Shown on hover or focus; always shown on touch screens. */
+.session-add { flex: none; display: grid; place-items: center; width: 28px; height: 28px; margin-right: 4px; border-radius: 6px; color: var(--muted); opacity: 0; transition: opacity .12s, background-color .12s; }
+.session-row:hover .session-add, .session-add:focus-visible { opacity: 1; }
+.session-add:hover { background: var(--hover); color: var(--text); }
 .state-dot.idle { background: transparent; width: 8px; height: 8px; box-shadow: inset 0 0 0 1.5px var(--line); }
 /* Touch: same layout, 44px targets. */
 @media (pointer: coarse) {
   .session-main { min-height: 44px; }
   .session-head .session-main { min-height: 40px; padding-top: 10px; }
   .pane-children button { min-height: 44px; font-size: 14px; }
+  .session-add { width: 40px; height: 40px; opacity: 1; }
   .group-toggle, .group-edit { min-height: 36px; padding-top: 0; padding-bottom: 0; }
   .sidebar-search { height: 40px; }
   .sidebar-search input { font-size: 16px; }

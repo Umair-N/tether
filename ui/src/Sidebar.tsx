@@ -15,6 +15,7 @@ import { shareUsage } from './usage'
 import { useHost } from './host'
 import { UpdateBanner } from './UpdateBanner'
 import { Elapsed } from './Notices'
+import { useWords } from './words'
 
 export const agentNames: Record<Agent, string> = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity', shell: 'Shell' }
 // Icons a pane can wear instead of its agent's icon (tmux option @chat_icon). The person picks one in the pane menu,
@@ -191,9 +192,11 @@ interface Props {
   /** Sessions whose project gives agents context, and panes that started with an older version. */
   marks?: ProjectMarks
   onMarks?: () => void
+  /** The + on a session row: a new tab (tmux pane) in that session. */
+  onAddPane?: (session: Session) => void
 }
 
-export function Sidebar({ api, sessions, selected, prefs, update, loading, error, onRetry, onOpen, onNew, onActions, onPaneActions, onPastChat, onSettings, onClose, slots, drag, onCommandMenu, onMessageAll, marks, onMarks }: Props) {
+export function Sidebar({ api, sessions, selected, prefs, update, loading, error, onRetry, onOpen, onNew, onActions, onPaneActions, onPastChat, onSettings, onClose, slots, drag, onCommandMenu, onMessageAll, marks, onMarks, onAddPane }: Props) {
   const host = useHost()
   const [query, setQuery] = useState('')
   const [reorder, setReorder] = useState<Section | null>(null)
@@ -338,7 +341,7 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
           {isOpen(group.key) && group.items.length > 1 && !search && !smart && group.key !== 'archived' && <button className="group-edit" onClick={() => setReorder(reorder === group.key ? null : group.key)}>{reorder === group.key ? 'Done' : 'Reorder'}</button>}
         </div>
         {isOpen(group.key) && (group.items.length
-          ? <SessionList items={group.items} reorder={reorder === group.key} selected={selected} prefs={prefs} update={update} onOpen={onOpen} onActions={onActions} onPaneActions={onPaneActions} onMove={ids => moveWithin(group.items, ids)} pinned={group.key === 'pinned'} slots={slots ?? []} canDrag={!!drag} api={api} carry={carry} onCarry={startCarry} onDrop={dropOn} onHold={holdStart} touchOver={touchOver} renaming={renameRow} onRenamed={renamed} marks={marks} />
+          ? <SessionList items={group.items} reorder={reorder === group.key} selected={selected} prefs={prefs} update={update} onOpen={onOpen} onActions={onActions} onPaneActions={onPaneActions} onMove={ids => moveWithin(group.items, ids)} pinned={group.key === 'pinned'} slots={slots ?? []} canDrag={!!drag} api={api} carry={carry} onCarry={startCarry} onDrop={dropOn} onHold={holdStart} touchOver={touchOver} renaming={renameRow} onRenamed={renamed} marks={marks} onAddPane={onAddPane} />
           : <p className="group-empty">{loading ? 'Finding sessions…' : group.key === 'terminals' ? 'No plain terminals. Create one with New session.' : 'Nothing here yet.'}</p>)}
       </section>)}
       {carry?.pane && <div className={`new-session-drop ${overNew ? 'over' : ''}`} onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setOverNew(true) }} onDragLeave={() => setOverNew(false)} onDrop={event => { event.preventDefault(); merge('break', carry.pane!) }}><Plus size={14} aria-hidden="true" />New session</div>}
@@ -365,7 +368,7 @@ function projectMark(mark: ProjectMark | undefined) {
   return <BookMarked size={11} className={`project-mark ${stale ? 'stale' : ''}`} aria-label={stale ? 'Project changed. Restart its agents to apply.' : 'Has project context'} />
 }
 
-function SessionList({ items, reorder, selected, prefs, update, onOpen, onActions, onPaneActions, onMove, pinned, slots, canDrag, api, carry, onCarry, onDrop, onHold, touchOver, renaming, onRenamed, marks }: { marks?: ProjectMarks; onHold: (event: React.TouchEvent, carried: Carry, label: string, menu: () => void) => void; touchOver: string | null; items: Session[]; reorder: boolean; selected: string | undefined; prefs: Prefs; update: Props['update']; onOpen: Props['onOpen']; onActions: Props['onActions']; onPaneActions: Props['onPaneActions']; onMove: (ids: string[]) => void; pinned: boolean; slots: string[]; canDrag: boolean; api: Api; carry: Carry | null; onCarry: (carry: Carry | null) => void; onDrop: (target: Session) => void; renaming: Moved | null; onRenamed: () => void }) {
+function SessionList({ items, reorder, selected, prefs, update, onOpen, onActions, onPaneActions, onMove, pinned, slots, canDrag, api, carry, onCarry, onDrop, onHold, touchOver, renaming, onRenamed, marks, onAddPane }: { onAddPane?: Props['onAddPane']; marks?: ProjectMarks; onHold: (event: React.TouchEvent, carried: Carry, label: string, menu: () => void) => void; touchOver: string | null; items: Session[]; reorder: boolean; selected: string | undefined; prefs: Prefs; update: Props['update']; onOpen: Props['onOpen']; onActions: Props['onActions']; onPaneActions: Props['onPaneActions']; onMove: (ids: string[]) => void; pinned: boolean; slots: string[]; canDrag: boolean; api: Api; carry: Carry | null; onCarry: (carry: Carry | null) => void; onDrop: (target: Session) => void; renaming: Moved | null; onRenamed: () => void }) {
   const list = useRef<HTMLUListElement>(null)
   const dragging = useRef<string | null>(null)
   const ids = items.map(session => session.id)
@@ -392,6 +395,7 @@ function SessionList({ items, reorder, selected, prefs, update, onOpen, onAction
     onDragLeave: (event: React.DragEvent) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOver(null) },
     onDrop: (event: React.DragEvent) => { event.preventDefault(); setOver(null); onDrop(session) },
   } : {}
+  const words = useWords()
   const slotKey = (id: string) => { const at = slots.indexOf(id); return at < 0 ? null : <kbd className="slot-key" aria-label={`In slot ${at + 1}`}>⌥{at + 1}</kbd> }
   return <ul className={`session-list ${reorder ? 'reordering' : ''}`} ref={list}>
     {items.map(session => {
@@ -427,6 +431,7 @@ function SessionList({ items, reorder, selected, prefs, update, onOpen, onAction
             {!multi && slotKey(session.panes[0].id)}
             {multi && !open && state.kind !== 'idle' && dot(state)}
           </button>}
+          {onAddPane && !reorder && !dropping && renaming?.session !== session.id && <button type="button" className="session-add" aria-label={`${words.newRight} in ${session.name}`} title={words.newRight} onClick={() => onAddPane(session)}><Plus size={15} aria-hidden="true" /></button>}
           {dropping && <span className="merge-hint" aria-hidden="true">{carry.pane ? 'Move here' : 'Merge here'}</span>}
           {reorder && <span className="grip" aria-label={`Drag to move ${session.name}`} onPointerDown={event => { dragging.current = session.id; event.currentTarget.setPointerCapture(event.pointerId) }} onPointerMove={drag} onPointerUp={() => { dragging.current = null }} onPointerCancel={() => { dragging.current = null }}><GripVertical size={18} /></span>}
         </div>
@@ -549,7 +554,8 @@ function UsageSheet({ data, api, onDone, onClose }: { data: UsageData; api: Api;
   const section = (name: string, report: UsageReport | null, missing: React.ReactNode, agent: 'claude' | 'codex') => <section className="usage-detail">
     <h3>{name}{report?.reported_at != null && <small>{report.source === 'live' ? 'Live' : 'Saved report'} · {reportedAgo(report.reported_at)}</small>}</h3>
     {data.live_errors?.[agent] && <p className="hint">{data.live_errors[agent]}</p>}
-    <AccountLogin agent={agent} api={api} account={data.accounts?.[agent]} onDone={onDone} />
+    {/* A sign-in or account switch changes whose limits these are: check live at once. */}
+    <AccountLogin agent={agent} api={api} account={data.accounts?.[agent]} onDone={reload} />
     {agent === 'codex' && <CodexProviderSwitch api={api} />}
     {report?.windows.length ? [...report.windows.map(window => {
       const percent = Math.max(0, Math.min(100, Math.round(window.percent)))

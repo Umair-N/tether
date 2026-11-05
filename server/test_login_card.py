@@ -88,11 +88,20 @@ class SavedAccounts(unittest.TestCase):
         return run
 
     def setUp(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
         self.old = saved_accounts.binary
         saved_accounts.binary = lambda: '/fake/ccswap'
+        # A switch records its time in the cache folder: keep it out of the real one.
+        self.cache = tempfile.TemporaryDirectory()
+        self.cache_patch = patch.object(saved_accounts.paths, 'CACHE', Path(self.cache.name))
+        self.cache_patch.start()
 
     def tearDown(self):
         saved_accounts.binary = self.old
+        self.cache_patch.stop()
+        self.cache.cleanup()
 
     def test_listing_keeps_usage_only(self):
         out = saved_accounts.listing(self.runner([]))
