@@ -354,6 +354,15 @@ def runtime_types():
         async def handle_user_turn_stopped(self):
             self.active = self.overlap = False
 
+        def release_overlap(self):
+            # A rejected overlap never opened a turn, so no turn-stop callback
+            # can release the observer's VAD gate for the event queue.
+            self.overlap = False
+            self.session.user_speaking = False
+            if not self.session.bot_speaking and not self.session.llm_running:
+                self.session.busy = False
+            self.session.wake.set()
+
         async def process_frame(self, frame):
             if isinstance(frame, BotStartedSpeakingFrame):
                 self.bot_speaking = True
@@ -363,17 +372,15 @@ def runtime_types():
                 self.overlap = self.bot_speaking
                 if not self.overlap:
                     await super().process_frame(frame)
+            elif isinstance(frame, EmptySTTSegmentFrame) and frame.finalized and not self.active:
+                self.release_overlap()
             elif isinstance(frame, (TranscriptionFrame, InterimTranscriptionFrame)) and not self.active:
                 # Latch overlap at VAD start: STT can finish after playback ends.
                 if (self.bot_speaking or self.overlap) and len(frame.text.split()) < BARGE_IN_WORDS:
                     # The aggregator appends final text before calling strategies.
                     await self.trigger_reset_aggregation()
                     if isinstance(frame, TranscriptionFrame):
-                        self.overlap = False
-                        self.session.user_speaking = False
-                        if not self.session.bot_speaking and not self.session.llm_running:
-                            self.session.busy = False
-                        self.session.wake.set()
+                        self.release_overlap()
                 elif frame.text.strip():
                     # Preserve today's transcription fallback if VAD missed speech.
                     await self.report_user_turn_started()
@@ -868,7 +875,8 @@ class Session:
         self.aggregators = LLMContextAggregatorPair(self.context, user_params=LLMUserAggregatorParams(
             empty_user_turn=None,
             vad_analyzer=rt.SharedVAD(models.vad, vad_stop(os.environ, models.smart_turn is not None)),
-            user_turn_strategies=UserTurnStrategies(stop=[stop])))  # b12 start strategy off: turns stalled live 20:17
+            user_turn_strategies=UserTurnStrategies(
+                start=[rt.FridayUserTurnStartStrategy(self)], stop=[stop])))
         transport = SmallWebRTCTransport(connection, TransportParams(
             audio_in_enabled=True, audio_out_enabled=True,
             audio_in_sample_rate=16000, audio_out_sample_rate=models.tts.sample_rate))
