@@ -417,6 +417,13 @@ function App() {
     setPanels(current => ({ cols: addPanel(panelCols(current), { id: newPanelId(), kind: 'terminal', folder, fresh: true }) }))
     chooseScreen('chats')
   }
+  // The sidebar Shells list: show a shell in a Terminal panel (once), and close the panels of shells that ended.
+  const openShell = (shell: string) => {
+    setPanels(current => panelCols(current).some(col => col.items.some(item => item.kind === 'terminal' && item.pane === shell)) ? {}
+      : { cols: addPanel(panelCols(current), { id: newPanelId(), kind: 'terminal', pane: shell }) })
+    chooseScreen('chats')
+  }
+  const shellsEnded = (panes: string[]) => setPanels(current => withoutShells(current, panes))
   const openPane = (target: Pane) => {
     update(current => ({ selected: target.id, lastPane: { ...current.lastPane, [target.tmux_session]: target.id } }))
     setDrawer(false)
