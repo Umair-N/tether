@@ -1,12 +1,13 @@
-import { AudioLines, Folder, MessageCircle, SquareTerminal } from 'lucide-react'
+import { AudioLines, Folder, MessageCircle, Share2, SquareTerminal } from 'lucide-react'
 import { ASSISTANT } from './Live'
 import { keyLabel } from './keys'
 
-export type Screen = 'chats' | 'files' | 'terminals'
+export type Screen = 'chats' | 'files' | 'terminals' | 'share'
 const SCREENS: { id: Screen; label: string; key: string; icon: typeof Folder }[] = [
   { id: 'chats', label: 'Chats', key: '⌘1', icon: MessageCircle },
   { id: 'files', label: 'Files', key: '⌘2', icon: Folder },
   { id: 'terminals', label: 'Terminals', key: '⌘3', icon: SquareTerminal },
+  { id: 'share', label: 'Share', key: '⌘4', icon: Share2 },
 ]
 
 /** The desktop left rail: Chats, Files and Terminals. The phone does not show it. */

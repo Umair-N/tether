@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { AudioLines, Folder, Globe, MessageCircle, SquareTerminal } from 'lucide-react'
+import { AudioLines, Folder, Globe, MessageCircle, Share2, SquareTerminal } from 'lucide-react'
 import { ASSISTANT } from './Live'
 import type { Screen } from './Rail'
 import { toggleButton } from './phoneScreen'
@@ -12,6 +12,7 @@ const TABS: { id: Screen; label: string; icon: typeof Folder }[] = [
   { id: 'chats', label: 'Chats', icon: MessageCircle },
   { id: 'files', label: 'Files', icon: Folder },
   { id: 'terminals', label: 'Terminals', icon: SquareTerminal },
+  { id: 'share', label: 'Share', icon: Share2 },
 ]
 
 /** browser: opens the shared browser full screen. busy = an agent has tabs open, asking = an agent needs the person there. */
@@ -20,7 +21,7 @@ export interface PhoneBrowser { onOpen: () => void; busy: boolean; asking: boole
 export function PhoneTabs({ screen, onScreen, setScreen, terminals, onLive, browser }: { screen: Screen; onScreen: (screen: Screen) => void; setScreen: (screen: Screen) => void; terminals: boolean; onLive?: () => void; browser?: PhoneBrowser }) {
   // The chat header has its own terminal button, and each pane keeps its own view. Keep the tab in step with what shows.
   useEffect(() => {
-    if (screen === 'files') return
+    if (screen === 'files' || screen === 'share') return
     const shell = document.querySelector('.app-shell')
     if (!shell) return
     const sync = () => {

@@ -7,7 +7,7 @@ export const toggleButton = () => document.querySelector<HTMLButtonElement>('.ap
 /** Show a screen. Chats and Terminals switch the open chat's terminal view to match. */
 export function choosePhoneScreen(next: Screen, setScreen: (screen: Screen) => void) {
   setScreen(next)
-  if (next === 'files') return
+  if (next === 'files' || next === 'share') return
   setTimeout(() => {
     const toggle = toggleButton()
     if (toggle && (toggle.getAttribute('aria-pressed') === 'true') !== (next === 'terminals')) toggle.click()
