@@ -18,7 +18,7 @@ from agents import records
 import agents
 import pane_icons
 from antigravity import snapshot as antigravity_snapshot, transcript_message as antigravity_message, window_active
-from terminal_input import NAME_HELP, valid_name, fork_chat, DraftError, card_key, menu_choose, unqueue, clear_draft as terminal_clear_draft, type_text, live_status, capture, capture_screen, submit as terminal_submit, respond_approval, plan_menu, start_agent, create_session, shell_snapshot, shell_submit, verify
+from terminal_input import NAME_HELP, valid_name, fork_chat, new_window_after, DraftError, card_key, menu_choose, unqueue, clear_draft as terminal_clear_draft, type_text, live_status, capture, capture_screen, submit as terminal_submit, respond_approval, plan_menu, start_agent, create_session, shell_snapshot, shell_submit, verify
 from quota_notices import error_message, merge as merge_quota_notices
 import tool_details
 import activity
@@ -1496,14 +1496,8 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError('Select a pane and split right or down.')
                 choose(pane)
                 with SEND_LOCK:
-                    result = subprocess.run([paths.TMUX, 'split-window', '-t', pane, '-h' if direction == 'right' else '-v',
-                                             '-c', '#{pane_current_path}', '-P', '-F', '#{pane_id}'],
-                                            capture_output=True, text=True, timeout=5)
-                if result.returncode:
-                    raise RuntimeError(result.stderr.strip() or 'Could not split the pane.')
-                if not re.fullmatch(r'%[0-9]+', result.stdout.strip()):
-                    raise RuntimeError('Pane creation could not be confirmed.')
-                self.respond(201, {'pane': result.stdout.strip()})
+                    new_pane = new_window_after(pane, subprocess.run)
+                self.respond(201, {'pane': new_pane})
                 return
             if self.path == '/mobile/api/fork':
                 pane = body.get('session')

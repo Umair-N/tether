@@ -100,11 +100,22 @@ class BackendTests(unittest.TestCase):
 
     def test_split_directions_do_not_require_thread_or_writable(self):
         self.entries.return_value = [{'id': '%12', 'thread': CHAT, 'writable': False}]
-        for direction, flag in [('right', '-h'), ('down', '-v')]:
+        for direction in ('right', 'down'):
+            self.run.reset_mock()
+            def run(command, **kwargs):
+                self.assertTrue(server.SEND_LOCK.locked())
+                output = ('@7\t/a folder\n' if '#{window_id}\t#{pane_current_path}' in command
+                          else 'manual\t160\t48\n' if '#{window-size}\t#{window_width}\t#{window_height}' in command
+                          else '%13\n')
+                return subprocess.CompletedProcess(command, 0, stdout=output, stderr='')
+            self.run.side_effect = run
             self.assertEqual(self.request('/mobile/api/split', {'session': '%12', 'direction': direction}), (201, {'pane': '%13'}))
-            self.assertEqual(self.run.call_args.args[0], [paths.TMUX, 'split-window', '-t', '%12', flag,
-                                                        '-c', '#{pane_current_path}', '-P', '-F', '#{pane_id}'])
-            self.assertEqual(self.run.call_args.kwargs['timeout'], 5)
+            self.assertEqual([call.args[0] for call in self.run.call_args_list], [
+                [paths.TMUX, 'display-message', '-p', '-t', '%12', '#{window_id}\t#{pane_current_path}'],
+                [paths.TMUX, 'display-message', '-p', '-t', '@7', '#{window-size}\t#{window_width}\t#{window_height}'],
+                [paths.TMUX, 'new-window', '-a', '-t', '@7', '-c', '/a folder', '-P', '-F', '#{pane_id}'],
+                [paths.TMUX, 'resize-window', '-t', '%13', '-x', '160', '-y', '48'],
+            ])
         self.verify.assert_not_called()
 
     def test_pane_name_sets_and_clears_a_tmux_pane_option(self):
@@ -208,7 +219,7 @@ class BackendTests(unittest.TestCase):
         self.assertEqual((empty['claude'], empty['codex']), (None, None))
 
     def test_split_rejects_bad_input_and_reports_tmux_errors(self):
-        for body in ({}, {'session': '%12', 'direction': 'left'}, {'session': '$1', 'direction': 'right'},
+        for body in ({}, {'session': '%12'}, {'session': '%12', 'direction': 'left'}, {'session': '$1', 'direction': 'right'},
                      {'session': '%99', 'direction': 'right'}, {'session': 12, 'direction': 'down'}):
             self.assertEqual(self.request('/mobile/api/split', body)[0], 400)
         self.run.assert_not_called()
@@ -217,6 +228,29 @@ class BackendTests(unittest.TestCase):
         self.assertEqual((status, body['error']), (503, 'no space for new pane'))
         self.run.side_effect = subprocess.TimeoutExpired('tmux', 5)
         self.assertEqual(self.request('/mobile/api/split', {'session': '%12', 'direction': 'down'})[0], 503)
+
+    def test_split_keeps_fallback_error_and_pane_confirmation(self):
+        self.run.return_value = subprocess.CompletedProcess([], 1, stdout='', stderr='')
+        status, body = self.request('/mobile/api/split', {'session': '%12', 'direction': 'right'})
+        self.assertEqual((status, body['error']), (503, 'Could not split the pane.'))
+        for output in ('', '@13\n', '%13\n%14\n'):
+            with self.subTest(output=output):
+                self.run.side_effect = [
+                    subprocess.CompletedProcess([], 0, stdout='@7\t/work\n', stderr=''),
+                    subprocess.CompletedProcess([], 0, stdout='latest\t120\t40\n', stderr=''),
+                    subprocess.CompletedProcess([], 0, stdout=output, stderr=''),
+                ]
+                status, body = self.request('/mobile/api/split', {'session': '%12', 'direction': 'right'})
+                self.assertEqual((status, body['error']), (503, 'Pane creation could not be confirmed.'))
+
+    def test_split_rejects_unconfirmed_source_window(self):
+        for output in ('', '%12\t/work\n', '@7', '@7x\t/work\n', '@7\t\n'):
+            with self.subTest(output=output):
+                self.run.reset_mock()
+                self.run.return_value = subprocess.CompletedProcess([], 0, stdout=output, stderr='')
+                status, body = self.request('/mobile/api/split', {'session': '%12', 'direction': 'down'})
+                self.assertEqual((status, body['error']), (503, 'Could not split the pane.'))
+                self.assertEqual(self.run.call_count, 1)
 
     def test_new_post_routes_use_auth_origin_and_header_guards(self):
         for route in ('/mobile/api/split', '/mobile/api/resume'):

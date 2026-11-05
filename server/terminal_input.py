@@ -72,6 +72,34 @@ def fork_name(entry, entries):
     return f'{base} {number}'
 
 
+def new_window_after(pane, run=subprocess.run, *, cwd=None):
+    """Open after the source window, preserving its directory and manual size."""
+    source = run([paths.TMUX, 'display-message', '-p', '-t', pane, '#{window_id}\t#{pane_current_path}'],
+                 capture_output=True, text=True, timeout=5)
+    fields = source.stdout.rstrip('\n').split('\t', 1)
+    if source.returncode or len(fields) != 2 or not re.fullmatch(r'@[0-9]+', fields[0]) or not fields[1]:
+        raise RuntimeError(source.stderr.strip() or 'Could not split the pane.')
+    window, folder = fields
+    size = run([paths.TMUX, 'display-message', '-p', '-t', window,
+                '#{window-size}\t#{window_width}\t#{window_height}'],
+               capture_output=True, text=True, timeout=5)
+    dimensions = size.stdout.strip().split('\t')
+    if (size.returncode or len(dimensions) != 3
+            or any(not re.fullmatch(r'[1-9][0-9]*', value) for value in dimensions[1:])):
+        raise RuntimeError(size.stderr.strip() or 'Could not split the pane.')
+    result = run([paths.TMUX, 'new-window', '-a', '-t', window, '-c', folder if cwd is None else cwd,
+                  '-P', '-F', '#{pane_id}'], capture_output=True, text=True, timeout=5)
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip() or 'Could not split the pane.')
+    new_pane = result.stdout.strip()
+    if not re.fullmatch(r'%[0-9]+', new_pane):
+        raise RuntimeError('Pane creation could not be confirmed.')
+    if dimensions[0] == 'manual':
+        run([paths.TMUX, 'resize-window', '-t', new_pane, '-x', dimensions[1], '-y', dimensions[2]],
+            check=True, capture_output=True, text=True, timeout=5)
+    return new_pane
+
+
 def fork_chat(entry, entries, cwd, run=subprocess.run):
     """Open a new window in the pane's tmux session with a copy of its chat: `claude --resume ID --fork-session` or `codex fork ID`.
     The original chat is not touched. Returns (pane, name)."""
@@ -81,11 +109,10 @@ def fork_chat(entry, entries, cwd, run=subprocess.run):
     if not isinstance(thread, str) or not UUID.fullmatch(thread) or entry.get('pending_conversation'):
         raise ValueError('Send a first message in this chat, then try again.')
     name = fork_name(entry, entries)
-    result = run([paths.TMUX, 'new-window', '-a', '-t', entry['id'], '-c', cwd, '-P', '-F', '#{pane_id}'],
-                 capture_output=True, text=True, timeout=5)
-    pane = result.stdout.strip()
-    if result.returncode or not re.fullmatch(r'%\d+', pane):
-        raise RuntimeError('Could not open a new window in this tmux session.')
+    try:
+        pane = new_window_after(entry['id'], run, cwd=cwd)
+    except RuntimeError as error:
+        raise RuntimeError('Could not open a new window in this tmux session.') from error
     # A copy keeps the provider of the chat it copies (codex -p foundry), whatever new panes use now.
     profile = entry.get('codex_profile') if agent == 'codex' else None
     command = (f"claude --resume {thread} --fork-session --name {shlex.quote(name)}" if agent == 'claude'

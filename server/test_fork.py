@@ -1,3 +1,4 @@
+import subprocess
 import unittest
 from unittest.mock import MagicMock
 
@@ -21,20 +22,26 @@ class ForkTests(unittest.TestCase):
         self.assertEqual(terminal.fork_name(entry(agent_name='', pane_name='', label='my big session'), []), 'my big session 2')
 
     def run_fork(self, **extra):
-        run = MagicMock(return_value=MagicMock(returncode=0, stdout='%9\n', stderr=''))
+        def result(command, **kwargs):
+            output = ('@3\t/source\n' if '#{window_id}\t#{pane_current_path}' in command
+                      else 'latest\t120\t40\n' if command[1] == 'display-message' else '%9\n')
+            return subprocess.CompletedProcess(command, 0, stdout=output, stderr='')
+        run = MagicMock(side_effect=result)
         pane, name = terminal.fork_chat(entry(**extra), [entry(**extra)], '/tmp', run=run)
         return pane, name, [call.args[0] for call in run.call_args_list]
 
     def test_claude_fork_opens_a_window_in_the_same_session(self):
         pane, name, calls = self.run_fork()
         self.assertEqual((pane, name), ('%9', 'docs-update 2'))
-        self.assertEqual(calls[0][1:5], ['new-window', '-a', '-t', '%5'])
-        self.assertIn(f"claude --resume {ID} --fork-session --name 'docs-update 2'", calls[2])
-        self.assertIn('@chat_name', calls[1])
+        self.assertEqual(calls[0][1:], ['display-message', '-p', '-t', '%5', '#{window_id}\t#{pane_current_path}'])
+        self.assertEqual(calls[2][1:], ['new-window', '-a', '-t', '@3', '-c', '/tmp', '-P', '-F', '#{pane_id}'])
+        self.assertFalse(any('resize-window' in call for call in calls))
+        self.assertIn(f"claude --resume {ID} --fork-session --name 'docs-update 2'", calls[4])
+        self.assertIn('@chat_name', calls[3])
 
     def test_codex_fork(self):
         _, _, calls = self.run_fork(agent='codex')
-        self.assertIn(f'codex fork {ID}', calls[2])
+        self.assertIn(f'codex fork {ID}', calls[4])
 
     def test_refuses_without_a_real_chat_and_never_calls_tmux(self):
         for extra in ({'agent': 'shell'}, {'thread': None}, {'thread': 'x; rm -rf ~'}, {'pending_conversation': True}):
@@ -43,9 +50,16 @@ class ForkTests(unittest.TestCase):
                 terminal.fork_chat(entry(**extra), [], '/tmp', run=run)
             run.assert_not_called()
 
+    def test_lookup_failure_does_not_create_a_window_or_send_input(self):
+        for code, output in ((1, ''), (0, '%5\t/source\n')):
+            run = MagicMock(return_value=subprocess.CompletedProcess([], code, stdout=output, stderr=''))
+            with self.assertRaisesRegex(RuntimeError, 'Could not open a new window in this tmux session.'):
+                terminal.fork_chat(entry(), [], '/tmp', run=run)
+            self.assertEqual(run.call_count, 1)
+
     def test_quotes_a_name_with_shell_characters(self):
         _, _, calls = self.run_fork(agent_name="it's $(x)")
-        self.assertIn("--name 'it'\"'\"'s $(x) 2'", calls[2][-1])
+        self.assertIn("--name 'it'\"'\"'s $(x) 2'", calls[4][-1])
 
 
 if __name__ == '__main__':

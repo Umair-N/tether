@@ -104,7 +104,9 @@ class CodexProviderTest(unittest.TestCase):
             def run(argv, **kwargs):
                 if '-l' in argv:
                     typed.append(argv[-1])
-                return subprocess.CompletedProcess(argv, 0, stdout='%9\n')
+                output = ('@3\t/source\n' if '#{window_id}\t#{pane_current_path}' in argv
+                          else 'latest\t120\t40\n' if argv[1] == 'display-message' else '%9\n')
+                return subprocess.CompletedProcess(argv, 0, stdout=output)
             entry = {'id': '%1', 'agent': 'codex', 'thread': thread, 'tmux_session': '$1', 'codex_profile': profile}
             terminal.fork_chat(entry, [entry], '/tmp', run=run)
             self.assertEqual(typed, [expected])
