@@ -21,6 +21,7 @@ import window_size
 import prompt_actions
 import choice_state
 import claude_hooks
+import permissions_dialog
 
 LAUNCHERS = {'codex': 'codex',
              'claude': 'claude',
@@ -541,8 +542,12 @@ def attention(entry, screen, working, now=None, login_screen=None, styled_screen
     link = login_link(login_screen.splitlines() if login_screen is not None else lines, entry['agent'])
     numbered = [line for line in tail if NUMBERED_ITEM.match(line)]
     tabs = next((index for index, line in enumerate(lines) if SETTINGS_TABS.match(line)), None) if entry['agent'] == 'claude' else None
+    permissions = permissions_dialog.parse(screen, styled_screen) if entry['agent'] == 'claude' else None
     if link:
         reason = 'prompt'
+    elif permissions is not None:
+        tab_row = max(index for index, line in enumerate(lines) if permissions_dialog.TAB_ROW.match(line))
+        reason, tail = 'permissions', lines[tab_row:]
     elif tabs is not None:
         # Claude's Settings dialog (/usage, /status ...) only shows facts. Show it from its tab row, without the chat above it.
         reason, tail = 'panel', lines[tabs:]
@@ -564,7 +569,8 @@ def attention(entry, screen, working, now=None, login_screen=None, styled_screen
         return None
     # The cursor moves while the user answers; it must not restart the delay.
     text = '\n'.join(tail).strip('\n')
-    fingerprint = hashlib.sha256((reason + re.sub(r'[>❯›]|\s+', '', text)).encode()).hexdigest()
+    fingerprint = hashlib.sha256(('permissions' if reason == 'permissions' else
+                                  reason + re.sub(r'[>❯›]|\s+', '', text)).encode()).hexdigest()
     if not seen or seen['reason'] != reason or (not seen['shown'] and seen['fingerprint'] != fingerprint):
         _attention_seen[key] = {'fingerprint': fingerprint, 'first': now, 'last': now, 'reason': reason, 'shown': False, 'id': fingerprint}
         return None
@@ -580,6 +586,9 @@ def attention(entry, screen, working, now=None, login_screen=None, styled_screen
         found.update(picker)
     elif reason == 'panel':
         found['requiresResponse'] = False
+    elif reason == 'permissions':
+        found['requiresResponse'] = False
+        found['permissions'] = permissions
     elif link:
         found['login'] = link
     if reason in ('menu', 'picker'):

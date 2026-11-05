@@ -6,4 +6,6 @@
 .notice-action:hover:not(:disabled) { background: var(--hover); }
 .notice-action:disabled { color: var(--muted); opacity: .7; }
 .notice-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-@media (pointer: coarse) { .notice-action { height: var(--control); } }
+/* In the notice tray the button stays small; its hit area grows on touch screens. */
+.notice-action { position: relative; }
+@media (pointer: coarse) { .notice-action::before { content: ""; position: absolute; inset: -8px -4px; } }

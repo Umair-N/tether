@@ -1,0 +1,45 @@
+  > - To stop repeat blocks, you need a lasting allow rule, or an entry in the Auto mode tab that tells the check which
+  places to trust.
+  > - Decide whether Tether's new button should give a one-time retry, a lasting rule, or both. Label it to match.
+
+  whatever is best also fix this one
+  </pasted_content id="c0a7">
+  ⎿  Read
+     ../../../../tmp/claude-1000/-home-mak-Documents-projects/8b6e1e25-fcba-4cdc-b725-2fe330202f29/scratchpad/refs.mjs
+     (18 lines)
+  ⎿  Read
+     ../../../../tmp/claude-1000/-home-mak-Documents-projects/8b6e1e25-fcba-4cdc-b725-2fe330202f29/scratchpad/shots.mjs
+     (15 lines)
+  ⎿  Read
+     ../../../../tmp/claude-1000/-home-mak-Documents-projects/8b6e1e25-fcba-4cdc-b725-2fe330202f29/scratchpad/perf.mjs
+     (40 lines)
+  ⎿  Read ../../apps/tether-notes/2026-11-05-reply-stream/codex-spec-2-lively.md (52 lines)
+  ⎿  Read ../../.tether/projects/e89e1e21b318/notes/reply-preview-spinner.md (8 lines)
+  ⎿  Skills restored (anti-slop-design)
+  ⎿  SessionStart:compact says: Session charter loaded.
+
+  Read 2 files, ran 4 shell commands
+
+● Status: Dribbble worked on the second try (default user agent), but it only shows dashboards. Now I read the strip
+  code to plan one shared look, and I fix the blocked notice title.
+
+  Read 1 file, ran 3 shell commands
+  ⎿  1 action blocked by auto mode
+     │ Auto mode: [Bot Check Circumvention]
+
+● Fetch(https://code.claude.com/docs/en/auto-mode-config)
+  ⎿  Received 34KB (200 OK)
+
+  Ran 1 shell command
+
+● Status: trying to capture a real "Recently blocked" row. My own session now has two real blocks, so I open a forked
+  copy of it in the private test tmux and read its /permissions screen.
+
+  Ran 2 shell commands
+  ⎿  Interrupted · What should Claude do instead?
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   Permissions  Recently blocked   Allow   Ask   Deny   Auto mode   Workspace
+
+   No recent blocks. Commands auto mode blocks will appear here.
+
+   ←/→ to switch · ↓ to select · Esc to cancel

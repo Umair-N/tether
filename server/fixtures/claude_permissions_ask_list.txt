@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.318
+▝▜██████▀  Opus 5.5 with medium effort · Claude Ultra
+ ▝▝   ▝▝   ~/Documents/projects
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   Permissions  Recently blocked   Allow   Ask   Deny   Auto mode   Workspace
+
+   Claude Code will always ask for confirmation before using these tools.
+   ╭────────────────────────────────────────────────────────────────────╮
+   │ ⌕ Search…                                                          │
+   ╰────────────────────────────────────────────────────────────────────╯
+
+   ❯ 1. Add a new rule…
+
+   ↑/↓ to navigate · Enter to select · ←/→ to switch · Esc to cancel

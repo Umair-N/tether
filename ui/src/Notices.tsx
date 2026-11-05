@@ -16,6 +16,7 @@ export interface NoticeItem {
   icon: ReactNode
   title: ReactNode
   detail?: ReactNode  // muted text after the title: what happens next
+  more?: ReactNode  // shown under the row only while it is open, such as the full command
   action?: { label: string; onClick: () => void; disabled?: boolean; hint?: string }
   dismissLabel?: string
   onDismiss?: () => void
@@ -43,8 +44,9 @@ function NoticeCard({ item }: { item: NoticeItem }) {
     <span className="notice-icon" aria-hidden="true">{item.icon}</span>
     <span ref={text} className="notice-text">{item.detail ? <><span className="notice-title">{item.title}</span><span className="notice-detail">{item.detail}</span></> : item.title}</span>
     {item.action && <button type="button" className="notice-action" disabled={item.action.disabled} title={item.action.hint} onClick={item.action.onClick}>{item.action.label}</button>}
-    {(overflow || open) && <button type="button" className="notice-button" aria-expanded={open} aria-label={open ? 'Show less' : 'Show all'} onClick={() => setOpen(!open)}><ChevronDown size={15} /></button>}
+    {(overflow || open || item.more) && <button type="button" className="notice-button" aria-expanded={open} aria-label={open ? 'Show less' : 'Show all'} onClick={() => setOpen(!open)}><ChevronDown size={15} /></button>}
     {item.onDismiss && <button type="button" className="notice-button" aria-label={item.dismissLabel ?? 'Hide notice'} onClick={item.onDismiss}><X size={14} /></button>}
+    {open && item.more && <div className="notice-more">{item.more}</div>}
   </div>
 }
 

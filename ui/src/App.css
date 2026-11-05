@@ -614,7 +614,13 @@ dialog::backdrop { background: #11110e66; }
 .working-line { align-items: flex-start; }
 .working-line > .state-dot { margin-top: 5px; flex: none; }
 .work-glyph { flex: none; width: 14px; height: 18px; contain: strict; text-align: center; color: var(--accent); font-size: 15px; line-height: 18px; }
-.work-verb { color: var(--accent) !important; }
+.work-verb { position: relative; display: inline-block; color: var(--accent) !important; }
+/* The shimmer: a soft window slides right while the lighter copy inside it slides left by the same amount, so the copy stays on the text. Both are transforms, so the GPU runs them without style or paint work. */
+.work-glint { position: absolute; top: 0; bottom: 0; left: 0; width: 40%; overflow: hidden; pointer-events: none; -webkit-mask-image: linear-gradient(90deg, transparent, #000 50%, transparent); mask-image: linear-gradient(90deg, transparent, #000 50%, transparent); animation: glint-window 2.2s linear infinite; will-change: transform; }
+.work-glint > span { position: absolute; top: 0; left: 0; white-space: nowrap; color: color-mix(in srgb, var(--accent) 35%, var(--bg)); animation: glint-text 2.2s linear infinite; will-change: transform; }
+@keyframes glint-window { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+@keyframes glint-text { from { transform: translateX(40%); } to { transform: translateX(-100%); } }
+@media (prefers-reduced-motion: reduce) { .work-glint { display: none; } }
 .running-title small { font-size: inherit; color: var(--muted); }
 .working-line > span { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .working-line strong { color: var(--text); font-weight: 500; }
@@ -625,8 +631,12 @@ dialog::backdrop { background: #11110e66; }
 .running-tool code { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 .running-tool > small { flex: none; }
 .denied-tool > svg { color: var(--attention); }
+button.denied-tool { min-height: 0; margin: 2px 0 0 -4px; padding: 2px 4px; border: 0; border-radius: var(--radius-sm); background: none; color: inherit; font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; }
+button.denied-tool > span:first-of-type { flex: 0 1 auto; }
+.denied-review { flex: none; color: var(--accent); font-weight: 600; }
+button.denied-tool:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
 .denied-tool small { color: var(--muted); }
-.heads-up { margin: 0 18px 8px; padding: 10px 12px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--radius-lg); background: var(--surface); font-size: 13.5px; }
+.heads-up { margin: 0 18px 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); font-size: 13.5px; }
 .heads-up p { margin: 0 0 8px; }
 .heads-up-keys { display: flex; flex-wrap: wrap; gap: 6px; }
 .heads-up-text { display: flex; gap: 8px; align-items: baseline; overflow-wrap: anywhere; }
@@ -644,7 +654,7 @@ dialog::backdrop { background: #11110e66; }
 .sheet-heading .usage-refresh { margin-left: auto; margin-right: -8px; }
 .usage-refresh .spin { animation: spin 1s linear infinite; }
 @media (prefers-reduced-motion: reduce) { .usage-refresh .spin { animation: none; } }
-.heads-up button { min-height: var(--control); padding: 0 12px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--hover); color: var(--text); font-size: 13px; }
+.heads-up button { min-height: var(--control); padding: 0 12px; border-radius: var(--radius); border: 1px solid var(--line); background: transparent; color: var(--text); font-size: 13px; }
 .heads-up button.secondary { background: transparent; color: var(--muted); }
 .live-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 18px 8px; }
 .live-chip { display: inline-flex; align-items: center; gap: 6px; min-height: var(--control-sm); padding: 0 10px; border-radius: var(--radius); background: var(--hover); color: var(--muted); font-size: 12.5px; }
@@ -837,11 +847,14 @@ button.live-chip:active { background: var(--line); }
 .status-grip span { width: 40px; height: 4px; border-radius: 2px; background: var(--line); }
 .status-grip:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--radius-sm); }
 .status-rail { position: sticky; top: 0; z-index: 1; background: var(--bg); display: flex; align-items: center; gap: 6px; overflow-x: auto; padding: 2px 0 4px; }
-.status-chip { flex: none; min-height: var(--control); max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--radius); color: var(--muted); background: var(--surface); font-size: 12.5px; }
+.status-chip { flex: none; min-height: 28px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 10px; border: 0; border-radius: 999px; color: var(--muted); background: transparent; font-size: 12.5px; }
 .status-chip[aria-expanded="true"] { color: var(--text); background: var(--hover); }
-.status-chip.needs-action { color: var(--attention); }
+.status-chip.needs-action { color: var(--attention); background: color-mix(in srgb, var(--attention) 12%, transparent); }
+.status-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+@media (pointer: coarse) { .status-chip { min-height: var(--control); } }
 .status-rail .live-chips { display: contents; }
-.status-rail .live-chip { flex: none; white-space: nowrap; max-width: 240px; overflow: hidden; }
+.status-rail .live-chip { flex: none; white-space: nowrap; max-width: 240px; overflow: hidden; min-height: 28px; border-radius: 999px; background: transparent; }
+@media (pointer: coarse) { .status-rail .live-chip { min-height: var(--control); } }
 .status-rail .prompt-suggestion { flex: 1 1 auto; min-width: 0; max-width: 100%; margin: 0; min-height: var(--control); font-size: 13px; }
 .status-content { padding: 4px 0; font-size: 13px; overflow-wrap: anywhere; }
 .status-content[hidden] { display: none; }
@@ -862,14 +875,14 @@ button.live-chip:active { background: var(--line); }
 .status-content .plan-text :is(h1, h2, h3):first-child { margin-top: 0; font-size: 18px; }
 
 /* Notice cards and approval accents, after T3 Code's ComposerBanner and ComposerPendingApprovalActions (MIT, T3 Tools Inc.). */
-.notice-stack { flex: none; display: flex; flex-direction: column; margin: 0 12px 6px; }
-.notice-card { display: flex; align-items: flex-start; gap: 8px; min-width: 0; padding: 4px 4px 4px 10px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); font-size: 13px; line-height: 24px; }
-.notice-card + .notice-card { border-top: 0; }
-.notice-card:first-child { border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
-.notice-card:last-child { border-radius: 0 0 var(--radius-lg) var(--radius-lg); }
-.notice-card:only-child { border-radius: var(--radius-lg); }
-.notice-card.warning { border-color: color-mix(in srgb, var(--attention) 40%, var(--line)); background: color-mix(in srgb, var(--attention) 8%, var(--surface)); color: var(--text); }
-.notice-card.error { border-color: color-mix(in srgb, var(--error) 40%, var(--line)); background: color-mix(in srgb, var(--error) 8%, var(--surface)); color: var(--text); }
+/* The notices sit in one tray tucked under the top edge of the message box, so they read as part of it. */
+.notice-stack { flex: none; display: flex; flex-direction: column; margin: 0 30px -8px; border: 1px solid var(--line); border-bottom: 0; border-radius: var(--radius-lg) var(--radius-lg) 0 0; background: color-mix(in srgb, var(--hover) 50%, var(--bg)); overflow: hidden; }
+.notice-card { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0 8px; min-width: 0; padding: 3px 4px 3px 12px; color: var(--muted); font-size: 12.5px; line-height: 24px; }
+.notice-card + .notice-card { border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+.notice-card.warning { background: color-mix(in srgb, var(--attention) 8%, transparent); color: var(--text); }
+.notice-card.error { background: color-mix(in srgb, var(--error) 8%, transparent); color: var(--text); }
+.notice-more { flex-basis: 100%; min-width: 0; padding: 0 8px 6px 23px; }
+.notice-command { display: block; max-height: 30vh; overflow: auto; padding: 6px 8px; border-radius: var(--radius-sm); background: var(--surface); font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; -webkit-user-select: text; user-select: text; }
 .notice-card.warning .notice-icon { color: var(--attention); }
 .notice-card.error .notice-icon { color: var(--error); }
 .notice-icon { flex: none; display: grid; place-items: center; height: 24px; }
@@ -1035,6 +1048,8 @@ button.live-chip:active { background: var(--line); }
 }
 /* Bars above the composer line up with the message column and the composer on wide screens. */
 .notice-stack, .heads-up, .choice-dock, .working-line, .status-stack { max-width: 780px; margin-left: max(12px, (100% - 780px) / 2); margin-right: max(12px, (100% - 780px) / 2); }
+/* The notice tray tucks under the message box, 14px in from its sides. */
+.notice-stack { max-width: 752px; margin-left: max(26px, (100% - 752px) / 2); margin-right: max(26px, (100% - 752px) / 2); }
 .search-key { display: none; }
 @media (hover: hover) and (pointer: fine) { .sidebar-search:not(:focus-within) .search-key { display: inline-flex; } }
 .sidebar-search input:not(:placeholder-shown) + .search-key { display: none; }
@@ -1542,3 +1557,17 @@ button.live-chip:active { background: var(--line); }
   .shell-end { width: 44px; height: 44px; }
   .shell-confirm-buttons button { min-height: 44px; }
 }
+
+/* Claude's /permissions dialog (Permissions.tsx): its tabs, the list as the terminal shows it, and the keys. */
+.perm-panel { display: flex; flex-direction: column; gap: 8px; padding: 10px 0 0; }
+.perm-tabs { display: flex; gap: 4px; overflow-x: auto; padding: 0 12px; scrollbar-width: none; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); }
+.perm-tabs::-webkit-scrollbar { display: none; }
+.perm-tabs button { flex: none; min-height: 28px; padding: 0 10px; border: 0; border-radius: 999px; background: transparent; color: var(--muted); font-size: 12.5px; }
+.perm-tabs button[aria-selected="true"] { background: var(--hover); color: var(--text); font-weight: 600; }
+@media (pointer: coarse) { .perm-tabs button { min-height: var(--control); } }
+.perm-note { margin: 0 16px; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+.perm-body { list-style: none; margin: 0 12px; padding: 6px 0; max-height: 40vh; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; line-height: 1.55; }
+.perm-body li { padding: 0 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.perm-body li.current { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--text); }
+.perm-panel .choice-keys { padding: 2px 12px 4px; }
+.choice-keys button.primary { border-color: var(--accent); background: var(--accent); color: var(--accent-text); font-weight: 600; }

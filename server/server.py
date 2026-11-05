@@ -1661,7 +1661,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if self.path == '/mobile/api/key':
                 key = body.get('key')
-                if key not in ('C-c', 'Up', 'Down', 'Left', 'Right', 'Enter', 'Escape', 'Tab', 'BTab', 'Space', 'y', 'n', *'0123456789'):
+                if key not in ('C-c', 'Up', 'Down', 'Left', 'Right', 'Enter', 'Escape', 'Tab', 'BTab', 'Space', 'y', 'n', 'r', *'0123456789'):
                     self.respond(400, {'error': 'Invalid key.'})
                     return
                 with SEND_LOCK:
@@ -1669,6 +1669,13 @@ class Handler(BaseHTTPRequestHandler):
                         card_key(config, key)
                     else:
                         verify(config)
+                        if key == 'r':
+                            import permissions_dialog
+                            styled = capture(config, styled=True) if config['agent'] == 'claude' else ''
+                            dialog = permissions_dialog.parse(styled, styled)
+                            if not dialog or dialog['tab'] != 'Recently blocked':
+                                self.respond(400, {'error': 'Open Recently blocked first.'})
+                                return
                         if key == 'Escape' and body.get('stop') is True and config['agent'] == 'claude':
                             from terminal_input import stop_turn
                             self.respond(200, {'accepted': True, **stop_turn(config)})

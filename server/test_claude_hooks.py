@@ -123,6 +123,48 @@ class HookTests(unittest.TestCase):
         self.feed('Notification', 108, notification_type='idle_prompt')
         self.assertIsNone(self.read()['spinner'])
 
+    def test_denied_block_facts_preserve_existing_notice(self):
+        self.feed('UserPromptSubmit', 100)
+        self.feed('PermissionDenied', 101, tool_name='Bash',
+                  tool_input={'command': 'curl x', 'description': 'Fetch page'},
+                  reason='Auto mode: [Bot Check Circumvention]')
+        result = self.read()
+        self.assertEqual(result['blocked'], {
+            'tool': 'Bash', 'description': 'Fetch page', 'command': 'curl x',
+            'reason': 'Bot Check Circumvention', 'at': 101})
+        self.assertEqual(result['notices'], [
+            'Bash(curl x) blocked by auto mode · /permissions · Auto mode: '
+            'Auto mode: [Bot Check Circumvention]'])
+        state = json.loads((self.cache / 'hooks/abc123.json').read_text())
+        self.assertEqual(state['denied']['description'], 'Fetch page')
+        self.assertEqual(state['denied']['command'], 'curl x')
+        self.assertNotIn('blocked', self.read(101 + claude_hooks.TURN_MAX_AGE + 1))
+        self.feed('UserPromptSubmit', 111)
+        self.assertNotIn('blocked', self.read(112))
+
+    def test_old_denied_state_defaults_missing_block_facts_to_empty(self):
+        self.feed('PermissionDenied', tool_name='Read', tool_input={'file_path': '/example/file'},
+                  reason='[File access]')
+        target = self.cache / 'hooks/abc123.json'
+        state = json.loads(target.read_text())
+        state['denied'].pop('description', None)
+        state['denied'].pop('command', None)
+        target.write_text(json.dumps(state))
+        self.assertEqual(self.read()['blocked'], {
+            'tool': 'Read', 'description': '', 'command': '', 'reason': 'File access', 'at': 100})
+
+    def test_block_command_fallbacks_and_short_limit(self):
+        for tool, command in [({'command': 'curl x', 'url': 'https://example.test'}, 'curl x'),
+                              ({'url': 'https://example.test', 'file_path': '/example/file'}, 'https://example.test'),
+                              ({'file_path': '/example/file'}, '/example/file'), ({}, ''),
+                              ({'command': 'x' * 200}, 'x' * 160)]:
+            with self.subTest(tool=tool):
+                self.feed('PermissionDenied', tool_name='Tool', tool_input=tool, reason='Auto mode: [Rule]')
+                blocked = self.read()['blocked']
+                self.assertEqual(blocked['command'], command)
+                self.assertEqual(blocked['description'], '')
+                self.assertEqual(blocked['reason'], 'Rule')
+
     def test_subagent_does_not_change_main_context_or_end_turn(self):
         self.feed('UserPromptSubmit', permission_mode='plan', effort={'level': 'high'})
         self.feed('SubagentStart', 101, agent_id='agent-one', agent_type='Explore')

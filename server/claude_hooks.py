@@ -119,6 +119,8 @@ def update(state, data, now):
         tool = tool if isinstance(tool, dict) else {}
         state['denied'] = {
             'tool': short(data.get('tool_name')),
+            'description': short(tool.get('description')),
+            'command': short(tool.get('command') or tool.get('url') or tool.get('file_path') or ''),
             'detail': next((short(tool.get(key)) for key in
                             ('command', 'file_path', 'pattern', 'query', 'description') if short(tool.get(key))), ''),
             'reason': short(data.get('reason')), 'at': now}
@@ -390,6 +392,11 @@ def overlay(config, result, now=None, screen_read_at=None):
             else:
                 notices.append(notice)
             merged['notices'] = notices
+            merged['blocked'] = {
+                'tool': denied['tool'], 'description': denied.get('description', ''),
+                'command': denied.get('command', ''),
+                'reason': re.sub(r'^Auto mode:\s*', '', denied['reason']).replace('[', '').replace(']', '').strip(),
+                'at': denied['at']}
         for key in ('mode', 'effort'):
             if key in state:
                 merged[key] = state[key]

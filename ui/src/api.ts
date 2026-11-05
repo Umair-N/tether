@@ -152,7 +152,9 @@ export interface ChoiceState {
   more_below: number
   hints: string[]
 }
-export interface Attention { id: string; text: string; reason: 'menu' | 'prompt' | 'no-input-box' | 'panel' | 'picker' | 'info';
+// Claude's /permissions dialog as server/permissions_dialog.py reads it.
+export interface PermissionsDialog { tabs: string[]; tab: string | null; lines: string[]; selected: number | null; hint: string; empty: boolean }
+export interface Attention { id: string; text: string; reason: 'menu' | 'prompt' | 'no-input-box' | 'panel' | 'picker' | 'info' | 'permissions'; permissions?: PermissionsDialog;
   promptId?: string; revision?: string; requiresResponse?: boolean; body?: string; hints?: string[]; actions?: PromptAction[]; title?: string; subtitle?: string; items?: PickerItem[]; more_above?: number; more_below?: number; hint?: string; question?: string; options?: Choice[]; choice?: ChoiceState; ask?: { id: string; questions: AskQuestion[] }; askBridge?: AskBridge; ask_current?: AskCurrent; login?: { url: string; code: boolean; user_code?: string; message?: string } }
 export interface PastChat { id: string; title: string; dir: string | null; time: string; live: boolean }
 export interface HistoryData { chats: PastChat[] }
@@ -219,6 +221,8 @@ export interface Footer { observed?: boolean; suggestion?: string; notices?: str
   spinner?: { verb: string; detail: string } | null
   running?: { title: string; elapsed: string; command: string } | null
   denied?: { text: string; reason: string } | null
+  // The last auto mode block of this turn, from the PermissionDenied hook.
+  blocked?: { tool: string; description: string; command: string; reason: string; at: number } | null
   heads_up?: { text: string; state?: 'offer' | 'explained' | 'making' | 'ready' | 'failed'; detail?: string[]; url?: string | null; more?: number; full?: string; note?: string; options: { key: string; label: string }[] } | null }
 // The /goal and the background shells and monitors of the pane's Claude conversation, from its transcript.
 export interface LiveGoal { condition: string; met: boolean; reason?: string; set_at?: number | null; checked_at?: number | null }
