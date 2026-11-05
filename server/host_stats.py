@@ -1,4 +1,4 @@
-"""On-demand Linux host and cgroup v2 samples. No privileged container API."""
+"""On-demand host and cgroup v2 samples. No privileged container API."""
 import json
 import os
 from pathlib import Path
@@ -9,6 +9,8 @@ import subprocess
 import threading
 import time
 from urllib.request import ProxyHandler, HTTPRedirectHandler, build_opener
+
+import procinfo
 
 GLANCES_URL = 'http://127.0.0.1:61208'
 
@@ -34,6 +36,38 @@ def number(value):
 def fields(path):
     return {key.rstrip(':'): value for line in read(path).splitlines() if len(line.split(None, 1)) == 2
             for key, value in [line.split(None, 1)]}
+
+
+def _vm_stat_used(text):
+    page_size = re.search(r'^Mach Virtual Memory Statistics: \(page size of (\d+) bytes\)', text)
+    if not page_size:
+        return None
+    pages = dict(re.findall(r'^Pages (.+?):\s+(\d+)\.$', text, re.M))
+    names = ('active', 'wired down', 'occupied by compressor')
+    if not all(name in pages for name in names):
+        return None
+    return sum(int(pages[name]) for name in names) * int(page_size.group(1))
+
+
+def _command_text(args):
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=2)
+        return result.stdout if result.returncode == 0 else ''
+    except (OSError, subprocess.SubprocessError):
+        return ''
+
+
+def _darwin_host():
+    try:
+        load = list(os.getloadavg())
+    except OSError:
+        load = []
+    try:
+        uptime = procinfo.uptime()
+    except (OSError, ValueError, subprocess.SubprocessError):
+        uptime = None
+    return dict(cpu_pct=None, mem_total=number(_command_text(['sysctl', '-n', 'hw.memsize'])),
+                mem_bytes=_vm_stat_used(_command_text(['vm_stat'])), load=load, uptime=uptime)
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -97,6 +131,17 @@ class Sampler:
             return self.cached
 
     def host(self):
+        metrics = _darwin_host() if procinfo.DARWIN else self._linux_host()
+        disk_used = disk_total = None
+        try:
+            disk = os.statvfs('/')
+            disk_total = disk.f_blocks * disk.f_frsize
+            disk_used = (disk.f_blocks - disk.f_bfree) * disk.f_frsize
+        except OSError:
+            pass
+        return dict(cpus=os.cpu_count() or 1, disk_bytes=disk_used, disk_total=disk_total, **metrics)
+
+    def _linux_host(self):
         cpu = None
         line = read(self.proc / 'stat').splitlines()
         sampled_at = self.clock()
@@ -112,22 +157,15 @@ class Sampler:
         memory = fields(self.proc / 'meminfo')
         total = number(memory.get('MemTotal', '').split(' ')[0])
         available = number(memory.get('MemAvailable', '').split(' ')[0])
-        disk_used = disk_total = None
-        try:
-            disk = os.statvfs('/')
-            disk_total = disk.f_blocks * disk.f_frsize
-            disk_used = (disk.f_blocks - disk.f_bfree) * disk.f_frsize
-        except OSError:
-            pass
         try:
             load = [float(v) for v in read(self.proc / 'loadavg').split()[:3]]
             uptime = float(read(self.proc / 'uptime').split()[0])
         except (ValueError, IndexError):
             load, uptime = [], None
-        return dict(cpu_pct=cpu, cpus=os.cpu_count() or 1,
+        return dict(cpu_pct=cpu,
                     mem_bytes=(max(0, total - available) * 1024 if total is not None and available is not None else None),
                     mem_total=total * 1024 if total is not None else None, load=load,
-                    disk_bytes=disk_used, disk_total=disk_total, uptime=uptime)
+                    uptime=uptime)
 
     def groups(self):
         if not (self.root / 'cgroup.controllers').exists():

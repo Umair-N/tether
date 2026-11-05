@@ -3,11 +3,24 @@ import os
 from pathlib import Path
 import shutil
 
+
+def _find_tmux():
+    found = os.environ.get('MOBILE_TMUX_TMUX') or shutil.which('tmux')
+    if found:
+        return found
+    import procinfo  # Only the fallback needs platform helpers; minimal CLI bundles omit them.
+    if procinfo.DARWIN:
+        for path in ('/opt/homebrew/bin/tmux', '/usr/local/bin/tmux'):
+            if os.access(path, os.X_OK):
+                return path
+    return '/usr/bin/tmux'
+
+
 HOME = Path(os.environ.get('MOBILE_TMUX_HOME') or Path.home())
 CACHE = Path(os.environ.get('MOBILE_TMUX_CACHE') or HOME / '.cache/mobile-tmux')
 TETHER = Path(os.environ.get('TETHER_HOME') or HOME / '.tether')  # session projects (projects.py)
 CONFIG = Path(os.environ.get('MOBILE_TMUX_CONFIG') or HOME / '.config/mobile-tmux')
-TMUX = os.environ.get('MOBILE_TMUX_TMUX') or shutil.which('tmux') or '/usr/bin/tmux'
+TMUX = _find_tmux()
 SYSTEMD_RUN = shutil.which('systemd-run')
 # server.py sets this at start when it runs as a systemd service. Not read from the environment here: tmux panes
 # started by the service inherit INVOCATION_ID too.

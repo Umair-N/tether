@@ -10,6 +10,7 @@ import fcntl
 import glob
 import json
 import os
+from pathlib import Path
 import re
 import shutil
 import signal
@@ -19,6 +20,7 @@ import time
 from urllib.parse import urlsplit
 
 import paths
+import procinfo
 from browser_display import VirtualDisplay
 
 IDLE_SECONDS = 15 * 60
@@ -75,13 +77,30 @@ def find_chrome():
         found = shutil.which(name)
         if found:
             return found
-    builds = sorted(glob.glob(str(paths.HOME / '.cache/ms-playwright/chromium-*/chrome-linux*/chrome')),
+    if procinfo.DARWIN:
+        for root in ('/Applications', paths.HOME / 'Applications'):
+            for app, binary in (('Chromium', 'Chromium'), ('Google Chrome', 'Google Chrome')):
+                path = str(Path(root) / (app + '.app') / 'Contents/MacOS' / binary)
+                if os.access(path, os.X_OK):
+                    return path
+    builds = glob.glob(str(paths.HOME / '.cache/ms-playwright/chromium-*/chrome-linux*/chrome'))
+    if procinfo.DARWIN:
+        for app in ('Chromium', 'Google Chrome for Testing'):
+            builds += glob.glob(str(paths.HOME / 'Library/Caches/ms-playwright' /
+                                    ('chromium-*/chrome-mac*/%s.app/Contents/MacOS/%s' % (app, app))))
+    builds = sorted(builds,
                     key=lambda path: int(re.search(r'chromium-(\d+)', path).group(1)), reverse=True)
     return next((path for path in builds if os.access(path, os.X_OK)), None)
 
 
 def find_signed_chrome():
     """The signed-in browser always uses branded Chrome, never the agent's override."""
+    if procinfo.DARWIN:
+        for root in ('/Applications', paths.HOME / 'Applications'):
+            path = str(Path(root) / 'Google Chrome.app/Contents/MacOS/Google Chrome')
+            if os.access(path, os.X_OK):
+                return path
+        return None
     return '/usr/bin/google-chrome' if os.access('/usr/bin/google-chrome', os.X_OK) else None
 
 
