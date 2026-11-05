@@ -1,4 +1,5 @@
 """Persistent worker/reviewer links and one bounded watcher step."""
+import hashlib
 import json
 import os
 import re
@@ -12,6 +13,8 @@ from terminal_input import DraftError
 FILE = paths.CACHE / 'review-links.json'
 MAX_LINKS = 50
 MAX_RETRIES = 30
+REVIEW_WAIT = 450
+MAX_ROUNDS = 3
 GRACE = 30
 _lock = threading.Lock()
 
@@ -64,6 +67,10 @@ def remove(worker):
         return True
 
 
+def _digest(text):
+    return hashlib.sha256((text or '').encode()).hexdigest()
+
+
 def _step(link, entries, status, send, last_reply):
     worker = entries.get(link['worker'])
     reviewer = entries.get(link['reviewer'])
@@ -72,23 +79,70 @@ def _step(link, entries, status, send, last_reply):
     if worker is None or reviewer is None:
         return link if time.time() - link.get('created', 0) < GRACE else None
     thread = worker.get('thread')
-    if link['worker_thread'] is None:
-        if thread:
+    if isinstance(thread, str) and re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', thread):
+        if link.get('worker_thread') is None:
             link['worker_thread'] = thread
-    elif thread != link['worker_thread']:
-        return None
+        elif thread != link['worker_thread']:
+            return None
     state = status(worker)['state']
+    if link.get('awaiting', False):
+        reviewer_state = status(reviewer)['state']
+        if reviewer_state == 'Working':
+            link['reviewer_seen_working'] = True
+        elif reviewer_state == 'Idle' and not link.get('reviewer_seen_working', False) \
+                and _digest(last_reply(reviewer)) == link.get('reviewer_before'):
+            # No turn seen yet. A turn shorter than one tick still changes the last reply; none for 30 ticks: give up.
+            link['idle_ticks'] = link.get('idle_ticks', 0) + 1
+            if link['idle_ticks'] >= 30:
+                link['awaiting'] = False
+        elif reviewer_state == 'Idle':
+            reply = last_reply(reviewer).strip()
+            if reply.upper().startswith('APPROVED') or link.get('rounds', 0) >= MAX_ROUNDS:
+                link['awaiting'] = False
+            elif state != 'Idle':
+                link['wait_ticks'] = link.get('wait_ticks', 0) + 1
+                if link['wait_ticks'] >= REVIEW_WAIT:
+                    link['awaiting'] = False
+            else:
+                link.pop('wait_ticks', None)
+                text = (f"[Tether review] Feedback from the reviewer tab ({link['reviewer']}):\n\n"
+                        f'{reply[:3000]}\n\nFix what it raises, then stop and wait.')
+                try:
+                    send(worker, text, state)
+                    link['rounds'] = link.get('rounds', 0) + 1
+                    link['awaiting'] = False
+                except (DraftError, RuntimeError):
+                    link['retries'] = link.get('retries', 0) + 1
+                    if link['retries'] >= MAX_RETRIES:
+                        link['awaiting'] = False
+        if not link['awaiting']:
+            for key in ('wait_ticks', 'idle_ticks', 'reviewer_before', 'reviewer_seen_working', 'retries'):
+                link.pop(key, None)
+        return link
     if state == 'Working':
         link['seen_working'] = True
         link.pop('retries', None)
+        link.pop('wait_ticks', None)
     elif link['seen_working'] and state == 'Idle':
         reviewer_state = status(reviewer)['state']
+        if reviewer_state != 'Idle':
+            link['wait_ticks'] = link.get('wait_ticks', 0) + 1
+            if link['wait_ticks'] >= REVIEW_WAIT:
+                link['seen_working'] = False
+                link.pop('wait_ticks', None)
+                link.pop('retries', None)
+            return link
+        link.pop('wait_ticks', None)
         delivered = False
-        if reviewer.get('writable') and reviewer_state not in ('Approval', 'Input needed', 'Unavailable'):
+        if reviewer.get('writable'):
             agent = 'Claude' if link['agent'] == 'claude' else 'Codex'
             text = (f"[Tether review] The {agent} tab “{link['name']}” ({link['worker']}) finished a turn. "
-                    'Review its work: check the changes and the claims, then tell me what is wrong or missing. '
+                    'Review its work: check the changes and the claims, then list what is wrong or missing. '
+                    'Start your reply with APPROVED if nothing is. Tether sends your reply to that tab. '
                     f"Its last reply:\n\n{last_reply(worker)[:1500]}\n\nTranscript: {worker.get('transcript', '')}")
+            if link.get('rounds', 0) == MAX_ROUNDS:
+                text += ' This is the last round: your reply stays here.'
+            before = _digest(last_reply(reviewer))
             try:
                 send(reviewer, text, reviewer_state)
                 delivered = True
@@ -96,6 +150,9 @@ def _step(link, entries, status, send, last_reply):
                 pass
         if delivered:
             link['seen_working'] = False
+            link['awaiting'] = True
+            link['reviewer_seen_working'] = False
+            link['reviewer_before'] = before
             link.pop('retries', None)
         else:
             link['retries'] = link.get('retries', 0) + 1
