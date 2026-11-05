@@ -18,6 +18,8 @@ from urllib.request import Request, urlopen
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'server'))
 import updates
 
+DARWIN = sys.platform == 'darwin'
+
 
 _spec = importlib.util.spec_from_file_location(
     'tether_bootstrap', Path(__file__).resolve().parent / 'integrations/claude/tether/skills/setup/bootstrap.py')
@@ -38,11 +40,31 @@ def run(command, quiet=False):
         raise subprocess.CalledProcessError(result.returncode, command)
 
 
+def launchd_label(name):
+    suffix = 'chat' if name == 'tether.service' else name.removeprefix('tether-').removesuffix('.service')
+    return 'local.tether.' + suffix
+
+
 def restart(state):
     units = [unit for unit in state.get('unit_names', ['tether.service'])
              if unit in ('tether.service', 'tether-terminal.service', 'tether-voice.service')]
     if 'tether.service' not in units:
         units.insert(0, 'tether.service')
+    if DARWIN:
+        # launchd sets XPC_SERVICE_NAME to the job label. A bootout of the update job from inside that job would
+        # stop this update before it finishes, so the running update job keeps its loaded plist until next login.
+        if ('tether-update.service' in state.get('unit_names', []) and
+                os.environ.get('XPC_SERVICE_NAME') != launchd_label('tether-update.service')):
+            units.append('tether-update.service')
+        domain = f'gui/{os.getuid()}'
+        for unit in units:
+            label = launchd_label(unit)
+            try:
+                run(['launchctl', 'bootout', f'{domain}/{label}'], quiet=True)
+            except (OSError, subprocess.SubprocessError):
+                pass
+            run(['launchctl', 'bootstrap', domain, str(Path.home() / 'Library/LaunchAgents' / (label + '.plist'))])
+        return
     run(['systemctl', '--user', 'daemon-reload'])
     run(['systemctl', '--user', 'restart', *units])
     if 'tether-update.timer' in state.get('unit_names', []):
@@ -81,9 +103,14 @@ def git_checkout(repo):
 
 def snapshot(state_file):
     home = Path.home()
-    units = home / '.config/systemd/user'
-    paths = [units / name for name in ('tether.service', 'tether-terminal.service', 'tether-voice.service',
-                                      'tether-update.service', 'tether-update.timer')]
+    if DARWIN:
+        units = home / 'Library/LaunchAgents'
+        paths = [units / (launchd_label(name) + '.plist') for name in
+                 ('tether.service', 'tether-terminal.service', 'tether-voice.service', 'tether-update.service')]
+    else:
+        units = home / '.config/systemd/user'
+        paths = [units / name for name in ('tether.service', 'tether-terminal.service', 'tether-voice.service',
+                                          'tether-update.service', 'tether-update.timer')]
     for folder in ('.claude', '.gemini/antigravity-cli'):
         settings = home / folder / 'settings.json'
         paths.extend([settings, settings.with_name('settings.json.before-tether')])

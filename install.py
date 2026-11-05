@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import plistlib
 import shlex
 import shutil
 import socket
@@ -14,6 +15,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parent
+DARWIN = sys.platform == 'darwin'
 UNIT_NAMES = ('tether.service', 'tether-terminal.service', 'tether-voice.service')
 UPDATE_UNITS = ('tether-update.service', 'tether-update.timer')
 LEGACY_UNITS = ('mobile-tmux.service', 'mobile-tmux-terminal.service', 'mobile-tmux-whisper.service')
@@ -33,6 +35,12 @@ def probe(*args):
 
 def occupied_ports():
     """Linux exposes sockets across users, including wildcard and IPv6 binds."""
+    if DARWIN:
+        result = probe('lsof', '-nP', '-iTCP', '-sTCP:LISTEN', '-F', 'n')
+        if not result or result.returncode:
+            return set()
+        return {int(line.rsplit(':', 1)[1]) for line in result.stdout.splitlines()
+                if line.startswith('n') and ':' in line and line.rsplit(':', 1)[1].isdigit()}
     ports = set()
     for name in ('tcp', 'tcp6'):
         for row in Path('/proc/net', name).read_text().splitlines()[1:]:
@@ -46,6 +54,17 @@ def occupied_ports():
 
 def owned_port(unit, port):
     """Accept an occupied port only when this user's installed service owns it."""
+    if DARWIN:
+        result = probe('launchctl', 'print', f'gui/{os.getuid()}/{launchd_label(unit)}')
+        if not result or result.returncode:
+            return False
+        pid = next((line.partition('=')[2].strip() for line in result.stdout.splitlines()
+                    if line.strip().startswith('pid = ')), '')
+        if not pid.isdigit() or int(pid) == 0:
+            return False
+        result = probe('lsof', '-nP', '-a', '-p', pid, f'-iTCP:{port}', '-sTCP:LISTEN', '-F', 'p')
+        return bool(result and result.returncode == 0 and
+                    any(line.startswith('p') for line in result.stdout.splitlines()))
     result = probe('systemctl', '--user', 'show', unit, '--property=MainPID', '--value')
     if not result or result.returncode or not result.stdout.strip().isdigit():
         return False
@@ -85,6 +104,9 @@ def free_port(port, taken, reserved, unit=None, legacy_unit=None):
             # Match the server, which also reuses addresses held in TIME_WAIT.
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind(('0.0.0.0', port))
+        if DARWIN:
+            with socket.socket() as sock:
+                sock.bind(('127.0.0.1', port))
         return True
     except OSError:
         return False
@@ -157,6 +179,31 @@ def unit_text(description, command, environment, *, oneshot=False):
     return (f'[Unit]\nDescription={description}\nAfter=network.target\n\n[Service]\n{service}'
             f'ExecStart={" ".join(quote(word, executable=True) for word in command)}\n{env}'
             f'{restart}\n[Install]\nWantedBy=default.target\n')
+
+
+def launchd_label(name):
+    suffix = 'chat' if name == 'tether.service' else name.removeprefix('tether-').removesuffix('.service')
+    return 'local.tether.' + suffix
+
+
+def unit_path(units_dir, name):
+    return units_dir / (launchd_label(name) + '.plist' if DARWIN else name)
+
+
+def service_file(name, description, command, environment, oneshot=False):
+    if not DARWIN:
+        return unit_text(description, command, environment, oneshot=oneshot)
+    label = launchd_label(name)
+    log = str(Path.home() / 'Library/Logs/tether' / (label + '.log'))
+    data = dict(Label=label, ProgramArguments=[str(word) for word in command],
+                StandardOutPath=log, StandardErrorPath=log)
+    if environment:
+        data['EnvironmentVariables'] = {key: str(value) for key, value in environment.items()}
+    if oneshot:
+        data.update(RunAtLoad=False, StartCalendarInterval={'Hour': 4, 'Minute': 17})
+    else:
+        data.update(RunAtLoad=True, KeepAlive=True, ThrottleInterval=3)
+    return plistlib.dumps(data).decode()
 
 
 def needs_build(repo):
@@ -275,7 +322,8 @@ def wrapped_original(value, script):
 def make_plan(args, repo=ROOT, home=None):
     home = home or Path.home()
     state_file = Path(os.environ.get('TETHER_INSTALL_STATE') or home / '.config/tether/install.json')
-    units_dir = home / '.config/systemd/user'
+    units_dir = home / ('Library/LaunchAgents' if DARWIN else '.config/systemd/user')
+    unit_names = (*UNIT_NAMES, UPDATE_UNITS[0]) if DARWIN else (*UNIT_NAMES, *UPDATE_UNITS)
     saved = {}
     if state_file.exists():
         saved = json.loads(state_file.read_text())
@@ -306,27 +354,44 @@ def make_plan(args, repo=ROOT, home=None):
     def check(name, ok, fix):
         checks.append(dict(name=name, ok=bool(ok), fix=fix))
 
-    check('Linux', platform.system() == 'Linux', 'Run the installer on Linux.')
-    check('Python >= 3.10', sys.version_info >= (3, 10), 'Use Python 3.10 or newer.')
-    result = probe('systemctl', '--user', 'show-environment')
-    check('systemd user session', result is not None and result.returncode == 0,
-          'Start a Linux login session with a reachable systemd user manager.')
-    legacy_files = {path.name for path in units_dir.glob('mobile-tmux*.service')}
-    result = probe('systemctl', '--user', 'list-unit-files', 'mobile-tmux*.service', '--no-legend', '--no-pager')
-    if result and result.returncode == 0:
-        legacy_files.update(row.split()[0] for row in result.stdout.splitlines()
-                            if row.split() and row.split()[0].startswith('mobile-tmux') and row.split()[0].endswith('.service'))
+    if DARWIN:
+        check('macOS', True, '')
+    else:
+        check('Linux', platform.system() == 'Linux', 'Run the installer on Linux.')
+    check('Python >= 3.11', sys.version_info >= (3, 11),
+          'Use Python 3.11 or newer, for example: brew install python, then run /opt/homebrew/bin/python3 install.py.'
+          if DARWIN else 'Use Python 3.11 or newer.')
+    legacy_files = set()
+    if DARWIN:
+        result = probe('launchctl', 'print', f'gui/{os.getuid()}')
+        check('launchd GUI session', result is not None and result.returncode == 0,
+              'Log in to the Mac desktop as this user, and run the installer from Terminal there, not over SSH.')
+    else:
+        result = probe('systemctl', '--user', 'show-environment')
+        check('systemd user session', result is not None and result.returncode == 0,
+              'Start a Linux login session with a reachable systemd user manager.')
+        legacy_files = {path.name for path in units_dir.glob('mobile-tmux*.service')}
+        result = probe('systemctl', '--user', 'list-unit-files', 'mobile-tmux*.service', '--no-legend', '--no-pager')
+        if result and result.returncode == 0:
+            legacy_files.update(row.split()[0] for row in result.stdout.splitlines()
+                                if row.split() and row.split()[0].startswith('mobile-tmux') and row.split()[0].endswith('.service'))
     legacy = sorted(legacy_files)
     legacy_config = {unit: legacy_settings(unit, units_dir) for unit in LEGACY_UNITS
                      if unit in legacy and not args.uninstall and (args.replace_legacy or options['voice'])}
     commands = []
     files = {}
     if args.uninstall:
-        commands = [['systemctl', '--user', 'disable', '--now', name] for name in (*UNIT_NAMES, *UPDATE_UNITS)
-                    if (units_dir / name).exists() or name in saved.get('unit_names', [])]
-        commands.append(['systemctl', '--user', 'daemon-reload'])
+        installed = [name for name in unit_names
+                     if unit_path(units_dir, name).exists() or name in saved.get('unit_names', [])]
+        if DARWIN:
+            commands = [['launchctl', 'bootout', f'gui/{os.getuid()}/{launchd_label(name)}'] for name in installed]
+        else:
+            commands = [['systemctl', '--user', 'disable', '--now', name] for name in installed]
+            commands.append(['systemctl', '--user', 'daemon-reload'])
     else:
-        check('tmux', bool(shutil.which('tmux')), 'Install tmux and place it on PATH.')
+        check('tmux', bool(shutil.which('tmux')) or DARWIN and any(
+            os.access(path, os.X_OK) for path in ('/opt/homebrew/bin/tmux', '/usr/local/bin/tmux')),
+            'Install tmux and place it on PATH.')
         try:
             valid_host = ipaddress.ip_address(options['host']).version == 4
         except ValueError:
@@ -346,7 +411,8 @@ def make_plan(args, repo=ROOT, home=None):
             taken = occupied_ports()
         except OSError:
             taken = set()
-            check('Linux socket table', False, 'Make /proc/net/tcp and /proc/net/tcp6 readable on Linux.')
+            if not DARWIN:
+                check('Linux socket table', False, 'Make /proc/net/tcp and /proc/net/tcp6 readable on Linux.')
         reserved = set()
         legacy_chat = LEGACY_UNITS[0] if args.replace_legacy and LEGACY_UNITS[0] in legacy else None
         if args.port is None and legacy_chat:
@@ -358,7 +424,7 @@ def make_plan(args, repo=ROOT, home=None):
         if options['port'] is None:
             options['port'] = pick_port(7683, taken, reserved)
         port = options['port']
-        own = (units_dir / UNIT_NAMES[0]).exists() and previous.get('port') == port
+        own = unit_path(units_dir, UNIT_NAMES[0]).exists() and previous.get('port') == port
         check('chat port', free_port(port, taken, reserved, UNIT_NAMES[0] if own else None, legacy_chat),
               f'Port {port} is taken or invalid. Choose a free port with --port.')
         reserved.add(port)
@@ -366,17 +432,18 @@ def make_plan(args, repo=ROOT, home=None):
                                           ('voice_port', options['voice'], 7684, UNIT_NAMES[2])):
             options[key] = None
             if enabled:
-                legacy_unit = LEGACY_UNITS[UNIT_NAMES.index(unit)] if args.replace_legacy else None
+                legacy_unit = LEGACY_UNITS[UNIT_NAMES.index(unit)] if args.replace_legacy and not DARWIN else None
                 legacy_port = legacy_config.get(legacy_unit, (None, {}))[0]
                 old = legacy_port if legacy_port is not None else previous.get(key)
-                if old and free_port(old, taken, reserved, unit if (units_dir / unit).exists() else None,
+                if old and free_port(old, taken, reserved, unit if unit_path(units_dir, unit).exists() else None,
                                      legacy_unit):
                     options[key] = old
                 else:
                     options[key] = pick_port(start, taken, reserved)
                 reserved.add(options[key])
                 check(key, True, '')
-        python = str(Path(sys.executable).resolve())
+        # Homebrew's /opt/homebrew/bin/python3 links into a versioned Cellar folder that `brew upgrade` deletes.
+        python = os.path.abspath(sys.executable) if DARWIN else str(Path(sys.executable).resolve())
         env = {'PATH': os.environ.get('PATH', '/usr/local/bin:/usr/bin:/bin'),
                'MOBILE_TMUX_HOST': options['host'], 'MOBILE_TMUX_PORT': port,
                'MOBILE_TMUX_AUTH': options['auth'], 'TMUX_CHAT_DIST': service_repo / 'ui/dist',
@@ -385,6 +452,10 @@ def make_plan(args, repo=ROOT, home=None):
                'MOBILE_TMUX_TTYD_PORT': options['terminal_port'] or 0,
                'MOBILE_TMUX_TRANSCRIBE_URL': f'http://127.0.0.1:{options["voice_port"] or 0}/transcribe'}
         env['TETHER_RESOURCES'] = '1' if options['resources'] else '0'
+        if DARWIN:
+            for directory in ('/opt/homebrew/bin', '/usr/local/bin'):
+                if directory not in env['PATH'].split(os.pathsep):
+                    env['PATH'] += os.pathsep + directory
         for key in ('TETHER_INSTALL_STATE', 'TETHER_REPO'):
             if os.environ.get(key):
                 env[key] = os.environ[key]
@@ -400,9 +471,15 @@ def make_plan(args, repo=ROOT, home=None):
                 server_python = vpython
             if options['voice']:
                 voice_env = {'MOBILE_TMUX_TRANSCRIBE_PORT': options['voice_port']}
+                if DARWIN:
+                    voice_env['PATH'] = env['PATH']
                 legacy_env = legacy_config.get(LEGACY_UNITS[2], (None, {}))[1]
                 # Keep the prompt across re-applies and release updates: the installed unit wins over legacy.
-                current_env = legacy_settings(UNIT_NAMES[2], units_dir)[1] if (units_dir / UNIT_NAMES[2]).is_file() else {}
+                current_env = {}
+                voice_file = unit_path(units_dir, UNIT_NAMES[2])
+                if voice_file.is_file():
+                    current_env = (plistlib.loads(voice_file.read_bytes()).get('EnvironmentVariables', {}) if DARWIN
+                                   else legacy_settings(UNIT_NAMES[2], units_dir)[1])
                 for source in (os.environ, current_env, legacy_env):
                     for key in ('TETHER_WHISPER_PROMPT', 'MOBILE_TMUX_WHISPER_PROMPT'):
                         if key in source:
@@ -410,34 +487,44 @@ def make_plan(args, repo=ROOT, home=None):
                             break
                     if 'TETHER_WHISPER_PROMPT' in voice_env:
                         break
-                files[UNIT_NAMES[2]] = unit_text('Tether voice worker', [vpython, service_repo / 'server/transcribe_worker.py'],
-                                                voice_env)
+                files[UNIT_NAMES[2]] = service_file(UNIT_NAMES[2], 'Tether voice worker',
+                    [vpython, service_repo / 'server/transcribe_worker.py'], voice_env)
         if build:
             commands.extend([['npm', 'ci'], ['npm', 'run', 'build']])
-        files[UNIT_NAMES[0]] = unit_text('Tether chat', [server_python, service_repo / 'server/server.py'], env)
+        files[UNIT_NAMES[0]] = service_file(UNIT_NAMES[0], 'Tether chat', [server_python, service_repo / 'server/server.py'], env)
         if options['terminal']:
-            files[UNIT_NAMES[1]] = unit_text('Tether terminal',
+            files[UNIT_NAMES[1]] = service_file(UNIT_NAMES[1], 'Tether terminal',
                 [shutil.which('ttyd') or 'ttyd', '-W', '-i', '127.0.0.1', '-p', str(options['terminal_port']),
                  '-O', '-a', '-b', '/terminal/live', '-t', 'titleFixed=Terminal', '-t', 'fontSize=13',
-                 '-t', 'rendererType=dom', '-t', 'scrollback=10000', python, service_repo / 'server/attach.py'], {})
+                 '-t', 'rendererType=dom', '-t', 'scrollback=10000', python, service_repo / 'server/attach.py'],
+                {'PATH': env['PATH']} if DARWIN else {})
         if options['updates'] == 'auto':
-            files[UPDATE_UNITS[0]] = unit_text('Tether automatic update',
+            files[UPDATE_UNITS[0]] = service_file(UPDATE_UNITS[0], 'Tether automatic update',
                 [python, service_repo / 'tether', 'update', '--auto'], env, oneshot=True)
-            files[UPDATE_UNITS[1]] = ('[Unit]\nDescription=Check Tether releases daily\n\n[Timer]\n'
-                                     'OnCalendar=daily\nRandomizedDelaySec=1h\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n')
-        if args.replace_legacy:
-            commands.extend([['systemctl', '--user', 'disable', '--now', name] for name in legacy])
-        commands.extend([['systemctl', '--user', 'disable', '--now', name] for name in (*UNIT_NAMES, *UPDATE_UNITS)
-                         if name not in files and (units_dir / name).exists()])
-        commands.append(['systemctl', '--user', 'daemon-reload'])
-        for name in sorted(files):
-            if name == UPDATE_UNITS[0]:
-                continue
-            commands.extend([['systemctl', '--user', 'enable', '--now', name],
-                             ['systemctl', '--user', 'restart', name]])
+            if not DARWIN:
+                files[UPDATE_UNITS[1]] = ('[Unit]\nDescription=Check Tether releases daily\n\n[Timer]\n'
+                                         'OnCalendar=daily\nRandomizedDelaySec=1h\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n')
+        if DARWIN:
+            removed = [name for name in unit_names if name not in files and unit_path(units_dir, name).exists()]
+            commands.extend([['launchctl', 'bootout', f'gui/{os.getuid()}/{launchd_label(name)}']
+                             for name in sorted(set(files) | set(removed))])
+            commands.extend([['launchctl', 'bootstrap', f'gui/{os.getuid()}', str(unit_path(units_dir, name))]
+                             for name in sorted(files)])
+        else:
+            if args.replace_legacy:
+                commands.extend([['systemctl', '--user', 'disable', '--now', name] for name in legacy])
+            commands.extend([['systemctl', '--user', 'disable', '--now', name] for name in (*UNIT_NAMES, *UPDATE_UNITS)
+                             if name not in files and (units_dir / name).exists()])
+            commands.append(['systemctl', '--user', 'daemon-reload'])
+            for name in sorted(files):
+                if name == UPDATE_UNITS[0]:
+                    continue
+                commands.extend([['systemctl', '--user', 'enable', '--now', name],
+                                 ['systemctl', '--user', 'restart', name]])
     if args.defer_restart:
         commands = [command for command in commands
-                    if command[:2] != ['systemctl', '--user'] or command[2] == 'daemon-reload']
+                    if (command[0] != 'launchctl' if DARWIN else
+                        command[:2] != ['systemctl', '--user'] or command[2] == 'daemon-reload')]
     hooks = []
     old_repo = Path(saved.get('repo', service_repo))
     relocating = old_repo != service_repo and not args.uninstall
@@ -530,10 +617,20 @@ def make_plan(args, repo=ROOT, home=None):
     return dict(cli_link=cli_link, warnings=warnings, version=VERSION, action='uninstall' if args.uninstall else 'install', repo=str(service_repo), build_repo=str(repo),
                 options=options, reused_saved_choices=sorted(set(reused)), checks=checks,
                 legacy_units=legacy, legacy_action='disable and stop' if args.replace_legacy and not args.uninstall else 'leave untouched',
-                units=files, commands=commands, hooks=hooks, state_file=str(state_file),
-                remove_units=[name for name in (*UNIT_NAMES, *UPDATE_UNITS) if name not in files and (units_dir / name).exists()],
+                units=files, units_dir=str(units_dir), commands=commands, hooks=hooks, state_file=str(state_file),
+                remove_units=[name for name in unit_names if name not in files and unit_path(units_dir, name).exists()],
                 url=f'http://{"127.0.0.1" if options["host"] in ("localhost", "0.0.0.0") else options["host"]}:{options["port"]}/chat/' if not args.uninstall else None,
                 token_file=str(Path(os.environ.get('MOBILE_TMUX_CONFIG') or home / '.config/mobile-tmux') / 'token'))
+
+
+def write_units(plan, units_dir):
+    if DARWIN:
+        (units_dir.parent / 'Logs/tether').mkdir(parents=True, exist_ok=True)
+    units_dir.mkdir(parents=True, exist_ok=True)
+    for name in plan['remove_units']:
+        unit_path(units_dir, name).unlink(missing_ok=True)
+    for name, content in plan['units'].items():
+        unit_path(units_dir, name).write_text(content)
 
 
 def apply_plan(plan, home=None):
@@ -541,17 +638,23 @@ def apply_plan(plan, home=None):
     failed = [item for item in plan['checks'] if not item['ok']]
     if failed:
         raise ValueError('Required checks failed:\n' + '\n'.join(f'{index}. {item["fix"]}' for index, item in enumerate(failed, 1)))
-    units_dir = home / '.config/systemd/user'
+    units_dir = home / ('Library/LaunchAgents' if DARWIN else '.config/systemd/user')
     written = False
     replacing = plan['action'] == 'install' and plan['legacy_action'] == 'disable and stop'
     # Only legacy services running now are stopped by this run, so only they are brought back.
     running = []
-    for name in plan['legacy_units'] if replacing else []:
+    for name in plan['legacy_units'] if replacing and not DARWIN else []:
         result = probe('systemctl', '--user', 'is-active', name)
         if result and result.stdout.strip() == 'active':
             running.append(name)
     for command in plan['commands']:
-        if command[:3] == ['systemctl', '--user', 'daemon-reload']:
+        if DARWIN and command[:2] == ['launchctl', 'bootout']:
+            probe(*command)
+            continue
+        if DARWIN and command[0] == 'launchctl' and not written:
+            write_units(plan, units_dir)
+            written = True
+        if not DARWIN and command[:3] == ['systemctl', '--user', 'daemon-reload']:
             if running:
                 taken = occupied_ports()
                 owners = {'port': UNIT_NAMES[0], 'terminal_port': UNIT_NAMES[1], 'voice_port': UNIT_NAMES[2]}
@@ -568,16 +671,15 @@ def apply_plan(plan, home=None):
                         state = ('could not restart ' + ', '.join(failed)) if failed else 'restarted ' + ', '.join(running)
                         raise ValueError(f'Port {port} is still taken after stopping legacy services. '
                                          f'Tether services were not started; {state}.')
-            units_dir.mkdir(parents=True, exist_ok=True)
-            for name in plan['remove_units']:
-                (units_dir / name).unlink(missing_ok=True)
-            for name, content in plan['units'].items():
-                (units_dir / name).write_text(content)
+            write_units(plan, units_dir)
             written = True
         # Keep stdout machine-readable for --apply --json, including pip/npm logs.
         run(command, cwd=Path(plan.get('build_repo', plan['repo'])) / 'ui' if command[0] == 'npm' else None, stdout=sys.stderr)
     if not written:
-        raise ValueError('Plan has no unit reload step.')
+        if DARWIN:
+            write_units(plan, units_dir)
+        else:
+            raise ValueError('Plan has no unit reload step.')
     state = Path(plan['state_file'])
     for hook in plan['hooks']:
         if 'entries' not in hook or hook['action'] not in ('merge', 'remove'):
@@ -666,10 +768,11 @@ def print_plan(plan):
         print(f'{"PASS" if item["ok"] else "FAIL"}: {item["name"]}')
     for name in plan['legacy_units']:
         print(f'Legacy {name}: {plan["legacy_action"]}')
+    folder = Path('~/Library/LaunchAgents' if DARWIN else '~/.config/systemd/user')
     for name, content in sorted(plan['units'].items()):
-        print(f'Write ~/.config/systemd/user/{name}:\n{content}')
+        print(f'Write {unit_path(folder, name)}:\n{content}')
     for name in plan['remove_units']:
-        print(f'Remove ~/.config/systemd/user/{name}')
+        print(f'Remove {unit_path(folder, name)}')
     for command in plan['commands']:
         print(shlex.join(command) + (' (in ui/)' if command[0] == 'npm' else ''))
     for hook in plan['hooks']:
@@ -679,7 +782,8 @@ def print_plan(plan):
         print('Keep the repository, status lines, user hooks, tokens, dependencies, and data.')
     else:
         print(f'URL: {plan["url"]}\nToken: {plan["token_file"]}')
-        print('loginctl enable-linger $USER keeps services running after logout; it may need admin. This installer does not run it.')
+        print('LaunchAgents run while you are logged in to the Mac desktop.' if DARWIN else
+              'loginctl enable-linger $USER keeps services running after logout; it may need admin. This installer does not run it.')
 
 
 def main(argv=None):

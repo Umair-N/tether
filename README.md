@@ -30,7 +30,7 @@ They do not show the current React UI.
 ## Requirements
 
 - Linux. The server uses `/proc` and Linux agent file layouts; macOS is not supported.
-- Python 3.10 or newer. CI targets Python 3.12.
+- Python 3.11 or newer.
 - Node.js 22 and npm for development UI builds. Release archives include the built UI.
 - `tmux` and at least one installed agent: Claude Code, Codex CLI, or Antigravity.
 - A systemd user session for the installer. The installer needs no root.
