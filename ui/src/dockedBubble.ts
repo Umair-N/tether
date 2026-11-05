@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useBackStep } from './backNav'
 
 const SIZE = 52
 const TAB_W = 26
@@ -55,6 +56,7 @@ export function useDockedBubble(storageKey: string, fallback: Place, onEscape?: 
     setClosing(true)
     timer.current = window.setTimeout(() => { setOpen(false); setClosing(false); if (focus) button.current?.focus() }, 140)
   }, [open, closing])
+  useBackStep(open, close)
 
   useEffect(() => {
     if (!open) return

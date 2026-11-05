@@ -4,6 +4,7 @@ import { ApiError, canFork, errorText, request } from './api'
 import type { Api, Pane, PastChat, SessionsData } from './api'
 import { useModal, usePolling } from './hooks'
 import type { Anchor } from './hooks'
+import { setPlace, setPlaceHandler, useBackStep } from './backNav'
 import { usePrefs } from './prefs'
 import { applyScheme } from './schemes'
 import { PlanUsage, Sidebar, groupSessions, isArchived, isDone, needsYou, paneTitle, runningPanes, shownIndex, sortByPrefs, toggleArchive } from './Sidebar'
@@ -44,7 +45,7 @@ import { BrowserSheet, WATCH_EVENT, browserAsks, setPaneLabels, useAgentBrowser,
 import { AgentBubble } from './AgentBubble'
 import { SidePins } from './SidePins'
 import { AgentsPage } from './AgentsView'
-import { choosePhoneScreen } from './phoneScreen'
+import { choosePhoneScreen, toggleButton } from './phoneScreen'
 import { WordsContext, wordsFor } from './words'
 import './App.css'
 
@@ -137,7 +138,7 @@ function App() {
     setScreen(next)
     if (next === 'files' || next === 'share') return
     setTimeout(() => {
-      const toggle = document.querySelector<HTMLButtonElement>('.slot.focused .terminal-toggle')
+      const toggle = document.querySelector<HTMLButtonElement>('.slot.focused .terminal-toggle') ?? toggleButton()
       if (toggle && (toggle.getAttribute('aria-pressed') === 'true') !== (next === 'terminals')) toggle.click()
     }, 0)
   }, [])
@@ -163,6 +164,22 @@ function App() {
   const view = wide && data && pane ? resolveSlots(desk, pane.id, live, sameSession) : null
   const slotPanes = view ? view.slots.map(id => panes.find(item => item.id === id)).filter((item): item is Pane => !!item) : []
   const multi = slotPanes.length > 1
+  const panesRef = useRef(panes)
+  panesRef.current = panes
+  useEffect(() => {
+    setPlaceHandler(place => {
+      if (place.pane && panesRef.current.some(item => item.id === place.pane)) update(() => ({ selected: place.pane }))
+      chooseScreen(place.screen)
+    })
+    return () => setPlaceHandler(null)
+  }, [update, chooseScreen])
+  const previousPlace = useRef<{ pane?: string; screen: Screen; slots: string[] }>({ screen, slots: [] })
+  useEffect(() => {
+    const before = previousPlace.current
+    const focusOnly = before.screen === screen && before.pane !== pane?.id && !!before.pane && !!pane?.id && before.slots.includes(before.pane) && before.slots.includes(pane.id)
+    setPlace({ pane: pane?.id, screen }, { push: !focusOnly })
+  }, [pane?.id, screen])
+  useEffect(() => { previousPlace.current = { pane: pane?.id, screen, slots: view?.slots ?? [] } })
   // Desktop "Needs you" list (Inbox.tsx). Its show/hide switch is the shared layout.desktop.inbox pref.
   const desktop = !!view
   const agentBrowser = useAgentBrowser(api)
@@ -288,7 +305,7 @@ function App() {
       void refresh()
       const url = new URL(location.href)
       url.searchParams.delete('session')
-      history.replaceState(null, '', url)
+      history.replaceState(history.state, '', url)
     }
     open(new URL(location.href).searchParams.get('session'))
     const message = (event: MessageEvent) => { if (event.data?.go) setGo(String(event.data.go)); else open(event.data?.session) }
@@ -311,7 +328,7 @@ function App() {
     if (!go || (go === 'attention' && !data)) return
     const url = new URL(location.href)
     url.searchParams.delete('go')
-    history.replaceState(null, '', url)
+    history.replaceState(history.state, '', url)
     setGo(null)
     if (go === 'new') setNewSession(true)
     else if (go === 'usage') setPlanSheet(true)
@@ -404,6 +421,7 @@ function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
   const drawerModal = useModal(drawer, () => setDrawer(false))
+  useBackStep(liveMode, () => setLive(false))
   const drawerTouch = useRef<{ x: number; y: number } | null>(null)
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 5000); return () => clearTimeout(timer) }, [notice])
   // Files explorer → chat: "Add to message" puts @paths in the active chat's draft; "Terminal here" opens a side shell at a folder.

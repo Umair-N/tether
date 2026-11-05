@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import { errorText } from './api'
+import { useBackStep } from './backNav'
 
 // One request at a time. Abort obsolete requests and pause polling in hidden tabs.
 // `initial` shows saved data at once (no loading state) while the first fetch runs.
@@ -67,6 +68,7 @@ export function usePolling<T>(fetcher: (signal: AbortSignal) => Promise<T>, inte
 }
 
 export function useModal(open: boolean, close: () => void) {
+  useBackStep(open, close)
   const ref = useRef<HTMLDialogElement>(null)
   const opened = useRef(0)
   useEffect(() => {

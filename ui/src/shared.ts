@@ -18,7 +18,7 @@ export async function takeShared(): Promise<SharedFile[]> {
     const name = decodeURIComponent(response.headers.get('X-Name') || 'shared')
     shared.push({ url: request.url, file: new File([await response.blob()], name, { type: response.headers.get('Content-Type') || '' }) })
   }
-  if (location.search.includes('shared=')) history.replaceState(null, '', location.pathname)
+  if (location.search.includes('shared=')) history.replaceState(history.state, '', location.pathname)
   return shared
 }
 

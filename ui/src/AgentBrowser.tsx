@@ -4,6 +4,7 @@ import { errorText } from './api'
 import type { Api, Pane, SignedBrowserAccess } from './api'
 import type { BrowserAskRow } from './needs'
 import { BrowserPanel } from './BrowserPanel'
+import { useBackStep } from './backNav'
 import './AgentBrowser.css'
 
 // Agents (Playwright MCP, scripts) drive tabs in Tether's shared browser. See server/browser_cdp.py.
@@ -225,6 +226,7 @@ export function BrowserSheet({ api, pane, onClose }: { api: Api; pane: Pane; onC
   const dialog = useRef<HTMLDialogElement>(null)
   const bubble = useRef<HTMLButtonElement>(null)
   const [small, setSmall] = useState(false)
+  useBackStep(!small, onClose)
   useEffect(() => {
     const box = dialog.current
     if (!box) return

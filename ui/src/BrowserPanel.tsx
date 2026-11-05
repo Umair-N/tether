@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { AppWindow, ArrowLeft, ArrowRight, Bot, Check, ChevronDown, Crosshair, FlaskConical, HatGlasses, Keyboard, KeyRound, Monitor, PenLine, PictureInPicture2, Plus, RotateCw, Send, Smartphone, Square, Tablet, Trash2, Type, UserRound, X } from 'lucide-react'
 import { errorText } from './api'
+import { useBackStep } from './backNav'
 import type { Api, BrowserAvailability, BrowserId, Pane } from './api'
 import { usePaneLabel, WATCH_EVENT } from './AgentBrowser'
 import { useHost } from './host'
@@ -50,6 +51,7 @@ function DeviceIcon({ preset }: { preset: string }) {
 // Close a menu on Escape or on a click outside it.
 function useMenu() {
   const [open, setOpen] = useState(false)
+  useBackStep(open, () => setOpen(false))
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!open) return

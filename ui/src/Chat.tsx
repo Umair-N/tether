@@ -5,6 +5,7 @@ import { AssistantRuntimeProvider, ThreadPrimitive, useExternalStoreRuntime } fr
 import { ApiError, canFork, creditsLabel, errorText, usageLabel } from './api'
 import type { Api, Approval, AskBridge, Attention, ChatData, ChatMessage, Choice, Footer, Pane, PromptAction } from './api'
 import { usePolling } from './hooks'
+import { useBackStep } from './backNav'
 import type { Anchor } from './hooks'
 import { AgentIcon, PlanUsage, agentNames, chatTitle, paneTitle } from './Sidebar'
 import { profileName } from './provider'
@@ -553,6 +554,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
   const [planSheet, setPlanSheet] = useState(false)
   const [modelSheet, setModelSheet] = useState(false)
   const [modeMenu, setModeMenu] = useState(false)
+  useBackStep(modeMenu, () => setModeMenu(false))
   const [modeBusy, setModeBusy] = useState('')
   const [info, setInfo] = useState(false)
   // A media path the agent named in a reply. Ask the server first, so a refused or missing file shows its reason, not a broken image.

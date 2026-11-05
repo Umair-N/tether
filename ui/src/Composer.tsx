@@ -6,6 +6,7 @@ import { ArrowUp, Blocks, Camera, CornerDownLeft, FolderOpen, Smartphone, ImageP
 import { errorText } from './api'
 import type { Api, Pane } from './api'
 import { takeShared, doneShared, releaseShared } from './shared'
+import { useBackStep } from './backNav'
 import { canPickFolder, forgetFolder, latestScreenshot } from './screenshot'
 import { Suggestions } from './Suggest'
 import type { SuggestHandle } from './Suggest'
@@ -67,6 +68,7 @@ const openPicker = () => ANDROID ? (window as unknown as { showOpenFilePicker?: 
 export function Composer({ api, pane, thread, disabled, onSend, error, errorAction, draft, setDraft, working, onStop, micOk, chime, options, onTools, hint, handsFree, listenRequest, sent = [] }: ComposerProps) {
   const host = useHost()
   const [menu, setMenu] = useState(false)
+  useBackStep(menu, () => setMenu(false))
   const hintId = useId()
   const camera = useRef<HTMLInputElement>(null)
   const photos = useRef<HTMLInputElement>(null)
