@@ -180,7 +180,7 @@ def parse(styled):
         below = below[1:]
     for line in below[1:]:
         stripped = line.strip()
-        if not stripped:
+        if not stripped or re.search(r'paste again to expand', stripped, re.I):
             continue
         agent = AGENT.match(line)
         # A narrow pane puts one space after the name; the row is still an agent, not a notice.
@@ -199,6 +199,7 @@ def parse(styled):
             result['status'] = stripped
         else:
             result['notices'] += [part.strip() for part in re.split(r'\s{3,}', stripped) if part.strip()]
+    result['notices'] = [item for item in result['notices'] if not re.search(r'paste again to expand', item, re.I)]
     goal = next((GOAL.search(item) for item in result['notices'] if GOAL.search(item)), None)
     if goal:
         result['goal'] = goal[1] or 'active'

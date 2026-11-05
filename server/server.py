@@ -1600,6 +1600,10 @@ class Handler(BaseHTTPRequestHandler):
                         card_key(config, key)
                     else:
                         verify(config)
+                        if key == 'Escape' and body.get('stop') is True and config['agent'] == 'claude':
+                            from terminal_input import stop_turn
+                            self.respond(200, {'accepted': True, **stop_turn(config)})
+                            return
                         from terminal_input import drop_double_escape
                         if key == 'Escape' and drop_double_escape(config):
                             print(f'/mobile/api/key dropped double Escape for Claude pane {config["id"]}', file=sys.stderr, flush=True)

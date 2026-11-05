@@ -454,6 +454,25 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
       setToast(`Not cancelled: ${errorText(error)}`)
     }
   }
+  // Stop before Claude replies: Claude drops the turn and puts the message (and any queued ones) back in its input box.
+  // The server clears that box and returns the text, so it lands in this message box instead of blocking the next send.
+  async function stop() {
+    if (activePane.agent !== 'claude') { void sendKey(activePane.agent === 'shell' ? 'C-c' : 'Escape'); return }
+    if (acting) return
+    setActing(true); setSendError(''); setDraftBlocked(false)
+    try {
+      const { restored } = await api<{ restored?: string }>('key', { session: pane.id, thread: data?.thread ?? null, key: 'Escape', stop: true })
+      if (restored) {
+        setPending(list => list.filter(other => other.failed))
+        setDraft(draft.trim() ? `${restored}\n\n${draft}` : restored)
+        setToast('Stopped. Your message is back in the box.')
+      }
+      await refresh(); onUpdate()
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) { await refresh(); setToast('The thread changed. Review the chat, then try again.') }
+      else { setSendError(errorText(error)); setDraftBlocked(error instanceof ApiError && error.draft) }
+    } finally { setActing(false) }
+  }
   // While Claude asks a question, the message box answers it through its own-answer row (checked on the server).
   const ownAnswer = !data?.approval && data?.attention?.reason === 'menu' ? data.attention.options?.find(option => option.free) : undefined
   async function send(text: string, retryOf?: Pending) {
@@ -744,7 +763,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
       <button type="button" className="pill" aria-label="Model and effort" disabled={!writable || state === 'Working'} onClick={() => setModelSheet(true)}><span className="pill-text">{model || 'Model'}</span>{footer.effort && <span className="pill-effort">· {footer.effort}</span>}<ChevronDown size={13} /></button>
       {activePane.agent === 'claude' && footer.status && <span className="mode-container"><button type="button" className="pill" aria-label={`Mode: ${MODES[currentMode]}. Change mode`} aria-expanded={modeMenu} disabled={!writable || !!modeBusy} onClick={() => setModeMenu(!modeMenu)}><Gauge size={13} />{modeBusy ? `${MODES[modeBusy]}…` : MODES[currentMode]}</button>
         {modeMenu && <div className="attach-menu mode-menu" role="menu">{Object.entries(MODES).map(([key, label]) => <button key={key} role="menuitemradio" aria-checked={key === currentMode} type="button" onClick={() => void chooseMode(key)}>{label}{key === currentMode && <Check size={16} />}</button>)}</div>}</span>}
-    </span>} api={api} pane={activePane} thread={data?.thread ?? null} disabled={!data || !writable} onSend={send} error={sendError} errorAction={draftBlocked ? <button type="button" disabled={acting} onClick={() => void clearAgentInput()}>Clear {agentNames[activePane.agent]}’s input</button> : null} draft={draft} setDraft={setDraft} working={state === 'Working'} onStop={() => void sendKey(activePane.agent === 'shell' ? 'C-c' : 'Escape')} micOk={micOk} chime={chime} handsFree={handsFree && readAloud} listenRequest={listenRequest} sent={sentPrompts} onTools={() => setTools(true)} hint={ownAnswer ? `Answer ${agentNames[activePane.agent]}’s question` : undefined} />
+    </span>} api={api} pane={activePane} thread={data?.thread ?? null} disabled={!data || !writable} onSend={send} error={sendError} errorAction={draftBlocked ? <button type="button" disabled={acting} onClick={() => void clearAgentInput()}>Clear {agentNames[activePane.agent]}’s input</button> : null} draft={draft} setDraft={setDraft} working={state === 'Working'} onStop={() => void stop()} micOk={micOk} chime={chime} handsFree={handsFree && readAloud} listenRequest={listenRequest} sent={sentPrompts} onTools={() => setTools(true)} hint={ownAnswer ? `Answer ${agentNames[activePane.agent]}’s question` : undefined} />
     </div>{nextPane && <ChatPeek id={nextPane.id} data={chatCache.get(nextPane.id)} api={api} side={1} peekRef={peekNext} />}{previousPane && <ChatPeek id={previousPane.id} data={chatCache.get(previousPane.id)} api={api} side={-1} peekRef={peekPrevious} />}</div>
     </>}
     <ImageViewer image={opened} close={() => setOpened(null)} onShow={showInFiles(opened && !opened.error ? opened.name : null, () => setOpened(null))} />

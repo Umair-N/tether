@@ -12,6 +12,9 @@ import { ImageViewer } from './ImageViewer'
 import { playChime, prepareChime } from './sound'
 import { stopSpeaking } from './speech'
 import { useHost } from './host'
+import { PasteChip } from './Pasted'
+import { inlinePaste, joinPastes, longPaste, pasteOf } from './pasteText'
+import type { Paste } from './pasteText'
 
 
 
@@ -99,7 +102,10 @@ export function Composer({ api, pane, thread, disabled, onSend, error, errorActi
   // A line that starts with "!" runs as a shell command in the agent's terminal on the server. The box shows it as a terminal prompt.
   const shellMode = pane.agent !== 'shell' && draft.startsWith('!')
   const canAttach = pane.agent !== 'shell' && pane.writable && !shellMode
-  useEffect(() => { setFiles([]) }, [pane.id, thread])
+  // Long pastes wait as badges above the box. Tap one to read it in place.
+  const [pastes, setPastes] = useState<Paste[]>([])
+  const [openPaste, setOpenPaste] = useState<number | null>(null)
+  useEffect(() => { setFiles([]); setPastes([]); setOpenPaste(null) }, [pane.id, thread])
   // Attach files shared from another app (Gallery → Share → Tether) once a session that takes files is open.
   // Wait until the chat has loaded (disabled is false), so the upload carries the current thread.
   useEffect(() => { if (canAttach && !disabled) void takeShared().then(async shared => { if (!shared.length) return; const saved = await attach(shared.map(item => item.file), index => void doneShared(shared[index])); releaseShared(shared.slice(saved)) }) }, [canAttach, disabled, pane.id, thread]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -236,14 +242,14 @@ export function Composer({ api, pane, thread, disabled, onSend, error, errorActi
   async function submit(event: React.FormEvent) {
     event.preventDefault()
     const waiting = finalDraft.current
-    if (disabled || sending || uploading || (!draft.trim() && !files.length && !waiting) || (shellMode && !draft.slice(1).trim())) return
+    if (disabled || sending || uploading || (!draft.trim() && !files.length && !pastes.length && !waiting) || (shellMode && !draft.slice(1).trim())) return
     if (recorder.current?.state === 'recording') recorder.current.stop()
     const typing = document.activeElement === textarea.current
     setSending(true)
     try {
       const body = waiting ? (await waiting).trim() : draft.trim()
-      const text = [...files.map(file => file.path), body].filter(Boolean).join(' ')
-      if (text && await onSend(text)) { if (body) remember(historyKind, body); browse.current = null; setDraft(''); setFiles([]); if (coarse?.matches) navigator.vibrate?.(10) }
+      const text = [...files.map(file => file.path), joinPastes(body, pastes)].filter(Boolean).join(' ')
+      if (text && await onSend(text)) { if (body) remember(historyKind, body); browse.current = null; setDraft(''); setFiles([]); setPastes([]); setOpenPaste(null); if (coarse?.matches) navigator.vibrate?.(10) }
     } finally { setSending(false); if (typing) requestAnimationFrame(() => textarea.current?.focus()) }
   }
   // Up on the first line goes to the previous sent prompt; Down on the last line goes forward, then back to the draft.
@@ -280,7 +286,7 @@ export function Composer({ api, pane, thread, disabled, onSend, error, errorActi
     if (document.activeElement === textarea.current && event.target !== textarea.current && (event.target as HTMLElement).closest('button')) event.preventDefault()
   }
   return <div className="composer-area"><Suggestions ref={suggest} api={api} pane={pane} draft={draft} setDraft={setDraft} focus={() => textarea.current?.focus()} /><form className={shellMode ? 'composer shell-mode' : 'composer'} ref={form} onSubmit={submit} onMouseDown={keepFocus}>
-    {files.length > 0 && <ul className="attachments" aria-label="Attached files">{files.map((file, index) => <li key={file.path} className="chip">{file.url ? <button type="button" className="chip-view" aria-label={`View ${file.name}`} onClick={() => setViewing({ name: file.name, url: file.url! })}><img src={file.url} alt="" /><span>{file.name}</span></button> : <><Paperclip size={13} /><span>{file.name}</span></>}<button type="button" aria-label={`Remove ${file.name}`} onClick={() => setFiles(current => current.filter((_, at) => at !== index))}><X size={14} /></button></li>)}</ul>}
+    {files.length + pastes.length > 0 && <ul className="attachments" aria-label="Attached files and pasted text">{files.map((file, index) => <li key={file.path} className="chip">{file.url ? <button type="button" className="chip-view" aria-label={`View ${file.name}`} onClick={() => setViewing({ name: file.name, url: file.url! })}><img src={file.url} alt="" /><span>{file.name}</span></button> : <><Paperclip size={13} /><span>{file.name}</span></>}<button type="button" aria-label={`Remove ${file.name}`} onClick={() => setFiles(current => current.filter((_, at) => at !== index))}><X size={14} /></button></li>)}{pastes.map(paste => <PasteChip key={paste.id} paste={paste} open={openPaste === paste.id} onToggle={() => setOpenPaste(openPaste === paste.id ? null : paste.id)} onEdit={() => { setDraft(inlinePaste(draft, paste)); setPastes(current => current.filter(item => item.id !== paste.id)); setOpenPaste(null); textarea.current?.focus() }} onRemove={() => { setPastes(current => current.filter(item => item.id !== paste.id)); textarea.current?.focus() }} />)}</ul>}
     <ImageViewer image={viewing} close={() => setViewing(null)} />
     <div className="composer-input">{shellMode && <span className="shell-prompt" title={pane.dir ? `Runs in ${pane.dir}` : undefined}><span className="shell-folder">{shortFolder(pane.dir)}</span><span aria-hidden="true">$</span></span>}
     <textarea className={shellMode ? 'shell-input' : undefined} onKeyDown={event => {
@@ -289,7 +295,9 @@ export function Composer({ api, pane, thread, disabled, onSend, error, errorActi
       else if (walk(event)) event.preventDefault()
       else if (shellMode && event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setDraft(draft.slice(1)) }
       else if (shellMode && event.key === 'Backspace' && !draft.slice(1).trim() && event.currentTarget.selectionEnd <= 1) { event.preventDefault(); setDraft(draft.slice(1)) }
-      else if (sendsOnEnter(event)) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} onPaste={event => { if (canAttach && event.clipboardData.files.length) { event.preventDefault(); void attach(event.clipboardData.files) } }} ref={textarea} aria-label={pane.agent === 'shell' ? 'Run a command' : shellMode ? 'Shell command' : `Message ${chatTitle(pane)}`} aria-describedby={shellMode ? hintId : undefined} spellCheck={!shellMode} autoCapitalize={shellMode ? 'off' : undefined} autoCorrect={shellMode ? 'off' : undefined} placeholder={hint ?? (pane.agent === 'shell' ? 'Run a command' : `Message ${chatTitle(pane)}`)} rows={1} value={draft} readOnly={listening || transcribing || sending} disabled={disabled} onChange={event => setDraft(event.target.value)} /></div>
+      else if (sendsOnEnter(event)) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} onPaste={event => { if (canAttach && event.clipboardData.files.length) { event.preventDefault(); void attach(event.clipboardData.files); return }
+      const pasted = event.clipboardData.getData('text/plain'), box = event.currentTarget
+      if (canAttach && !box.readOnly && longPaste(pasted)) { event.preventDefault(); setPastes(current => [...current, pasteOf(pasted, !draft.slice(0, box.selectionStart).trim())]) } }} ref={textarea} aria-label={pane.agent === 'shell' ? 'Run a command' : shellMode ? 'Shell command' : `Message ${chatTitle(pane)}`} aria-describedby={shellMode ? hintId : undefined} spellCheck={!shellMode} autoCapitalize={shellMode ? 'off' : undefined} autoCorrect={shellMode ? 'off' : undefined} placeholder={hint ?? (pane.agent === 'shell' ? 'Run a command' : `Message ${chatTitle(pane)}`)} rows={1} value={draft} readOnly={listening || transcribing || sending} disabled={disabled} onChange={event => setDraft(event.target.value)} /></div>
     <div className="composer-controls"><div>{canAttach && <div className="attach-container" ref={menuRef}>
       <input ref={picker} type="file" multiple hidden onChange={event => { const chosen = Array.from(event.target.files ?? []); event.target.value = ''; void attach(chosen) }} />
       <input ref={photos} type="file" accept="image/*" hidden onChange={event => { const chosen = Array.from(event.target.files ?? []); event.target.value = ''; void attach(chosen) }} />
@@ -306,15 +314,15 @@ export function Composer({ api, pane, thread, disabled, onSend, error, errorActi
           <button role="menuitem" type="button" onClick={() => { setMenu(false); onTools() }}><Blocks size={18} />Plugins & MCP</button>
         </>}
       </div>}
-    </div>}{!uploading && !listening && !transcribing && options}<span className="composer-status" aria-live="polite">{uploading || (listening ? `Recording ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}` : transcribing ? 'Converting…' : pane.agent === 'shell' ? 'Terminal input' : shellMode ? 'Shell mode' : '')}</span>{!draft && !files.length && pane.agent !== 'shell' && !listening && !transcribing && !uploading && <span className="composer-keys" aria-hidden="true"><span><kbd>↵</kbd> send</span><span><kbd>⇧↵</kbd> new line</span><span><kbd>/</kbd> commands</span><span><kbd>!</kbd> shell</span></span>}</div><div>
+    </div>}{!uploading && !listening && !transcribing && options}<span className="composer-status" aria-live="polite">{uploading || (listening ? `Recording ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}` : transcribing ? 'Converting…' : pane.agent === 'shell' ? 'Terminal input' : shellMode ? 'Shell mode' : '')}</span>{!draft && !files.length && !pastes.length && pane.agent !== 'shell' && !listening && !transcribing && !uploading && <span className="composer-keys" aria-hidden="true"><span><kbd>↵</kbd> send</span><span><kbd>⇧↵</kbd> new line</span><span><kbd>/</kbd> commands</span><span><kbd>!</kbd> shell</span></span>}</div><div>
       {micOk && canRecord && (transcribing
         ? <button type="button" className="icon-button mic active" aria-label="Stop converting and keep the live text" onClick={() => converting.current?.abort()}><X size={19} /></button>
         : <button type="button" className={`icon-button mic ${listening ? 'active' : ''}`} aria-label={listening ? 'Stop recording' : 'Start voice input'} aria-pressed={listening} disabled={disabled || sending} onClick={() => void toggleMic()}>{listening ? <Square size={18} /> : <Mic size={20} />}</button>)}
-      {working && !draft.trim() && !files.length
+      {working && !draft.trim() && !files.length && !pastes.length
         ? <button type="button" className="primary send-button stop-button" aria-label={pane.agent === 'shell' ? 'Stop command (Ctrl+C)' : 'Stop response (Esc)'} disabled={disabled} onClick={onStop}><Square size={15} fill="currentColor" /></button>
         : shellMode
           ? <button className="primary send-button run-button" aria-label="Run command" disabled={disabled || sending || !!uploading || !draft.slice(1).trim()}><CornerDownLeft size={16} />Run</button>
-          : <button className="primary send-button" aria-label="Send message" disabled={disabled || sending || !!uploading || (!draft.trim() && !files.length)}><ArrowUp size={21} /></button>}
+          : <button className="primary send-button" aria-label="Send message" disabled={disabled || sending || !!uploading || (!draft.trim() && !files.length && !pastes.length)}><ArrowUp size={21} /></button>}
     </div></div>
   </form>{shellMode && <p className="shell-hint" id={hintId}>Runs on {host} · Esc or Backspace on empty leaves shell mode</p>}{(error || speechError) && <p className="composer-error error" role="alert">{error || speechError}{error && errorAction}</p>}</div>
 }

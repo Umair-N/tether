@@ -644,6 +644,9 @@ def live_status(entry, run=subprocess.run):
     return status
 
 
+WORKING = re.compile(r'Working \(|esc to interrupt|(?m:^\s*[✻✶✽✢·*●]\s+[A-Z][a-z]+(?:ing|ed)?…)', re.I)
+
+
 def _live_status(entry, run, screen, login_screen=None, styled_screen=None):
     if styled_screen is None:  # callers that pass one frame may pass it styled
         styled_screen, screen = screen, prompt_actions.plain(screen)
@@ -657,7 +660,7 @@ def _live_status(entry, run, screen, login_screen=None, styled_screen=None):
         if entry['agent'] == 'antigravity':
             pending['text'] = reflow_prompt(pending['text'])
         return {'state': 'Approval', 'approval': {k: v for k, v in pending.items() if not k.startswith('_')}}
-    working = bool(re.search(r'Working \(|esc to interrupt|(?m:^\s*[✻✶✽✢·*●]\s+[A-Z][a-z]+(?:ing|ed)?…)', screen, re.I))
+    working = bool(WORKING.search(screen))
     if entry['agent'] == 'codex':
         working = working or transcript_busy(entry.get('transcript'))
     registry = {}
@@ -957,6 +960,37 @@ def drop_double_escape(entry, run=subprocess.run, now=None):
         return not any(prompt_draft(entry, run))
     except RuntimeError:
         return False  # a picker, approval or hidden input box must still receive Esc
+
+
+def stop_turn(entry, run=subprocess.run, sleep=time.sleep):
+    """Interrupt Claude and return text it restores into a previously empty input."""
+    if entry.get('agent') != 'claude':
+        raise ValueError('Only Claude turns can be stopped with draft restoration.')
+    verify(entry, run)
+    try:
+        before = [line for line in prompt_draft(entry, run) if line]
+    except RuntimeError:
+        before = None
+    if not drop_double_escape(entry, run):
+        run([paths.TMUX, 'send-keys', '-t', entry['id'], 'Escape'],
+            check=True, capture_output=True, timeout=5)
+    if before != []:
+        return {'restored': ''}
+    for attempt in range(10):
+        sleep(.2)
+        try:
+            draft = [line for line in prompt_draft(entry, run) if line]
+            if draft:
+                sleep(.2)
+                draft = [line for line in prompt_draft(entry, run) if line]
+        except RuntimeError:
+            continue  # Claude may temporarily hide its input while it redraws.
+        if draft:
+            clear_draft(entry, run)
+            return {'restored': '\n'.join(draft)}
+        if attempt >= 4 and not WORKING.search(capture(entry, run)):
+            break
+    return {'restored': ''}
 
 
 def empty_prompt(entry, run=subprocess.run):
