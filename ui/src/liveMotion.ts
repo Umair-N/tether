@@ -63,6 +63,20 @@ export function bloomFromBubble(el: HTMLElement | null, bubble: Point, size: num
   ], { duration: 300, easing: EASE_DRAWER })
 }
 
+/** First open: Friday grows out of the button that opened it, so the window reads as coming from there. */
+export function openFrom(el: HTMLElement | null, from: { left: number; top: number; width: number; height: number }) {
+  if (!can(el)) return
+  if (reducedMotion()) { el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 150, easing: 'ease' }); return }
+  const size = Math.max(24, Math.min(from.width, from.height))
+  const box = el.getBoundingClientRect()
+  const start = atBubble(box, { x: from.left + (from.width - size) / 2, y: from.top + (from.height - size) / 2 }, size)
+  el.animate([
+    { ...start, transformOrigin: '0 0', opacity: 0 },
+    { opacity: 1, offset: 0.3 },
+    { ...atBox(box), transformOrigin: '0 0', opacity: 1 },
+  ], { duration: 340, easing: EASE_DRAWER })
+}
+
 /** Window to full screen and back: a short settle, centered, no travel. */
 export function settle(el: HTMLElement | null, opening = false) {
   if (!can(el)) return

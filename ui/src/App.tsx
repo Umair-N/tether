@@ -77,7 +77,12 @@ function App() {
   const [planSheet, setPlanSheet] = useState(false)
   const [liveMode, setLive] = useState(false)
   const [liveReveal, setLiveReveal] = useState(0)  // a new ask while Friday runs as a bubble opens its window again
-  const openLive = () => { setLive(true); setLiveReveal(n => n + 1) }
+  const [liveFrom, setLiveFrom] = useState<DOMRect | null>(null)  // the button that opened Friday: the window grows out of it
+  const openLive = (event?: unknown) => {
+    const button = event && typeof event === 'object' && 'currentTarget' in event && event.currentTarget instanceof Element ? event.currentTarget : null
+    if (!liveMode) setLiveFrom(button?.getBoundingClientRect() ?? null)
+    setLive(true); setLiveReveal(n => n + 1)
+  }
   // Phone (or no workspace): "Watch" on an agent's browser card opens the browser full screen.
   const [browserSheet, setBrowserSheet] = useState(false)
   // Desktop workspace: the ⌘K command menu or the ? shortcuts sheet.
@@ -597,7 +602,7 @@ function App() {
         busy: !!agentBrowser?.agents.some(agent => agent.tabs.length), asking: asks.length > 0,
       } : undefined} />}
     {browserSheet && pane && <BrowserSheet api={api} pane={pane} onClose={() => setBrowserSheet(false)} />}
-    {liveMode && <Live api={api} panes={panes} selected={pane} commands={commands.filter(item => !item.label.includes('Live mode'))} onClose={() => setLive(false)} reveal={liveReveal} />}
+    {liveMode && <Live api={api} panes={panes} selected={pane} commands={commands.filter(item => !item.label.includes('Live mode'))} onClose={() => setLive(false)} reveal={liveReveal} from={liveFrom} />}
     {view && <Inbox api={api} items={inbox} sessions={sessions} selected={pane?.id} open={desk.inbox} onToggle={() => setDesk({ inbox: !desk.inbox })} onOpen={openPane} onUpdate={() => void refresh()} />}
     {view && picking !== null && picking < view.slots.length && <SlotPicker index={picking} sessions={sortByPrefs(sessions, prefs.order).filter(item => !isArchived(item, prefs.archived))} slots={view.slots} onPane={id => { showInSlot(id, picking); setPicking(null) }} onSession={target => { showSession(target); setPicking(null) }} onClose={() => setPicking(null)} />}
     {project && sessions.some(item => item.id === project.session) && <ProjectSheet key={project.session} api={api} session={sessions.find(item => item.id === project.session)!} mark={marks[project.session]} pin={project.pin} onChanged={loadMarks} onClose={() => setProject(null)} />}

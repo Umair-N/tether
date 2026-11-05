@@ -109,35 +109,62 @@ button.live-chip:hover { background: var(--hover); }
 .live button.live-chip { transition: transform .12s cubic-bezier(.23, 1, .32, 1), background-color .15s ease; }
 .live .live-grip { cursor: grab; touch-action: none; margin-left: -6px; }
 
-/* Window: a card over the app. The app stays usable around it. Its size is the container, so the
-   orb and words scale with the window instead of the screen. */
-/* Depth from tone, not a halo: a lighter band under the title bar fades into the page color, a self-colored
-   edge catches light on the top lip, and one tight shadow falls down. The edge takes the voice's color
-   while Friday listens or speaks, so the frame itself shows who has the turn. */
-.live-window { --live-edge: color-mix(in oklab, var(--text) 10%, transparent);
-  inset: auto; left: 0; top: 0; z-index: 60; border: 1px solid var(--live-edge); border-radius: var(--radius-xl);
-  background: linear-gradient(180deg, color-mix(in oklab, var(--surface) 80%, var(--bg)) 0, var(--bg) 140px);
-  box-shadow: inset 0 1px 0 color-mix(in oklab, white 9%, transparent), 0 1px 2px rgb(0 0 0 / .14), 0 18px 40px -18px rgb(0 0 0 / .55);
+/* Window: a pane of glass that floats over the app, like Liquid Glass and the Gemini Live overlay.
+   The app shows through, blurred and a little more saturated, so the window sits in the page instead of on it.
+   Round 28px corners; everything inside is a capsule or a circle, concentric with them.
+   Depth comes from a lit top lip, a self-colored edge and one tight shadow, not a halo.
+   The edge takes the voice's color while Friday listens or speaks, so the frame shows who has the turn. */
+.live-window { --live-edge: color-mix(in oklab, var(--text) 12%, transparent); --live-r: 28px;
+  --live-fill: color-mix(in oklab, var(--text) 7%, transparent);
+  inset: auto; left: 0; top: 0; z-index: 60; border: 1px solid var(--live-edge); border-radius: var(--live-r);
+  background: linear-gradient(180deg, color-mix(in oklab, white 6%, transparent), transparent 96px), color-mix(in oklab, var(--surface) 74%, transparent);
+  -webkit-backdrop-filter: blur(28px) saturate(1.7); backdrop-filter: blur(28px) saturate(1.7);
+  box-shadow: inset 0 1px 0 color-mix(in oklab, white 16%, transparent), 0 1px 2px rgb(0 0 0 / .12), 0 22px 44px -20px rgb(0 0 0 / .5);
   transition: border-color .3s ease, box-shadow .2s cubic-bezier(.23, 1, .32, 1); }
 .live-window[data-phase="listening"] { --live-edge: color-mix(in oklab, var(--live-you) 45%, transparent); }
 .live-window[data-phase="speaking"], .live-window[data-phase="thinking"] { --live-edge: color-mix(in oklab, var(--live-agent) 45%, transparent); }
 .live-window[data-asking="true"] { --live-edge: color-mix(in oklab, var(--attention) 60%, transparent); }
 /* Picked up: the shadow drops further, as if the window lifts. No scale, so edges stay under the pointer. */
-.live-window.moving { box-shadow: inset 0 1px 0 color-mix(in oklab, white 9%, transparent), 0 2px 4px rgb(0 0 0 / .14), 0 30px 56px -20px rgb(0 0 0 / .6); }
-.live-window .live-top { cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
+.live-window.moving { box-shadow: inset 0 1px 0 color-mix(in oklab, white 16%, transparent), 0 2px 4px rgb(0 0 0 / .14), 0 30px 56px -20px rgb(0 0 0 / .6); }
+.live-window .live-top { cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; flex-wrap: nowrap; gap: 6px; }
 .live-window.moving, .live-window.moving * { cursor: grabbing; user-select: none; -webkit-user-select: none; }
-.live-window .live-stage { padding: 8px 14px 14px; grid-template-rows: auto minmax(0, 1fr) auto auto auto; }
+.live-window .live-stage { padding: 18px 14px 14px; grid-template-rows: auto minmax(0, 1fr) auto auto auto; }
+/* The move handle is a grabber pill at the top, as on an iOS sheet. It stays a real, focusable button. */
+.live-window .live-top .live-grip { position: absolute; top: -17px; left: 50%; translate: -50% 0; width: 48px; height: 16px; margin: 0; border-radius: 99px; }
+.live-window .live-grip svg { display: none; }
+.live-window .live-grip::before { content: ''; position: absolute; left: 8px; right: 8px; top: 6px; height: 4px; border-radius: 99px; background: color-mix(in oklab, var(--text) 22%, transparent); transition: background-color .15s ease; }
+.live-window .live-top .live-grip:hover { background: none; }
+.live-window .live-grip:hover::before, .live-window.moving .live-grip::before { background: color-mix(in oklab, var(--text) 45%, transparent); }
+/* Header: the name, then capsules. The status chips stay in full screen; in a window they live in the name's tooltip. */
+.live-window .live-info { display: none; }
+.live-window .live-tag { min-width: 0; }
+.live-window .live-target-wrap { min-width: 0; }
+.live-window .live-chip { min-height: 32px; max-width: 100%; padding: 0 10px 0 12px; border: 0; border-radius: 99px; background: var(--live-fill); }
+.live-window .live-target { overflow: hidden; white-space: nowrap; }
+.live-window .live-target .live-k { overflow: hidden; text-overflow: ellipsis; }
+.live-window button.live-chip:hover { background: color-mix(in oklab, var(--text) 12%, transparent); }
+.live-window .live-window-buttons { flex: none; padding: 2px; border-radius: 99px; background: var(--live-fill); }
+.live-window .live-icon { width: 30px; height: 30px; border-radius: 50%; }
+.live-window .live-icon:hover { background: color-mix(in oklab, var(--text) 10%, transparent); }
 .live-window .live-orb { width: min(62cqw, 34cqh, 300px); }
 .live-window .live-words { min-height: 4.5em; max-height: 32cqh; padding-bottom: 10px; }
 .live-window .live-said { font-size: clamp(18px, 6cqw, 24px); }
 .live-window .live-reply { font-size: 16px; }
-.live-window .live-popover { max-height: 60cqh; width: min(300px, calc(100cqw - 28px)); }
-.live-window .live-controls { gap: clamp(16px, 9cqw, 40px); }
-.live-window .live-round { width: 48px; height: 48px; }
-.live-window .live-talk .live-round { width: 64px; height: 64px; }
-.live-window .live-approval { margin-bottom: 10px; padding: 12px; }
-@container live (max-width: 440px) { .live-window .live-info { display: none; } }
-@container live (max-height: 470px) { .live-window .live-words { min-height: 3em; } .live-window .live-ctl > span { display: none; } }
+/* Glass does not sit on glass: the menu is solid. */
+.live-window .live-popover { max-height: 60cqh; width: min(300px, calc(100cqw - 28px)); border-radius: 20px; padding: 6px; border-color: color-mix(in oklab, var(--text) 10%, transparent); background: var(--surface); box-shadow: 0 1px 2px rgb(0 0 0 / .12), 0 16px 32px -12px rgb(0 0 0 / .45); }
+.live-window .live-popover .live-pane { border-radius: 14px; }
+/* Controls: one capsule tray at the thumb, as in Gemini Live. Labels move to tooltips and screen readers. */
+.live-window .live-controls { justify-self: center; align-items: center; gap: 10px; padding: 6px; border-radius: 99px; background: var(--live-fill); box-shadow: inset 0 1px 0 color-mix(in oklab, white 7%, transparent); }
+.live-window .live-ctl > span { display: none; }
+.live-window .live-round { width: 48px; height: 48px; border: 0; background: color-mix(in oklab, var(--text) 8%, transparent); }
+.live-window .live-round:hover:not(:disabled) { background: color-mix(in oklab, var(--text) 14%, transparent); }
+.live-window .live-talk .live-round { width: 60px; height: 60px; }
+.live-window .live-talk .live-round:hover:not(:disabled) { background: var(--text); }
+.live-window .live-end .live-round { background: color-mix(in oklab, var(--error) 16%, transparent); }
+.live-window .live-end .live-round:hover { background: color-mix(in oklab, var(--error) 26%, transparent); }
+.live-window .live-approval { margin-bottom: 10px; padding: 12px; border-radius: 18px; }
+.live-window .live-row button { border-radius: 99px; }
+@container live (max-height: 470px) { .live-window .live-words { min-height: 3em; } }
 
 /* Resize: thin strips on each edge and corner, plus a visible, focusable grip at the bottom right. */
 .live-edge { position: absolute; z-index: 30; touch-action: none; }
@@ -152,10 +179,12 @@ button.live-chip:hover { background: var(--hover); }
 .live-edge-ne, .live-edge-nw, .live-edge-se, .live-edge-sw { width: 18px; height: 18px; }
 .live-edge-ne { top: -4px; right: -4px; cursor: nesw-resize; } .live-edge-sw { bottom: -4px; left: -4px; cursor: nesw-resize; }
 .live-edge-nw { top: -4px; left: -4px; cursor: nwse-resize; } .live-edge-se { bottom: -4px; right: -4px; cursor: nwse-resize; }
-.live .live-grip-resize { position: absolute; z-index: 31; right: 2px; bottom: 2px; width: 24px; height: 24px; padding: 0; cursor: nwse-resize; touch-action: none; border-radius: 0 0 var(--radius-xl) 0;
-  background: linear-gradient(135deg, transparent 52%, var(--line) 52% 58%, transparent 58% 68%, var(--line) 68% 74%, transparent 74%); }
-.live .live-grip-resize:hover { background-color: transparent; filter: brightness(.8); }
-@media (pointer: coarse) { .live .live-grip-resize { width: 32px; height: 32px; } .live-edge-n, .live-edge-s { height: 16px; } .live-edge-n { top: -8px; } .live-edge-s { bottom: -8px; } }
+/* The grip is an arc that follows the round corner, as on iPadOS windows. */
+.live .live-grip-resize { position: absolute; z-index: 31; right: 0; bottom: 0; width: 30px; height: 30px; padding: 0; cursor: nwse-resize; touch-action: none; border-radius: 0 0 var(--live-r, 28px) 0; }
+.live .live-grip-resize::before { content: ''; position: absolute; right: 6px; bottom: 6px; width: 18px; height: 18px; border: solid color-mix(in oklab, var(--text) 24%, transparent); border-width: 0 3px 3px 0; border-bottom-right-radius: 22px; transition: border-color .15s ease; }
+.live .live-grip-resize:hover::before, .live .live-grip-resize:focus-visible::before, .live-window.moving .live-grip-resize::before { border-color: var(--live-you); }
+.live .live-grip-resize:focus-visible { outline-offset: -2px; }
+@media (pointer: coarse) { .live .live-grip-resize { width: 36px; height: 36px; } .live-edge-n, .live-edge-s { height: 16px; } .live-edge-n { top: -8px; } .live-edge-s { bottom: -8px; } }
 
 /* Bubble: the call keeps running and the orb stays alive in a small floating circle. Tap it to open, drag it anywhere. */
 /* The bubble is a small live orb: a lit glass rim, a light that turns around it while Friday listens,
@@ -163,7 +192,8 @@ button.live-chip:hover { background: var(--hover); }
 .live-bubble { --live-ring: var(--live-you); --live-turn: 5s;
   inset: auto; left: 0; top: 0; z-index: 60; border-radius: 50%; display: block; overflow: visible;
   border: 1px solid color-mix(in oklab, var(--live-ring) 35%, transparent);
-  background: radial-gradient(circle at 50% 30%, color-mix(in oklab, var(--surface) 90%, white 6%), var(--bg) 75%);
+  background: radial-gradient(circle at 50% 30%, color-mix(in oklab, var(--surface) 70%, color-mix(in oklab, white 10%, transparent)), color-mix(in oklab, var(--bg) 70%, transparent) 75%);
+  -webkit-backdrop-filter: blur(16px) saturate(1.7); backdrop-filter: blur(16px) saturate(1.7);
   box-shadow: inset 0 1px 0 color-mix(in oklab, white 14%, transparent), 0 2px 4px rgb(0 0 0 / .18), 0 10px 22px -8px color-mix(in oklab, var(--live-ring) 45%, black);
   transition: scale .22s cubic-bezier(.23, 1, .32, 1), opacity .3s ease, border-color .3s ease; }
 .live-bubble[data-phase="speaking"] { --live-ring: var(--live-agent); --live-turn: 2.6s; }
@@ -192,6 +222,12 @@ button.live-chip:hover { background: var(--hover); }
 .live-bubble[data-phase="paused"] { opacity: .8; }
 @keyframes live-turn { to { rotate: 1turn; } }
 @keyframes live-call { 0% { opacity: .8; transform: scale(1); } 70%, 100% { opacity: 0; transform: scale(1.35); } }
+
+/* Glass needs a blur behind it. Without one, or when the person asks for less transparency, the surfaces are solid. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) { .live-window { background: var(--surface); } .live-bubble { background: var(--surface); } }
+@media (prefers-reduced-transparency: reduce) {
+  .live-window, .live-bubble { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--surface); }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .live-reply { animation: none; }

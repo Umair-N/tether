@@ -7,7 +7,7 @@ import { agentReady, FridayAgent, type AgentChatList, type AgentChats, type Agen
 import { LiveVoice, sentences } from './liveVoice'
 import { useBackStep } from './backNav'
 import { useFloatingWindow, type Edge, type FloatMode, type Point, type Rect } from './floatingWindow'
-import { bloomFromBubble, foldToBubble, popBubble, settle, snapBubble } from './liveMotion'
+import { bloomFromBubble, foldToBubble, openFrom, popBubble, settle, snapBubble } from './liveMotion'
 import { speakable } from './speech'
 import './Live.css'
 
@@ -51,7 +51,7 @@ const findPane = (agents: Pane[], wanted: string) => {
 const chatState = (pane: Pane) => approvalOf(pane) ? 'needs approval' : pane.needs ? `needs ${pane.needs.kind}` : pane.state.toLowerCase()
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
-export function Live({ api, panes, selected, commands, onClose, reveal = 0 }: { api: Api; panes: Pane[]; selected?: Pane; commands: Command[]; onClose: () => void; reveal?: number }) {
+export function Live({ api, panes, selected, commands, onClose, reveal = 0, from = null }: { api: Api; panes: Pane[]; selected?: Pane; commands: Command[]; onClose: () => void; reveal?: number; from?: DOMRect | null }) {
   const { mode, setMode, moving, bubble, windowStyle, bubbleStyle, move, resize, bubbleHandlers } = useFloatingWindow('tether.live-window.v1', { minW: 300, minH: 360, bubble: BUBBLE, initial: firstRect, initialMode: 'window' })
   const root = useRef<HTMLDivElement>(null)
   const bubbleButton = useRef<HTMLButtonElement>(null)
@@ -78,10 +78,11 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0 }: { 
     fold.finished.then(done, () => window.clearTimeout(fallback))
   }
   const shown = useRef<{ mode: FloatMode | null; bubble: Point }>({ mode: null, bubble })
+  const openedFrom = useRef(from)  // the button that opened Friday; only the first open grows out of it
   useLayoutEffect(() => {
     const el = root.current, prev = shown.current
     shown.current = { mode, bubble }
-    if (prev.mode === null) { settle(el, true); return }
+    if (prev.mode === null) { if (openedFrom.current && mode !== 'bubble') openFrom(el, openedFrom.current); else settle(el, true); return }
     if (prev.mode === mode) { if (mode === 'bubble' && !moving) snapBubble(el, prev.bubble, bubble); return }
     folding.current?.cancel(); folding.current = null
     if (mode === 'bubble') { popBubble(el, folded.current); folded.current = false; if (focusBubble.current) bubbleButton.current?.focus(); focusBubble.current = false }
@@ -647,7 +648,7 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0 }: { 
       <div className="live-aurora" aria-hidden="true" />
       <header className="live-top" onPointerDown={mode === 'window' ? move.onPointerDown : undefined} onPointerMove={move.onPointerMove} onPointerUp={move.onPointerUp} onPointerCancel={move.onPointerCancel}>
         {mode === 'window' && <button type="button" className="live-icon live-grip" data-float-grip aria-label="Move Friday window. Use the arrow keys." title="Drag to move" onKeyDown={move.onKeyDown}><GripHorizontal size={16} aria-hidden="true" /></button>}
-        <span className="live-tag"><i aria-hidden="true" />{ASSISTANT}</span>
+        <span className="live-tag" title={`${awake ? 'Screen on' : 'Screen may sleep'}${agentOn ? ` · ${voiceKind === 'kokoro' ? 'Voice: this device' : voiceKind === 'system' ? 'Voice: device basic' : 'Voice: server'}` : ''}`}><i aria-hidden="true" />{ASSISTANT}</span>
         <span className="live-chip live-info" title={awake ? 'The screen stays on while Live mode runs.' : 'This browser can turn the screen off.'}><span className="live-wake" data-on={awake} aria-hidden="true" />{awake ? 'Screen on' : 'Screen may sleep'}</span>
         {agentOn && <span className="live-chip live-info" title={voiceKind ? 'This device speaks Friday’s replies, so a busy server cannot break the voice.' : 'The server speaks Friday’s replies.'}>{voiceKind === 'kokoro' ? 'Voice: this device' : voiceKind === 'system' ? 'Voice: device basic' : 'Voice: server'}</span>}
         <span className="live-target-wrap">
