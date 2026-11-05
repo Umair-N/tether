@@ -64,7 +64,7 @@ See the [Claude Code marketplace docs](https://code.claude.com/docs/en/plugin-ma
 The setup skills install the latest stable release by default. To prepare a release without a checkout:
 
 ```sh
-curl -fL https://raw.githubusercontent.com/incmak/tether/v0.1.2/integrations/claude/tether/skills/setup/bootstrap.py -o tether-bootstrap.py
+curl -fL https://raw.githubusercontent.com/incmak/tether/v0.1.3/integrations/claude/tether/skills/setup/bootstrap.py -o tether-bootstrap.py
 python3 tether-bootstrap.py
 python3 ~/.local/share/tether/current/install.py --plan --json --no-build-ui
 python3 ~/.local/share/tether/current/install.py --apply --json --no-build-ui
