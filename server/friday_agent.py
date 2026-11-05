@@ -354,7 +354,7 @@ def runtime_types():
         async def handle_user_turn_stopped(self):
             self.active = self.overlap = False
 
-        def release_overlap(self):
+        async def release_overlap(self):
             # A rejected overlap never opened a turn, so no turn-stop callback
             # can release the observer's VAD gate for the event queue.
             self.overlap = False
@@ -362,6 +362,7 @@ def runtime_types():
             if not self.session.bot_speaking and not self.session.llm_running:
                 self.session.busy = False
             self.session.wake.set()
+            await self.session.send_idle()
 
         async def process_frame(self, frame):
             if isinstance(frame, BotStartedSpeakingFrame):
@@ -373,14 +374,14 @@ def runtime_types():
                 if not self.overlap:
                     await super().process_frame(frame)
             elif isinstance(frame, EmptySTTSegmentFrame) and frame.finalized and not self.active:
-                self.release_overlap()
+                await self.release_overlap()
             elif isinstance(frame, (TranscriptionFrame, InterimTranscriptionFrame)) and not self.active:
                 # Latch overlap at VAD start: STT can finish after playback ends.
                 if (self.bot_speaking or self.overlap) and len(frame.text.split()) < BARGE_IN_WORDS:
                     # The aggregator appends final text before calling strategies.
                     await self.trigger_reset_aggregation()
                     if isinstance(frame, TranscriptionFrame):
-                        self.release_overlap()
+                        await self.release_overlap()
                 elif frame.text.strip():
                     # Preserve today's transcription fallback if VAD missed speech.
                     await self.report_user_turn_started()
@@ -548,7 +549,8 @@ def runtime_types():
                 await self.session.output.broadcast_frame(BotStoppedSpeakingFrame)
 
         async def spoken(self, data):
-            if (type(data.get('turn')) is not int or data['turn'] != self.voice_turn
+            if (self.session.voice_mode != 'client'
+                    or type(data.get('turn')) is not int or data['turn'] != self.voice_turn
                     or not self.voice_count or self.voice_cancelled or self.voice_playback_ended):
                 return
             if data.get('state') == 'start' and not self.voice_speaking:
@@ -906,10 +908,7 @@ class Session:
 
         @self.aggregators.user().event_handler('on_user_turn_stopped')
         async def user_stopped(aggregator, strategy, message):
-            self.user_speaking = False
-            if not message.content and not self.llm_running:
-                self.busy = False
-            self.wake.set()
+            await self.user_stopped(message)
 
         @transport.event_handler('on_client_disconnected')
         async def disconnected(transport, peer):
@@ -958,12 +957,32 @@ class Session:
                     else 'My brain is offline. Start the Tether LLM service.')
             await self.worker.queue_frame(self.rt.TTSSpeakFrame(text))
 
+    async def send_idle(self):
+        # User/VAD IDs differ from the TTS reply IDs used by say/stop.
+        await self.rtvi.send_server_message({'t': 'idle', 'd': {'turn': self.turn}})
+
+    async def user_stopped(self, message):
+        self.user_speaking = False
+        if not message.content:
+            if not self.llm_running:
+                self.busy = False
+            await self.send_idle()
+        self.wake.set()
+
     async def client_message(self, kind, data):
         if not isinstance(data, dict):
             return
         if kind == 'voice':
             if data.get('mode') in ('client', 'server'):
                 self.voice_mode = data['mode']
+                if self.voice_mode == 'server' and self.tts.voice_client:
+                    # Device playback can fail without spoken(end). Retire its
+                    # state before server audio owns the speaking broadcasts.
+                    speaking = self.tts.voice_speaking
+                    self.tts.voice_speaking = False
+                    self.tts.voice_playback_ended = True
+                    if speaking:
+                        await self.output.broadcast_frame(self.rt.BotStoppedSpeakingFrame)
                 await self.rtvi.send_server_message({'t': 'voice', 'd': {'mode': self.voice_mode}})
         elif kind == 'interrupt':
             pending_voice = (not self.tts.voice_cancelled and (

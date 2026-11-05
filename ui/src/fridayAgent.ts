@@ -119,6 +119,8 @@ export class FridayAgent {
           else if (message?.t === 'say') { const d = message.d as { turn: number; seq: number; text: string }; this.bot = d.seq ? `${this.bot} ${d.text}` : d.text; this.events.onBotText(this.bot); this.voice.say(d.turn, d.seq, d.text) }
           else if (message?.t === 'say_end') { const d = message.d as { turn: number; count: number }; this.voice.end(d.turn, d.count) }
           else if (message?.t === 'stop') this.voice.stop()
+          // The server heard no words (noise, echo, or a short overlap): no reply comes, so stop showing thinking.
+          else if (message?.t === 'idle') { if (this.turn === 'thinking') this.setTurn('listening') }
         },
         onDisconnected: () => { if (!this.closed) this.events.onClosed('Friday hung up.') },
         onError: message => { if (!this.closed) this.events.onClosed(String((message.data as { message?: string })?.message ?? 'Friday stopped.')) },

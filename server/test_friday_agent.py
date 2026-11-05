@@ -1128,7 +1128,7 @@ class FridayAPITests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(analyzer.params.stop_secs, 0.2)
             model.reset_states.assert_called_once()
 
-    async def voice_pipeline(self, mode, frames, user_turns=False):
+    async def voice_pipeline(self, mode, frames, user_turns=False, smart=False, llm_calls=None):
         from pipecat.frames.frames import Frame, TTSAudioRawFrame
         from pipecat.pipeline.pipeline import Pipeline
         from pipecat.observers.base_observer import BaseObserver
@@ -1199,20 +1199,155 @@ class FridayAPITests(unittest.IsolatedAsyncioTestCase):
         if user_turns:
             from pipecat.processors.aggregators.llm_response_universal import LLMUserAggregator, LLMUserAggregatorParams
             from pipecat.turns.user_turn_strategies import UserTurnStrategies
-            processors.append(LLMUserAggregator(session.context, params=LLMUserAggregatorParams(
+            stop = self.rt.FridaySpeechTimeoutStop(user_speech_timeout=0)
+            if smart:
+                from pipecat.audio.turn.base_turn_analyzer import EndOfTurnState, BaseTurnParams
+                analyzer = Mock(params=BaseTurnParams(), cleanup=AsyncMock(),
+                    append_audio=Mock(return_value=EndOfTurnState.INCOMPLETE),
+                    analyze_end_of_turn=AsyncMock(side_effect=[
+                        (EndOfTurnState.COMPLETE, None), (EndOfTurnState.INCOMPLETE, None)]))
+                stop = self.rt.FridayTurnAnalyzerStop(turn_analyzer=analyzer)
+            user = LLMUserAggregator(session.context, params=LLMUserAggregatorParams(
                 empty_user_turn=None,
                 user_turn_strategies=UserTurnStrategies(start=[self.rt.FridayUserTurnStartStrategy(session)],
-                    stop=[self.rt.FridaySpeechTimeoutStop(user_speech_timeout=0)]))))
+                    stop=[stop])))
+            processors.append(user)
+            session.aggregators.user = lambda: user
+
+            @user.event_handler('on_user_turn_stopped')
+            async def user_stopped(aggregator, strategy, message):
+                await session.user_stopped(message)
+        if llm_calls is not None:
+            session.state, session.notes, session.last_sent = None, [], None
+            session.llm = self.rt.FridayLLM(session, friday.brain_config({}))
+
+            async def completion(**kwargs):
+                llm_calls.append(copy.deepcopy(kwargs['messages']))
+
+                async def chunks():
+                    yield self.chunk(content='A reply.')
+
+                return chunks()
+
+            session.llm._client.chat.completions.create = AsyncMock(side_effect=completion)
+            processors.append(session.llm)
         assistant = LLMAssistantAggregator(session.context)
         pipeline = Pipeline(processors + [session.tts, session.output, assistant])
         with patch.object(self.rt.PocketTTSService, 'run_tts', audio):
-            await asyncio.wait_for(run_test(pipeline,
-                frames_to_send=[Action(f) if callable(f) else f for f in frames],
-                observers=[self.rt.FridayObserver(session), SpeakingFrames()]), timeout=10)
+            try:
+                await asyncio.wait_for(run_test(pipeline,
+                    frames_to_send=[Action(f) if callable(f) else f for f in frames],
+                    observers=[self.rt.FridayObserver(session), SpeakingFrames()]), timeout=10)
+            finally:
+                if llm_calls is not None:
+                    await session.llm._client.close()
         if action_errors:
             raise action_errors[0]
         messages = [call.args[0] for call in session.rtvi.send_server_message.call_args_list]
         return session, messages, captured, synth
+
+    async def test_late_final_after_empty_turn_runs_llm_once(self):
+        from pipecat.tests.utils import SleepFrame
+
+        for words in ('What has been happening', 'Hello', 'Hello Friday'):
+            for smart in (True, False):
+                with self.subTest(words=words, smart=smart):
+                    calls = []
+                    empty = self.rt.EmptySTTSegmentFrame()
+                    empty.finalized = True
+                    transcript = self.rt.TranscriptionFrame(words, 'user', 'now', finalized=True)
+
+                    async def stopped(session):
+                        self.assertFalse(session.aggregators.user()._user_turn_controller._user_turn)
+                        self.assertEqual(calls, [])
+
+                    async def answered(session):
+                        # EndFrame also flushes text. Require inference before teardown.
+                        self.assertEqual(len(calls), 1)
+
+                    session, messages, _, _ = await self.voice_pipeline('client', [
+                        self.rt.VADUserStartedSpeakingFrame(),
+                        self.rt.VADUserStoppedSpeakingFrame(), empty, SleepFrame(.1), stopped,
+                        transcript, SleepFrame(.15),
+                        # An older empty segment must not erase the accepted words.
+                        self.rt.EmptySTTSegmentFrame(),
+                        self.rt.VADUserStoppedSpeakingFrame(), SleepFrame(.15), answered],
+                        user_turns=True, smart=smart, llm_calls=calls)
+                    self.assertEqual(len(calls), 1)
+                    self.assertEqual([m['d']['text'] for m in messages if m['t'] == 'say'], ['A reply.'])
+                    self.assertEqual([m['content'] for m in calls[0] if friday.is_real_user(m)], [words])
+                    self.assertEqual([m['content'] for m in session.context.get_messages()
+                                      if friday.is_real_user(m)], [words])
+
+    async def test_empty_turn_sends_idle_from_real_session_handler(self):
+        from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
+        from pipecat.processors.aggregators.llm_response_universal import UserTurnStoppedMessage
+        connection = SmallWebRTCConnection(ice_servers=[])
+        models = Mock(brain=friday.brain_config({}), smart_turn=None)
+        models.tts.sample_rate = 24000
+        rt = Mock(wraps=self.rt)
+        rt.SharedVAD.return_value = None
+        session = friday.Session(rt, models, connection)
+        session.rtvi.send_server_message = AsyncMock()
+        try:
+            await session.aggregators.user()._call_event_handler('on_user_turn_stopped', None,
+                UserTurnStoppedMessage(content=None, timestamp='now'))
+            await asyncio.sleep(0)  # Pipecat schedules public event handlers.
+            session.rtvi.send_server_message.assert_awaited_once_with(
+                {'t': 'idle', 'd': {'turn': session.turn}})
+            session.rtvi.send_server_message.reset_mock()
+            await session.aggregators.user()._call_event_handler('on_user_turn_stopped', None,
+                UserTurnStoppedMessage(content='Hello', timestamp='now'))
+            await asyncio.sleep(0)
+            session.rtvi.send_server_message.assert_not_awaited()
+        finally:
+            await connection.disconnect()
+            await session.llm._client.close()
+
+    async def test_server_voice_switch_releases_unended_client_playback(self):
+        from pipecat.frames.frames import LLMTextFrame, UserStartedSpeakingFrame
+        from pipecat.tests.utils import SleepFrame
+
+        async def switch(session):
+            await session.client_message('spoken', {'turn': 1, 'state': 'start'})
+
+        async def server(session):
+            await session.client_message('voice', {'mode': 'server'})
+
+        async def released(session):
+            self.assertFalse(session.bot_speaking)
+            # A stale client start must not latch speech again after the switch.
+            await session.client_message('spoken', {'turn': 1, 'state': 'start'})
+            self.assertFalse(session.tts.voice_speaking)
+
+        _, _, frames, _ = await self.voice_pipeline('client', [
+            self.rt.LLMFullResponseStartFrame(), LLMTextFrame('A reply.'),
+            self.rt.LLMFullResponseEndFrame(), SleepFrame(), switch, SleepFrame(),
+            server, SleepFrame(), released, self.rt.VADUserStartedSpeakingFrame(), SleepFrame(.1)],
+            user_turns=True)
+        self.assertEqual(sum(isinstance(f, UserStartedSpeakingFrame) for f in frames), 1)
+        self.assertEqual(sum(isinstance(f, self.rt.InterruptionFrame) for f in frames), 1)
+
+    async def test_empty_and_short_overlap_send_idle_without_llm(self):
+        from pipecat.tests.utils import SleepFrame
+
+        for overlap in (False, True):
+            for text in ('', 'Again fish') if overlap else ('',):
+                with self.subTest(overlap=overlap, text=text):
+                    calls = []
+                    empty = self.rt.EmptySTTSegmentFrame()
+                    empty.finalized = True
+                    frames = ([self.rt.BotStartedSpeakingFrame(), SleepFrame()] if overlap else [])
+                    frames += [self.rt.VADUserStartedSpeakingFrame(),
+                               self.rt.VADUserStoppedSpeakingFrame(),
+                               self.rt.TranscriptionFrame(text, 'user', 'now') if text else empty,
+                               SleepFrame(.15)]
+                    session, messages, _, _ = await self.voice_pipeline('client', frames,
+                        user_turns=True, llm_calls=calls)
+                    self.assertEqual(calls, [])
+                    self.assertEqual([m for m in messages if m['t'] == 'idle'],
+                                     [{'t': 'idle', 'd': {'turn': session.turn}}])
+                    self.assertFalse(session.user_speaking)
 
     async def test_empty_overlap_releases_queue_and_next_silent_vad_immediately(self):
         from pipecat.frames.frames import UserStartedSpeakingFrame
