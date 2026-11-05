@@ -286,6 +286,15 @@ class FakePipeTests(unittest.TestCase):
         self.assertEqual(casts, ['Page.startScreencast', 'Page.stopScreencast', 'Page.startScreencast'])
         self.assertEqual(self.fake.sent('Page.startScreencast')[-1]['params']['maxHeight'], 1344)
 
+    def test_watch_brings_a_signed_tab_to_the_front(self):
+        # Headed Chrome stops painting a tab behind another one, so its stream dropped to 0.2 fps.
+        self.browser.list_tabs()
+        self.browser.watch('T1', 960, 1280)
+        self.assertEqual(self.fake.sent('Page.bringToFront'), [])
+        self.browser.signed = True
+        self.browser.watch('T1', 960, 1280)
+        self.assertEqual(len(self.fake.sent('Page.bringToFront')), 1)
+
     def test_target_destroyed_and_info_changed(self):
         self.browser.list_tabs()
         self.browser.new_tab()

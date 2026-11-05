@@ -676,6 +676,8 @@ class Browser:
             tab = self.tab(target)
             tab.viewers += 1
             size = (_clamp(max_width, 160, 2560, 1280), _clamp(max_height, 160, 2560, 1280))
+            if self.signed:  # headed Chrome paints only the front tab: a tab behind streamed 0.2 fps, in front 37 fps
+                self.conn.call('Page.bringToFront', session=tab.session)
             if tab.casting != size:
                 self._start_cast(tab, size)
             return tab
