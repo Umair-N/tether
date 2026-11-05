@@ -125,7 +125,11 @@ class SystemEngine implements Engine<string> {
       utterance.lang = this.voice?.lang ?? 'en-US'
       // Android can drop speech with no error. No start in 2 s means silence: fail over to the server voice.
       let started = false
-      const silent = () => { this.speaking = false; reject(new Error('The device voice did not start.')) }
+      const silent = () => {
+        this.speaking = false
+        save({ system: 'silent' })  // Skip it on the next call: its first reply would be lost.
+        reject(new Error('The device voice did not start.'))
+      }
       const watchdog = setTimeout(() => {
         if (started) return
         if (this.stopped) { this.speaking = false; resolve(); return }
@@ -166,11 +170,11 @@ async function voicesReady() {
   })
 }
 
-interface Saved { kokoro: 'fast' | 'slow'; rtf: number }
+interface Saved { kokoro?: 'fast' | 'slow'; rtf?: number; system?: 'silent' }
 function saved(): Saved | null {
   try { return JSON.parse(localStorage.getItem(STORE) ?? 'null') as Saved | null } catch { return null }
 }
-function save(value: Saved) { try { localStorage.setItem(STORE, JSON.stringify(value)) } catch { /* private mode */ } }
+function save(value: Saved) { try { localStorage.setItem(STORE, JSON.stringify({ ...saved(), ...value })) } catch { /* private mode */ } }
 
 /** Kokoro on WebGPU, kept only when a short probe runs at least twice as fast as speech.
  * One model per page: each call reuses it, so a new call does not load another 326 MB onto the GPU. */
@@ -228,7 +232,7 @@ export class DeviceVoice {
   async open() {
     await voicesReady()
     // Use the built-in voice even when no voice is listed yet: the device default still speaks.
-    if (typeof speechSynthesis !== 'undefined') this.use(new SystemEngine(systemVoice()))
+    if (typeof speechSynthesis !== 'undefined' && saved()?.system !== 'silent') this.use(new SystemEngine(systemVoice()))
     loadKokoro().then(engine => {
       if (!engine) return
       if (this.closed) { engine.close(); return }
