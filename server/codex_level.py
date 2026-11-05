@@ -51,7 +51,8 @@ RULES = (
 UI_RULE = 'UI design and prototyping stay with you. Do not give them to Codex.'
 EVERYTHING = len(RULES) - 1
 COMMON = (
-    'Run `codex exec` only through `codex-lane -- <args>`, or add `</dev/null`. Without it, Codex waits on stdin forever.',
+    'Run Codex as `codex-lane -- <codex exec options> "<prompt>"`. codex-lane adds `exec` itself; do not repeat it. '
+    'Or run `codex exec ... </dev/null`. Without one of these, Codex waits on stdin forever.',
     'Give Codex a full spec: the goal, the files, the limits and the checks. Read its result before you use it.',
     'Do not change the level. The user sets it in Tether.',
 )
