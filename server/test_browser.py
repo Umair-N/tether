@@ -131,6 +131,26 @@ class InputTests(unittest.TestCase):
         self.assertEqual((select['type'], select['commands']), ('rawKeyDown', ['selectAll']))
         self.assertEqual(browser.input_command({'type': 'keyup', 'key': 'a'})[1]['type'], 'keyUp')
 
+    def test_key_virtual_codes(self):
+        cases = [('.', 'Period', 190), (',', 'Comma', 188), ('/', 'Slash', 191), (';', 'Semicolon', 186),
+                 ('-', 'Minus', 189), ('=', 'Equal', 187), ("'", 'Quote', 222), ('[', 'BracketLeft', 219),
+                 (']', 'BracketRight', 221), ('\\', 'Backslash', 220), ('`', 'Backquote', 192)]
+        for key, code, expected in cases:
+            with self.subTest(key=key, code=code):
+                down = browser.input_command({'type': 'keydown', 'key': key, 'code': code})[1]
+                self.assertEqual(down['text'], key)
+                self.assertEqual(down['windowsVirtualKeyCode'], expected)
+                self.assertNotIn(down['windowsVirtualKeyCode'], (*range(33, 41), 45, 46))
+        for key, code, modifiers, expected in [('>', 'Period', 8, 190), ('#', 'Digit3', 8, 51),
+                                                ('(', 'Digit9', 0, 57), ('.', '', 0, 190),
+                                                ('é', '', 0, 0), ('a', 'KeyA', 0, 65)]:
+            with self.subTest(key=key, code=code, modifiers=modifiers):
+                event = {'type': 'keydown', 'key': key, 'modifiers': modifiers}
+                if code:
+                    event['code'] = code
+                down = browser.input_command(event)[1]
+                self.assertEqual((down['text'], down['windowsVirtualKeyCode']), (key, expected))
+
     def test_text_and_bad_input(self):
         self.assertEqual(browser.input_command({'type': 'text', 'text': 'héllo'}), ('Input.insertText', {'text': 'héllo'}))
         for bad in ({'type': 'down', 'x': 'a', 'y': 1}, {'type': 'eval'}, {'type': 'keydown'}, {'type': 'text', 'text': ''}, 'x',

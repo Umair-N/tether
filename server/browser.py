@@ -936,7 +936,31 @@ class Browser:
 
 KEY_CODES = {'Enter': 13, 'Backspace': 8, 'Tab': 9, 'Escape': 27, 'Delete': 46, 'ArrowLeft': 37, 'ArrowUp': 38,
              'ArrowRight': 39, 'ArrowDown': 40, 'Home': 36, 'End': 35, 'PageUp': 33, 'PageDown': 34, ' ': 32}
+CODE_VK = {
+    **KEY_CODES,
+    **{'Key' + chr(value): value for value in range(65, 91)},
+    **{'Digit' + str(value): 48 + value for value in range(10)},
+    **{'Numpad' + str(value): 96 + value for value in range(10)},
+    'Space': 32, 'Semicolon': 186, 'Equal': 187, 'Comma': 188, 'Minus': 189, 'Period': 190,
+    'Slash': 191, 'Backquote': 192, 'BracketLeft': 219, 'Backslash': 220, 'BracketRight': 221,
+    'Quote': 222, 'IntlBackslash': 226, 'NumpadMultiply': 106, 'NumpadAdd': 107, 'NumpadSubtract': 109,
+    'NumpadDecimal': 110, 'NumpadDivide': 111, 'NumpadEnter': 13,
+}
+PUNCTUATION_VK = {char: value for chars, value in (
+    (';:', 186), ('=+', 187), (',<', 188), ('-_', 189), ('.>', 190), ('/?', 191), ('`~', 192),
+    ('[{', 219), ('\\|', 220), (']}', 221), ("'\"", 222),
+) for char in chars}
 BUTTONS = {'left': 1, 'right': 2, 'middle': 4, 'none': 0}
+
+
+def _windows_virtual_key_code(key, code):
+    if code in CODE_VK:
+        return CODE_VK[code]
+    if key in KEY_CODES:
+        return KEY_CODES[key]
+    if len(key) == 1 and ('a' <= key <= 'z' or 'A' <= key <= 'Z' or '0' <= key <= '9'):
+        return ord(key.upper())
+    return PUNCTUATION_VK.get(key, 0)
 
 
 def as_touch(method, params):
@@ -978,7 +1002,7 @@ def input_command(event):
         text = key if len(key) == 1 and not modifiers & 6 else ('\r' if key == 'Enter' and kind == 'keydown' else '')
         params = {'type': 'keyDown' if text and kind == 'keydown' else ('rawKeyDown' if kind == 'keydown' else 'keyUp'),
                   'key': key, 'code': code, 'modifiers': modifiers,
-                  'windowsVirtualKeyCode': KEY_CODES.get(key) or (ord(key.upper()) if len(key) == 1 else 0)}
+                  'windowsVirtualKeyCode': _windows_virtual_key_code(key, code)}
         if text and kind == 'keydown':
             params['text'] = params['unmodifiedText'] = text
         commands = [command for command in event.get('commands') or [] if command in ('selectAll', 'copy', 'cut', 'paste', 'undo', 'redo')]
