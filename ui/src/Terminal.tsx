@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Maximize2, SquareTerminal } from 'lucide-react'
+import { SquareTerminal } from 'lucide-react'
 import { copyText } from './clipboard'
 
 
@@ -88,25 +88,15 @@ function fitPane(frame: HTMLIFrameElement, box: HTMLElement, setWidth: (width: n
   new ResizeObserver(() => fit()).observe(box)
 }
 
-type TerminalView = 'pane' | 'window'
-const VIEW_KEY = 'tether.terminalView', ZOOM_KEY = 'tether.terminalZoom'
-function savedView(): TerminalView {
-  try { return localStorage.getItem(VIEW_KEY) === 'window' ? 'window' : 'pane' } catch { return 'pane' }
-}
-
-// The live terminal (ttyd through the server). "This pane" shows only the pane; "Whole window" is the classic tmux view.
+// The live terminal (ttyd through the server). Each tab has its own tmux window, so the view always shows the tab's pane, zoomed to fit.
 // shell: Tether's own side shell (TerminalPanel). Its window holds only this pane, so the view zooms it to fit and shows no view switch.
 // fixed: the window keeps its own size (btop needs a minimum), so the view never resizes it and scales the font instead.
 export function LiveTerminal({ paneId, onChat, shell = false, fixed = false }: { paneId: string; onChat: () => void; shell?: boolean; fixed?: boolean }) {
   const [status, setStatus] = useState<'checking' | 'ok' | 'down'>('checking')
   const [attempt, setAttempt] = useState(0)
   const [width, setWidth] = useState<number | null>(null)
-  const [view, setViewState] = useState<TerminalView>(savedView)
-  const setView = (next: TerminalView) => { setWidth(null); setViewState(next); try { localStorage.setItem(VIEW_KEY, next) } catch { /* the choice lasts for this visit only */ } }
-  // Zoom: the tmux pane fills this view while it is open (prefix+z), and goes back when the view closes.
-  const [zoom, setZoomState] = useState(() => { try { return localStorage.getItem(ZOOM_KEY) === '1' } catch { return false } })
-  const setZoom = (next: boolean) => { setWidth(null); setZoomState(next); try { localStorage.setItem(ZOOM_KEY, next ? '1' : '0') } catch { /* this visit only */ } }
-  const arg = fixed ? paneId : shell ? 'z' + paneId : view === 'window' ? 'w' + paneId : zoom ? 'z' + paneId : paneId
+  const view = 'pane'  // one pane per tmux window: no window view, no zoom switch
+  const arg = fixed ? paneId : 'z' + paneId
   const box = useRef<HTMLDivElement>(null)
   const frame = useRef<HTMLIFrameElement>(null)
   const textField = useRef<HTMLTextAreaElement>(null)
@@ -134,10 +124,7 @@ export function LiveTerminal({ paneId, onChat, shell = false, fixed = false }: {
     return () => { live = false }
   }, [attempt])
   if (status === 'ok') return <div className="live-terminal-wrap">
-    <div className="terminal-bar">{!shell && <><label>View <select value={view} onChange={event => setView(event.target.value as TerminalView)}>
-      <option value="pane">This pane</option><option value="window">Whole window</option></select></label>
-      {view === 'pane' && <button type="button" className={zoom ? 'terminal-zoom active' : 'terminal-zoom'} aria-pressed={zoom} onClick={() => setZoom(!zoom)}
-        title="Zoom the tmux pane to fill this view while it is open"><Maximize2 size={15} />Zoom</button>}</>}
+    <div className="terminal-bar">
       <button type="button" className={`terminal-zoom${selection !== null ? ' active' : ''}`} aria-pressed={selection !== null} onClick={selectText}>{selection !== null ? 'Back to terminal' : 'Select text'}</button>
       {selection !== null && <button type="button" className="terminal-zoom" onClick={() => void copySelection()}>{hasSelection ? 'Copy selection' : 'Copy all'}</button>}</div>
     {(selection !== null || copyStatus) && <p className="terminal-selection-hint" role="status">{copyStatus || 'Drag or long-press to select text. This copy stays still until you return to the terminal.'}</p>}
