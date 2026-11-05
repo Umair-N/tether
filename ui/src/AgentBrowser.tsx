@@ -153,9 +153,10 @@ function SignedAskCard({ api, request }: { api: Api; request: SignedRequest }) {
         <p className="signed-ask-reason">“{request.reason}”</p>
         {request.url && <p className="signed-ask-meta">Opens {hostOf(request.url)}</p>}
         <p className="signed-ask-meta">It gets one new tab with your sign-ins{request.browser === 'mac' ? ' on your Mac' : ''}. It cannot see your other tabs, cookies or settings.</p>
+        {request.browser === 'mac' && <p className="signed-ask-meta"><strong>Chrome shows a debugging bar. Keep it open: closing it ends access.</strong></p>}
       </div>
       <div className="agent-browser-actions">
-        <button type="button" className="primary" disabled={busy} onClick={() => void answer('allow')}>Allow</button>
+        <button type="button" className="primary signed-allow" disabled={busy} onClick={() => void answer('allow')}>Allow</button>
         <button type="button" className="secondary" disabled={busy} onClick={() => void answer('deny')}>Deny</button>
       </div>
     </div>
@@ -175,7 +176,7 @@ function SignedGrantCard({ api, grant }: { api: Api; grant: SignedGrant }) {
     <ul className="agent-browser-tabs">
       <li>
         <KeyRound size={15} aria-hidden="true" />
-        <span><strong>{grant.browser === 'mac' ? 'Mac Chrome tab' : 'Signed-in tab'}</strong><small>{left ? `${left} min left` : 'Ending'} · {grant.reason}</small></span>
+        <span><strong>{grant.browser === 'mac' ? 'Mac Chrome tab' : 'Signed-in tab'}</strong><small>{left ? `${left} min left` : 'Ending'} · {grant.browser === 'mac' ? 'Keep Chrome’s debugging bar open' : grant.reason}</small></span>
         <button type="button" className="secondary" onClick={() => watchTab(grant.tab, grant.pane, grant.browser === 'mac' ? 'mac' : 'signed')}>Watch</button>
         <button type="button" className="secondary" onClick={() => void answerSigned(api, 'end', grant.id).catch(failure => setError(errorText(failure)))}>End now</button>
       </li>

@@ -28,6 +28,11 @@ const GROUPS = [
   { name: 'Act', items: [
     ['Send', '↵'],
     ['New line', '⇧↵'],
+    ['Voice input on or off', '⌥V'],
+    ['Copy the session name', '⌥⇧S'],
+    ['Copy the Claude session name', '⌥⇧C'],
+    ['Copy the tmux pane name', '⌥⇧P'],
+    ['Copy the tmux session name', '⌥⇧T'],
     ['This list', '?'],
   ] },
 ] as const

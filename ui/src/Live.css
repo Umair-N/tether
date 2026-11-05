@@ -12,7 +12,7 @@
   background: var(--bg); color: var(--text); overflow: hidden; -webkit-tap-highlight-color: transparent;
 }
 .live button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
-.live :focus-visible { outline: 2px solid var(--text); outline-offset: 3px; border-radius: 10px; }
+.live :focus-visible { outline: 2px solid var(--text); outline-offset: 3px; border-radius: var(--radius); }
 
 .live-stage { position: relative; display: grid; grid-template-rows: auto 1fr auto auto auto; min-height: 0; min-width: 0;
   padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
@@ -29,16 +29,16 @@
 .live-top { position: relative; z-index: 3; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .live-tag { display: inline-flex; align-items: center; gap: 8px; margin-right: auto; font-family: var(--live-mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
 .live-tag i { width: 7px; height: 7px; border-radius: 50%; background: var(--live-you); box-shadow: 0 0 10px var(--live-you); }
-.live-chip { display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line); background: color-mix(in oklab, var(--live-panel) 85%, transparent); font-size: 13px; color: var(--text); }
+.live-chip { display: inline-flex; align-items: center; gap: 7px; min-height: var(--control); padding: 0 12px; border-radius: var(--radius); border: 1px solid var(--line); background: color-mix(in oklab, var(--live-panel) 85%, transparent); font-size: 13px; color: var(--text); }
 button.live-chip:hover { background: var(--hover); }
 .live-k { font-family: var(--live-mono); font-size: 11px; color: var(--muted); }
 .live-wake { width: 6px; height: 6px; border-radius: 50%; background: var(--line); }
 .live-wake[data-on="true"] { background: var(--live-agent); box-shadow: 0 0 8px var(--live-agent); }
 .live-target-wrap { position: relative; }
-.live-popover { position: absolute; z-index: 20; top: calc(100% + 8px); right: 0; width: min(320px, calc(100vw - 32px)); max-height: 60vh; overflow: auto; padding: 6px; border-radius: 14px; border: 1px solid var(--line); background: var(--live-panel); box-shadow: 0 18px 50px color-mix(in oklab, black 30%, transparent); }
+.live-popover { position: absolute; z-index: 20; top: calc(100% + 8px); right: 0; width: min(320px, calc(100vw - 32px)); max-height: 60vh; overflow: auto; padding: 6px; border-radius: var(--radius-lg); border: 1px solid var(--line); background: var(--live-panel); box-shadow: 0 18px 50px color-mix(in oklab, black 30%, transparent); }
 .live-popover h3, .live-rail h2 { margin: 6px 10px; font-family: var(--live-mono); font-size: 11px; font-weight: 400; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
 
-.live-pane { display: grid; grid-template-columns: 10px 1fr auto; align-items: center; gap: 10px; width: 100%; padding: 10px; border-radius: 10px; text-align: left; border: 1px solid transparent; }
+.live-pane { display: grid; grid-template-columns: 10px 1fr auto; align-items: center; gap: 10px; width: 100%; padding: 10px; border-radius: var(--radius); text-align: left; border: 1px solid transparent; }
 .live-pane:hover { background: var(--hover); }
 .live-pane i { width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
 .live-pane[data-state="working"] i { background: var(--live-agent); box-shadow: 0 0 8px var(--live-agent); }
@@ -50,24 +50,26 @@ button.live-chip:hover { background: var(--hover); }
 .live-pane[aria-checked="true"] { border-color: color-mix(in oklab, var(--live-you) 50%, var(--line)); background: color-mix(in oklab, var(--live-you) 8%, transparent); }
 .live-pane[aria-checked="true"] .live-check { opacity: 1; }
 
-.live-center { position: relative; z-index: 1; display: grid; place-items: center; min-height: 0; }
-.live-orb { position: relative; width: min(64vw, 42vh, 380px); aspect-ratio: 1; max-width: 100%; }
+/* The orb and its status share one column, so a long reply can never cover the status. */
+.live-center { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; min-height: 0; overflow: hidden; }
+.live-orb { position: relative; flex: none; width: min(64vw, 42vh, 380px); aspect-ratio: 1; max-width: 100%; }
 .live-orb canvas { display: block; width: 100%; height: 100%; cursor: pointer; }
-.live-status { position: absolute; left: 50%; bottom: -6px; transform: translateX(-50%); white-space: nowrap; font-family: var(--live-mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.live-status { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--live-mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
 
-.live-words { position: relative; z-index: 2; display: grid; align-content: end; gap: 12px; justify-self: center; width: 100%; max-width: 34em; min-height: 9.5em; padding-bottom: 14px; }
+.live-words { position: relative; z-index: 2; display: flex; flex-direction: column; gap: 12px; justify-self: center; width: 100%; max-width: 34em; min-height: 9.5em; max-height: 38vh; overflow-y: auto; overscroll-behavior: contain; padding-bottom: 14px; }
 .live-words p { margin: 0; }
+.live-words > :first-child { margin-top: auto; } /* bottom-aligned, but long text stays scrollable */
 .live-said { font-family: var(--live-display); font-style: italic; font-weight: 300; font-size: clamp(20px, 5vw, 30px); line-height: 1.22; text-wrap: balance; color: var(--muted); }
 .live-reply { font-size: clamp(16px, 3.9vw, 19px); line-height: 1.5; color: var(--text); animation: live-in .25s cubic-bezier(.23, 1, .32, 1) both; }
 .live-who { display: block; margin-bottom: 4px; font-family: var(--live-mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--live-agent); }
 .live-problem { font-size: 14px; color: var(--error); }
 @keyframes live-in { from { opacity: 0; transform: translateY(.35em); } to { opacity: 1; transform: none; } }
 
-.live-approval { position: relative; z-index: 4; justify-self: center; width: min(100%, 30em); margin-bottom: 14px; padding: 14px 14px 12px; border-radius: 16px; border: 1px solid color-mix(in oklab, var(--attention) 55%, var(--line)); background: color-mix(in oklab, var(--attention) 10%, var(--live-panel)); }
+.live-approval { position: relative; z-index: 4; justify-self: center; width: min(100%, 30em); margin-bottom: 14px; padding: 14px 14px 12px; border-radius: var(--radius-xl); border: 1px solid color-mix(in oklab, var(--attention) 55%, var(--line)); background: color-mix(in oklab, var(--attention) 10%, var(--live-panel)); }
 .live-approval p { margin: 0 0 4px; font-size: 15px; overflow-wrap: anywhere; }
 .live-say { margin-bottom: 12px !important; color: var(--muted); font-size: 13px !important; }
 .live-row { display: flex; gap: 8px; }
-.live-row button { flex: 1; min-height: 44px; border-radius: 12px; font-weight: 600; }
+.live-row button { flex: 1; min-height: var(--control-lg); border-radius: var(--radius-lg); font-weight: 600; }
 .live .live-approve { background: var(--attention); color: var(--bg); }
 .live .live-deny { border: 1px solid var(--line); background: var(--live-panel); }
 
@@ -80,7 +82,7 @@ button.live-chip:hover { background: var(--hover); }
 .live .live-talk[data-on="true"] .live-round { background: var(--live-you); color: var(--accent-text); box-shadow: 0 0 0 6px color-mix(in oklab, var(--live-you) 25%, transparent), 0 0 40px color-mix(in oklab, var(--live-you) 55%, transparent); }
 .live .live-round[aria-pressed="true"] { border-color: color-mix(in oklab, var(--error) 50%, var(--line)); color: var(--error); }
 .live .live-end .live-round { color: var(--error); }
-.live-ctl kbd { padding: 1px 5px; border: 1px solid var(--line); border-radius: 5px; font-family: var(--live-mono); font-size: 10px; color: var(--muted); }
+.live-ctl kbd { padding: 1px 5px; border: 1px solid var(--line); border-radius: var(--radius-sm); font-family: var(--live-mono); font-size: 10px; color: var(--muted); }
 @media (hover: none) { .live-ctl kbd { display: none; } }
 
 .live-rail { display: none; }

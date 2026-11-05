@@ -1,0 +1,45 @@
+● Lighthouses have guided ships for more than two thousand years. The most famous early example was the Pharos of
+  Alexandria, built around 280 BCE. It stood on an island near the Egyptian coast. Its fire burned at the top of a tall
+  stone tower, and sailors could see it from far away at sea. The Pharos became one of the Seven Wonders of the Ancient
+  World. Its name later gave several languages their word for lighthouse, such as the Italian faro.
+
+  Early lighthouses burned open fires, usually of wood or coal. Keepers had to feed the flames through the night. Wind
+  and rain often put the fires out, so the work was hard and sometimes dangerous. In the 1700s, builders began to use
+  oil lamps with curved mirrors behind them. These reflectors sent the light outward in a narrower beam across the
+  water. Later, the Fresnel lens, first used in 1822, used rings of glass to bend light much farther. Ships could then
+  see a strong beam from many miles away.
+
+  Each lighthouse had its own signal, so sailors could tell where they were. Some lights flashed in set patterns. Others
+  turned slowly, and some stayed fixed. Mariners learned these patterns and checked them against their charts. Keepers
+  lived in the towers or in cottages nearby. They cleaned the lenses, wound the clockwork that turned the light, and
+  kept logs of the weather. Their work was lonely, and many families lived with them on remote rocks.
+
+  Today most lighthouses run on electricity and need little human care. Satellites and GPS now help ships find their
+  way, so many lights have been switched off or turned into museums. Even so, people still love them. Lighthouses appear
+  in paintings, poems, and novels, and they often stand as symbols of hope. Visitors climb the spiral stairs to see the
+  view and learn about the keepers who once lived there. A lighthouse, even a silent one, still tells a story about
+  courage and care.
+
+  Needs you: no
+
+✻ Sautéed for 18s · done 6:21 PM
+
+❯ /model opus
+  ⎿  Set model to Opus 5.5 and saved as your default for new sessions
+
+❯ No tools. Write 300 words of plain prose about tides.
+
+● Tides are the regular rise and fall of the sea along the coast. Most coasts get two high tides and two low tides each
+  day. The cause is gravity, mostly from the Moon. The Moon pulls on the Earth, and it pulls hardest on the side that
+  faces it. This pull lifts the water there into a bulge. A second bulge forms on the far side of the Earth, where the
+  Moon's pull is weakest.
+
+  As the Earth turns, each coast passes through both bulges. This is why most places see two high tides in about one
+  day. The cycle actually takes about 24 hours and 50 minutes, because the Moon also moves along its orbit. So high tide
+  comes about 50 minutes later each day. The Sun also pulls on the oceans, but its effect is less than half as strong
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Opus 5.5 | ctx 6% (56k/1000k) | 5h 1% | 7d 11% | scratchpad
+  ⏵⏵ auto mode on (shift+tab to cycle)

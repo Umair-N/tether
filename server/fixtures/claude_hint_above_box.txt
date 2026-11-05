@@ -1,0 +1,45 @@
+
+ ▐▛███▛█   Claude Code v2.1.318
+▝▜██████▀  Haiku 5.5 · Claude Ultra
+ ▝▝   ▝▝   /tmp/probe
+
+
+❯ Without using any tools, write about 400 words of plain prose paragraphs (no headings, no lists) about lighthouses.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+✽ Julienning… (6s · thinking)
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Haiku 5.5 | ctx 0% (0k/1000k) | scratchpad
+  ⏵⏵ auto mode on (shift+tab to cycle)

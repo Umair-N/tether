@@ -1,8 +1,8 @@
 /* A long paste waits as a badge above the message box (Pasted.tsx). It opens in place, full width. */
 .chip.paste-chip { min-width: 0; padding: 2px; gap: 2px; }
 /* Compact: 28px rows with a mouse, 36px on touch (WCAG 2.2 target size is 24px). */
-.chip.paste-chip button { min-height: 28px; padding: 4px 6px; }
-@media (pointer: coarse) { .chip.paste-chip button { min-height: 36px; } }
+.chip.paste-chip button { min-height: var(--control-sm); padding: 4px 6px; }
+@media (pointer: coarse) { .chip.paste-chip button { min-height: var(--control); } }
 .paste-chip .paste-toggle { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 4px 6px; color: var(--muted); }
 .paste-chip .paste-toggle:hover { background: var(--hover); }
 .paste-chip strong { flex: none; font-size: 13px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
@@ -11,7 +11,7 @@
 .chip.paste-chip.open { flex: 1 1 100%; flex-wrap: wrap; }
 .paste-chip.open .paste-toggle { margin-right: auto; }
 .paste-chip.open .paste-chevron { transform: rotate(180deg); }
-.paste-body { flex: 1 1 100%; margin: 2px 0 0; padding: 8px 10px; max-height: min(40vh, 280px); overflow: auto; border-radius: 6px; background: var(--hover);
+.paste-body { flex: 1 1 100%; margin: 2px 0 0; padding: 8px 10px; max-height: min(40vh, 280px); overflow: auto; border-radius: var(--radius-sm); background: var(--hover);
   font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; overscroll-behavior: contain; }
 .paste-body:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 @media (max-width: 480px) { .paste-chip .paste-preview { max-width: 12ch; } }

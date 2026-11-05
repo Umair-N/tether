@@ -10,6 +10,8 @@ import { PANELS, TOOLBAR_PANELS, extraPanels, togglePanelKind } from './panels'
 import type { PanelItem, SetPanels } from './panels'
 import type { DesktopLayout } from './prefs'
 import { paneTitle } from './Sidebar'
+import { endShell, listShells, shellsChanged, withoutShells } from './sideShells'
+import type { SideShell } from './sideShells'
 import { addPanel, canMovePanel, clampRow, hasPanel, movePanel, newPanelId, panelCols, panelSplit, panelWidth, removePanel, rowBounds, moveBound, evenBounds, tracks } from './workspace'
 import type { PanelMove } from './workspace'
 
@@ -61,6 +63,8 @@ export function PanelColumn({ api, desk, pane, setPanels, renderChat }: ColumnPr
   const [expanded, setExpanded] = useState<string | null>(null)
   const [active, setActive] = useState<string | null>(null)
   const [menu, setMenu] = useState<{ id: string; at: Anchor } | null>(null)
+  // X on a terminal panel ends its shell. A shell with a program running (or one the list cannot see) asks first.
+  const [ending, setEnding] = useState<{ id: string; pane: string; at: Anchor; shell: SideShell | null } | null>(null)
   const root = useRef<HTMLElement>(null)
   const ids = cols.flatMap(col => col.items.map(item => item.id))
   const shown = expanded && ids.includes(expanded) ? expanded : null
@@ -73,6 +77,17 @@ export function PanelColumn({ api, desk, pane, setPanels, renderChat }: ColumnPr
   if (!cols.length) return null
   const width = draft?.width ?? panelWidth(desk), split = draft?.split ?? panelSplit(desk)
   const close = (id: string) => setPanels(current => ({ cols: removePanel(panelCols(current), id) }))
+  const shellEnded = (pane: string) => { setExpanded(null); setPanels(current => withoutShells(current, [pane])); shellsChanged() }
+  const closeX = (item: PanelItem, at: Anchor) => {
+    if (item.kind !== 'terminal' || !item.pane) { if (shown === item.id) setExpanded(null); close(item.id); return }
+    const pane = item.pane
+    void listShells(api).then(list => {
+      const shell = list.find(other => other.pane === pane)
+      if (!shell) { if (shown === item.id) setExpanded(null); close(item.id); return }  // it ended already
+      if (!shell.idle) { setEnding({ id: item.id, pane, at, shell }); return }
+      return endShell(api, pane).then(() => shellEnded(pane), () => setEnding({ id: item.id, pane, at, shell }))
+    }, () => setEnding({ id: item.id, pane, at, shell: null }))
+  }
   const setItem = (id: string, patch: Partial<PanelItem>) => setPanels(current => ({ cols: panelCols(current).map(col => ({ ...col, items: col.items.map(item => item.id === id ? { ...item, ...patch } : item) })) }))
   const another = (item: PanelItem) => setPanels(current => ({ cols: addPanel(panelCols(current), { id: newPanelId(), kind: item.kind, fresh: true }, item.id) }))
   const move = (id: string, where: PanelMove) => setPanels(current => ({ cols: movePanel(panelCols(current), id, where) }))
@@ -107,7 +122,7 @@ export function PanelColumn({ api, desk, pane, setPanels, renderChat }: ColumnPr
                   {spec.multi && <button type="button" className="icon-button" aria-label={`New ${spec.title.toLowerCase()}`} title={`New ${spec.title.toLowerCase()}`} onClick={() => another(item)}><Plus size={15} /></button>}
                   <button type="button" className="icon-button" aria-label={`${spec.title} options`} title="Options" aria-haspopup="dialog" aria-expanded={menu?.id === item.id} onClick={event => setMenu({ id: item.id, at: anchorOf(event) })}><MoreHorizontal size={15} /></button>
                   <button type="button" className="icon-button" aria-label={big ? 'Restore (Esc)' : `Expand ${spec.title.toLowerCase()}`} title={big ? 'Restore (Esc)' : 'Expand to fill the workspace'} aria-pressed={big} onClick={() => setExpanded(big ? null : item.id)}>{big ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>
-                  <button type="button" className="icon-button" aria-label={`Close ${spec.title.toLowerCase()}`} title="Close panel" onClick={() => { if (big) setExpanded(null); close(item.id) }}><X size={15} /></button>
+                  <button type="button" className="icon-button" aria-label={item.kind === 'terminal' && item.pane ? 'Close and end the shell' : `Close ${spec.title.toLowerCase()}`} title={item.kind === 'terminal' && item.pane ? 'Close and end the shell' : 'Close panel'} aria-haspopup={item.kind === 'terminal' && item.pane ? 'dialog' : undefined} onClick={event => closeX(item, anchorOf(event))}><X size={15} /></button>
                 </span>
               </header>
               <div className="panel-body">
@@ -127,7 +142,25 @@ export function PanelColumn({ api, desk, pane, setPanels, renderChat }: ColumnPr
     </div>
     {menu && menuItem && <PanelOptions api={api} item={menuItem} at={menu.at} canMove={where => canMovePanel(cols, menuItem.id, where)}
       onMove={where => move(menuItem.id, where)} onClose={() => setMenu(null)} onRemove={() => { if (shown === menuItem.id) setExpanded(null); close(menuItem.id) }} />}
+    {ending && <EndShell api={api} {...ending} onClose={() => setEnding(null)} onKeep={() => { if (shown === ending.id) setExpanded(null); close(ending.id) }} onEnded={() => shellEnded(ending.pane)} />}
   </aside>
+}
+
+/** Asks before X ends a shell that runs a program. "Close panel only" keeps the shell; the sidebar Shells list still shows it. */
+function EndShell({ api, pane, at, shell, onClose, onKeep, onEnded }: { api: Api; pane: string; at: Anchor; shell: SideShell | null; onClose: () => void; onKeep: () => void; onEnded: () => void }) {
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState('')
+  const end = async () => {
+    setPending(true); setError('')
+    try { await endShell(api, pane); onClose(); onEnded() } catch (failure) { setError(errorText(failure)) } finally { setPending(false) }
+  }
+  return <PopMenu at={at} label="End this shell" onClose={() => { if (!pending) onClose() }}>
+    <div className="confirm-box" role="alertdialog" aria-labelledby="end-running-shell">
+      <p id="end-running-shell">{shell ? <><strong>{shell.command} is running in this shell.</strong> Ending the shell stops it.</> : <><strong>End this shell?</strong> This stops anything running in it.</>}</p>
+      {error && <p className="error" role="alert">{error}</p>}
+      <div className="sheet-buttons"><button type="button" className="secondary" disabled={pending} onClick={() => { onClose(); onKeep() }}>Close panel only</button><button type="button" className="danger" autoFocus disabled={pending} onClick={() => void end()}>{pending ? 'Ending…' : 'End shell'}</button></div>
+    </div>
+  </PopMenu>
 }
 
 const MOVES: { where: PanelMove; label: string; icon: typeof ArrowUp }[] = [
@@ -143,7 +176,7 @@ function PanelOptions({ api, item, at, canMove, onMove, onClose, onRemove }: { a
   const title = PANELS[item.kind].title
   const end = async () => {
     setPending(true); setError('')
-    try { await api('side-shell/end', { pane: item.pane }); onClose(); onRemove() } catch (failure) { setError(errorText(failure)) } finally { setPending(false) }
+    try { await api('side-shell/end', { pane: item.pane }); onClose(); onRemove(); shellsChanged() } catch (failure) { setError(errorText(failure)) } finally { setPending(false) }
   }
   const moves = MOVES.filter(move => canMove(move.where))
   return <PopMenu at={at} label={`${title} options`} onClose={() => { if (!pending) onClose() }}>
@@ -157,7 +190,7 @@ function PanelOptions({ api, item, at, canMove, onMove, onClose, onRemove }: { a
         {moves.map(({ where, label, icon: Icon }) => <button key={where} type="button" onClick={() => { onClose(); onMove(where) }}><Icon size={16} />{label}</button>)}
         {moves.length > 0 && <hr />}
         {item.kind === 'terminal' && item.pane && <button type="button" className="danger-item" onClick={() => setConfirm(true)}><SquareX size={16} />End this shell</button>}
-        <button type="button" onClick={() => { onClose(); onRemove() }}><X size={16} />Close panel</button>
+        <button type="button" onClick={() => { onClose(); onRemove() }}><X size={16} />{item.kind === 'terminal' && item.pane ? 'Close panel, keep the shell' : 'Close panel'}</button>
       </div>}
   </PopMenu>
 }

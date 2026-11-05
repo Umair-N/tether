@@ -1,0 +1,134 @@
+/* Share screen (Share.tsx). Controls come from controls.css; this file sets layout only, plus the tiles. */
+.app-shell.screen-share > :is(.sidebar, .workspace, .no-session, .inbox, .chat) { display: none; }
+.app-shell.phone-share :is(.chat-panel, .no-session) { visibility: hidden; }
+
+.share { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; background: var(--surface); color: var(--text); font-size: 14px; }
+.share.narrow { position: absolute; inset: 0; z-index: 5; padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); }
+.sh-main { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+.sh-head { flex-shrink: 0; display: flex; align-items: center; gap: 8px; min-height: 56px; padding: 8px 16px; }
+.sh-head h1 { font-size: 20px; font-weight: 650; letter-spacing: -.01em; }
+.sh-usage { margin-right: auto; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sh-search { width: min(320px, 36%); }
+.share.narrow .sh-head { flex-wrap: wrap; row-gap: 6px; }
+.share.narrow .sh-search { order: 5; width: 100%; }
+.sh-views { flex-shrink: 0; padding: 0 16px 8px; }
+.sh-views > button:last-child { margin-left: auto; }
+.share.narrow .sh-views > button:last-child { margin-left: 8px; }
+
+.sh-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 16px 96px; }
+.sh-day { position: sticky; top: 0; z-index: 2; padding: 10px 0 8px; background: var(--surface); font-size: 13px; font-weight: 650; color: var(--muted); }
+.sh-note { margin: 4px 0; color: var(--muted); font-size: 13px; }
+.sh-empty { padding: 48px 16px; text-align: center; color: var(--muted); }
+.sh-more { height: 1px; }
+.sh-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+
+/* Grid */
+.sh-grid { list-style: none; margin: 0 0 8px; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 4px; }
+.share.narrow .sh-grid { grid-template-columns: repeat(3, 1fr); gap: 3px; }
+.sh-grid li { position: relative; aspect-ratio: 1; }
+.sh-tile { position: relative; display: block; width: 100%; height: 100%; padding: 0; border-radius: var(--radius-sm); overflow: hidden; }
+.sh-tile .sh-thumb { width: 100%; height: 100%; }
+.sh-tile .sh-doc { padding-bottom: 22px; }
+.sh-tile-name { position: absolute; left: 6px; right: 6px; bottom: 6px; font-size: 11.5px; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.sh-tile:has(.sh-page) { box-shadow: inset 0 0 0 1px var(--line); }
+.sh-tile:has(.sh-page) .sh-tile-name { left: 0; right: 0; bottom: 0; padding: 14px 6px 6px; background: linear-gradient(transparent, var(--bubble) 55%); }
+.sh-grid li.open .sh-tile { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sh-grid li.picked .sh-tile { outline: 3px solid var(--accent); outline-offset: -3px; }
+.sh-grid li.picked .sh-thumb img { scale: .92; border-radius: var(--radius-xs); }
+
+.sh-check { position: absolute; top: 2px; left: 2px; display: grid; place-items: center; width: 40px; height: 40px; min-height: 0; padding: 0; opacity: 0; transition: opacity .12s; }
+.sh-check:not(:disabled):hover { background: none; }
+.sh-check span { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; border: 2px solid #fff; background: rgb(0 0 0 / .25); color: transparent; box-shadow: 0 1px 3px rgb(0 0 0 / .3); }
+.sh-check[aria-pressed="true"] span { border-color: var(--accent); background: var(--accent); color: #fff; }
+.share.wide .sh-grid li:hover .sh-check, .sh-check:focus-visible, .share.selecting .sh-check { opacity: 1; }
+.share.narrow:not(.selecting) .sh-check { pointer-events: none; }
+
+/* Thumbnails */
+.sh-thumb { position: relative; display: grid; place-items: center; overflow: hidden; background: var(--bubble); }
+.sh-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.sh-length { position: absolute; right: 6px; bottom: 6px; padding: 1px 6px; border-radius: var(--radius-sm); background: rgb(0 0 0 / .62); color: #fff; font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.sh-doc { align-content: center; gap: 4px; color: var(--muted); }
+.sh-doc b { font-size: 10.5px; font-weight: 700; letter-spacing: .06em; }
+.sh-doc.k-pdf { color: var(--error); } .sh-doc.k-text { color: var(--pin); } .sh-doc.k-audio { color: var(--attention); }
+/* A text file shows its first lines on paper, in both themes. */
+.sh-page { place-items: start; background: #fbfaf6; }
+.sh-page-text { display: block; width: 100%; height: 100%; padding: 10px 10px 0; overflow: hidden; color: #3b3a36; font: 7.5px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; text-align: left; }
+.sh-ext { position: absolute; top: 6px; right: 6px; padding: 1px 5px; border-radius: var(--radius-xs); background: rgb(255 255 255 / .92); font-size: 10px; font-weight: 700; letter-spacing: .05em; box-shadow: 0 0 0 1px rgb(0 0 0 / .08); }
+.sh-ext.k-pdf { color: #b3261e; } .sh-ext.k-text { color: #2f5d8a; }
+
+/* From agents */
+.sh-agents { margin-bottom: 6px; }
+.sh-agents > header { display: flex; align-items: center; justify-content: space-between; }
+.sh-agents .sh-day { position: static; }
+.sh-agent-row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 56px; margin-bottom: 4px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius-lg); text-align: left; }
+.sh-agent-icon { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: var(--bubble); color: var(--accent); }
+.sh-agent-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.sh-agent-text > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sh-agent-text small { color: var(--muted); font-size: 12px; }
+.sh-agent-thumbs { flex: none; display: flex; gap: 3px; }
+.sh-agent-thumbs .sh-thumb { width: 40px; height: 40px; border-radius: var(--radius-sm); }
+.sh-agent-thumbs :is(.sh-ext, .sh-length, .sh-doc b) { display: none; }
+.sh-agent-thumbs .sh-page-text { padding: 4px 4px 0; font-size: 3px; }
+.share.narrow .sh-agent-thumbs .sh-thumb:nth-child(n+2) { display: none; }
+
+/* Upload queue */
+.sh-uploads { position: absolute; left: 16px; bottom: 16px; z-index: 20; width: min(340px, calc(100% - 32px)); padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--bg); color: var(--accent); box-shadow: 0 10px 30px rgb(0 0 0 / .16); }
+.share.narrow .sh-uploads { left: 8px; right: 8px; bottom: 8px; width: auto; }
+.sh-uploads header { display: flex; align-items: center; gap: 10px; min-height: var(--control-sm); color: var(--text); }
+.sh-uploads header b { flex: 1; font-weight: 600; }
+.sh-uploads header > span { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.sh-uploads ul { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+.sh-uploads li { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 10px; font-size: 13px; color: var(--text); }
+.sh-up-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sh-up-meta { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.sh-up-meta.error { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--error); }
+.sh-uploads li.sh-up-more { display: block; color: var(--muted); font-size: 12px; }
+.sh-ok { flex: none; color: var(--accent); }
+.sh-warn { flex: none; color: var(--error); }
+.sh-ring { flex: none; rotate: -90deg; }
+.sh-ring circle { fill: none; stroke-width: 2.5; stroke: color-mix(in srgb, currentColor 22%, transparent); }
+.sh-ring circle + circle { stroke: currentColor; stroke-linecap: round; transition: stroke-dashoffset .15s linear; }
+
+/* Selection bar */
+.sh-actionbar { position: absolute; left: 16px; right: 16px; bottom: 16px; z-index: 20; display: flex; align-items: center; gap: 4px; max-width: 640px; margin: 0 auto; padding: 6px; border-radius: var(--radius-lg); background: var(--text); color: var(--bg); box-shadow: 0 10px 30px rgb(0 0 0 / .22); }
+.sh-actionbar > span { flex: 1; padding-left: 4px; font-weight: 600; white-space: nowrap; }
+.sh-actionbar button { display: inline-flex; align-items: center; gap: 6px; min-height: var(--control); padding: 0 10px; border-radius: var(--radius); color: var(--bg); font-size: var(--control-text); font-weight: 500; }
+.sh-actionbar button:not(:disabled):hover { background: color-mix(in srgb, var(--bg) 16%, transparent); }
+.sh-actionbar .sh-danger { color: color-mix(in srgb, var(--error) 55%, var(--bg)); }
+.share.narrow .sh-actionbar { left: 8px; right: 8px; bottom: 8px; }
+.share.narrow .sh-actionbar button { justify-content: center; width: var(--control-lg); padding: 0; }
+.share.narrow .sh-actionbar button span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+
+.sh-toast { position: absolute; left: 50%; bottom: 72px; translate: -50% 0; z-index: 30; display: flex; align-items: center; gap: 12px; max-width: calc(100% - 32px); padding: 10px 14px; border-radius: var(--radius-lg); background: var(--text); color: var(--bg); font-size: 13.5px; box-shadow: 0 6px 24px rgb(0 0 0 / .18); }
+.sh-toast .link-button { color: color-mix(in srgb, var(--accent) 60%, var(--bg)); }
+.sh-dropzone { position: absolute; inset: 10px; z-index: 25; display: grid; place-content: center; justify-items: center; gap: 8px; border: 2px dashed var(--accent); border-radius: var(--radius-xl); background: color-mix(in srgb, var(--accent) 9%, var(--surface)); color: var(--accent); font-weight: 600; pointer-events: none; }
+
+/* Preview pane: beside the grid on wide screens, full screen on a phone */
+.sh-pane { flex: none; display: flex; flex-direction: column; width: min(440px, 42%); min-height: 0; border-left: 1px solid var(--line); background: var(--surface); }
+.sh-pane.sh-sheet { position: absolute; inset: 0; z-index: 22; width: auto; border: 0; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+.sh-pane > header { display: flex; align-items: center; gap: 8px; min-height: 56px; padding: 8px 16px 8px 8px; }
+.sh-pane-title { min-width: 0; }
+.sh-pane h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15.5px; font-weight: 650; }
+.sh-pane-title p { color: var(--muted); font-size: 12.5px; }
+.sh-rename { flex: 1; }
+.sh-pane-actions { display: flex; align-items: center; gap: 6px; padding: 0 16px 12px; }
+.sh-pane-actions .primary { flex: 1; }
+.sh-pane-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 0 16px 24px; }
+.sh-sheet .sh-pane-actions { order: 3; padding: 10px 16px; border-top: 1px solid var(--line); }
+.sh-view { display: grid; place-items: center; min-height: 240px; border-radius: var(--radius-lg); background: var(--bubble); overflow: hidden; }
+.sh-view-image { display: block; width: 100%; padding: 0; cursor: zoom-in; }
+.sh-view-image img { display: block; max-width: 100%; max-height: 62vh; margin: 0 auto; }
+.sh-view-video { display: block; width: 100%; max-height: 62vh; background: #000; }
+.sh-view-pdf { display: block; width: 100%; height: 62vh; border: 0; background: #fff; }
+.sh-view-text { width: 100%; max-height: 62vh; margin: 0; padding: 14px; overflow: auto; align-self: stretch; background: #fbfaf6; color: #3b3a36; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.sh-view-none { display: grid; justify-items: center; gap: 8px; padding: 32px 16px; color: var(--muted); text-align: center; }
+.sh-view-none audio { width: 100%; max-width: 320px; }
+.sh-pane-meta { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 12.5px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .sh-check, .sh-ring circle + circle { transition: none; }
+}
+
+/* Phone: the selection bar takes the tab bar's place. */
+.app-shell.phone-tabs:has(.sh-actionbar) .phone-tabbar { visibility: hidden; }

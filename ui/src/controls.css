@@ -1,0 +1,145 @@
+/* Controls: the one place that sets the shape, size and color of buttons, fields, tabs, chips and badges.
+   Screens set layout only (margin, width, flex). To change a control's look, change it here.
+
+   Buttons     .primary  .secondary  .ghost  .danger  .link-button   size: .sm  .lg
+   Icon button .icon-button                                          size: .sm  .lg
+   Field       .text-field > svg + input                             size: .sm
+   Tabs        .tab-bar > button[aria-selected | aria-pressed | aria-current]
+   Segmented   .segmented > label > input + span   (radio group)
+   Small parts .pill (inline picker)  .chip (attachment)  .badge  kbd  */
+
+:root {
+  --radius-xs: 4px;    /* kbd, check marks */
+  --radius-sm: 6px;    /* badges, items inside a control */
+  --radius: 8px;       /* buttons, fields, tabs, chips, tiles */
+  --radius-lg: 12px;   /* cards, menus, popovers, the message box */
+  --radius-xl: 16px;   /* sheets and dialogs */
+  --control-xs: 24px;
+  --control-sm: 28px;
+  --control: 32px;
+  --control-lg: 36px;
+  --control-text: 13px;
+  --field-text: 13.5px;
+  --accent-hover: color-mix(in srgb, var(--accent) 86%, #000);
+  --accent-soft: color-mix(in srgb, var(--accent) 13%, transparent);
+  --field: color-mix(in srgb, var(--hover) 70%, var(--surface));
+  --danger: #b3261e;
+  --focus: var(--accent);
+}
+@media (pointer: coarse) {
+  /* Touch: the same shapes, sized for a finger. */
+  :root { --control-xs: 32px; --control-sm: 36px; --control: 40px; --control-lg: 44px; --control-text: 15px; --field-text: 16px; }
+}
+
+/* Buttons */
+.primary, .secondary, .ghost, .danger {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex-shrink: 0;
+  min-height: var(--control); padding: 0 12px; border: 1px solid transparent; border-radius: var(--radius);
+  font-size: var(--control-text); font-weight: 500; line-height: 1.2; white-space: nowrap; text-decoration: none;
+  transition: background-color .12s, border-color .12s, color .12s;
+}
+.primary { background: var(--accent); color: var(--accent-text); }
+:is(button, a).primary:not(:disabled):hover { background: var(--accent-hover); }
+.secondary { border-color: var(--line); background: var(--surface); color: var(--text); }
+:is(button, a).secondary:not(:disabled):hover { background: var(--hover); }
+.secondary[aria-pressed="true"] { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); background: var(--accent-soft); }
+.ghost { background: none; color: var(--muted); }
+:is(button, a).ghost:not(:disabled):hover { background: var(--hover); color: var(--text); }
+.danger { background: var(--danger); color: #fff; }
+:is(button, a).danger:not(:disabled):hover { background: color-mix(in srgb, var(--danger) 86%, #000); }
+.ghost.danger-text, .secondary.danger-text { color: var(--error); }
+:is(.primary, .secondary, .ghost, .danger).sm { min-height: var(--control-sm); padding: 0 10px; gap: 5px; }
+:is(.primary, .secondary, .ghost, .danger).lg { min-height: var(--control-lg); padding: 0 16px; }
+:is(.primary, .secondary, .ghost, .danger) svg { width: 15px; height: 15px; }
+.link-button { display: inline-flex; align-items: center; gap: 4px; min-height: 0; padding: 0; border: 0; background: none; color: var(--accent); font: inherit; font-weight: 500; cursor: pointer; }
+.link-button:not(:disabled):hover { background: none; text-decoration: underline; }
+
+/* Icon button: a square with no frame. */
+.icon-button {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: var(--control); height: var(--control); min-height: 0; padding: 0; border-radius: var(--radius); color: inherit;
+  transition: background-color .12s, color .12s;
+}
+.icon-button.sm { width: var(--control-sm); height: var(--control-sm); border-radius: var(--radius-sm); }
+.icon-button.lg { width: var(--control-lg); height: var(--control-lg); }
+.icon-button[aria-pressed="true"] { background: var(--hover); color: var(--text); }
+
+/* Field: a search box or one-line input. The frame shows focus, not the input. */
+.text-field, .sidebar-search, .search-field {
+  display: flex; align-items: center; gap: 8px; min-width: 0;
+  height: var(--control); padding: 0 10px; border: 1px solid transparent; border-radius: var(--radius);
+  background: var(--field); color: var(--muted); transition: border-color .12s, box-shadow .12s, background-color .12s;
+}
+.text-field.sm { height: var(--control-sm); }
+.text-field.lg, .search-field { height: var(--control-lg); }
+:is(.text-field, .sidebar-search, .search-field) > svg { width: 15px; height: 15px; flex: none; }
+:is(.text-field, .sidebar-search, .search-field) input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; background: none; color: var(--text); font-size: var(--field-text); outline: none; }
+:is(.text-field, .sidebar-search, .search-field) input::placeholder { color: var(--muted); }
+:is(.text-field, .sidebar-search, .search-field) input:focus-visible { outline: none; }
+:is(.text-field, .sidebar-search, .search-field):focus-within { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); background: var(--surface); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+/* Tabs and filters: quiet text, the chosen one sits on a soft fill. */
+.tab-bar, .settings-tabs { display: flex; align-items: center; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+:is(.tab-bar, .settings-tabs) > :is(button, a) {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex: none;
+  min-height: var(--control-sm); padding: 0 10px; border: 0; border-radius: var(--radius);
+  font-size: var(--control-text); font-weight: 500; color: var(--muted); white-space: nowrap; text-decoration: none;
+  transition: background-color .12s, color .12s;
+}
+:is(.tab-bar, .settings-tabs) > :is(button, a):not(:disabled):hover { background: var(--hover); color: var(--text); }
+:is(.tab-bar, .settings-tabs) > :is([aria-selected="true"], [aria-pressed="true"], [aria-current]:not([aria-current="false"])) { background: var(--hover); color: var(--text); font-weight: 600; }
+:is(.tab-bar, .settings-tabs) > :is(button, a):focus-visible { outline-offset: -2px; }
+.tab-bar .badge { margin-right: -4px; }
+
+/* Segmented: one choice of a few, in a track. */
+.segmented { display: flex; padding: 2px; border-radius: var(--radius); background: var(--hover); }
+.segmented label { flex: 1; min-width: 0; position: relative; }
+.segmented input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.segmented span {
+  display: flex; align-items: center; justify-content: center; min-height: calc(var(--control) - 4px); padding: 0 10px;
+  border-radius: var(--radius-sm); font-size: var(--control-text); color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: background-color .12s, color .12s;
+}
+.segmented label:hover input:not(:checked) + span { color: var(--text); }
+.segmented input:checked + span { background: var(--surface); color: var(--text); font-weight: 500; box-shadow: 0 1px 2px #0000001f, 0 0 0 1px #0000000a; }
+.segmented input:focus-visible + span { outline: 2px solid var(--focus); outline-offset: -2px; }
+
+/* Pill: an inline picker in a bar (model, effort, folder). */
+.pill {
+  display: inline-flex; align-items: center; gap: 4px; min-width: 0;
+  min-height: var(--control-sm); padding: 0 8px; border-radius: var(--radius);
+  font-size: var(--control-text); color: var(--muted); white-space: nowrap;
+}
+.pill:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.pill:disabled { opacity: .5; }
+.pill svg, .pill + .pill, .pill-effort { flex: none; }
+.pill-text { overflow: hidden; text-overflow: ellipsis; }
+
+/* Chip: an item you added, with a remove button. */
+.chip {
+  display: flex; align-items: center; gap: 6px; max-width: 100%;
+  min-height: var(--control-sm); padding: 0 2px 0 8px; border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--surface); font-size: var(--control-text); color: var(--muted);
+}
+.chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.chip button { display: grid; place-items: center; width: var(--control-xs); height: var(--control-xs); min-height: 0; padding: 0; border-radius: var(--radius-sm); }
+
+/* Badge: a short label or count. Not clickable. */
+.badge {
+  display: inline-flex; align-items: center; justify-content: center; flex: none; gap: 3px;
+  height: 18px; min-width: 18px; padding: 0 6px; border-radius: var(--radius-sm);
+  background: var(--hover); color: var(--muted); font-size: 11px; font-weight: 600; line-height: 1; letter-spacing: .02em; white-space: nowrap;
+}
+.badge.accent { background: var(--accent-soft); color: var(--accent); }
+.badge.danger { background: color-mix(in srgb, var(--error) 14%, transparent); color: var(--error); }
+.badge.solid { background: var(--accent); color: var(--accent-text); }
+
+/* Keyboard key */
+kbd, .search-key {
+  display: inline-flex; align-items: center; height: 18px; padding: 0 5px; border: 1px solid var(--line); border-radius: var(--radius-xs);
+  color: var(--muted); font: 500 11px/1 ui-sans-serif, system-ui, sans-serif; white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .primary, .secondary, .ghost, .danger, .icon-button, .text-field, .tab-bar > *, .segmented span { transition: none; }
+}

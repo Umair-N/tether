@@ -9,15 +9,15 @@
 .side-pin-bubble.unread .side-pin-count::after { content: ''; position: absolute; top: -5px; right: -5px; width: 7px; height: 7px; border-radius: 50%; background: var(--pin); box-shadow: 0 0 0 2px var(--surface); }
 .side-pin-bubble.open.unread .side-pin-count::after { top: -4px; right: -8px; }
 .agent-pop-head.side-pin-head { gap: 4px; flex: none; }
-.side-pin-head .icon-button { width: 36px; height: 36px; min-height: 36px; flex: none; padding: 8px; color: var(--muted); }
-.side-pin-edit { min-height: 32px; padding: 0 10px; border-radius: 8px; color: var(--pin); font-size: 13px; font-weight: 600; }
+.side-pin-head .icon-button { color: var(--muted); }
+.side-pin-edit { min-height: 32px; padding: 0 10px; border-radius: var(--radius); color: var(--pin); font-size: 13px; font-weight: 600; }
 .side-pin-pop .side-pin-needs { color: var(--attention); font-weight: 500; }
 .side-pin-list { list-style: none; margin: 0; }
-.side-pin-row { border-radius: 10px; }
-.side-pin-row-head { display: flex; align-items: center; gap: 4px; border-radius: 10px; }
+.side-pin-row { border-radius: var(--radius); }
+.side-pin-row-head { display: flex; align-items: center; gap: 4px; border-radius: var(--radius); }
 .side-pin-row.selected > .side-pin-row-head, .side-pin-row-head:hover { background: var(--hover); }
 .side-pin-row.expanded { background: color-mix(in srgb, var(--hover) 55%, transparent); }
-.side-pin-open { display: flex; flex: 1; min-width: 0; align-items: center; gap: 10px; padding: 8px 10px; min-height: 54px; text-align: left; border-radius: 10px; }
+.side-pin-open { display: flex; flex: 1; min-width: 0; align-items: center; gap: 10px; padding: 8px 10px; min-height: 54px; text-align: left; border-radius: var(--radius); }
 .side-pin-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
 .side-pin-text strong, .side-pin-edit-body strong { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .side-pin-text small { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -26,57 +26,56 @@
 .side-pin-line strong { flex: 1; }
 .side-pin-text .side-pin-time { flex: none; font-size: 11px; font-variant-numeric: tabular-nums; }
 .side-pin-action { flex: none; margin-right: 8px; }
-.side-pin-answer { min-height: 30px; padding: 0 10px; border-radius: 999px; background: var(--attention); color: var(--surface); font-size: 12.5px; font-weight: 600; }
+.side-pin-answer { min-height: var(--control-sm); padding: 0 10px; border-radius: var(--radius); background: var(--attention); color: var(--surface); font-size: 12.5px; font-weight: 600; }
 .side-pin-answer[aria-expanded="true"] { background: none; color: var(--attention); box-shadow: inset 0 0 0 1px var(--attention); }
-.side-pin-reply { width: 36px; height: 36px; min-height: 36px; display: grid; place-items: center; border-radius: 9px; color: var(--muted); }
+.side-pin-reply { width: 36px; height: 36px; min-height: 36px; display: grid; place-items: center; border-radius: var(--radius); color: var(--muted); }
 .side-pin-reply:hover { background: var(--hover); color: var(--text); }
 .side-pin-reply[aria-expanded="true"] { color: var(--pin); background: var(--hover); }
 .side-pin-quick { padding: 2px 10px 10px 28px; font-size: 13px; animation: side-pin-reply-open .2s ease-out; }
 .side-pin-quick-controls { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; min-inline-size: 0; }
 .side-pin-quick p { margin: 0; overflow-wrap: anywhere; }
-.side-pin-quick .choice-dock { margin: 0; border-radius: 9px; box-shadow: none; }
+.side-pin-quick .choice-dock { margin: 0; border-radius: var(--radius); box-shadow: none; }
 .side-pin-quick .choice-head { min-height: 36px; gap: 8px; padding: 6px 10px; font-size: 13px; }
 .side-pin-quick .choice-text, .side-pin-quick .ask-card, .side-pin-quick .panel-pre { margin: 0 10px 8px; font-size: 12px; }
-.side-pin-quick .choice-text.mono { padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
-.side-pin-quick .choice-options button { min-height: 40px; gap: 10px; padding: 8px 10px; font-size: 13px; }
+.side-pin-quick .choice-text.mono { padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); }
+.side-pin-quick .choice-options button { min-height: var(--control-lg); gap: 10px; padding: 8px 10px; font-size: 13px; }
 .side-pin-quick .choice-options button:last-child { border-bottom: 0; }
 .side-pin-quick .choice-options button:hover:not(:disabled) { background: var(--hover); }
 .side-pin-quick .choice-options small { font-size: 12px; }
-.side-pin-quick .choice-number { width: 18px; height: 18px; border-radius: 5px; font-size: 11px; }
+.side-pin-quick .choice-number { width: 18px; height: 18px; border-radius: var(--radius-sm); font-size: 11px; }
 .side-pin-quick .choice-options .accept .choice-number { background: var(--pin); color: var(--surface); }
 .side-pin-quick .choice-keys { gap: 4px; padding: 8px 10px; }
-.side-pin-quick .choice-keys button { min-width: 32px; min-height: 32px; padding: 0 8px; font-size: 12px; }
+.side-pin-quick .choice-keys button { min-width: 32px; min-height: var(--control); padding: 0 8px; font-size: 12px; }
 .side-pin-quick .login-card { margin: 0 10px 8px; font-size: 12px; }
 .side-pin-plan { display: grid; gap: 8px; justify-items: start; }
-.side-pin-plan .primary { min-height: 36px; padding: 6px 12px; font-size: 13px; }
-.side-pin-reply-field { display: flex; align-items: end; gap: 6px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 4px 4px 4px 10px; }
+.side-pin-reply-field { display: flex; align-items: end; gap: 6px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); padding: 4px 4px 4px 10px; }
 .side-pin-reply-field:focus-within { border-color: var(--pin); }
 .side-pin-reply-field textarea { flex: 1; min-width: 0; border: 0; background: none; color: var(--text); font-size: 13px; line-height: 20px; resize: none; padding: 6px 0; max-height: 92px; }
 .side-pin-reply-field textarea:focus-visible { outline: none; }
-.side-pin-send { width: 32px; height: 32px; min-height: 32px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--accent-text); flex: none; }
+.side-pin-send { width: var(--control); height: var(--control); min-height: var(--control); border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--accent-text); flex: none; }
 .side-pin-quick-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
-.side-pin-quick-foot button { flex: none; min-height: 28px; padding: 4px 2px; background: none; border: 0; color: var(--pin); font-size: 12px; font-weight: 500; }
+.side-pin-quick-foot button { flex: none; min-height: var(--control-sm); padding: 4px 2px; background: none; border: 0; color: var(--pin); font-size: 12px; font-weight: 500; }
 .side-pin-quick .side-pin-reply-error { margin-top: 8px; color: var(--error); }
 .side-pin-announcement { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 @keyframes side-pin-reply-open { from { opacity: 0; translate: 0 -4px; } }
 .agent-pop-foot.side-pin-foot { justify-content: space-between; flex: none; padding: 6px 8px 8px; }
-.side-pin-foot button { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 10px; border-radius: 8px; font-size: 13px; font-weight: 500; color: var(--text); }
-.side-pin-search { display: flex; align-items: center; gap: 8px; margin: 0 10px 6px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); }
+.side-pin-foot button { display: inline-flex; align-items: center; gap: 6px; min-height: var(--control); padding: 0 10px; border-radius: var(--radius); font-size: 13px; font-weight: 500; color: var(--text); }
+.side-pin-search { display: flex; align-items: center; gap: 8px; margin: 0 10px 6px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--radius); color: var(--muted); }
 .side-pin-search input { flex: 1; min-width: 0; border: 0; background: none; color: var(--text); font-size: 14px; padding: 8px 0; }
 .side-pin-search:focus-within { outline: 2px solid var(--pin); }
 .side-pin-search input:focus-visible { outline: none; }
-.side-pin-picker-row { display: flex; align-items: center; gap: 10px; padding: 4px 4px 4px 10px; min-height: 50px; border-radius: 10px; }
+.side-pin-picker-row { display: flex; align-items: center; gap: 10px; padding: 4px 4px 4px 10px; min-height: 50px; border-radius: var(--radius); }
 .side-pin-picker-row:hover { background: var(--hover); }
-.side-pin-picker-row .icon-button { color: var(--pin); flex: none; width: 36px; height: 36px; min-height: 36px; }
+.side-pin-picker-row .icon-button { color: var(--pin); }
 .side-pin-empty { padding: 14px 12px 16px; color: var(--muted); font-size: 13px; }
 .side-pin-edit-row { display: flex; align-items: center; gap: 6px; padding: 6px 2px 6px 0; }
 .side-pin-edit-row.moving { opacity: .5; }
-.side-pin-grip { color: var(--muted); cursor: grab; touch-action: none; width: 28px; height: 40px; min-height: 40px; flex: none; display: grid; place-items: center; border-radius: 6px; }
+.side-pin-grip { color: var(--muted); cursor: grab; touch-action: none; width: 28px; height: 40px; min-height: 40px; flex: none; display: grid; place-items: center; border-radius: var(--radius-sm); }
 .side-pin-grip:active { cursor: grabbing; }
 .side-pin-edit-body { flex: 1; min-width: 0; display: grid; gap: 4px; }
-.side-pin-edit-body input { font-size: 12.5px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px; min-width: 0; }
+.side-pin-edit-body input { font-size: 12.5px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 5px 8px; min-width: 0; }
 .side-pin-edit-body input:focus-visible { outline: 2px solid var(--pin); outline-offset: 0; }
-.side-pin-edit-row .icon-button { color: var(--muted); width: 36px; height: 36px; min-height: 36px; flex: none; }
+.side-pin-edit-row .icon-button { color: var(--muted); }
 .side-pin-toggle { display: none; }
 .with-rail .side-pin-toggle { display: inline-flex; }
 .side-pin-toggle[aria-pressed="true"] { color: var(--pin); }

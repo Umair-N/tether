@@ -381,11 +381,13 @@ pane_view.zoom_leave(view)
         registries = home / '.claude/sessions'
         registries.mkdir(parents=True)
         registry = dict(kind='interactive', pid=entry['pane_pid'], tmux='zoom-test:' + self.home + '.' + self.pane,
-                        cwd='/work', sessionId='zoom-thread')
+                        cwd='/work', sessionId='zoom-thread', nameSource='user', name='Claude name', nameSince=1)
         (registries / 'zoom.json').write_text(json.dumps(registry))
         with patch.object(agents, 'HOME', home):
             entry = next(e for e in agents.discover({}, run) if e['id'] == self.pane)
         self.assertEqual((entry['agent'], entry['thread']), ('claude', 'zoom-thread'))
+        # A newer /rename hides the tmux name from the tab, but "Copy tmux pane name" still gets it.
+        self.assertEqual((entry['agent_name'], entry['pane_name'], entry['tmux_pane_name']), ('Claude name', '', 'My chat'))
 
     def test_discover_repairs_killed_view_before_listing(self):
         import agents

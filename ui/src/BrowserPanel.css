@@ -1,5 +1,5 @@
 /* Test / Signed in switch at the start of the browser tab row. */
-.browser-switch { display: inline-flex; flex: none; align-items: center; gap: 5px; height: 32px; margin-right: 4px; padding: 0 8px 0 9px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; font-weight: 600; color: var(--text); }
+.browser-switch { display: inline-flex; flex: none; align-items: center; gap: 5px; height: 32px; margin-right: 4px; padding: 0 8px 0 9px; border: 1px solid var(--line); border-radius: var(--radius); font-size: 13px; font-weight: 600; color: var(--text); }
 .browser-switch:hover { background: var(--hover, #0000000a); }
 .browser-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .browser-switch > svg:last-child { color: var(--muted); }

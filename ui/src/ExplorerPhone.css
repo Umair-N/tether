@@ -8,7 +8,7 @@
 .phone-tabbar button { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; min-height: 56px; color: var(--muted); font-size: 11px; font-weight: 500; }
 .phone-tabbar button[aria-current='page'] { color: var(--accent); font-weight: 600; }
 .phone-tabbar button:disabled { opacity: .4; }
-.phone-tabbar button:focus-visible { outline: 2px solid var(--accent); outline-offset: -4px; border-radius: 10px; }
+.phone-tabbar button:focus-visible { outline: 2px solid var(--accent); outline-offset: -4px; border-radius: var(--radius); }
 /* Typing: the keyboard takes the bottom of the screen, so the tab bar steps aside. */
 .app-shell.phone-tabs:has(:is(textarea, input:not([type]), input[type=text], input[type=search], iframe):focus) { bottom: 0; }
 .app-shell.phone-tabs:has(:is(textarea, input:not([type]), input[type=text], input[type=search], iframe):focus) .phone-tabbar { display: none; }
@@ -22,23 +22,23 @@
 .xp-head { flex-shrink: 0; display: flex; align-items: center; gap: 2px; min-height: 52px; padding: 4px 8px 4px 4px; }
 .xp-title, .xp-head h1, .xp-head h2 { flex: 1; min-width: 0; margin: 0; font-size: 18px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .xp-head .icon-button:disabled { opacity: .35; }
-.xp-text-button { min-height: 44px; padding: 0 10px; color: var(--accent); font-size: 16px; font-weight: 600; border-radius: 9px; }
-.xp-search { flex-shrink: 0; display: flex; align-items: center; gap: 8px; margin: 0 16px 8px; padding: 0 12px; min-height: 44px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--muted); }
+.xp-text-button { min-height: var(--control-lg); padding: 0 10px; color: var(--accent); font-size: 16px; font-weight: 600; border-radius: var(--radius); }
+.xp-search { flex-shrink: 0; display: flex; align-items: center; gap: 8px; margin: 0 16px 8px; padding: 0 12px; min-height: 44px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); color: var(--muted); }
 .xp-search:focus-within { border-color: var(--accent); }
 .xp-search input { flex: 1; min-width: 0; height: 42px; border: 0; background: none; color: var(--text); font-size: 16px; outline: none; }
 .xp .xp-search input:focus-visible { outline: none; }
 .xp-crumbs { flex-shrink: 0; display: flex; gap: 6px; padding: 2px 16px 10px; overflow-x: auto; scrollbar-width: none; }
 .xp-crumbs::-webkit-scrollbar { display: none; }
-.xp-chip { flex-shrink: 0; display: inline-flex; align-items: center; height: 32px; padding: 0 12px; border-radius: 16px; border: 1px solid var(--line); font-size: 13px; color: var(--muted); white-space: nowrap; position: relative; }
+.xp-chip { flex-shrink: 0; display: inline-flex; align-items: center; height: var(--control-sm); padding: 0 12px; border-radius: var(--radius); border: 1px solid var(--line); font-size: 13px; color: var(--muted); white-space: nowrap; position: relative; }
 /* 32px chip, 44px tap area. */
 button.xp-chip::after { content: ''; position: absolute; inset: -6px -3px; }
 .xp-chip[aria-current] { background: var(--bubble); border-color: var(--bubble); color: var(--text); font-weight: 600; }
-.xp-secret-bar { flex-shrink: 0; display: flex; align-items: center; gap: 8px; margin: 0 16px 10px; padding: 0 4px 0 12px; min-height: 44px; border-radius: 10px; background: color-mix(in srgb, var(--attention) 14%, transparent); color: var(--text); font-size: 13px; }
+.xp-secret-bar { flex-shrink: 0; display: flex; align-items: center; gap: 8px; margin: 0 16px 10px; padding: 0 4px 0 12px; min-height: 44px; border-radius: var(--radius); background: color-mix(in srgb, var(--attention) 14%, transparent); color: var(--text); font-size: 13px; }
 .xp-secret-bar span { flex: 1; }
-.xp-secret-bar button { min-height: 44px; padding: 0 12px; font-weight: 600; color: var(--accent); }
+.xp-secret-bar button { min-height: var(--control-lg); padding: 0 12px; font-weight: 600; color: var(--accent); }
 .xp-bar { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; padding: 0 8px 0 16px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .xp-count { font-size: 13px; color: var(--muted); }
-.xp-sort { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 8px; font-size: 13px; font-weight: 500; color: var(--text); }
+.xp-sort { display: inline-flex; align-items: center; gap: 6px; min-height: var(--control-lg); padding: 0 8px; font-size: 13px; font-weight: 500; color: var(--text); }
 .xp-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-bottom: 96px; }
 .xp-list ul { list-style: none; margin: 0; padding: 0; }
 .xp-row { display: flex; align-items: center; min-height: 60px; padding-left: 8px; border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
@@ -53,7 +53,7 @@ button.xp-chip::after { content: ''; position: absolute; inset: -6px -3px; }
 .xp-name { display: flex; align-items: center; gap: 6px; font-size: 15px; }
 .xp-name > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .xp-lock { flex-shrink: 0; color: var(--muted); }
-.xp-git { flex-shrink: 0; min-width: 18px; padding: 0 5px; border-radius: 4px; background: var(--bubble); font: 600 11px/18px ui-monospace, monospace; text-align: center; color: var(--attention); }
+.xp-git { flex-shrink: 0; min-width: 18px; padding: 0 5px; border-radius: var(--radius-xs); background: var(--bubble); font: 600 11px/18px ui-monospace, monospace; text-align: center; color: var(--attention); }
 .xp-meta { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .xp-more { flex-shrink: 0; color: var(--muted); margin-right: 4px; }
 .xp-empty { margin: 0; padding: 40px 24px; text-align: center; color: var(--muted); font-size: 15px; line-height: 1.5; }
@@ -70,12 +70,12 @@ button.xp-chip::after { content: ''; position: absolute; inset: -6px -3px; }
 .xp-actionbar .xp-act-danger { color: var(--error); }
 
 /* Upload progress, above the tab bar. */
-.xp-upload { position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 3; display: grid; gap: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: 0 4px 16px #0002; }
+.xp-upload { position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 3; display: grid; gap: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: 0 4px 16px #0002; }
 .xp-upload-text { display: grid; gap: 2px; font-size: 14px; }
 .xp-upload-text span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 13px; }
 .xp-upload .meter-bar > span { background: var(--accent); }
 .xp-upload-foot { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--muted); }
-.xp-upload-foot button { min-height: 44px; padding: 0 4px 0 16px; color: var(--accent); font-weight: 600; font-size: 14px; }
+.xp-upload-foot button { min-height: var(--control-lg); padding: 0 4px 0 16px; color: var(--accent); font-weight: 600; font-size: 14px; }
 .xp-toast.app-toast { bottom: 96px; z-index: 30; }
 
 /* Sheets */
@@ -87,7 +87,7 @@ button.xp-chip::after { content: ''; position: absolute; inset: -6px -3px; }
 .xp-zip { margin: 4px 0 18px; display: grid; gap: 6px; }
 .xp-zip p { margin: 0; }
 .xp-zip-size { font-size: 26px; font-weight: 600; }
-.xp-zip-secret { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 9px; background: color-mix(in srgb, var(--attention) 14%, transparent); font-size: 14px; }
+.xp-zip-secret { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: var(--radius); background: color-mix(in srgb, var(--attention) 14%, transparent); font-size: 14px; }
 
 /* Copy to / Move to: a full-screen folder picker. */
 .xp-picker[open] { position: fixed; inset: 0; width: 100%; height: 100%; max-width: none; max-height: none; margin: 0; padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); border: 0; display: flex; flex-direction: column; background: var(--surface); }
@@ -97,7 +97,7 @@ button.xp-chip::after { content: ''; position: absolute; inset: -6px -3px; }
 .xp-pick-title span { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .xp-pick-foot { flex-shrink: 0; display: grid; gap: 8px; padding: 12px 16px max(16px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line); }
 .xp-pick-foot p { margin: 0; font-size: 13px; }
-.xp-pick-foot .primary { width: 100%; min-height: 48px; }
+.xp-pick-foot .primary { width: 100%; min-height: var(--control-lg); }
 .xp-pick-foot .primary:disabled { opacity: .45; }
 
 /* Full-screen preview */
@@ -115,7 +115,7 @@ button.xp-chip::after { content: ''; position: absolute; inset: -6px -3px; }
 .xp-note a { color: var(--accent); text-decoration: underline; }
 .xp-preview-foot { flex-shrink: 0; display: flex; gap: 10px; margin: 0; padding: 12px 16px; border-top: 1px solid var(--line); background: var(--surface); }
 p.xp-preview-foot { font-size: 13px; }
-.xp-preview-foot .primary { flex: 1; min-width: 0; min-height: 48px; gap: 8px; }
+.xp-preview-foot .primary { flex: 1; min-width: 0; min-height: var(--control-lg); }
 .xp-preview-foot .primary span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .xp-square { display: inline-flex; align-items: center; justify-content: center; width: 48px; min-height: 48px; padding: 0; flex-shrink: 0; }
 
@@ -124,7 +124,7 @@ p.xp-preview-foot { font-size: 13px; }
 
 /* The global button rule gives 44px and a hover fill. Chips are 32px (44px tap area above), and touch screens keep
    no sticky hover fill after a tap. */
-.xp-chip { min-height: 32px; }
+.xp-chip { min-height: var(--control-sm); }
 .xp .xp-fab:not(:disabled):hover { background-color: var(--accent); }
 @media (hover: none) {
   :is(.xp, .xp-picker) button:not(.primary, .xp-fab):hover, .phone-tabbar button:hover, .xp-actionbar button:hover { background-color: transparent; }

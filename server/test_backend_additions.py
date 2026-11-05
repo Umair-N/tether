@@ -60,6 +60,42 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(self.request('/mobile/api/key', {'session': '%12', 'key': 'C-c'})[0], 409)
         self.assertEqual(self.request('/mobile/api/key', {'session': '%12', 'thread': CHAT, 'key': 'C-z'})[0], 400)
 
+    def test_stop_escape_returns_restored_text_under_send_lock(self):
+        import terminal_input as terminal
+        entry = {'id': '%12', 'agent': 'claude', 'thread': CHAT, 'writable': True}
+        self.entries.return_value = [entry]
+        body = {'session': '%12', 'thread': CHAT, 'key': 'Escape', 'stop': True}
+
+        def stop(config):
+            self.assertIs(config, entry)
+            self.assertTrue(server.SEND_LOCK.locked())
+            self.verify.assert_called_once_with(entry)
+            return {'restored': 'write about rivers'}
+
+        with patch.object(terminal, 'stop_turn', side_effect=stop) as restore:
+            self.assertEqual(self.request('/mobile/api/key', body),
+                             (200, {'accepted': True, 'restored': 'write about rivers'}))
+            restore.assert_called_once_with(entry)
+            self.run.assert_not_called()
+            self.assertEqual(self.request('/mobile/api/key', {**body, 'thread': OTHER})[0], 409)
+            self.assertEqual(self.request('/mobile/api/key', body, headers={'X-Codex-Mobile': ''})[0], 403)
+            self.assertEqual(restore.call_count, 1)
+
+    def test_stop_restoration_requires_claude_escape_and_literal_true(self):
+        import terminal_input as terminal
+        entry = {'id': '%12', 'agent': 'claude', 'thread': CHAT, 'writable': True}
+        self.entries.return_value = [entry]
+        with patch.object(terminal, 'stop_turn') as restore, \
+                patch.object(terminal, 'drop_double_escape', return_value=False):
+            for agent, key, flag in (('claude', 'Escape', 1), ('claude', 'Escape', False),
+                                     ('claude', 'C-c', True), ('codex', 'Escape', True),
+                                     ('antigravity', 'Escape', True)):
+                entry['agent'] = agent
+                body = {'session': '%12', 'thread': CHAT, 'key': key, 'stop': flag}
+                self.assertEqual(self.request('/mobile/api/key', body), (200, {'accepted': True}))
+                self.assertEqual(self.run.call_args.args[0][-1], key)
+            restore.assert_not_called()
+
     def test_double_escape_guard_uses_a_fake_clock_and_keeps_response_contract(self):
         import terminal_input as terminal
         entry = {'id': '%esc-guard', 'agent': 'claude', 'thread': CHAT, 'writable': True}

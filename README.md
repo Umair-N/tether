@@ -182,7 +182,7 @@ For advanced service settings, add `Environment=NAME=value` to a systemd user ov
 ## Live mode workers
 
 Live mode uses the Whisper worker for transcription and [`tether-tts.service`](server/deploy/tether-tts.service) for natural speech.
-[`tether-llm.service`](server/deploy/tether-llm.service) runs llama-server on `127.0.0.1:7687` for local summaries.
+[`tether-llm.service`](server/deploy/tether-llm.service) runs llama-server with `-t 6` on `127.0.0.1:7687` for local summaries.
 It uses `~/.local/share/tether/friday-models/Qwen3.5-2B-Q4_K_M.gguf` and the binary in `~/.local/share/tether/llama/`.
 Summaries try the local model, then Claude Haiku, then two sentences from the reply.
 Set `TETHER_LLM_URL` on the Tether server to override the local URL.
@@ -205,6 +205,11 @@ The two Friday units are `tether-friday.service` (worker, loopback port 7686) an
 The unit files live in `server/deploy/`. They require the prepared venv and models; the installer does not install these units.
 `TETHER_FRIDAY_PORT`, `TETHER_LLM_URL`, and `TETHER_FRIDAY_MODELS` override the worker defaults.
 `TETHER_FRIDAY_URL` sets the server's signaling proxy destination.
+Set `TETHER_FRIDAY_BRAIN=gemini` for Vertex AI; `local` is the default. STT, VAD, Smart Turn, and TTS stay local.
+`TETHER_FRIDAY_GCP_PROJECT` uses the ADC project if unset; `TETHER_FRIDAY_GEMINI_MODEL` defaults to `google/gemini-3.5-flash-lite`.
+`TETHER_FRIDAY_GEMINI_EFFORT` defaults to `low`; `default` omits it. `TETHER_FRIDAY_VAD_STOP` defaults to 0.5 seconds with Smart Turn.
+Use [`gcloud auth application-default login`](https://docs.cloud.google.com/sdk/gcloud/reference/auth/application-default/login) for credentials. The service reads optional settings from `~/.config/tether/friday.env`.
+With `gemini`, the user's speech text and chat state go to Google.
 
 The browser reaches the worker's WebRTC ports directly through host candidates, such as the host's Tailscale IP.
 UDP must be open between the browser and the host. The HTTP proxy carries signaling, while WebRTC carries audio and RTVI messages.
@@ -299,3 +304,15 @@ It keeps tokens, preferences, configuration, chat data, and agent transcripts.
 Failure restores checkout units, settings, and saved state, then restarts the checkout services.
 The checkout stays untouched, including local changes. After success, the user can remove it.
 Set `TETHER_REPO` to choose another release repository. The default is `incmak/tether`.
+
+
+## Share storage
+
+Share stores personal files under `TETHER_HOME/share` (default `~/.tether/share`). Set `TETHER_SHARE` to use another folder.
+The authenticated `/mobile/api/share/` API supports uploads, downloads, thumbnails, trash, and private chat exports.
+The default quota is 50 GiB, and the file limit is 2 GiB. Set `TETHER_SHARE_QUOTA_BYTES` or `TETHER_SHARE_MAX_BYTES` to override them.
+Uploads require 20 GiB of free disk space after reservation. Two uploads can run at once.
+Startup reconciliation purges trash after 30 days and expires incomplete uploads after 24 hours.
+Trash counts against quota. Purge removes the file's thumbnails and exports; exports survive trash and restore.
+Use `python3 server/agent_share_cli.py put PATH`, `list`, `stat ID`, or `path ID` for local access.
+Back up the catalog and objects together while Share is idle. The Files explorer cannot change the managed Share folder.

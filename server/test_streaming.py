@@ -9,6 +9,69 @@ import reply_preview
 
 
 class PreviewTests(unittest.TestCase):
+    tides_prompt = 'No tools. Write 300 words of plain prose about tides.'
+    lighthouse_prompt = 'Without using any tools, write about 400 words of plain prose paragraphs (no headings, no lists) about lighthouses.'
+
+    def fixture(self, name):
+        return (Path(__file__).parent / 'fixtures' / name).read_text()
+
+    def no_spinner(self, body, anchor=True, border=None):
+        prefix = '❯ ' + self.tides_prompt + '\n\n' if anchor else ''
+        return prefix + '● ' + body + '\n\n' + (border or '─' * 120) + '\n❯ \n'
+
+    def test_stream_without_spinner(self):
+        text = reply_preview.extract(self.fixture('claude_stream_no_spinner.txt'), 120,
+                                     [{'role': 'user', 'text': self.tides_prompt}])
+        self.assertIsNotNone(text)
+        self.assertTrue(text.startswith('Tides are the regular rise and fall of the sea'))
+        self.assertTrue(text.endswith('less than half as strong'))
+        self.assertEqual(len(text.split('\n\n')), 2)
+        self.assertIn('\n\nAs the Earth turns', text)
+        self.assertNotIn('\n', text.replace('\n\n', ''))
+
+    def test_stream_with_spinner(self):
+        text = reply_preview.extract(self.fixture('claude_stream_spinner.txt'), 120,
+                                     [{'role': 'user', 'text': self.lighthouse_prompt}])
+        self.assertTrue(text.startswith('Lighthouses have guided ships'))
+
+    def test_done_reply_in_transcript(self):
+        screen = self.fixture('claude_stream_done.txt')
+        block = screen.split('● ', 1)[1].split('\n✻ ', 1)[0]
+        full_reply = '\n'.join(line[2:] if line.startswith('  ') else line
+                               for line in block.splitlines()).strip()
+        messages = [{'role': 'user', 'text': self.tides_prompt},
+                    {'role': 'assistant', 'text': full_reply}]
+        self.assertIsNone(reply_preview.extract(screen, 120, messages))
+
+    def test_hint_fixture(self):
+        self.assertIsNone(reply_preview.extract(self.fixture('claude_hint_above_box.txt'), 120,
+                                               [{'role': 'user', 'text': self.lighthouse_prompt}]))
+
+    def test_no_spinner_safety(self):
+        messages = [{'role': 'user', 'text': self.tides_prompt}]
+        for body in ('Bash(ls)\n  ⎿  file.txt', 'Prose\n  │ chrome', 'Prose\nunindented'):
+            with self.subTest(body=body):
+                self.assertIsNone(reply_preview.extract(self.no_spinner(body), 120, messages))
+        self.assertIsNone(reply_preview.extract(self.no_spinner('New prose', anchor=False), 120, messages))
+
+    def test_no_spinner_trailing_status(self):
+        messages = [{'role': 'user', 'text': self.tides_prompt}]
+        for status in ('✻ Sautéed for 18s · done', '                  tmux focus-events off · hint',
+                       '                  ◐ medium · /effort'):
+            with self.subTest(status=status):
+                self.assertEqual(reply_preview.extract(self.no_spinner('New prose\n\n' + status),
+                                                      120, messages), 'New prose')
+                self.assertIsNone(reply_preview.extract(self.no_spinner('New prose\n\n' + status + '\n  More prose'),
+                                                       120, messages))
+
+    def test_no_spinner_border(self):
+        messages = [{'role': 'user', 'text': self.tides_prompt}]
+        for border in ('  ' + '─' * 120 + '  ', '─' * 119 + 'x'):
+            with self.subTest(border=border):
+                self.assertEqual(reply_preview.extract(self.no_spinner('New prose', border=border),
+                                                      120, messages), 'New prose')
+        self.assertIsNone(reply_preview.extract(self.no_spinner('New prose', border='missing'), 120, messages))
+
     def extract(self, body, width=80, known='Earlier answer.'):
         screen = '● Earlier answer.\n\n● ' + body + '\n\n✻ Composing… (2s · esc to interrupt)\n' + '─' * width + '\n❯ \n' + '─' * width + '\n footer'
         return reply_preview.extract(screen, width, [{'role': 'assistant', 'text': known}])
