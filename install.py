@@ -181,6 +181,7 @@ def parser():
     result.add_argument('--updates', choices=('notify', 'auto', 'off'))
     result.add_argument('--release-current', type=Path, help=argparse.SUPPRESS)
     result.add_argument('--defer-restart', action='store_true', help=argparse.SUPPRESS)
+    result.add_argument('--ask-bridge-wait', type=int, help='Phone answer wait in seconds (5..120; default 30)')
     for name in ('terminal', 'voice', 'push', 'hooks', 'ask-bridge', 'resources', 'build-ui'):
         result.add_argument('--' + name, action=argparse.BooleanOptionalAction, default=None)
     return result
@@ -200,10 +201,10 @@ def claude_hook_entries(repo):
             for event in events}
 
 
-def ask_bridge_entries(repo):
+def ask_bridge_entries(repo, wait=30):
     return {'PreToolUse': {'matcher': 'AskUserQuestion', 'hooks': [{
         'type': 'command', 'command': shlex.join([sys.executable, str(repo / 'server/ask_bridge.py')]),
-        'timeout': 600, 'statusMessage': 'Waiting for a Tether answer'}]}}
+        'timeout': wait + 10, 'statusMessage': f'Answer on phone · back to terminal in {wait} s'}]}}
 
 
 def merge_claude_hooks(data, entries, remove=False):
@@ -280,13 +281,15 @@ def make_plan(args, repo=ROOT, home=None):
         raise ValueError('Release unit paths must use the managed current symlink.')
     options = {}
     defaults = dict(host='127.0.0.1', auth='token', terminal=bool(shutil.which('ttyd')),
-                    voice=False, push=False, hooks=False, ask_bridge=False, resources=False, build_ui=None, updates=saved.get('updates', 'notify'))
+                    voice=False, push=False, hooks=False, ask_bridge=False, ask_bridge_wait=30, resources=False, build_ui=None, updates=saved.get('updates', 'notify'))
     reused = []
     for key, default in defaults.items():
         value = getattr(args, key)
         options[key] = value if value is not None else previous.get(key, default)
         if value is None and key in previous:
             reused.append(key)
+    value = options['ask_bridge_wait']
+    options['ask_bridge_wait'] = max(5, min(120, value)) if type(value) is int else 30
     options['port'] = args.port if args.port is not None else previous.get('port')
     if args.port is None and 'port' in previous:
         reused.append('port')
@@ -475,19 +478,21 @@ def make_plan(args, repo=ROOT, home=None):
     settings = home / '.claude/settings.json'
     if settings.parent.is_dir():
         bridge_remove = args.uninstall or not options['ask_bridge']
-        entries = ask_bridge_entries(old_repo if args.uninstall else service_repo)
+        entries = ask_bridge_entries(old_repo if args.uninstall else service_repo, options['ask_bridge_wait'])
         old_entries = ask_bridge_entries(old_repo) if relocating else None
         try:
             data = json.loads(settings.read_text()) if settings.exists() else {}
             original = data
             if old_entries:
                 data = merge_claude_hooks(data, old_entries, remove=True)
+            if data is not None and not bridge_remove:
+                data = merge_claude_hooks(data, entries, remove=True)
             merged = merge_claude_hooks(data, entries, remove=bridge_remove) if data is not None else None
             status = 'preserve' if merged is None or merged == original else 'remove' if bridge_remove else 'merge'
         except ValueError:
             status = 'preserve invalid JSON'
         hooks.append(dict(path=str(settings), action=status, entries=entries,
-                          old_entries=old_entries, remove=bridge_remove))
+                          old_entries=old_entries, remove=bridge_remove, replace=True))
     cli_link = cli_link_plan(home, service_repo, args.uninstall)
     warnings = []
     if cli_link:
@@ -558,6 +563,8 @@ def apply_plan(plan, home=None):
         original = data
         if hook.get('old_entries'):
             data = merge_claude_hooks(data, hook['old_entries'], remove=True)
+        if data is not None and hook.get('replace') and not hook['remove']:
+            data = merge_claude_hooks(data, hook['entries'], remove=True)
         merged = merge_claude_hooks(data, hook['entries'], remove=hook.get('remove', plan['action'] == 'uninstall')) if data is not None else None
         if merged is None or merged == original:
             continue

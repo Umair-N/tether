@@ -21,7 +21,10 @@ import paths
 
 HOOK_PATH = '/mobile/api/ask-hook'
 ANSWER_PATH = '/mobile/api/ask-answer'
-WAIT_SECONDS = 590  # Leave room for cleanup before Claude's 600-second deadline.
+WAIT_SECONDS = 30
+MAX_WAIT_SECONDS = 120
+WATCH_WINDOW = 60
+WATCH_GRACE = 10
 LEASE_SECONDS = 5
 MAX_PENDING = 32
 MAX_PAYLOAD = 32768
@@ -40,6 +43,11 @@ def install_settings():
 
 def enabled():
     return install_settings().get('ask_bridge') is True
+
+
+def wait_seconds():
+    value = install_settings().get('ask_bridge_wait', WAIT_SECONDS)
+    return max(5, min(MAX_WAIT_SECONDS, value)) if type(value) is int else WAIT_SECONDS
 
 
 def identity(entry):
@@ -163,8 +171,10 @@ class Conflict(Exception):
 
 
 class Pending:
-    def __init__(self, clock=time.time):
+    def __init__(self, clock=time.time, monotonic=time.monotonic, last_watched=lambda pane: float('-inf')):
         self.clock = clock
+        self.monotonic = monotonic
+        self.last_watched = last_watched
         self.lock = threading.Lock()
         self.records = {}
 
@@ -172,7 +182,8 @@ class Pending:
         now = self.clock()
         for key, item in list(self.records.items()):
             if item['expires'] <= now or (item['state'] in ('pending', 'answered') and
-                    (item['lease'] <= now or not process_alive(item['pid'], item['started']))):
+                    (item['lease'] <= now or not process_alive(item['pid'], item['started']) or
+                     self.monotonic() - self.last_watched(item['identity'][0]) >= WATCH_GRACE)):
                 self.records.pop(key)
 
     def register(self, entry, body):
@@ -182,20 +193,23 @@ class Pending:
                 or body.get('session_id') != entry.get('thread')):
             raise ValueError('Invalid invocation.')
         questions = questions_input(body.get('tool_input'))
-        started = hook_process(body.get('pid'), entry['owner_pid'])
         with self.lock:
             self.prune()
+            if self.monotonic() - self.last_watched(entry['id']) >= WATCH_WINDOW:
+                return {'wait': 0}
+            started = hook_process(body.get('pid'), entry['owner_pid'])
             if (len(self.records) >= MAX_PENDING or any(item['nonce'] == nonce or
                     item['identity'][0] == entry['id'] and item['state'] == 'pending'
                     for item in self.records.values())):
                 raise Conflict()
             identifier = secrets.token_urlsafe(18)
             now = self.clock()
+            seconds = wait_seconds()
             self.records[identifier] = dict(identity=identity(entry), nonce=nonce,
                 tool_use_id=tool_id, questions=json.loads(json.dumps(questions)),
-                pid=body['pid'], started=started, expires=now + WAIT_SECONDS,
+                pid=body['pid'], started=started, expires=now + seconds,
                 lease=now + LEASE_SECONDS, state='pending')
-            return dict(id=identifier, nonce=nonce, expires=now + WAIT_SECONDS)
+            return dict(id=identifier, nonce=nonce, expires=now + seconds, wait=seconds)
 
     def lookup(self, entry, body):
         if not isinstance(body.get('id'), str) or not isinstance(body.get('nonce'), str):
@@ -346,8 +360,12 @@ def hook(data, request=None, wait=time.sleep, clock=time.monotonic):
                     socket=os.environ.get('TMUX', '').split(',')[0],
                     nonce=secrets.token_urlsafe(24), tool_use_id=data.get('tool_use_id'),
                     pid=os.getpid(), tool_input=data['tool_input'])
-        deadline = clock() + WAIT_SECONDS
+        started = clock()
         registered = request(dict(body, action='register'))
+        seconds = registered.get('wait')
+        if type(seconds) is not int or seconds <= 0:
+            return None
+        deadline = started + min(seconds, MAX_WAIT_SECONDS)
         body = {key: body[key] for key in ('session', 'nonce')}
         body['id'] = registered['id']
         try:

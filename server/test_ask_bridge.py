@@ -41,7 +41,12 @@ DATA = dict(hook_event_name='PreToolUse', tool_name='AskUserQuestion', tool_use_
 class StoreTests(unittest.TestCase):
     def setUp(self):
         self.now = 1000
-        self.store = bridge.Pending(lambda: self.now)
+        self.watched = {'%9': self.now, '%10': self.now}
+        self.store = bridge.Pending(lambda: self.now, lambda: self.now,
+                                    lambda pane: self.watched.get(pane, float('-inf')))
+        settings = patch.object(bridge, 'install_settings', return_value={})
+        settings.start()
+        self.addCleanup(settings.stop)
         for name, value in [('hook_process', 'hook-start'), ('process_alive', True)]:
             p = patch.object(bridge, name, return_value=value)
             p.start()
@@ -50,6 +55,78 @@ class StoreTests(unittest.TestCase):
                                  tool_use_id='tool-1', tool_input=copy.deepcopy(DATA['tool_input']), pid=456)
         self.ask = self.store.register(ENTRY, self.registration)
         self.answer = dict(session='%9', **self.ask, answers=ANSWERS, requestId='tap-1')
+
+    def test_no_recent_watch_registers_no_wait_without_retaining_payload(self):
+        store = bridge.Pending()
+        self.assertEqual(store.register(ENTRY, self.registration), {'wait': 0})
+        self.assertEqual(store.records, {})
+
+    def test_watch_window_is_per_pane_and_monotonic(self):
+        self.store.records.clear()
+        for age, seconds in [(60, 0), (61, 0), (59, 30)]:
+            with self.subTest(age=age):
+                self.store.records.clear()
+                self.watched['%9'] = self.now - age
+                self.assertEqual(self.store.register(ENTRY, self.registration)['wait'], seconds)
+        self.store.records.clear()
+        self.watched.pop('%9')
+        self.assertEqual(self.store.register(ENTRY, self.registration), {'wait': 0})
+
+    def test_watch_stops_ends_wait_despite_hook_heartbeat(self):
+        for _ in range(9):
+            self.now += 1
+            self.assertEqual(self.store.poll(ENTRY, self.ask)['state'], 'pending')
+        self.now += 1
+        with self.assertRaises(bridge.Conflict):
+            self.store.poll(ENTRY, self.ask)
+        self.assertEqual(self.store.records, {})
+
+    def test_already_idle_watch_falls_through_on_first_poll(self):
+        self.store.records.clear()
+        self.watched['%9'] = self.now - 10
+        ask = self.store.register(ENTRY, self.registration)
+        self.assertEqual(ask['wait'], 30)
+        with self.assertRaises(bridge.Conflict):
+            self.store.poll(ENTRY, ask)
+
+    def test_stopped_watch_makes_hook_fall_through_without_a_decision(self):
+        self.store.records.clear()
+        started = self.now
+        def request(body):
+            return getattr(self.store, body['action'])(ENTRY, body)
+        def wait(delay):
+            self.now += delay
+        with patch.dict(os.environ, TMUX_PANE='%9'):
+            self.assertIsNone(bridge.hook(DATA, request, wait=wait, clock=lambda: self.now))
+        self.assertEqual(self.now - started, 10)
+        self.assertEqual(self.store.records, {})
+
+    def test_watch_poll_renews_grace_and_wall_clock_does_not_control_it(self):
+        monotonic = [1000]
+        self.store.monotonic = lambda: monotonic[0]
+        for _ in range(8):
+            monotonic[0] += 4
+            self.watched['%9'] = monotonic[0]
+            self.assertEqual(self.store.poll(ENTRY, self.ask)['state'], 'pending')
+        monotonic[0] += 10
+        with self.assertRaises(bridge.Conflict):
+            self.store.answer(ENTRY, self.answer)
+
+    def test_configured_wait_and_clamp_are_read_at_registration(self):
+        for value, seconds in [(5, 5), (47, 47), (120, 120), (0, 5), (999, 120), ('bad', 30), (True, 30)]:
+            with self.subTest(value=value), patch.object(bridge, 'install_settings', return_value={'ask_bridge_wait': value}):
+                self.store.records.clear()
+                ask = self.store.register(ENTRY, self.registration)
+                self.assertEqual(ask['wait'], seconds)
+                self.assertEqual(ask['expires'], self.now + seconds)
+                self.now += seconds - 1
+                self.watched['%9'] = self.now
+                self.store.records[ask['id']]['lease'] = self.now + 5
+                self.assertEqual(self.store.poll(ENTRY, ask)['state'], 'pending')
+                self.now += 1
+                with self.assertRaises(bridge.Conflict):
+                    self.store.poll(ENTRY, ask)
+                self.watched['%9'] = self.now
 
     def test_one_answer_dedupes_before_and_after_delivery(self):
         self.assertEqual(self.store.answer(ENTRY, self.answer), {'status': 'submitted'})
@@ -90,6 +167,7 @@ class StoreTests(unittest.TestCase):
 
     def test_absolute_expiry_even_with_heartbeat(self):
         self.now += bridge.WAIT_SECONDS - 1
+        self.watched['%9'] = self.now
         self.store.records[self.ask['id']]['lease'] = self.now + 5
         self.store.poll(ENTRY, self.ask)
         self.now += 1
@@ -188,7 +266,7 @@ class HookTests(unittest.TestCase):
         def request(body):
             calls.append(body)
             if body['action'] == 'register':
-                return {'id': 'ask-1'}
+                return {'id': 'ask-1', 'wait': 30}
             if body['action'] == 'poll':
                 return {'state': 'pending'} if len(calls) == 2 else {'state': 'answered', 'answers': ANSWERS}
             return {'state': 'retired'}
@@ -209,7 +287,7 @@ class HookTests(unittest.TestCase):
 
     def test_timeout_retires_before_empty_stdout_exit_zero(self):
         clock = Mock(side_effect=[0, 0, bridge.WAIT_SECONDS])
-        request = Mock(side_effect=[{'id': 'ask'}, {'state': 'pending'}, {'state': 'retired'}])
+        request = Mock(side_effect=[{'id': 'ask', 'wait': 30}, {'state': 'pending'}, {'state': 'retired'}])
         self.assertIsNone(bridge.hook(DATA, request, wait=Mock(), clock=clock))
         self.assertEqual(request.call_args.args[0]['action'], 'retire')
         with patch.object(bridge, 'hook', return_value=None), patch('sys.stdin', io.StringIO(json.dumps(DATA))), \
@@ -219,14 +297,33 @@ class HookTests(unittest.TestCase):
 
     def test_failures_never_emit_allow_or_answers(self):
         for request in [Mock(side_effect=ConnectionRefusedError),
-                        Mock(side_effect=[{'id': 'ask'}, KeyboardInterrupt, {}]),
-                        Mock(side_effect=[{'id': 'ask'}, TimeoutError, {}]),
-                        Mock(side_effect=[{'id': 'ask'}, {'state': 'retired'}, {}]),
-                        Mock(side_effect=[{'id': 'ask'}, {'state': 'answered', 'answers': {}}, {}])]:
+                        Mock(side_effect=[{'id': 'ask', 'wait': 30}, KeyboardInterrupt, {}]),
+                        Mock(side_effect=[{'id': 'ask', 'wait': 30}, TimeoutError, {}]),
+                        Mock(side_effect=[{'id': 'ask', 'wait': 30}, {'state': 'retired'}, {}]),
+                        Mock(side_effect=[{'id': 'ask', 'wait': 30}, {'state': 'answered', 'answers': {}}, {}])]:
             self.assertIsNone(bridge.hook(DATA, request, wait=Mock()))
         request = Mock()
         self.assertIsNone(bridge.hook(dict(DATA, agent_id='child'), request))
         request.assert_not_called()
+
+    def test_no_wait_and_invalid_register_reply_never_poll_or_sleep(self):
+        for reply in [{'wait': 0}, {'wait': True}, {'wait': '30'}, {}]:
+            request, wait = Mock(return_value=reply), Mock()
+            self.assertIsNone(bridge.hook(DATA, request, wait=wait))
+            self.assertEqual(request.call_count, 1)
+            wait.assert_not_called()
+
+    def test_hook_uses_configured_wait_and_caps_untrusted_server_wait(self):
+        for seconds, cap in [(5, 5), (47, 47), (999, 120)]:
+            now = [0]
+            def wait(delay):
+                now[0] += delay
+            def request(body):
+                if body['action'] == 'register':
+                    return {'id': 'ask', 'wait': seconds}
+                return {'state': 'pending'}
+            self.assertIsNone(bridge.hook(DATA, request, wait=wait, clock=lambda: now[0]))
+            self.assertEqual(now[0], cap)
 
     def test_server_down_subprocess_falls_through_fast_and_does_not_write(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -310,14 +407,41 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(self.post(dict(self.answer, nonce={}))[0], 400)
 
 
+class WatchPollTests(unittest.TestCase):
+    def test_only_visible_chat_polls_count_for_the_selected_pane(self):
+        store = bridge.Pending(monotonic=lambda: 100, last_watched=server.last_watched)
+        registration = dict(session_id=ENTRY['thread'], nonce='nonce-12345678901234567890',
+                            tool_use_id='tool-1', tool_input=DATA['tool_input'], pid=456)
+        with patch.dict(server.WATCHED, clear=True), patch.dict(server.WATCHING, {'%9': 1}, clear=True), \
+                patch.object(server.time, 'monotonic', return_value=100), \
+                patch.object(server, 'choose', return_value=ENTRY), patch.object(server, 'chat_payload', return_value={}), \
+                patch.object(bridge, 'hook_process', return_value='start'), patch.object(bridge, 'install_settings', return_value={}):
+            for suffix in ['', '&watch=0', '&preview=1']:
+                value = handler('/mobile/api/chat?session=%259' + suffix, method='GET')
+                value.do_GET()
+                self.assertEqual(value.send_response.call_args.args[0], 200)
+                self.assertEqual(store.register(ENTRY, registration), {'wait': 0})
+            value = handler('/mobile/api/chat?session=%259&watch=1', method='GET')
+            value.do_GET()
+            self.assertEqual(server.last_watched('%9'), 100)
+            self.assertEqual(store.register(ENTRY, registration)['wait'], 30)
+            self.assertEqual(store.register(dict(ENTRY, id='%10'), registration), {'wait': 0})
+
+
 class HttpRoundtripTests(unittest.TestCase):
     def test_real_hook_process_registers_and_receives_route_answer(self):
+        self.run_hook_process(watched=True)
+
+    def test_no_phone_hook_exits_under_300ms_without_polling_or_output(self):
+        self.run_hook_process(watched=False)
+
+    def run_hook_process(self, watched):
         with tempfile.TemporaryDirectory() as folder:
             home = Path(folder)
             token = home / 'token'
             token.write_text('isolated-test-token')
             state = home / 'install.json'
-            store = bridge.Pending()
+            store = bridge.Pending(last_watched=server.last_watched)
             entry = dict(ENTRY, owner_pid=os.getpid(), process_start='mocked-owner')
             class QuietHandler(server.Handler):
                 def log_message(self, *_):
@@ -332,14 +456,28 @@ class HttpRoundtripTests(unittest.TestCase):
             process = None
             with patch.object(bridge, 'pending', store), patch.object(bridge, 'enabled', return_value=True), \
                     patch.object(server, 'choose', return_value=entry), patch.object(bridge, 'verify_entry', return_value=''), \
-                    patch.object(auth, 'TOKEN_FILE', token), patch.object(auth, 'MODE', 'token'):
+                    patch.object(auth, 'TOKEN_FILE', token), patch.object(auth, 'MODE', 'token'), \
+                    patch.dict(server.WATCHED, {'%9': time.monotonic()} if watched else {}, clear=True), \
+                    patch.object(store, 'register', wraps=store.register) as register, \
+                    patch.object(store, 'poll', wraps=store.poll) as poll:
                 worker.start()
                 try:
+                    started = time.monotonic()
                     process = subprocess.Popen([sys.executable, str(Path(bridge.__file__))], stdin=subprocess.PIPE,
                                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
                     process.stdin.write(json.dumps(DATA))
                     process.stdin.close()
                     process.stdin = None
+                    if not watched:
+                        stdout, stderr = process.communicate(timeout=3)
+                        elapsed = time.monotonic() - started
+                        self.assertLess(elapsed, .3)
+                        self.assertEqual((process.returncode, stdout, stderr), (0, '', ''))
+                        self.assertEqual(register.call_count, 1)
+                        poll.assert_not_called()
+                        self.assertEqual(store.records, {})
+                        self.assertEqual(set(p.name for p in home.iterdir()), {'token', 'install.json'})
+                        return
                     deadline = time.monotonic() + 5
                     ask = None
                     while time.monotonic() < deadline:

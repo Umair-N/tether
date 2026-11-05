@@ -89,6 +89,14 @@ def watching(session):
         return WATCHING.get(session, 0) > 0 or time.monotonic() - WATCHED.get(session, float('-inf')) < 10
 
 
+def last_watched(session):
+    with WATCHING_LOCK:
+        return WATCHED.get(session, float('-inf'))
+
+
+ask_bridge.pending.last_watched = last_watched
+
+
 def notify(payload, urgent):
     threading.Thread(target=push.send_all, args=(payload, urgent), daemon=True).start()
 

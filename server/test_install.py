@@ -462,7 +462,8 @@ class InstallTests(unittest.TestCase):
         data = json.loads(settings.read_text())
         bridge = data['hooks']['PreToolUse'][-1]
         self.assertEqual(bridge['matcher'], 'AskUserQuestion')
-        self.assertEqual(bridge['hooks'][0]['timeout'], 600)
+        self.assertEqual(bridge['hooks'][0]['timeout'], 40)
+        self.assertEqual(bridge['hooks'][0]['statusMessage'], 'Answer on phone · back to terminal in 30 s')
         self.assertTrue(self.plan()['options']['ask_bridge'])
         self.assertEqual(data['hooks']['PreToolUse'][:-1], original['hooks']['PreToolUse'])
         for event, groups in original['hooks'].items():
@@ -483,6 +484,28 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(list(data['hooks']), ['PreToolUse'])
         self.assertEqual(len(data['hooks']['PreToolUse']), 1)
         self.apply(self.plan('--uninstall'))
+        self.assertEqual(json.loads(settings.read_text()), {'hooks': {}})
+
+    def test_ask_bridge_wait_clamped_saved_and_existing_hook_updated(self):
+        settings = self.home / '.claude/settings.json'
+        settings.parent.mkdir()
+        self.assertEqual(self.plan()['options']['ask_bridge_wait'], 30)
+        for value, seconds in [('1', 5), ('47', 47), ('999', 120)]:
+            plan = self.plan('--ask-bridge', '--ask-bridge-wait', value)
+            self.assertEqual(plan['options']['ask_bridge_wait'], seconds)
+            self.apply(plan)
+            self.assertEqual(self.plan()['options']['ask_bridge_wait'], seconds)
+            groups = json.loads(settings.read_text())['hooks']['PreToolUse']
+            self.assertEqual(len(groups), 1)
+            hook = groups[0]['hooks'][0]
+            self.assertEqual(hook['timeout'], seconds + 10)
+            self.assertEqual(hook['statusMessage'], f'Answer on phone · back to terminal in {seconds} s')
+        old = json.loads(settings.read_text())
+        old['hooks']['PreToolUse'][0]['hooks'][0]['timeout'] = 600
+        settings.write_text(json.dumps(old))
+        self.apply(self.plan())
+        self.assertEqual(json.loads(settings.read_text())['hooks']['PreToolUse'][0]['hooks'][0]['timeout'], 130)
+        self.apply(self.plan('--no-ask-bridge'))
         self.assertEqual(json.loads(settings.read_text()), {'hooks': {}})
 
     def test_claude_hooks_preserve_malformed_configuration(self):
