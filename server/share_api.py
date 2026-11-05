@@ -238,6 +238,8 @@ def serve_upload_post(handler, store, action):
     if len(offsets) != 1 or not re.fullmatch(r'[0-9]{1,20}', offsets[0]):
         raise ShareError(400, 'Send a valid upload offset.')
     result = store.append_upload(identifier, handler.rfile, size, int(offsets[0]))
+    if 'file' in result:
+        share_previews.after_upload(store, result['file']['id'])
     answer(handler, 200, result)
 
 

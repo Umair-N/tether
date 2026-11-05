@@ -402,6 +402,21 @@ print(json.dumps([os.getpriority(os.PRIO_PROCESS, 0),
                 self.assertEqual(handler.status, 400)
                 enqueue.assert_not_called()
 
+    def test_resumable_finalize_enqueues_only_the_finished_file(self):
+        self.tool('ffmpeg')
+        with patch.object(share_api, 'get_store', return_value=self.store), patch.object(previews, 'enqueue') as enqueue:
+            handler = Handler('POST', 'uploads', json.dumps({'name': 'clip.bin', 'size': 4}).encode())
+            share_api.dispatch(handler)
+            identifier = json.loads(handler.wfile.getvalue())['upload']['id']
+            handler = Handler('POST', f'uploads/{identifier}?offset=0', b'ab')
+            share_api.dispatch(handler)
+            self.assertEqual(handler.status, 200)
+            enqueue.assert_not_called()
+            handler = Handler('POST', f'uploads/{identifier}?offset=2', b'cd')
+            share_api.dispatch(handler)
+            self.assertEqual(handler.status, 200)
+            enqueue.assert_called_once_with(self.store, json.loads(handler.wfile.getvalue())['file']['id'])
+
     def test_api_previews_keeps_authentication_gate(self):
         with patch.object(share_api, 'get_store') as store:
             handler = Handler('GET', 'previews', denied=True)
