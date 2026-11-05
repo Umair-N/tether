@@ -334,6 +334,7 @@ class Tab:
         self.viewers = 0
         self.casting = None  # (max width, max height) while a screencast runs
         self.viewer_sizes = []
+        self.last_input = 0.0
         self.motion_until = 0.0
         self.motion_timer = None
         self.motion_generation = 0
@@ -692,6 +693,7 @@ class Browser:
             raise ValueError('Invalid input.')
         self.ensure()
         tab = self.tab(target)
+        tab.last_input = self.clock()
         touch = PRESETS[tab.preset]['mobile']
         for event in events:
             method, params = input_command(event)

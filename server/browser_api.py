@@ -11,6 +11,8 @@ import mac_browser
 
 PREFIX = '/mobile/api/browser/'
 FRAME_INTERVAL = 1 / 30  # at most 30 frames a second per viewer
+KEEP_WARM = 0.08  # seconds between comment lines while warm
+WARM_AFTER_INPUT = 15  # seconds to keep warm after user input
 STREAM_LIFETIME = 600
 KEEPALIVE = 15
 POST_NAMES = {'new', 'close', 'navigate', 'history', 'input', 'device', 'agents', 'agents/setup', 'ask/dismiss',
@@ -231,7 +233,8 @@ def stream(handler, the_browser, target, width, height, browser_id='test', css_s
                     state['nav'] = {'back': False, 'forward': False}
                 handler.wfile.write(('event: tabs\ndata: ' + json.dumps(_tag(state, browser_id)) + '\n\n').encode())
                 wrote = time.monotonic()
-            frame = the_browser.first_frame(tab) if first else the_browser.wait_frame(tab, seen, 1.0)
+            warm = the_browser.clock() - tab.last_input < WARM_AFTER_INPUT
+            frame = the_browser.first_frame(tab) if first else the_browser.wait_frame(tab, seen, KEEP_WARM if warm else 1.0)
             first = False
             if frame is not None and not the_browser.heal(tab, frame):
                 seen = frame[0]  # a frame at the wrong size would map clicks wrongly; the next one fits
@@ -240,8 +243,12 @@ def stream(handler, the_browser, target, width, height, browser_id='test', css_s
                 handler.wfile.write(browser.frame_event(frame, browser_id))
                 handler.wfile.flush()
                 seen, wrote = frame[0], time.monotonic()
-            elif time.monotonic() - wrote >= KEEPALIVE:
+            elif not warm and time.monotonic() - wrote >= KEEPALIVE:
                 handler.wfile.write(('event: idle\ndata: ' + json.dumps(_tag({}, browser_id)) + '\n\n').encode())
+                wrote = time.monotonic()
+            # tailscale serve's gVisor netstack resets cwnd after RTO idle; keep this connection warm.
+            if warm and time.monotonic() - wrote >= KEEP_WARM:
+                handler.wfile.write(b':\n\n')
                 wrote = time.monotonic()
             handler.wfile.flush()
             the_browser.touch()

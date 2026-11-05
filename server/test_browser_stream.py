@@ -51,6 +51,15 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(self.tab.casting, (2560, 1600))
         self.assertEqual(self.tab.motion_until, 0.0)
 
+    def test_input_records_browser_clock_once_before_dispatch(self):
+        self.assertEqual(self.tab.last_input, 0.0)
+        self.browser.clock = Mock(return_value=123.0)
+        with patch.object(self.browser, 'ensure'), patch.object(self.browser.conn, 'call') as call:
+            call.side_effect = lambda *args, **kwargs: self.assertEqual(self.tab.last_input, 123.0)
+            self.browser.input('T1', [{'type': 'text', 'text': 'a'}, {'type': 'text', 'text': 'b'}])
+        self.browser.clock.assert_called_once_with()
+        self.assertEqual(call.call_count, 2)
+
     def test_motion_restores_sharp_static_frame_without_blank(self):
         now = [10.0]
         self.browser.clock = lambda: now[0]
@@ -182,16 +191,78 @@ class CaptureTests(unittest.TestCase):
 
 
 class StreamTests(unittest.TestCase):
+    def run_idle_stream(self, last_input, lifetime, frames=None):
+        now = [100.0]
+        clock = SimpleNamespace(monotonic=lambda: now[0])
+        clock.sleep = lambda delay: now.__setitem__(0, now[0] + delay)
+        tab = SimpleNamespace(target='T1', last_input=last_input)
+        fake = Mock(tabs={'T1': tab}, version=0, clock=lambda: now[0] + 1000)
+        fake.watch.return_value = tab
+        fake.first_frame.return_value = None
+        fake.state.return_value = {}
+        fake.nav_state.return_value = {}
+        fake.heal.return_value = True
+        waits, writes = [], []
+        def wait_frame(tab, seen, timeout):
+            waits.append(timeout)
+            delay, frame = (frames or {}).get(len(waits), (timeout + 1e-9, None))
+            now[0] += delay
+            return frame
+        fake.wait_frame.side_effect = wait_frame
+        class Sink(io.BytesIO):
+            def write(self, data):
+                writes.append((now[0], data))
+                return super().write(data)
+        with patch.object(browser_api, 'time', clock), patch.object(browser_api, 'STREAM_LIFETIME', lifetime):
+            browser_api.stream(Mock(wfile=Sink()), fake, 'T1', 1280, 800)
+        fake.unwatch.assert_called_once_with(tab, (1280, 800), None)
+        return waits, writes
+
+    def test_without_recent_input_preserves_idle_events(self):
+        for last_input in (0.0, 1085.0):  # never, or exactly 15 seconds ago
+            with self.subTest(last_input=last_input):
+                waits, writes = self.run_idle_stream(last_input, 16)
+                self.assertTrue(waits)
+                self.assertTrue(all(timeout == 1.0 for timeout in waits))
+                self.assertFalse(any(data == b':\n\n' for _, data in writes))
+                idle = [when for when, data in writes if data.startswith(b'event: idle')]
+                self.assertEqual(len(idle), 1)
+                self.assertAlmostEqual(idle[0], 115.0)
+
+    def test_recent_input_writes_comments_every_eighty_ms(self):
+        waits, writes = self.run_idle_stream(1099.0, 0.3)
+        self.assertTrue(waits)
+        self.assertTrue(all(timeout == browser_api.KEEP_WARM for timeout in waits))
+        comments = [when for when, data in writes if data == b':\n\n']
+        self.assertGreaterEqual(len(comments), 3)
+        for before, after in zip([100.0] + comments, comments):
+            self.assertAlmostEqual(after - before, 0.08)
+        self.assertFalse(any(data.startswith(b'event: idle') for _, data in writes))
+
+    def test_frame_write_resets_comment_timer(self):
+        _, writes = self.run_idle_stream(1099.0, 0.25, {1: (0.04, (1, {}, 'jpeg', 7))})
+        frames = [when for when, data in writes if data.startswith(b'event: frame')]
+        self.assertEqual(frames, [100.04])
+        comments = [when for when, data in writes if data == b':\n\n']
+        self.assertTrue(comments)
+        self.assertAlmostEqual(comments[0] - frames[0], browser_api.FRAME_INTERVAL + 0.08)
+
+    def test_warm_window_expires(self):
+        waits, writes = self.run_idle_stream(1085.1, 1.2)
+        self.assertEqual(waits[:2], [browser_api.KEEP_WARM] * 2)
+        self.assertTrue(all(timeout == 1.0 for timeout in waits[2:]))
+        self.assertEqual(sum(data == b':\n\n' for _, data in writes), 2)
+
     def test_pacing_takes_newest_after_sleep_and_slow_write(self):
         now = [0.0]
         clock = SimpleNamespace(monotonic=lambda: now[0])
         clock.sleep = lambda delay: now.__setitem__(0, now[0] + delay)
-        tab = SimpleNamespace(target='T1')
+        tab = SimpleNamespace(target='T1', last_input=0.0)
         emitted = []
         def newest(*args):
             seq = int(round(now[0] * 120)) + 1
             return (seq, {}, str(seq), 7)
-        fake = Mock(tabs={'T1': tab}, version=0)
+        fake = Mock(tabs={'T1': tab}, version=0, clock=lambda: now[0] + 1000)
         fake.watch.return_value = tab
         fake.first_frame.side_effect = newest
         fake.wait_frame.side_effect = newest
