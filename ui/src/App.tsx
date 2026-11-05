@@ -4,7 +4,7 @@ import { ApiError, canFork, errorText, request } from './api'
 import type { Api, Pane, PastChat, SessionsData } from './api'
 import { useModal, usePolling } from './hooks'
 import type { Anchor } from './hooks'
-import { setPlace, setPlaceHandler, useBackStep } from './backNav'
+import { setPlace, setPlaceHandler } from './backNav'
 import { usePrefs } from './prefs'
 import { applyScheme } from './schemes'
 import { PlanUsage, Sidebar, groupSessions, isArchived, isDone, needsYou, paneTitle, runningPanes, shownIndex, sortByPrefs, toggleArchive } from './Sidebar'
@@ -423,7 +423,6 @@ function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
   const drawerModal = useModal(drawer, () => setDrawer(false))
-  useBackStep(liveMode, () => setLive(false))
   const drawerTouch = useRef<{ x: number; y: number } | null>(null)
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 5000); return () => clearTimeout(timer) }, [notice])
   // Files explorer → chat: "Add to message" puts @paths in the active chat's draft; "Terminal here" opens a side shell at a folder.

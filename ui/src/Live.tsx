@@ -5,6 +5,7 @@ import type { Command } from './CommandMenu'
 import { agentNames, paneTitle } from './Sidebar'
 import { agentReady, FridayAgent, type AgentChatList, type AgentChats, type AgentEvent, type ToolHandler } from './fridayAgent'
 import { LiveVoice, sentences } from './liveVoice'
+import { useBackStep } from './backNav'
 import { useFloatingWindow, type Edge, type Rect } from './floatingWindow'
 import { speakable } from './speech'
 import './Live.css'
@@ -583,6 +584,8 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0 }: { 
   // The bubble button goes away when the window opens: move focus into the window, not to the page.
   const lastMode = useRef(mode)
   useEffect(() => { if (lastMode.current === 'bubble' && mode !== 'bubble') root.current?.focus(); lastMode.current = mode }, [mode])
+  // Back shrinks Friday to its bubble, like a call app. Only End stops the call.
+  useBackStep(mode !== 'bubble', () => setMode('bubble'))
   const revealed = useRef(reveal)
   useEffect(() => { if (reveal !== revealed.current) { revealed.current = reveal; if (mode === 'bubble') setMode('window') } }, [reveal, mode, setMode])
   useEffect(() => { talkButton.current?.focus() }, [])
