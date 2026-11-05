@@ -8,6 +8,7 @@ from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 import auth
 import paths
+import share_previews
 from share_store import CHUNK, OWNER, THUMB_LIMIT, ShareError, Store, authorize
 
 PREFIX = '/mobile/api/share/'
@@ -152,8 +153,11 @@ def serve_get(handler, store, action, query):
         one = lambda key, default='': query.get(key, [default])[0]
         if one('trash', '0') not in ('0', '1'):
             raise ShareError(400, 'Choose trash 0 or 1.')
+        share_previews.backfill(store)
         answer(handler, 200, store.list(one('kind', 'all'), one('q'), one('trash', '0') == '1', one('cursor') or None,
                                         one('limit', '60'), source=one('source', 'all')))
+    elif action == 'previews' and handler.command == 'GET':
+        answer(handler, 200, {'tools': share_previews.tools()})
     elif action.startswith('raw/'):
         send_file(handler, store, action[4:], query)
     elif action.startswith('thumb/') and handler.command == 'GET':
@@ -177,6 +181,7 @@ def serve_post(handler, store, action):
             raise ShareError(400, 'Send a percent-encoded UTF-8 file name.') from exc
         file = store.put(handler.rfile, size, name, handler.headers.get('X-File-Type', ''),
                          **{k: handler.headers.get('X-' + k.title()) for k in ('width', 'height', 'duration')})
+        share_previews.after_upload(store, file['id'])
         answer(handler, 200, {'file': file})
         return
     if action.startswith('thumb/'):
