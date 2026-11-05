@@ -28,6 +28,7 @@ except ImportError:
 
 SYSTEM_PROMPT = (
     'You are Friday, the voice assistant for Tether. You drive Claude Code and Codex coding agents in tmux. '
+    'Tether is the app; speech-to-text may mishear it. '
     'Reply in one or two short spoken sentences. No markdown, lists, code, or Needs you footer. '
     'State lists busy chats, chats that need the user, and an idle count. Call list_chats for idle names. '
     'Never read more than 3 names aloud. Give a count, name the most relevant, and ask which one. '
@@ -35,6 +36,7 @@ SYSTEM_PROMPT = (
     'If unsure, call list_chats or read_last_reply, or say you do not know. '
     'If the user asks what a chat said or replied, call read_last_reply. '
     'Before send_to_chat, turn the user request into a clear, complete prompt for the coding agent. '
+    'Before send_to_chat, unless the user said send, tell, or ask, read the prompt back in one short sentence and wait for yes. '
     'Use answer_approval only if the user clearly said approve or yes, or deny or no, for that request in this turn. '
     'Use new_chat only when the user asks for a new chat or session. '
     'When an agent works, keep talking with the user. Do not wait for the agent. '
@@ -43,6 +45,53 @@ SYSTEM_PROMPT = (
 STATE_PREFIX = 'Current Tether state: '
 EVENT_PREFIX = 'Tether news to tell the user in one sentence; do not act on it: '
 MAX_REPLY_TOKENS = 120
+BARGE_IN_WORDS = 3
+SEND_INTENT = re.compile(
+    r'\b(?:send|tell|ask|prompt|instruct|message|forward)\b'
+    r'|\bhave\s+(?:it|them|\w+(?:-\w+)+)\s+\w+'
+    r'|\bget\s+(?:it|them)\s+to\b', re.I)
+APPROVAL_YES = re.compile(r'\b(?:approve|approved|yes|yeah|yep|ok|okay|sure|allow|go ahead)\b', re.I)
+APPROVAL_NO = re.compile(r"\b(?:deny|denied|no|nope|reject|stop|don't)\b", re.I)
+STT_FIXUPS = {'t third': 'Tether', 'tthird': 'Tether', 'teether': 'Tether',
+              'tetter': 'Tether', "tether's": "Tether's"}
+_STT_FIXUP = re.compile(r'\b(?:' + '|'.join(re.escape(word) for word in STT_FIXUPS) + r')\b', re.I)
+CLOSE_STEP_TIMEOUT = 2.0
+REQUEST_TIMEOUT = 9.0
+_closing_tasks = set()
+
+
+def fix_transcript(text):
+    return _STT_FIXUP.sub(lambda match: STT_FIXUPS[match[0].lower()], text)
+
+
+async def bounded(awaitable, timeout):
+    """Stop waiting even if a dependency swallows cancellation."""
+    task = asyncio.ensure_future(awaitable)
+    _closing_tasks.add(task)
+
+    def finished(task):
+        _closing_tasks.discard(task)
+        if not task.cancelled():
+            task.exception()  # Retrieve late failures after a timeout.
+
+    task.add_done_callback(finished)
+    try:
+        done, _ = await asyncio.wait([task], timeout=max(0, timeout))
+        if done:
+            return task.result()
+        raise asyncio.TimeoutError()
+    finally:
+        if not task.done():
+            task.cancel()
+
+
+async def close_step(awaitable, step, timeout=CLOSE_STEP_TIMEOUT):
+    try:
+        await bounded(awaitable, timeout)
+    except asyncio.TimeoutError:
+        print(f'Friday close timeout: {step}', file=sys.stderr, flush=True)
+    except Exception as exc:
+        print(f'Friday close failed: {step}: {type(exc).__name__}', file=sys.stderr, flush=True)
 
 
 def brain_config(env, default_project=None):
@@ -102,7 +151,7 @@ def vad_stop(env, smart_turn):
     return float(env.get('TETHER_FRIDAY_VAD_STOP', '0.5')) if smart_turn else 0.8
 
 
-def check_tool(name, args, source, last_user_text, used):
+def check_tool(name, args, source, last_user_text, used, previous_assistant=''):
     """Return a short refusal, without changing the originating turn's state."""
     actions = ('send_to_chat', 'answer_approval', 'new_chat', 'switch_chat')
     if source == 'event' and name in actions:
@@ -112,9 +161,8 @@ def check_tool(name, args, source, last_user_text, used):
     if name in ('send_to_chat', 'answer_approval') and name in used:
         return 'Only one ' + name + ' is allowed per spoken turn.'
     if name == 'answer_approval':
-        approve = bool(re.search(r'\b(?:approve|approved|yes|yeah|yep|ok|okay|sure|allow|go ahead)\b',
-                                 last_user_text, re.I))
-        deny = bool(re.search(r"\b(?:deny|denied|no|nope|reject|stop|don't)\b", last_user_text, re.I))
+        approve = bool(APPROVAL_YES.search(last_user_text))
+        deny = bool(APPROVAL_NO.search(last_user_text))
         decision = args.get('decision')
         if approve == deny or decision not in ('approve', 'deny') or (decision == 'approve') != approve:
             return 'The user did not give unambiguous consent for this decision.'
@@ -122,7 +170,30 @@ def check_tool(name, args, source, last_user_text, used):
             r'\bwhat\s+(?:was|is|did)\b.*\b(?:response|reply|answer|say)\b|\bdid it (?:reply|answer|finish)\b',
             str(args.get('prompt', '')), re.I | re.S):
         return 'This asks about a reply; call read_last_reply.'
+    if name == 'send_to_chat' and not SEND_INTENT.search(last_user_text):
+        prompt = str(args.get('prompt', '')).strip().casefold()
+        chat = str(args.get('chat', '')).strip().casefold()
+        readback = previous_assistant.casefold()
+        confirmed = (APPROVAL_YES.search(last_user_text) and not APPROVAL_NO.search(last_user_text)
+                     and ((prompt and prompt in readback)
+                          or (chat and re.search(r'\bsend\b', readback)
+                              and re.search(r'(?<![\w-])' + re.escape(chat) + r'(?![\w-])', readback))))
+        if not confirmed:
+            return 'Read the prompt back and ask the user to confirm before sending.'
     return None
+
+
+def provider_error_detail(exc, api_key):
+    """Read only the provider message, never request or header fields."""
+    body = getattr(exc, 'body', None)
+    if isinstance(body, dict):
+        body = body.get('error', body)
+        body = body.get('message') if isinstance(body, dict) else body
+    detail = body if isinstance(body, str) else getattr(exc, 'message', '')
+    detail = re.sub(r'(?i)\bBearer\s+[^\s\"\'<>},;]+|\bya29\.[\w.~-]+', '[REDACTED]', detail)
+    if api_key:
+        detail = detail.replace(api_key, '[REDACTED]')
+    return ' '.join(detail.split())[:300]
 
 
 def tool_schemas():
@@ -253,8 +324,9 @@ def runtime_types():
     from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
     from pipecat.frames.frames import (BotStartedSpeakingFrame, BotStoppedSpeakingFrame,
         FunctionCallResultFrame, InterruptionFrame, LLMContextFrame, LLMFullResponseEndFrame,
-        LLMFullResponseStartFrame, MetricsFrame, TTSSpeakFrame, TranscriptionFrame,
-        VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame)
+        LLMFullResponseStartFrame, LLMAssistantPushAggregationFrame, MetricsFrame,
+        TTSSpeakFrame, TTSStartedFrame, TTSStoppedFrame, TTSTextFrame, TranscriptionFrame,
+        InterimTranscriptionFrame, VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame)
     from pipecat.metrics.metrics import TTFBMetricsData
     from pipecat.observers.base_observer import BaseObserver
     from pipecat.processors.frameworks.rtvi.observer import RTVIFunctionCallReportLevel, RTVIObserverParams
@@ -263,7 +335,45 @@ def runtime_types():
     from pipecat.services.tts_service import TTSService
     from pipecat.services.openai.llm import OpenAILLMService
     from pipecat.transcriptions.language import Language
+    from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
     from pipecat.utils.time import time_now_iso8601
+
+    class FridayUserTurnStartStrategy(VADUserTurnStartStrategy):
+        """Keep silent VAD latency; require words for overlapping speech."""
+        def __init__(self, session):
+            super().__init__()
+            self.session = session
+            self.bot_speaking = self.overlap = self.active = False
+
+        async def handle_user_turn_started(self):
+            self.active = True
+
+        async def handle_user_turn_stopped(self):
+            self.active = self.overlap = False
+
+        async def process_frame(self, frame):
+            if isinstance(frame, BotStartedSpeakingFrame):
+                self.bot_speaking = True
+            elif isinstance(frame, BotStoppedSpeakingFrame):
+                self.bot_speaking = False
+            elif isinstance(frame, VADUserStartedSpeakingFrame):
+                self.overlap = self.bot_speaking
+                if not self.overlap:
+                    await super().process_frame(frame)
+            elif isinstance(frame, (TranscriptionFrame, InterimTranscriptionFrame)) and not self.active:
+                # Latch overlap at VAD start: STT can finish after playback ends.
+                if (self.bot_speaking or self.overlap) and len(frame.text.split()) < BARGE_IN_WORDS:
+                    # The aggregator appends final text before calling strategies.
+                    await self.trigger_reset_aggregation()
+                    if isinstance(frame, TranscriptionFrame):
+                        self.overlap = False
+                        self.session.user_speaking = False
+                        if not self.session.bot_speaking and not self.session.llm_running:
+                            self.session.busy = False
+                        self.session.wake.set()
+                elif frame.text.strip():
+                    # Preserve today's transcription fallback if VAD missed speech.
+                    await self.report_user_turn_started()
 
     class ParakeetSTT(SegmentedSTTService):
         def __init__(self, recognizer, session):
@@ -279,7 +389,7 @@ def runtime_types():
             stream = self.recognizer.create_stream()
             stream.accept_waveform(16000, samples)
             self.recognizer.decode_stream(stream)
-            return stream.result.text.strip()
+            return fix_transcript(stream.result.text.strip())
 
         async def run_stt(self, audio):
             start = time.monotonic()
@@ -315,6 +425,97 @@ def runtime_types():
                 sample_rate=model.sample_rate,
                 settings=self.Settings(model=None, voice='alba', language=Language.EN))
             self._model, self._voice_state, self.session = model, voice, session
+            self.voice_turn = 0
+            self.voice_count = 0
+            self.voice_open = self.voice_client = self.voice_cancelled = False
+            self.voice_speaking = self.voice_playback_ended = False
+
+        def begin_voice_turn(self):
+            self.voice_turn += 1
+            self.voice_count = 0
+            self.voice_open = True
+            self.voice_client = self.session.voice_mode == 'client'
+            self.voice_cancelled = self.voice_speaking = self.voice_playback_ended = False
+
+        async def _handle_llm_response_start(self, frame):
+            self.begin_voice_turn()
+            await super()._handle_llm_response_start(frame)
+
+        async def _handle_tts_speak(self, frame):
+            standalone = not self._turn_context_id
+            if not self.voice_open:
+                self.begin_voice_turn()
+            await super()._handle_tts_speak(frame)
+            # No audio context exists to commit standalone client speech.
+            if standalone and self.voice_count and frame.append_to_context:
+                await self._audio_context_manager.put_frame(TTSStoppedFrame())
+                await self._audio_context_manager.put_frame(LLMAssistantPushAggregationFrame())
+
+        async def _handle_aggregated_text(self, frame, context_id=None):
+            if self.voice_cancelled:
+                return
+            if self.session.voice_mode != 'client':
+                await super()._handle_aggregated_text(frame, context_id)
+                return
+            text = self._trim_text(frame.text)
+            if text is None:
+                return
+            self.voice_client = True
+            self.session.tts_ttfb = None
+            await self.session.rtvi.send_server_message({'t': 'say', 'd': {
+                'turn': self.voice_turn, 'seq': self.voice_count, 'text': text}})
+            self.voice_count += 1
+            # Match Pocket's announcement and completed-text frames, without
+            # opening an audio context or entering synthesis. The existing
+            # transport, RTVI observer and assistant aggregator keep the text.
+            context_id = context_id or self.create_context_id()
+            context = self._tts_contexts.get(context_id)
+            append = context.append_to_context if context else True
+            if context and context.push_assistant_aggregation:
+                started = TTSStartedFrame(context_id=context_id)
+                started.append_to_context = append
+                await self._audio_context_manager.put_frame(started)
+            await self._announce_text(frame, context_id)
+            spoken = TTSTextFrame(text, text_type=frame.text_type,
+                                  raw_text=frame.raw_text, segment_id=frame.id)
+            spoken.context_id = context_id
+            spoken.will_be_spoken = True
+            spoken.append_to_context = append
+            spoken.interruptible = frame.interruptible
+            await self._audio_context_manager.put_frame(spoken)
+
+        async def on_turn_context_completed(self):
+            await super().on_turn_context_completed()
+            if self.voice_open and self.voice_client and not self.voice_cancelled:
+                await self.session.rtvi.send_server_message({'t': 'say_end', 'd': {
+                    'turn': self.voice_turn, 'count': self.voice_count}})
+            self.voice_open = False
+
+        async def _handle_interruption(self, frame, direction):
+            was_speaking = self.voice_speaking
+            client_turn = self.voice_client or (self.voice_open and self.session.voice_mode == 'client')
+            if client_turn and not self.voice_cancelled and not self.voice_playback_ended:
+                self.voice_cancelled = True
+                self.voice_speaking = False
+                await self.session.rtvi.send_server_message(
+                    {'t': 'stop', 'd': {'turn': self.voice_turn}})
+            await super()._handle_interruption(frame, direction)
+            if was_speaking:
+                await self.session.output.broadcast_frame(BotStoppedSpeakingFrame)
+
+        async def spoken(self, data):
+            if (type(data.get('turn')) is not int or data['turn'] != self.voice_turn
+                    or not self.voice_count or self.voice_cancelled or self.voice_playback_ended):
+                return
+            if data.get('state') == 'start' and not self.voice_speaking:
+                self.voice_speaking = True
+                self.session.tts_ttfb = None
+                self.session.reported = False
+                await self.session.output.broadcast_frame(BotStartedSpeakingFrame)
+            elif data.get('state') == 'end' and self.voice_speaking:
+                self.voice_speaking = False
+                self.voice_playback_ended = True
+                await self.session.output.broadcast_frame(BotStoppedSpeakingFrame)
 
         async def run_tts(self, text, context_id):
             start = time.monotonic()
@@ -343,6 +544,7 @@ def runtime_types():
             self._run_message = None
             self._active_run = ContextVar('friday_tool_run', default=None)
             self._thought_signatures = {}
+            self._request_roles = ''
 
         async def get_chat_completions(self, context):
             stream = await super().get_chat_completions(context)
@@ -382,6 +584,9 @@ def runtime_types():
 
         def build_chat_completion_params(self, params_from_context):
             params = super().build_chat_completion_params(params_from_context)
+            self._request_roles = ','.join(
+                message['role'] + ('(tool_calls)' if message.get('tool_calls') else '')
+                for message in params['messages'])
             if self.brain.kind != 'gemini':
                 return params
             # Copy only the outgoing tool messages; shared LLMContext stays intact.
@@ -416,8 +621,11 @@ def runtime_types():
                 self.run_source = 'event' if text.startswith(EVENT_PREFIX) else 'speech'
                 if self.run_source == 'speech':
                     self.last_user_text = text
+                previous = next((m for m in reversed(messages[:-1])
+                                 if m.get('role') == 'assistant'), {})
                 self.tool_run = SimpleNamespace(source=self.run_source,
-                    last_user_text=self.last_user_text, used=set())
+                    last_user_text=self.last_user_text, used=set(),
+                    previous_assistant=previous.get('content') or '')
             else:
                 self.run_source = 'tool'
             return self.tool_run
@@ -428,7 +636,7 @@ def runtime_types():
             run = self._active_run.get()
             reason = check_tool(params.function_name, params.arguments,
                 run.source if run else None, run.last_user_text if run else '',
-                run.used if run else set())
+                run.used if run else set(), run.previous_assistant if run else '')
             if reason:
                 print(f'Friday blocked {params.function_name}: {reason}', file=sys.stderr, flush=True)
                 await params.result_callback({'error': reason})
@@ -452,6 +660,8 @@ def runtime_types():
             run = self.prepare_run(context.get_messages())
             token = self._active_run.set(run)
             context.set_messages(self.session.prepare_messages(context.get_messages()))
+            self._request_roles = ','.join(m['role'] + ('(tool_calls)' if m.get('tool_calls') else '')
+                                           for m in context.get_messages())
             try:
                 if self.brain.kind == 'gemini':
                     self._client.api_key = await self.session.models.auth.token()
@@ -460,9 +670,10 @@ def runtime_types():
                 if self.brain.kind == 'gemini' and isinstance(exc, AuthenticationError):
                     self.session.models.auth.refresh_ok = False
                 if isinstance(exc, APIError):
-                    # Never log the provider body: it can echo prompts or tokens.
                     status = getattr(exc, 'status_code', None) or 'transport'
-                    print(f'Friday LLM error: {status} request failed ({type(exc).__name__})',
+                    detail = provider_error_detail(exc, self._client.api_key)
+                    print(f'Friday LLM error: {status} request failed ({type(exc).__name__}): '
+                          f'{detail}; roles={self._request_roles}',
                           file=sys.stderr, flush=True)
                 if not await self.session.models.llm_health():
                     await self.session.offline_notice()
@@ -590,6 +801,7 @@ class Session:
         self.wake = asyncio.Event()
         self.user_speaking = self.bot_speaking = self.busy = self.llm_running = False
         self.offline_spoken = False
+        self.voice_mode = 'server'
         self.turn = 0
         self.new_turn()
         self.rtvi = RTVIProcessor()
@@ -607,18 +819,21 @@ class Session:
                 if models.smart_turn is not None else SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0))
         self.aggregators = LLMContextAggregatorPair(self.context, user_params=LLMUserAggregatorParams(
             vad_analyzer=rt.SharedVAD(models.vad, vad_stop(os.environ, models.smart_turn is not None)),
-            user_turn_strategies=UserTurnStrategies(stop=[stop])))
+            user_turn_strategies=UserTurnStrategies(stop=[stop])))  # b12 start strategy off: turns stalled live 20:17
         transport = SmallWebRTCTransport(connection, TransportParams(
             audio_in_enabled=True, audio_out_enabled=True,
             audio_in_sample_rate=16000, audio_out_sample_rate=models.tts.sample_rate))
+        self.output = transport.output()
         pipeline = Pipeline([transport.input(), self.rtvi, self.stt, self.aggregators.user(),
-                             self.llm, self.tts, transport.output(), self.aggregators.assistant()])
+                             self.llm, self.tts, self.output, self.aggregators.assistant()])
         self.worker = PipelineWorker(pipeline, params=PipelineParams(enable_metrics=True,
             audio_in_sample_rate=16000, audio_out_sample_rate=models.tts.sample_rate),
             observers=[self.llm.browser_observer(), rt.FridayObserver(self)],
             idle_timeout_secs=None)
         self.runner = WorkerRunner(handle_sigint=False, handle_sigterm=False)
         self.run_task = self.queue_task = None
+        self.close_task = None
+        self.on_closed = None
 
         @self.rtvi.event_handler('on_client_message')
         async def client_message(processor, message):
@@ -641,7 +856,20 @@ class Session:
 
         @transport.event_handler('on_client_disconnected')
         async def disconnected(transport, peer):
-            await self.worker.cancel()
+            self.end()
+
+        # Subscribe directly too: failed/closed can arrive before the transport
+        # connects. Never await teardown inside an aiortc close callback.
+        @connection.event_handler('closed')
+        @connection.event_handler('failed')
+        async def connection_ended(peer):
+            self.end()
+
+    def end(self):
+        if self.close_task is None:
+            if self.on_closed:
+                self.on_closed(self)
+            self.close_task = asyncio.create_task(self._close(), name='friday-close')
 
     def prepare_messages(self, messages):
         messages, sent = add_state(messages, self.state, self.notes, self.last_sent)
@@ -659,7 +887,8 @@ class Session:
 
     async def report_metrics(self):
         self.reported = True
-        data = {'turn': self.turn, 'stop_to_first_audio': round(max(0, time.time() - self.stop_time), 4) if self.stop_time else None,
+        turn = self.tts.voice_turn if self.tts.voice_speaking else self.turn
+        data = {'turn': turn, 'stop_to_first_audio': round(max(0, time.time() - self.stop_time), 4) if self.stop_time else None,
                 'stt': round(self.stt_seconds, 4), 'llm_ttft': round(self.llm_ttft, 4) if self.llm_ttft is not None else None,
                 'tts_ttfb': round(self.tts_ttfb, 4) if self.tts_ttfb is not None else None}
         await self.rtvi.send_server_message({'t': 'metrics', 'd': data})
@@ -675,7 +904,13 @@ class Session:
     async def client_message(self, kind, data):
         if not isinstance(data, dict):
             return
-        if kind == 'state':
+        if kind == 'voice':
+            if data.get('mode') in ('client', 'server'):
+                self.voice_mode = data['mode']
+                await self.rtvi.send_server_message({'t': 'voice', 'd': {'mode': self.voice_mode}})
+        elif kind == 'spoken':
+            await self.tts.spoken(data)
+        elif kind == 'state':
             self.state = json.loads(json.dumps(data))
         elif kind == 'note' and isinstance(data.get('text'), str):
             self.notes.append(data['text'])
@@ -715,15 +950,22 @@ class Session:
         try:
             await self.runner.run(self.worker)
         finally:
+            self.end()
             self.queue_task.cancel()
             await asyncio.gather(self.queue_task, return_exceptions=True)
             await self.llm._client.close()
 
     async def close(self):
-        await self.connection.disconnect()
+        self.end()
+        await asyncio.shield(self.close_task)
+
+    async def _close(self):
+        if self.queue_task:
+            self.queue_task.cancel()
+        await close_step(self.connection.disconnect(), 'connection.disconnect()')
         if self.run_task and not self.run_task.done():
-            await self.runner.cancel()
-            await asyncio.wait_for(self.run_task, timeout=10)
+            await close_step(self.runner.cancel(), 'runner.cancel()')
+            await close_step(self.run_task, 'run_task')
 
 
 def create_app():
@@ -742,7 +984,14 @@ def create_app():
     request_handler = SmallWebRTCRequestHandler(ice_servers=[], connection_mode=ConnectionMode.SINGLE)
     lock = asyncio.Lock()
     active = None
+    retiring = None
     models = None
+
+    def clear_active(session):
+        nonlocal active, retiring
+        if active is session:
+            active = None
+            retiring = session
 
     @asynccontextmanager
     async def lifespan(app):
@@ -757,9 +1006,10 @@ def create_app():
         try:
             yield
         finally:
-            if active:
-                await active.close()
-            await request_handler.close()
+            previous = active or retiring
+            if previous:
+                await close_step(previous.close(), 'active.close()', 6.1)
+            await close_step(request_handler.close(), 'request_handler.close()')
             await asyncio.gather(*models.warmup_tasks, return_exceptions=True)
 
     app = FastAPI(lifespan=lifespan)
@@ -785,27 +1035,47 @@ def create_app():
 
     @app.post('/offer')
     async def offer(request: Request):
-        nonlocal active
+        nonlocal active, retiring, request_handler
         data = await body(request)
         try:
             offer_request = SmallWebRTCRequest.from_dict(data)
         except TypeError:
             raise HTTPException(400, 'Invalid offer.')
-        async with lock:
+        deadline = asyncio.get_running_loop().time() + REQUEST_TIMEOUT
+        try:
+            await asyncio.wait_for(lock.acquire(), timeout=REQUEST_TIMEOUT)
+        except asyncio.TimeoutError:
+            raise HTTPException(504, 'Friday offer timed out.') from None
+        try:
             # A pc_id match is a renegotiation; a fresh offer replaces the
             # active peer so a phone reload works with SINGLE mode.
-            if active and offer_request.pc_id != active.connection.pc_id:
-                await active.close()
-                await request_handler.close()
-                active = None
+            if active is None or offer_request.pc_id != active.connection.pc_id:
+                # A disconnected Session has already cleared active, but its
+                # bounded teardown must finish before shared VAD state resets.
+                previous = active or retiring
+                active = retiring = None
+                if previous:
+                    await close_step(previous.close(), 'active.close()',
+                                     min(6.1, deadline - asyncio.get_running_loop().time()))
+                await close_step(request_handler.close(), 'request_handler.close()',
+                                 min(CLOSE_STEP_TIMEOUT, deadline - asyncio.get_running_loop().time()))
+                # A timed-out handler can still finish later. Give the next
+                # offer its own map, so stale cleanup cannot discard its peer.
+                request_handler = SmallWebRTCRequestHandler(ice_servers=[], connection_mode=ConnectionMode.SINGLE)
 
             async def connected(connection):
                 nonlocal active
                 active = Session(rt, models, connection)
+                active.on_closed = clear_active
                 models.start_warmup('connection')
                 active.run_task = asyncio.create_task(active.run(), name='friday-pipeline')
 
-            return await request_handler.handle_web_request(offer_request, connected)
+            return await bounded(request_handler.handle_web_request(offer_request, connected),
+                                 deadline - asyncio.get_running_loop().time())
+        except asyncio.TimeoutError:
+            raise HTTPException(504, 'Friday offer timed out.') from None
+        finally:
+            lock.release()
 
     @app.patch('/offer')
     async def patch_offer(request: Request):
@@ -815,8 +1085,18 @@ def create_app():
                 candidates=[IceCandidate(**candidate) for candidate in data['candidates']])
         except (KeyError, TypeError):
             raise HTTPException(400, 'Invalid ICE candidates.')
-        async with lock:
-            await request_handler.handle_patch_request(patch_request)
+        deadline = asyncio.get_running_loop().time() + REQUEST_TIMEOUT
+        try:
+            await asyncio.wait_for(lock.acquire(), timeout=REQUEST_TIMEOUT)
+        except asyncio.TimeoutError:
+            raise HTTPException(504, 'Friday ICE update timed out.') from None
+        try:
+            await bounded(request_handler.handle_patch_request(patch_request),
+                          deadline - asyncio.get_running_loop().time())
+        except asyncio.TimeoutError:
+            raise HTTPException(504, 'Friday ICE update timed out.') from None
+        finally:
+            lock.release()
         return {}
 
     return app

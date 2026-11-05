@@ -15,6 +15,16 @@ except ImportError:
 
 
 class FridayRulesTests(unittest.TestCase):
+    def test_stt_fixups_are_whole_word_and_case_insensitive(self):
+        for word, replacement in friday.STT_FIXUPS.items():
+            for spelling in (word, word.upper(), word.title()):
+                with self.subTest(spelling=spelling):
+                    self.assertEqual(friday.fix_transcript('Ask ' + spelling + '!'),
+                                     'Ask ' + replacement + '!')
+        for text in ('the third time', 'the tether', 'Tether', 'teethers', 'tettering',
+                     'T thirdly', 'T thirdtime', 'T-third', 'T  third'):
+            self.assertEqual(friday.fix_transcript(text), text)
+
     def test_local_brain_defaults(self):
         brain = friday.brain_config({})
         self.assertEqual(brain.kind, 'local')
@@ -70,7 +80,7 @@ class FridayRulesTests(unittest.TestCase):
     def test_one_action_per_speech_turn(self):
         for name, args in [('send_to_chat', {'prompt': 'Fix the login bug'}),
                            ('answer_approval', {'decision': 'approve'})]:
-            self.assertIsNone(friday.check_tool(name, args, 'speech', 'yes', set()))
+            self.assertIsNone(friday.check_tool(name, args, 'speech', 'yes, tell it to fix login', set()))
             used = {name}
             self.assertIsNotNone(friday.check_tool(name, args, 'speech', 'yes', used))
             self.assertEqual(used, {name})
@@ -98,7 +108,36 @@ class FridayRulesTests(unittest.TestCase):
             reason = friday.check_tool('send_to_chat', {'prompt': prompt}, 'speech', prompt, set())
             self.assertIn('read_last_reply', reason)
         self.assertIsNone(friday.check_tool('send_to_chat', {'prompt': 'Fix the login bug'},
-            'speech', 'Fix the login bug', set()))
+            'speech', 'Tell it to fix the login bug', set()))
+
+    def test_send_intent_and_readback_consent(self):
+        args = {'chat': 'ci-audit', 'prompt': 'Fix the flake.'}
+        refusal = 'Read the prompt back and ask the user to confirm before sending.'
+        for text in ('Again with a fish.', 'yes', 'yesterday', 'Fix the flake.'):
+            self.assertEqual(friday.check_tool('send_to_chat', args, 'speech', text, set()), refusal)
+        for text in ('tell ci-audit to fix the flake', 'SEND this', 'ask it', 'prompt it',
+                     'instruct it', 'message ci-audit', 'forward this', 'have it fix it',
+                     'have them fix it', 'have ci-audit fix it', 'get it to fix it',
+                     'get them to fix it'):
+            self.assertIsNone(friday.check_tool('send_to_chat', args, 'speech', text, set()))
+        for text in ('sender', 'telling', 'messaged', 'forget it to', 'I have a fish'):
+            self.assertIsNotNone(friday.check_tool('send_to_chat', args, 'speech', text, set()))
+        for readback in ('Shall I send ci-audit the fix?', 'Should I ask it: Fix the flake.?'):
+            for yes in ('yes', 'YEP!', 'go ahead'):
+                self.assertIsNone(friday.check_tool('send_to_chat', args, 'speech', yes, set(), readback))
+            for no in ('no', 'yes but no', "yes, don't", 'yesterday'):
+                self.assertEqual(friday.check_tool('send_to_chat', args, 'speech', no, set(), readback), refusal)
+        for readback in ('', 'Fix another issue?', 'I read ci-audit.', 'Send to another chat?'):
+            self.assertEqual(friday.check_tool('send_to_chat', args, 'speech', 'yes', set(), readback), refusal)
+
+    def test_error_detail_is_bounded_and_redacted_before_truncation(self):
+        exc = SimpleNamespace(body={'message': 'Invalid role\nBEARER abc ya29.token actual-key ' + 'x' * 400},
+                              message='unused fallback')
+        detail = friday.provider_error_detail(exc, 'actual-key')
+        self.assertEqual(len(detail), 300)
+        self.assertTrue(detail.startswith('Invalid role [REDACTED] [REDACTED] [REDACTED] '))
+        self.assertNotIn('\n', detail)
+        self.assertEqual(friday.provider_error_detail(SimpleNamespace(body=None, message='Fallback'), ''), 'Fallback')
 
     def event(self, ident, priority='idle'):
         return {'id': ident, 'chat': 'docs', 'kind': 'done', 'text': 'Done.', 'priority': priority}
@@ -280,6 +319,52 @@ class FridayRulesTests(unittest.TestCase):
 
 
 class FridayNoteTests(unittest.IsolatedAsyncioTestCase):
+    async def test_close_bounds_all_steps_and_cancels_pipeline_and_queue(self):
+        async def hang():
+            await asyncio.Event().wait()
+
+        session = friday.Session.__new__(friday.Session)
+        session.connection = Mock(disconnect=AsyncMock(side_effect=hang))
+        session.runner = Mock(cancel=AsyncMock(side_effect=hang))
+        session.run_task = asyncio.create_task(hang())
+        session.queue_task = asyncio.create_task(hang())
+        session.close_task = None
+        session.on_closed = Mock()
+        close_step = friday.close_step
+
+        async def fast_close(awaitable, step):
+            await close_step(awaitable, step, timeout=0.02)
+
+        with patch.object(friday, 'close_step', side_effect=fast_close), patch('sys.stderr') as stderr:
+            await asyncio.wait_for(session.close(), timeout=1)
+            await asyncio.gather(session.run_task, session.queue_task, return_exceptions=True)
+        session.on_closed.assert_called_once_with(session)
+        self.assertTrue(session.run_task.cancelled())
+        self.assertTrue(session.queue_task.cancelled())
+        lines = ''.join(str(call.args[0]) for call in stderr.write.call_args_list).splitlines()
+        self.assertEqual(lines, ['Friday close timeout: connection.disconnect()',
+                                 'Friday close timeout: runner.cancel()', 'Friday close timeout: run_task'])
+
+    async def test_close_timeout_does_not_wait_for_cancellation(self):
+        release = asyncio.Event()
+        stopped = asyncio.Event()
+
+        async def stubborn():
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                await release.wait()
+            finally:
+                stopped.set()
+
+        try:
+            with patch('sys.stderr'):
+                await asyncio.wait_for(friday.close_step(stubborn(), 'stubborn', timeout=0.02), timeout=1)
+            self.assertFalse(stopped.is_set())
+        finally:
+            release.set()
+            await asyncio.wait_for(stopped.wait(), timeout=1)
+
     async def test_notes_cap_and_do_not_touch_context_during_tool_call(self):
         session = friday.Session.__new__(friday.Session)
         session.notes = []
@@ -328,6 +413,132 @@ class FridayAPITests(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
         cls.rt = friday.runtime_types()
+
+    async def test_offer_replaces_session_even_when_close_hangs(self):
+        import httpx
+        from pipecat.transports.smallwebrtc import request_handler as handlers
+        sessions = []
+        handler = Mock(close=AsyncMock(), handle_patch_request=AsyncMock())
+
+        async def handle(request, connected):
+            connection = Mock(pc_id=str(len(sessions)))
+            await connected(connection)
+            return {'pc_id': connection.pc_id, 'sdp': 'answer', 'type': 'answer'}
+
+        handler.handle_web_request = AsyncMock(side_effect=handle)
+
+        def make_session(*args):
+            session = Mock(connection=args[2], run=AsyncMock(), close=AsyncMock())
+            sessions.append(session)
+            return session
+
+        async def hang():
+            await asyncio.Event().wait()
+
+        with patch.object(friday, 'Session', side_effect=make_session), \
+                patch.object(friday, 'Models', return_value=Mock(warmup_tasks=set())), \
+                patch.object(handlers, 'SmallWebRTCRequestHandler', return_value=handler), \
+                patch.dict(friday.os.environ, {'TETHER_FRIDAY_BRAIN': 'local'}):
+            app = friday.create_app()
+            async with app.router.lifespan_context(app), httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+                self.assertEqual((await client.post('/offer', json={'sdp': 'offer', 'type': 'offer'})).status_code, 200)
+                sessions[0].close.side_effect = hang
+                start = asyncio.get_running_loop().time()
+                try:
+                    response = await asyncio.wait_for(client.post('/offer', json={
+                        'sdp': 'offer', 'type': 'offer'}), timeout=9.5)
+                finally:
+                    sessions[0].close.side_effect = None
+                self.assertEqual(response.status_code, 200)
+                self.assertLess(asyncio.get_running_loop().time() - start, 10)
+                self.assertEqual(len(sessions), 2)
+                handler.close.assert_awaited()
+                closes = handler.close.await_count
+                sessions[0].on_closed(sessions[0])
+                self.assertEqual((await client.post('/offer', json={'sdp': 'offer', 'type': 'offer',
+                    'pc_id': sessions[-1].connection.pc_id})).status_code, 200)
+                self.assertEqual(handler.close.await_count, closes)
+                retired = sessions[-1]
+                retired.on_closed(retired)
+                self.assertEqual((await client.post('/offer', json={'sdp': 'offer', 'type': 'offer',
+                    'pc_id': sessions[-1].connection.pc_id})).status_code, 200)
+                self.assertEqual(handler.close.await_count, closes + 1)
+                retired.close.assert_awaited_once()
+                # A stuck handler close must also allow the replacement offer.
+                close_step = friday.close_step
+
+                async def fast_close(awaitable, step, timeout=2):
+                    await close_step(awaitable, step, timeout=min(timeout, 0.02))
+
+                handler.close.side_effect = hang
+                try:
+                    with patch.object(friday, 'close_step', side_effect=fast_close), patch('sys.stderr') as stderr:
+                        response = await asyncio.wait_for(client.post('/offer', json={
+                            'sdp': 'offer', 'type': 'offer'}), timeout=1)
+                    self.assertEqual(response.status_code, 200)
+                    self.assertIn('Friday close timeout: request_handler.close()', ''.join(
+                        str(call.args[0]) for call in stderr.write.call_args_list))
+                finally:
+                    handler.close.side_effect = None
+
+    async def test_connection_closed_or_failed_cancels_session_and_clears_active(self):
+        from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
+        # Exercise the actual Session event registration, without loading weights.
+        for event in ('closed', 'failed'):
+            with self.subTest(event=event):
+                connection = SmallWebRTCConnection(ice_servers=[])
+                models = Mock(brain=friday.brain_config({}), smart_turn=None)
+                models.tts.sample_rate = 24000
+                rt = Mock(wraps=self.rt)
+                rt.SharedVAD.return_value = None
+                session = friday.Session(rt, models, connection)
+                active = session
+
+                def clear(ended):
+                    nonlocal active
+                    if active is ended:
+                        active = None
+
+                session.on_closed = clear
+                session.runner = Mock(cancel=AsyncMock())
+                session.run_task = asyncio.create_task(asyncio.Event().wait())
+                try:
+                    await connection._call_event_handler(event)
+                    await asyncio.wait_for(session.close(), timeout=7)
+                    self.assertIsNone(active)
+                    self.assertTrue(session.run_task.done())
+                    session.runner.cancel.assert_awaited_once()
+                finally:
+                    session.run_task.cancel()
+                    await asyncio.gather(session.run_task, return_exceptions=True)
+                    await connection.disconnect()
+                    await session.llm._client.close()
+
+    async def test_offer_and_patch_bound_handler_and_lock_waits(self):
+        import httpx
+        from pipecat.transports.smallwebrtc import request_handler as handlers
+
+        async def hang(*args):
+            await asyncio.Event().wait()
+
+        handler = Mock(close=AsyncMock(), handle_web_request=AsyncMock(side_effect=hang),
+                       handle_patch_request=AsyncMock(side_effect=hang))
+        with patch.object(friday, 'Models', return_value=Mock(warmup_tasks=set())), \
+                patch.object(handlers, 'SmallWebRTCRequestHandler', return_value=handler), \
+                patch.object(friday, 'REQUEST_TIMEOUT', 0.1), \
+                patch.dict(friday.os.environ, {'TETHER_FRIDAY_BRAIN': 'local'}):
+            app = friday.create_app()
+            async with app.router.lifespan_context(app), httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+                post = asyncio.create_task(client.post('/offer', json={'sdp': 'offer', 'type': 'offer'}))
+                await asyncio.sleep(0.01)
+                candidate_patch = asyncio.create_task(client.patch('/offer', json={'pc_id': 'old', 'candidates': []}))
+                responses = await asyncio.wait_for(asyncio.gather(post, candidate_patch), timeout=1)
+                self.assertEqual([r.status_code for r in responses], [504, 504])
+                handler.handle_patch_request.side_effect = None
+                self.assertEqual((await client.patch('/offer', json={
+                    'pc_id': 'new', 'candidates': []})).status_code, 200)
 
     def chunk(self, tool_calls=None, content=None):
         from openai.types.chat import ChatCompletionChunk
@@ -436,8 +647,10 @@ class FridayAPITests(unittest.IsolatedAsyncioTestCase):
         from pipecat.processors.aggregators.llm_context import LLMContext
         from pipecat.processors.frame_processor import FrameDirection
         request = httpx.Request('POST', 'http://127.0.0.1:7697/v1/chat/completions')
-        errors = [BadRequestError('secret prompt and token', response=httpx.Response(400, request=request), body=None),
-                  APITimeoutError(request=request), APIError('secret prompt and token', request, body=None)]
+        errors = [BadRequestError('fallback detail', response=httpx.Response(400, request=request),
+                                body={'error': {'message': 'Invalid role\nBearer test-token ya29.test-token',
+                                                'request': 'private request', 'headers': 'private headers'}}),
+                  APITimeoutError(request=request), APIError('Provider unavailable Bearer test-token ya29.test-token', request, body=None)]
         for kind in ('local', 'gemini'):
             for error, at_request in [(error, at_request) for error in errors for at_request in (True, False)]:
                 with self.subTest(brain=kind, error=type(error).__name__, at_request=at_request):
@@ -475,9 +688,17 @@ class FridayAPITests(unittest.IsolatedAsyncioTestCase):
                             await service.process_frame(self.rt.LLMContextFrame(context), FrameDirection.DOWNSTREAM)
                         log = ''.join(str(c.args[0]) for c in stderr.write.call_args_list)
                         self.assertEqual(log.count('Friday LLM error:'), 1)
-                        self.assertNotIn('secret', log)
+                        self.assertNotIn('test-token', log)
+                        self.assertNotIn('Bearer', log)
+                        self.assertNotIn('ya29', log)
+                        self.assertNotIn('private request', log)
+                        self.assertNotIn('private headers', log)
+                        self.assertIn('roles=user,assistant(tool_calls),tool', log)
                         if isinstance(error, BadRequestError):
                             self.assertIn('Friday LLM error: 400 ', log)
+                            self.assertIn('Invalid role [REDACTED] [REDACTED]', log)
+                        elif type(error) is APIError:
+                            self.assertIn('Provider unavailable', log)
                         self.assertEqual(create.await_count, 2)
                         self.assertTrue(any(getattr(c.args[0], 'text', None) == 'Hello again.'
                                             for c in service.push_frame.await_args_list))
@@ -809,6 +1030,14 @@ class FridayAPITests(unittest.IsolatedAsyncioTestCase):
         recognizer.create_stream.return_value.result.text = '  '
         self.assertEqual([f async for f in service.run_stt(b'\0\0')], [])
 
+    async def test_parakeet_fixes_text_before_transcription_frame(self):
+        recognizer = Mock()
+        service = self.rt.ParakeetSTT(recognizer, SimpleNamespace(stt_seconds=0))
+        for word, replacement in friday.STT_FIXUPS.items():
+            recognizer.create_stream.return_value.result.text = 'Ask ' + word + ' to reply.'
+            frames = [f async for f in service.run_stt(b'\0\0')]
+            self.assertEqual(frames[0].text, 'Ask ' + replacement + ' to reply.')
+
     async def test_shared_wrappers_do_not_reload_models(self):
         with patch.object(self.rt.LocalSmartTurnAnalyzerV3, '__init__', side_effect=AssertionError('reload')):
             session = Mock()
@@ -825,6 +1054,320 @@ class FridayAPITests(unittest.IsolatedAsyncioTestCase):
             self.assertIs(analyzer._model, model)
             self.assertEqual(analyzer.params.stop_secs, 0.2)
             model.reset_states.assert_called_once()
+
+    async def voice_pipeline(self, mode, frames, user_turns=False):
+        from pipecat.frames.frames import Frame, TTSAudioRawFrame
+        from pipecat.pipeline.pipeline import Pipeline
+        from pipecat.observers.base_observer import BaseObserver
+        from pipecat.processors.aggregators.llm_context import LLMContext
+        from pipecat.processors.aggregators.llm_response_universal import LLMAssistantAggregator
+        from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+        from pipecat.tests.utils import run_test
+
+        session = friday.Session.__new__(friday.Session)
+        session.rt = self.rt
+        session.voice_mode = mode
+        session.rtvi = Mock(send_server_message=AsyncMock())
+        session.turn = 0
+        session.new_turn()
+        session.stop_time = friday.time.time() - 0.1
+        session.wake = asyncio.Event()
+        session.user_speaking = session.bot_speaking = session.busy = session.llm_running = False
+        session.llm = Mock(name='llm')
+        session.context = LLMContext([])
+        session.tts = self.rt.SharedPocketTTS(Mock(sample_rate=24000), 'voice', session)
+        captured = []
+
+        class Action(Frame):
+            def __init__(self, action):
+                super().__init__()
+                self.action = action
+
+        class Actions(FrameProcessor):
+            async def process_frame(self, frame, direction):
+                await super().process_frame(frame, direction)
+                if isinstance(frame, Action):
+                    await frame.action(session)
+                else:
+                    await self.push_frame(frame, direction)
+
+        class Output(FrameProcessor):
+            async def process_frame(self, frame, direction):
+                await super().process_frame(frame, direction)
+                captured.append(frame)
+                await self.push_frame(frame, direction)
+
+        session.output = Output()
+        class SpeakingFrames(BaseObserver):
+            async def on_push_frame(self, data):
+                if (data.source is session.output and data.first_push
+                        and data.direction == FrameDirection.DOWNSTREAM and isinstance(
+                        data.frame, (self_rt.BotStartedSpeakingFrame, self_rt.BotStoppedSpeakingFrame))):
+                    captured.append(data.frame)
+
+        self_rt = self.rt
+        synth = Mock()
+
+        async def audio(service, text, context_id):
+            synth(text)
+            yield TTSAudioRawFrame(b'\x01\x00' * 480, 24000, 1, context_id=context_id)
+
+        processors = [Actions()]
+        if user_turns:
+            from pipecat.processors.aggregators.llm_response_universal import LLMUserAggregator, LLMUserAggregatorParams
+            from pipecat.turns.user_turn_strategies import UserTurnStrategies
+            from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import SpeechTimeoutUserTurnStopStrategy
+            processors.append(LLMUserAggregator(session.context, params=LLMUserAggregatorParams(
+                user_turn_strategies=UserTurnStrategies(start=[self.rt.FridayUserTurnStartStrategy(session)],
+                    stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0)]))))
+        pipeline = Pipeline(processors + [session.tts, session.output,
+                             LLMAssistantAggregator(session.context)])
+        with patch.object(self.rt.PocketTTSService, 'run_tts', audio):
+            await asyncio.wait_for(run_test(pipeline,
+                frames_to_send=[Action(f) if callable(f) else f for f in frames],
+                observers=[self.rt.FridayObserver(session), SpeakingFrames()]), timeout=10)
+        messages = [call.args[0] for call in session.rtvi.send_server_message.call_args_list]
+        return session, messages, captured, synth
+
+    async def test_barge_in_words_and_silent_vad(self):
+        from pipecat.frames.frames import InterimTranscriptionFrame, UserStartedSpeakingFrame
+        from pipecat.tests.utils import SleepFrame
+        for text, interim, accepted in [('Again fish', False, False), ('Again', False, False),
+                                         ('Again fish', True, False),
+                                         ('Please stop speaking', False, True),
+                                         ('Please stop speaking', True, True)]:
+            with self.subTest(text=text, interim=interim):
+                transcript = InterimTranscriptionFrame if interim else self.rt.TranscriptionFrame
+                frames = [self.rt.BotStartedSpeakingFrame(), SleepFrame(),
+                    self.rt.VADUserStartedSpeakingFrame(), SleepFrame(),
+                    self.rt.VADUserStoppedSpeakingFrame(),
+                    transcript(text, 'user', 'now'), SleepFrame()]
+                if interim:
+                    frames += [self.rt.TranscriptionFrame(text, 'user', 'now'), SleepFrame()]
+                session, _, captured, _ = await self.voice_pipeline('server', frames, user_turns=True)
+                self.assertEqual(any(isinstance(f, self.rt.InterruptionFrame) for f in captured), accepted)
+                self.assertEqual(any(isinstance(f, self.rt.LLMContextFrame) for f in captured), accepted)
+                self.assertEqual([m['content'] for m in session.context.get_messages()
+                                  if m['role'] == 'user'], [text] if accepted else [])
+                self.assertFalse(session.user_speaking)
+        _, _, captured, _ = await self.voice_pipeline('server', [
+            self.rt.VADUserStartedSpeakingFrame(), SleepFrame()], user_turns=True)
+        self.assertTrue(any(isinstance(f, UserStartedSpeakingFrame) for f in captured))
+
+    async def test_client_barge_in_and_silent_vad_after_spoken_end(self):
+        from pipecat.frames.frames import LLMTextFrame, UserStartedSpeakingFrame
+        from pipecat.tests.utils import SleepFrame
+
+        async def start(session):
+            await session.client_message('spoken', {'turn': 1, 'state': 'start'})
+
+        async def end(session):
+            await session.client_message('spoken', {'turn': 1, 'state': 'end'})
+
+        session, messages, captured, _ = await self.voice_pipeline('client', [
+            self.rt.LLMFullResponseStartFrame(), LLMTextFrame('A long reply.'),
+            self.rt.LLMFullResponseEndFrame(), SleepFrame(), start, SleepFrame(),
+            self.rt.VADUserStartedSpeakingFrame(), self.rt.VADUserStoppedSpeakingFrame(),
+            self.rt.TranscriptionFrame('Again fish', 'user', 'now'), SleepFrame(),
+            end, SleepFrame(), self.rt.VADUserStartedSpeakingFrame(), SleepFrame()], user_turns=True)
+        self.assertEqual([m for m in session.context.get_messages() if m['role'] == 'user'], [])
+        self.assertTrue(any(isinstance(f, UserStartedSpeakingFrame) for f in captured))
+        # The sole interruption occurs after playback ends, at the silent VAD start.
+        self.assertEqual(sum(isinstance(f, self.rt.InterruptionFrame) for f in captured), 1)
+        self.assertEqual([m for m in messages if m['t'] == 'stop'], [])
+
+    async def test_delayed_echo_is_dropped_after_bot_stops(self):
+        from pipecat.tests.utils import SleepFrame
+        session, _, captured, _ = await self.voice_pipeline('server', [
+            self.rt.BotStartedSpeakingFrame(), SleepFrame(),
+            self.rt.VADUserStartedSpeakingFrame(), self.rt.VADUserStoppedSpeakingFrame(),
+            self.rt.BotStoppedSpeakingFrame(), SleepFrame(),
+            self.rt.TranscriptionFrame('Again fish', 'user', 'now'), SleepFrame()], user_turns=True)
+        self.assertEqual(session.context.get_messages(), [])
+        self.assertFalse(any(isinstance(f, self.rt.LLMContextFrame) for f in captured))
+        self.assertFalse(any(isinstance(f, self.rt.InterruptionFrame) for f in captured))
+        self.assertFalse(session.user_speaking)
+
+    async def test_client_three_words_interrupt_playback(self):
+        from pipecat.frames.frames import LLMTextFrame
+        from pipecat.tests.utils import SleepFrame
+
+        async def start(session):
+            await session.client_message('spoken', {'turn': 1, 'state': 'start'})
+
+        session, messages, _, _ = await self.voice_pipeline('client', [
+            self.rt.LLMFullResponseStartFrame(), LLMTextFrame('A reply.'),
+            self.rt.LLMFullResponseEndFrame(), SleepFrame(), start, SleepFrame(),
+            self.rt.VADUserStartedSpeakingFrame(), self.rt.VADUserStoppedSpeakingFrame(),
+            self.rt.TranscriptionFrame('Please stop speaking', 'user', 'now'), SleepFrame()], user_turns=True)
+        self.assertEqual([m for m in messages if m['t'] == 'stop'], [{'t': 'stop', 'd': {'turn': 1}}])
+        self.assertEqual([m['content'] for m in session.context.get_messages() if m['role'] == 'user'],
+                         ['Please stop speaking'])
+        self.assertFalse(session.bot_speaking)
+
+    async def test_send_dispatch_uses_readback_from_originating_context(self):
+        session = SimpleNamespace(rtvi=SimpleNamespace(handle_function_call=AsyncMock()))
+        service = self.rt.FridayLLM(session, friday.brain_config({'TETHER_LLM_URL': 'http://127.0.0.1:7697'}))
+        args = {'chat': 'ci-audit', 'prompt': 'Fix the flake.'}
+        result = AsyncMock()
+        params = SimpleNamespace(function_name='send_to_chat', arguments=args, result_callback=result)
+        try:
+            for text, readback, allowed in [('Again with a fish.', '', False),
+                    ('tell ci-audit to fix the flake', '', True),
+                    ('yes', 'Should I send ci-audit: Fix the flake.?', True),
+                    ('yes', '', False), ('yes but no', 'Send ci-audit: Fix the flake.?', False)]:
+                messages = ([{'role': 'assistant', 'content': readback}] if readback else [])
+                messages.append({'role': 'user', 'content': text})
+                run = service.prepare_run(messages)
+                service._active_run.set(run)
+                session.rtvi.handle_function_call.reset_mock()
+                with patch('sys.stderr'):
+                    await service.handle_browser_tool(params)
+                self.assertEqual(session.rtvi.handle_function_call.await_count, int(allowed))
+                if allowed:
+                    messages.extend([{'role': 'tool', 'content': '{}'},
+                                     {'role': 'developer', 'content': 'Tool finished.'}])
+                    self.assertIs(service.prepare_run(messages), run)
+                    with patch('sys.stderr'):
+                        await service.handle_browser_tool(params)
+                    self.assertEqual(session.rtvi.handle_function_call.await_count, 1)
+        finally:
+            await service._client.close()
+
+    async def test_client_voice_sentences_context_and_no_synthesis(self):
+        from pipecat.frames.frames import LLMTextFrame, TTSAudioRawFrame
+        from pipecat.tests.utils import SleepFrame
+
+        async def first_sentence_left(session):
+            messages = [call.args[0] for call in session.rtvi.send_server_message.call_args_list]
+            self.assertEqual([m['t'] for m in messages], ['voice', 'say'])
+
+        async def client(session):
+            await session.client_message('voice', {'mode': 'client'})
+
+        session, messages, frames, synth = await self.voice_pipeline('server', [client,
+            self.rt.LLMFullResponseStartFrame(), LLMTextFrame('Hello there. Next'), SleepFrame(),
+            first_sentence_left, LLMTextFrame(' sentence.'), self.rt.LLMFullResponseEndFrame()])
+        spoken = [m for m in messages if m['t'] in ('say', 'say_end')]
+        self.assertEqual(spoken, [
+            {'t': 'say', 'd': {'turn': 1, 'seq': 0, 'text': 'Hello there.'}},
+            {'t': 'say', 'd': {'turn': 1, 'seq': 1, 'text': 'Next sentence.'}},
+            {'t': 'say_end', 'd': {'turn': 1, 'count': 2}}])
+        synth.assert_not_called()
+        self.assertFalse(any(isinstance(f, TTSAudioRawFrame) for f in frames))
+        self.assertEqual(session.context.get_messages(),
+                         [{'role': 'assistant', 'content': 'Hello there. Next sentence.'}])
+
+    async def test_server_voice_and_switch_next_sentence(self):
+        from pipecat.frames.frames import LLMTextFrame, TTSAudioRawFrame
+        from pipecat.tests.utils import SleepFrame
+
+        async def server(session):
+            await session.client_message('voice', {'mode': 'server'})
+
+        for mode in ('server', 'client'):
+            with self.subTest(mode=mode):
+                session, messages, frames, synth = await self.voice_pipeline(mode, [
+                    self.rt.LLMFullResponseStartFrame(), LLMTextFrame('First sentence. Next'),
+                    SleepFrame(), server, LLMTextFrame(' sentence.'), self.rt.LLMFullResponseEndFrame()])
+                self.assertEqual(synth.call_count, 2 if mode == 'server' else 1)
+                self.assertTrue(any(isinstance(f, TTSAudioRawFrame) for f in frames))
+                says = [m for m in messages if m['t'] == 'say']
+                self.assertEqual(len(says), 0 if mode == 'server' else 1)
+                self.assertEqual(session.context.get_messages(),
+                    [{'role': 'assistant', 'content': 'First sentence. Next sentence.'}])
+
+    async def test_client_spoken_frames_metrics_and_stale_turn(self):
+        from pipecat.frames.frames import LLMTextFrame
+        from pipecat.tests.utils import SleepFrame
+
+        async def spoken(session):
+            session.turn = 7  # VAD/user turn IDs are distinct from bot reply IDs.
+            session.reported = True
+            for data in ({'turn': 0, 'state': 'start'}, {'turn': True, 'state': 'start'},
+                         {'turn': 1, 'state': 'bad'}):
+                await session.client_message('spoken', data)
+            self.assertFalse(session.bot_speaking)
+            await session.client_message('spoken', {'turn': 1, 'state': 'start'})
+            await session.client_message('spoken', {'turn': 1, 'state': 'start'})
+
+        async def ended(session):
+            self.assertTrue(session.bot_speaking)
+            await session.client_message('spoken', {'turn': 1, 'state': 'end'})
+            await session.client_message('spoken', {'turn': 1, 'state': 'end'})
+
+        async def stale(session):
+            await session.client_message('spoken', {'turn': 1, 'state': 'start'})
+
+        session, messages, frames, _ = await self.voice_pipeline('client', [
+            self.rt.LLMFullResponseStartFrame(), LLMTextFrame('A reply.'),
+            self.rt.LLMFullResponseEndFrame(), SleepFrame(), spoken, SleepFrame(), ended,
+            SleepFrame(), self.rt.LLMFullResponseStartFrame(), LLMTextFrame('Next reply.'),
+            self.rt.LLMFullResponseEndFrame(), SleepFrame(), stale])
+        self.assertEqual(sum(isinstance(f, self.rt.BotStartedSpeakingFrame) for f in frames), 1)
+        self.assertEqual(sum(isinstance(f, self.rt.BotStoppedSpeakingFrame) for f in frames), 1)
+        self.assertFalse(session.bot_speaking)
+        metrics = [m['d'] for m in messages if m['t'] == 'metrics']
+        self.assertEqual(len(metrics), 1)
+        self.assertEqual(metrics[0]['turn'], 1)
+        self.assertIsNone(metrics[0]['tts_ttfb'])
+        self.assertGreater(metrics[0]['stop_to_first_audio'], 0.1)
+
+    async def test_client_interruption_stops_once_drops_unsent_context_and_recovers(self):
+        from pipecat.frames.frames import LLMTextFrame
+        from pipecat.tests.utils import SleepFrame
+
+        async def speaking(session):
+            await session.client_message('spoken', {'turn': 1, 'state': 'start'})
+
+        session, messages, frames, synth = await self.voice_pipeline('client', [
+            self.rt.LLMFullResponseStartFrame(), LLMTextFrame('Sent sentence. Buffered'), SleepFrame(),
+            speaking, SleepFrame(),
+            self.rt.InterruptionFrame(), SleepFrame(), self.rt.InterruptionFrame(), SleepFrame(),
+            LLMTextFrame(' dropped sentence.'), self.rt.LLMFullResponseEndFrame(), SleepFrame(),
+            self.rt.LLMFullResponseStartFrame(), LLMTextFrame('New reply.'), self.rt.LLMFullResponseEndFrame()])
+        self.assertEqual([m for m in messages if m['t'] == 'stop'],
+                         [{'t': 'stop', 'd': {'turn': 1}}])
+        self.assertEqual([m['d']['text'] for m in messages if m['t'] == 'say'],
+                         ['Sent sentence.', 'New reply.'])
+        self.assertEqual([m['content'] for m in session.context.get_messages()],
+                         ['Sent sentence.', 'New reply.'])
+        self.assertEqual([m['d'] for m in messages if m['t'] == 'say_end'], [{'turn': 2, 'count': 1}])
+        self.assertEqual(sum(isinstance(f, self.rt.BotStoppedSpeakingFrame) for f in frames), 1)
+        synth.assert_not_called()
+
+    async def test_invalid_voice_data_is_ignored(self):
+        session = friday.Session.__new__(friday.Session)
+        session.voice_mode = 'server'
+        session.rtvi = Mock(send_server_message=AsyncMock())
+        for data in (None, [], 'client', {}, {'mode': None}, {'mode': []}, {'mode': 'unknown'}):
+            await session.client_message('voice', data)
+        self.assertEqual(session.voice_mode, 'server')
+        session.rtvi.send_server_message.assert_not_awaited()
+
+    async def test_client_switch_before_first_sentence_can_be_interrupted(self):
+        from pipecat.frames.frames import LLMTextFrame
+        from pipecat.tests.utils import SleepFrame
+
+        async def client(session):
+            await session.client_message('voice', {'mode': 'client'})
+
+        _, messages, _, synth = await self.voice_pipeline('server', [
+            self.rt.LLMFullResponseStartFrame(), SleepFrame(), client, SleepFrame(),
+            self.rt.InterruptionFrame(), SleepFrame(), LLMTextFrame('Late sentence.'),
+            self.rt.LLMFullResponseEndFrame()])
+        self.assertEqual([m['t'] for m in messages], ['voice', 'stop'])
+        synth.assert_not_called()
+
+    async def test_client_standalone_and_error_speech_keeps_context(self):
+        for text in ('My brain is offline. Start the Tether LLM service.',
+                     'Sorry, that failed. Try again.'):
+            with self.subTest(text=text):
+                session, messages, _, synth = await self.voice_pipeline('client', [self.rt.TTSSpeakFrame(text)])
+                self.assertEqual([m['t'] for m in messages], ['say', 'say_end'])
+                self.assertEqual(messages[0]['d']['text'], text)
+                self.assertEqual(session.context.get_messages(), [{'role': 'assistant', 'content': text}])
+                synth.assert_not_called()
 
 
 if __name__ == '__main__':

@@ -57,6 +57,7 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
   const voice = useRef<LiveVoice | null>(null)
   const agent = useRef<FridayAgent | null>(null)  // set when the local Friday worker runs; else `voice` does the old phrase loop
   const [agentOn, setAgentOn] = useState(false)
+  const [voiceKind, setVoiceKind] = useState<'kokoro' | 'system' | null>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
   const words = useRef<HTMLDivElement>(null)
   // Keep the newest words in view when a long reply scrolls.
@@ -326,6 +327,7 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
         onUserText: (text, final) => { if (final) { setSaid(text); setProblem('') } },
         onBotText: text => setReply({ who: ASSISTANT, text }),
         onMetrics: metrics => console.debug('Friday turn', metrics),
+        onVoice: kind => { if (!gone) setVoiceKind(kind) },
         onClosed: reason => {
           if (gone || agent.current !== friday) return
           agent.current = null
@@ -340,15 +342,17 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
       try {
         await friday.open()
         if (gone) return
+        // No spoken briefing: Friday has the chat state and answers when asked.
         friday.state(chats())
         go('listening')
-        void flow.current.brief()
       } catch (failure) {
         if (gone || agent.current !== friday) return  // onClosed already fell back
         agent.current = null
         setAgentOn(false)
         friday.close()
         if (blocked(failure)) { setProblem('The microphone is blocked. Allow it in the browser, then start Live mode again.'); go('idle'); return }
+        console.error('Friday could not start', failure)
+        setProblem(`Friday could not start: ${errorText(failure)} Using the basic voice instead.`)
         classic()
       }
     })
@@ -576,6 +580,7 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
       <header className="live-top">
         <span className="live-tag"><i aria-hidden="true" />{ASSISTANT}</span>
         <span className="live-chip" title={awake ? 'The screen stays on while Live mode runs.' : 'This browser can turn the screen off.'}><span className="live-wake" data-on={awake} aria-hidden="true" />{awake ? 'Screen on' : 'Screen may sleep'}</span>
+        {agentOn && <span className="live-chip" title={voiceKind ? 'This device speaks Friday’s replies, so a busy server cannot break the voice.' : 'The server speaks Friday’s replies.'}>{voiceKind === 'kokoro' ? 'Voice: this device' : voiceKind === 'system' ? 'Voice: device basic' : 'Voice: server'}</span>}
         <span className="live-target-wrap">
           <button type="button" className="live-chip live-target" aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(open => !open)}>
             {target ? <>{paneTitle(target)}<span className="live-k">{agentNames[target.agent]}</span></> : 'No chat'}<ChevronDown size={14} aria-hidden="true" />

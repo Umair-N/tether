@@ -15,6 +15,7 @@
     "@pipecat-ai/client-js": "1.14.0",
     "@pipecat-ai/small-webrtc-transport": "1.11.0",
     "@ricky0123/vad-web": "^0.0.31",
+    "kokoro-js": "1.2.1",
     "lucide-react": "^1.66.0",
     "pdfjs-dist": "6.4.299",
     "react": "^19.1.0",

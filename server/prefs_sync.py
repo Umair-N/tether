@@ -4,18 +4,20 @@ Each save sends only the keys that changed; the newest value of a key wins. 'see
 so two devices never undo each other's Done marks. 'drafts' ({pane: {text, at}}) keeps the newest edit per pane; an empty text is a
 cleared draft, kept for two days so an old copy on another device cannot bring it back.
 'repos' ({folder: [repo, ...]}) is the Changes panel's repository choice per parent folder; it merges per folder.
+'hosts' ([{name, url}, ...]) is the host menu's other Tether servers; the newest list wins.
 'files.pinned' ([~/folder, ...]) is the Files explorer's pinned places; the newest list wins. Device-only choices (open pane, text size) never come here.
 """
 import json
 import os
 import threading
 import time
+from urllib.parse import urlsplit
 import paths
 
 FILE = paths.CACHE / 'prefs.json'
 KEYS = {'pinned': list, 'sidePins': list, 'order': list, 'paneOrder': dict, 'sort': str, 'seen': dict, 'collapsed': dict,
         'showPaths': bool, 'tmuxWords': bool, 'liveReplyPreview': bool, 'voiceOff': bool, 'voiceSound': bool, 'theme': str, 'scheme': str, 'drafts': dict,
-        'archived': dict, 'layout': dict, 'repos': dict, 'files.pinned': list}
+        'archived': dict, 'layout': dict, 'repos': dict, 'files.pinned': list, 'hosts': list}
 MAX_SEEN = 500
 MAX_DRAFTS = 200
 MAX_DRAFT_TEXT = 20000
@@ -50,6 +52,28 @@ def save(changes):
                     and ('note' not in item or isinstance(item['note'], str) and len(item['note']) <= 60)
                     for item in value) and len({item['pane'] for item in value}) == len(value)):
                 raise ValueError('Invalid preference: sidePins.')
+        if key == 'hosts':
+            urls = set()
+            if len(value) > 20:
+                raise ValueError('Invalid preference: hosts.')
+            for item in value:
+                if not (isinstance(item, dict) and set(item) == {'name', 'url'}
+                        and isinstance(item['name'], str) and 1 <= len(item['name'].strip()) <= 40
+                        and all(ord(c) >= 32 and ord(c) != 127 for c in item['name'])
+                        and isinstance(item['url'], str) and len(item['url']) <= 200):
+                    raise ValueError('Invalid preference: hosts.')
+                try:
+                    url = urlsplit(item['url'])
+                    valid = (url.scheme in ('http', 'https') and bool(url.hostname)
+                             and url.username is None and url.password is None
+                             and not url.query and not url.fragment and url.path in ('', '/'))
+                    url.port  # Access validates the port, including its range.
+                except ValueError:
+                    raise ValueError('Invalid preference: hosts.') from None
+                normalized = item['url'].rstrip('/')
+                if not valid or normalized in urls:
+                    raise ValueError('Invalid preference: hosts.')
+                urls.add(normalized)
     with _lock:
         stored = load()
         prefs = stored['prefs']

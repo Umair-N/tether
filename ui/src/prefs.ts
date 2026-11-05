@@ -40,8 +40,11 @@ export interface Prefs {
   // Desktop workspace layout, shared by every desktop. The phone always shows one pane and ignores it.
   // desktop: the sidebar and inbox switches, shared by all sessions (and, before per-session layouts, the one layout).
   // desks: each tmux session's own layout, by session id. active: the session whose layout shows.
+  /** The host menu's other Tether servers (synced). url: the server's origin, for example https://mac.example.com. */
+  hosts: Host[]
   layout: { desktop?: DesktopLayout; desks?: Record<string, Partial<DesktopLayout>>; active?: string }
 }
+export interface Host { name: string; url: string }
 export interface DesktopLayout { count: 1 | 2 | 3 | 4; panes: string[]; focus: number; cols: Record<string, number[]>; row: number; inbox: boolean; sidebar: boolean; /** With 2 slots: one above the other. */ stack?: boolean; /** Panes of other sessions that the user placed in this layout. */ guests?: string[]
   /** The right-hand panel column. Absent in older prefs: no panels open. */ panels?: PanelLayout }
 /** Panels in the workspace's right-hand column (panels.ts). terminal: a separate shell; chat: a side chat; tasks and plan follow the focused pane. */
@@ -55,7 +58,7 @@ export interface Draft { text: string; at: number }
 export interface SidePin { pane: string; note?: string }
 const KEY = 'tmux-chat.prefs.v1'
 const CLEARED_KEEP = 2 * 86400  // Match CLEARED_KEEP in server/prefs_sync.py (seconds).
-const DEFAULTS: Prefs = { pinned: [], sidePins: [], order: [], collapsed: { past: true }, expanded: {}, selected: null, lastPane: {}, voiceOff: false, voiceSound: true, readAloud: false, handsFree: false, agentBubble: true, liveReplyPreview: true, theme: 'system', scheme: 'claude', textSize: 'default', showPaths: false, tmuxWords: false, sort: 'smart', seen: {}, paneOrder: {}, drafts: {}, archived: {}, layout: {} }
+const DEFAULTS: Prefs = { pinned: [], sidePins: [], order: [], collapsed: { past: true }, expanded: {}, selected: null, lastPane: {}, voiceOff: false, voiceSound: true, readAloud: false, handsFree: false, agentBubble: true, liveReplyPreview: true, theme: 'system', scheme: 'claude', textSize: 'default', showPaths: false, tmuxWords: false, sort: 'smart', seen: {}, paneOrder: {}, drafts: {}, archived: {}, hosts: [], layout: {} }
 
 function keptDrafts(drafts: Record<string, Draft>) {
   const now = Date.now() / 1000
@@ -79,7 +82,7 @@ function load(): Prefs {
   return { ...prefs, drafts: keptDrafts(prefs.drafts) }
 }
 
-const SYNCED = ['pinned', 'sidePins', 'order', 'paneOrder', 'sort', 'seen', 'collapsed', 'showPaths', 'tmuxWords', 'liveReplyPreview', 'voiceOff', 'voiceSound', 'theme', 'scheme', 'drafts', 'archived', 'layout'] as const
+const SYNCED = ['pinned', 'sidePins', 'order', 'paneOrder', 'sort', 'seen', 'collapsed', 'showPaths', 'tmuxWords', 'liveReplyPreview', 'voiceOff', 'voiceSound', 'theme', 'scheme', 'drafts', 'archived', 'hosts', 'layout'] as const
 type Shared = Partial<Pick<Prefs, typeof SYNCED[number]>>
 interface Stored { prefs: Shared; version: number }
 const PULL_MS = 20000
