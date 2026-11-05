@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
-import { ArrowLeft, ArrowRight, Bot, Check, Crosshair, HatGlasses, Keyboard, KeyRound, Monitor, PenLine, PictureInPicture2, Plus, RotateCw, Send, Smartphone, Square, Tablet, Trash2, Type, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Bot, Check, ChevronDown, Crosshair, FlaskConical, HatGlasses, Keyboard, KeyRound, Monitor, PenLine, PictureInPicture2, Plus, RotateCw, Send, Smartphone, Square, Tablet, Trash2, Type, UserRound, X } from 'lucide-react'
 import { errorText } from './api'
-import type { Api, Pane } from './api'
+import type { Api, BrowserAvailability, BrowserId, Pane } from './api'
 import { usePaneLabel, WATCH_EVENT } from './AgentBrowser'
 import { useHost } from './host'
+import './BrowserPanel.css'
 
 // Same shape as PanelProps in src/panels.ts (frame lane); kept here until the lanes merge.
 // onPopOut: show a button that moves the panel into its own window (BrowserWindow.tsx).
@@ -15,7 +16,7 @@ type Mode = 'private' | 'saved'
 // (controller 'user'); Stop gives the agent its own viewport back.
 interface BrowserTab { id: string; url: string; title: string; preset: string; mode: Mode | 'agent'; width: number; height: number; touch: boolean; owner?: { pane: string | null } | null; controller?: 'user' | 'agent' }
 interface Preset { id: string; label: string; width: number; height: number; touch: boolean }
-interface BrowserState { tabs: BrowserTab[]; presets: Preset[]; nav?: { back: boolean; forward: boolean } }
+interface BrowserState { tabs: BrowserTab[]; presets: Preset[]; nav?: { back: boolean; forward: boolean }; browsers?: BrowserAvailability[] }
 interface FrameMessage { seq: number; width: number; height: number; jpeg: string }
 type Gesture = Record<string, string | number | string[]>
 type Tool = 'point' | 'pen' | 'rect' | 'text'
@@ -73,12 +74,44 @@ function usePageVisible() {
 // A phone: tabs it opens or takes over start at phone width.
 const onPhone = () => typeof matchMedia === 'function' && matchMedia('(pointer: coarse) and (max-width: 820px)').matches
 const savedNote = (host: string) => `Saved logins · readable by agents on ${host}`
-export function BrowserPanel({ api, pane, active, onPopOut }: BrowserPanelProps) {
+const signedNote = (host: string) => `Your sign-ins · agents cannot drive this browser, but can read its files on ${host}`
+const WHICH_KEY = 'tether-browser-which'
+const tabKey = (which: BrowserId) => which === 'signed' ? 'tether-browser-tab-signed' : 'tether-browser-tab'
+const BROWSERS: { id: BrowserId; label: string; note: string; icon: typeof UserRound }[] = [
+  { id: 'test', label: 'Test', note: 'Agents can use it. No sign-ins.', icon: FlaskConical },
+  { id: 'signed', label: 'Signed in', note: 'Google Chrome with your sign-ins. Agents cannot use it.', icon: UserRound },
+]
+
+/** Two server browsers: 'test' (headless, agents can drive it) and 'signed' (headed Google Chrome, people only).
+ * Each choice mounts its own view, so a switch closes the old stream and keeps tab choices apart. */
+export function BrowserPanel(props: BrowserPanelProps) {
+  const [which, setWhich] = useState<BrowserId>(() => { try { return localStorage.getItem(WHICH_KEY) === 'signed' ? 'signed' : 'test' } catch { return 'test' } })
+  const change = (id: BrowserId) => { setWhich(id); try { localStorage.setItem(WHICH_KEY, id) } catch { /* private mode */ } }
+  // "Watch" opens an agent tab, and agent tabs live only in the test browser.
+  useEffect(() => {
+    const onWatch = (event: Event) => {
+      if (which === 'test') return
+      try { localStorage.setItem(tabKey('test'), (event as CustomEvent<{ tab: string }>).detail.tab) } catch { /* private mode */ }
+      change('test')
+    }
+    window.addEventListener(WATCH_EVENT, onWatch)
+    return () => window.removeEventListener(WATCH_EVENT, onWatch)
+  }, [which])
+  return <BrowserView key={which} {...props} which={which} onSwitch={change} />
+}
+
+function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: BrowserPanelProps & { which: BrowserId; onSwitch: (id: BrowserId) => void }) {
   const host = useHost()
+  // Every request names the signed-in browser; headed Chrome can take longer than 10 s to start.
+  const api: Api = which === 'test' ? baseApi : (path, body, signal, method, timeout) => baseApi(
+    body === undefined ? `${path}${path.includes('?') ? '&' : '?'}browser=signed` : path,
+    body === undefined ? undefined : { ...(body as object), browser: 'signed' }, signal, method, timeout ?? 30000)
+  const [browsers, setBrowsers] = useState<BrowserAvailability[]>([])
+  const switchMenu = useMenu()
   const [tabs, setTabs] = useState<BrowserTab[]>([])
   const [presets, setPresets] = useState<Preset[]>([])
   const [nav, setNav] = useState({ back: false, forward: false })
-  const [current, setCurrent] = useState<string | null>(() => { try { return localStorage.getItem('tether-browser-tab') } catch { return null } })
+  const [current, setCurrent] = useState<string | null>(() => { try { return localStorage.getItem(tabKey(which)) } catch { return null } })
   const [loaded, setLoaded] = useState(false)
   const [failure, setFailure] = useState('')
   const [status, setStatus] = useState('')
@@ -120,12 +153,13 @@ export function BrowserPanel({ api, pane, active, onPopOut }: BrowserPanelProps)
     setTabs(state.tabs)
     if (state.presets) setPresets(state.presets)
     if (state.nav) setNav(state.nav)
+    if (state.browsers) setBrowsers(state.browsers)
   }
   function choose(id: string) {
     setCurrent(id)
     setFrame(null)
     setNav({ back: false, forward: false })
-    try { localStorage.setItem('tether-browser-tab', id) } catch { /* private mode */ }
+    try { localStorage.setItem(tabKey(which), id) } catch { /* private mode */ }
   }
   async function load() {
     try { apply(await api<BrowserState>('browser/tabs')); setFailure('') } catch (error) { setFailure(errorText(error)) } finally { setLoaded(true) }
@@ -135,7 +169,7 @@ export function BrowserPanel({ api, pane, active, onPopOut }: BrowserPanelProps)
   useEffect(() => { if (tab && tab.id !== current) choose(tab.id) }, [tab?.id]) // eslint-disable-line react-hooks/exhaustive-deps
   // "Watch" in a chat card (AgentBrowser.tsx): show that tab. Reload the list: the tab can be newer than the stream's last list.
   useEffect(() => {
-    const onWatch = (event: Event) => { const id = (event as CustomEvent<{ tab: string }>).detail.tab; choose(id); void load() }
+    const onWatch = (event: Event) => { if (which !== 'test') return; const id = (event as CustomEvent<{ tab: string }>).detail.tab; choose(id); void load() }
     window.addEventListener(WATCH_EVENT, onWatch)
     return () => window.removeEventListener(WATCH_EVENT, onWatch)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -186,7 +220,7 @@ export function BrowserPanel({ api, pane, active, onPopOut }: BrowserPanelProps)
   const streamHeight = Math.min(2560, Math.max(160, Math.ceil(stage.height * devicePixelRatio / 64) * 64))
   useEffect(() => {
     if (!active || !visible || !tabId || noting || !stage.width) return
-    const source = new EventSource(`/mobile/api/browser/stream?tab=${encodeURIComponent(tabId)}&w=${streamWidth}&h=${streamHeight}`)
+    const source = new EventSource(`/mobile/api/browser/stream?tab=${encodeURIComponent(tabId)}&w=${streamWidth}&h=${streamHeight}${which === 'signed' ? '&browser=signed' : ''}`)
     source.addEventListener('frame', event => { pending.current = JSON.parse((event as MessageEvent).data); setLive(true); if (!decoding.current) void paint() })
     source.addEventListener('tabs', event => apply(JSON.parse((event as MessageEvent).data)))
     source.addEventListener('closed', () => void load())
@@ -461,14 +495,33 @@ export function BrowserPanel({ api, pane, active, onPopOut }: BrowserPanelProps)
   const view = size && scale ? { width: Math.floor(size.width * scale), height: Math.floor(size.height * scale) } : { width: 0, height: 0 }
   const presetLabel = presets.find(item => item.id === tab?.preset)?.label ?? 'Desktop'
 
-  if (!loaded) return <div className="browser-panel"><p className="browser-empty">{active ? 'Starting the browser…' : ''}</p></div>
-  if (failure && !tabs.length) return <div className="browser-panel"><div className="browser-empty"><p>{failure}</p><button type="button" className="browser-text-button" onClick={() => { setLoaded(false); void load() }}>Try again</button></div></div>
+  const chosen = BROWSERS.find(item => item.id === which)!
+  const switcher = <div className="browser-menu-anchor" ref={switchMenu.ref} onKeyDown={switchMenu.onKeyDown}>
+    <button type="button" className="browser-switch" aria-label={`Browser: ${chosen.label}`} aria-haspopup="menu" aria-expanded={switchMenu.open} onClick={() => switchMenu.setOpen(!switchMenu.open)}>
+      <chosen.icon size={15} aria-hidden="true" /><span>{chosen.label}</span><ChevronDown size={14} aria-hidden="true" />
+    </button>
+    {switchMenu.open && <div className="browser-menu" role="menu">
+      {BROWSERS.map(item => {
+        const row = browsers.find(entry => entry.id === item.id)
+        const off = row ? !row.available : false
+        return <button key={item.id} type="button" role="menuitemradio" aria-checked={item.id === which} autoFocus={item.id === which} disabled={off}
+          onClick={() => { switchMenu.setOpen(false); if (item.id !== which) onSwitch(item.id) }}>
+          <item.icon size={16} /><span>{item.label} browser<small>{off ? row?.reason : item.note}</small></span>{item.id === which && <Check size={16} />}
+        </button>
+      })}
+    </div>}
+  </div>
+
+  if (!loaded) return <div className="browser-panel"><p className="browser-empty">{active ? (which === 'signed' ? 'Starting Google Chrome…' : 'Starting the browser…') : ''}</p></div>
+  if (failure && !tabs.length) return <div className="browser-panel"><div className="browser-empty"><p>{failure}</p><button type="button" className="browser-text-button" onClick={() => { setLoaded(false); void load() }}>Try again</button>
+    {which === 'signed' && <button type="button" className="browser-text-button" onClick={() => onSwitch('test')}>Use the test browser</button>}</div></div>
 
   return <div className="browser-panel" onKeyDown={event => { if (noting && event.key === 'Escape' && !event.defaultPrevented) stopNotes() }}>
     <div className="browser-tabs" role="tablist" aria-label="Browser tabs">
+      {switcher}
       {tabs.map(item => {
         const name = tabName(item)
-        return <div key={item.id} className={item.id === tab?.id ? 'browser-tab active' : 'browser-tab'} title={item.mode === 'saved' ? `${name} · ${savedNote(host)}` : item.mode === 'agent' ? `${name} · Agent` : `${name} · Private`}>
+        return <div key={item.id} className={item.id === tab?.id ? 'browser-tab active' : 'browser-tab'} title={item.mode === 'saved' ? `${name} · ${which === 'signed' ? signedNote(host) : savedNote(host)}` : item.mode === 'agent' ? `${name} · Agent` : `${name} · Private`}>
           <button type="button" role="tab" aria-selected={item.id === tab?.id} className="browser-tab-main" onClick={() => choose(item.id)}>
             {item.mode === 'saved' ? <KeyRound size={14} aria-label="Saved" /> : item.mode === 'agent' ? <Bot size={14} aria-label="Agent" /> : <HatGlasses size={14} aria-label="Private" />}
             <span>{name}</span>
@@ -477,7 +530,7 @@ export function BrowserPanel({ api, pane, active, onPopOut }: BrowserPanelProps)
         </div>
       })}
       <div className="browser-menu-anchor" ref={tabMenu.ref} onKeyDown={tabMenu.onKeyDown}>
-        <button type="button" className="browser-icon" aria-label="New tab" aria-haspopup="menu" aria-expanded={tabMenu.open} onClick={() => tabMenu.setOpen(!tabMenu.open)}><Plus size={17} /></button>
+        <button type="button" className="browser-icon" aria-label="New tab" aria-haspopup={which === 'signed' ? undefined : 'menu'} aria-expanded={which === 'signed' ? undefined : tabMenu.open} onClick={() => which === 'signed' ? void newTab('saved') : tabMenu.setOpen(!tabMenu.open)}><Plus size={17} /></button>
         {tabMenu.open && <div className="browser-menu" role="menu">
           <button type="button" role="menuitem" autoFocus onClick={() => void newTab('private')}><HatGlasses size={16} /><span>New private tab<small>Logins go away when the tab closes</small></span></button>
           <button type="button" role="menuitem" onClick={() => void newTab('saved')}><KeyRound size={16} /><span>New saved tab<small>{savedNote(host)}</small></span></button>
@@ -512,7 +565,7 @@ export function BrowserPanel({ api, pane, active, onPopOut }: BrowserPanelProps)
       <button type="button" className="browser-icon" aria-label="Add notes to this frame" title="Notes" disabled={!frame} onClick={startNotes}><PenLine size={17} /></button>
     </form>}
 
-    {tab?.mode === 'saved' && <p className="browser-saved"><KeyRound size={13} />{savedNote(host)}</p>}
+    {tab?.mode === 'saved' && <p className="browser-saved">{which === 'signed' ? <><UserRound size={13} />{signedNote(host)}</> : <><KeyRound size={13} />{savedNote(host)}</>}</p>}
     {tab?.mode === 'agent' && <div className="browser-agent" role="note">
       <Bot size={14} aria-hidden="true" />
       <span>{watching ? `${owner ?? 'An agent'} uses this tab. You watch.` : `You control this tab. ${owner ?? 'The agent'} can still act.`}</span>
