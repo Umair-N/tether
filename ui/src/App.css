@@ -356,7 +356,7 @@ button.stop-button:not(:disabled):hover { background: var(--muted); }
 kbd { font-size: 12px; color: var(--muted); }
 .thread { display: flex; flex: 1; min-height: 0; position: relative; }
 .chat-scroll { overflow-y: auto; overscroll-behavior: contain; width: 100%; }
-.messages { max-width: 780px; margin: 0 auto; padding: 28px 20px 38px; overflow-wrap: anywhere; }
+.messages { max-width: 780px; margin: 0 auto; padding: 28px 20px 14px; overflow-wrap: anywhere; }
 .messages a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
 .user-message { width: fit-content; max-width: 90%; margin: 16px 0 28px auto; padding: 12px 18px; border-radius: 18px 18px 5px 18px; background: var(--bubble); white-space: pre-wrap; line-height: 1.55; font-size: calc(var(--chat-text) - 1px); }
 .assistant-message { font-family: ui-serif, Georgia, serif; line-height: 1.6; font-size: var(--chat-text); margin: 24px 0 32px; }
@@ -464,7 +464,7 @@ dialog::backdrop { background: #11110e66; }
 .signin .primary { min-width: 150px; }
 @media (min-width: 600px) {
   .sheet { inset: 0; margin: auto; height: fit-content; border-radius: var(--radius-xl); border: 1px solid var(--line); padding: 26px; }
-  .messages { padding: 36px 34px 45px; }
+  .messages { padding: 36px 34px 16px; }
   .chat-header { padding-left: 24px; padding-right: 24px; }
   .composer-area { padding-bottom: max(22px, env(safe-area-inset-bottom)); }
 }
@@ -1074,7 +1074,7 @@ button.live-chip:active { background: var(--line); }
 .app-shell.no-sidebar > .sidebar { display: none; }
 /* A narrow slot: less padding, shorter header words. */
 @container (max-width: 560px) {
-  .messages { padding: 20px 16px 28px; }
+  .messages { padding: 20px 16px 10px; }
   .context-word, .agent-word { display: none; }
   .composer-area { padding-left: 10px; padding-right: 10px; }
 }

@@ -67,3 +67,17 @@
 }
 @keyframes signed-allow-sweep { 0%, 35% { transform: translateX(-120%); } 75%, 100% { transform: translateX(120%); } }
 @media (prefers-reduced-motion: reduce) { .signed-allow, .signed-allow::after { animation: none; } .signed-allow::after { display: none; } }
+
+/* Status chip for a signed-in request (StatusStack.tsx): a turning blue-violet-rose border and a soft glow, so the
+   2-minute request is hard to miss. Reduced motion keeps a still gradient border. */
+@property --gem-turn { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
+.status-chip.gemini-glow { border: 1.5px solid transparent; color: var(--text); font-weight: 600;
+  background: linear-gradient(var(--surface), var(--surface)) padding-box,
+    conic-gradient(from var(--gem-turn), #4796e3, #9177c7, #ca6673, #9177c7, #4796e3) border-box;
+  animation: gem-turn 3s linear infinite, gem-glow 2.4s ease-in-out infinite; }
+@keyframes gem-turn { to { --gem-turn: 360deg; } }
+@keyframes gem-glow {
+  0%, 100% { box-shadow: 0 0 6px 0 rgb(71 150 227 / .35); }
+  50% { box-shadow: 0 0 14px 2px rgb(145 119 199 / .45); }
+}
+@media (prefers-reduced-motion: reduce) { .status-chip.gemini-glow { animation: none; box-shadow: 0 0 8px rgb(145 119 199 / .35); } }
