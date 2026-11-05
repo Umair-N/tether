@@ -232,6 +232,85 @@ class SessionControlTests(unittest.TestCase):
             finally:
                 subprocess.run(['tmux', '-S', socket, 'kill-server'], check=False)
 
+class ShellPromptTests(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        proc = Path(folder.name)
+        (proc / '123').mkdir()
+        (proc / '123/stat').write_text('123 (zsh) S 1 123 0 0 123')
+        (proc / '123/comm').write_text('zsh\n')
+        self.entry = {'id': '%1', 'agent': 'shell', 'pane_pid': 123, 'pane_start': '42'}
+        self.enterContext(patch.object(terminal, 'Path', side_effect=lambda value: proc if value == '/proc' else Path(value)))
+        self.enterContext(patch.object(terminal, 'process_start', return_value='42'))
+        self.enterContext(patch.object(terminal.time, 'sleep'))
+        self.enterContext(patch.object(terminal.time, 'monotonic', side_effect=[0, 0, 10]))
+
+    def pane(self, width, screen, row, column, pasted=None):
+        state = [screen, row, column]
+        calls = []
+
+        def run(argv, **kwargs):
+            calls.append((argv, kwargs))
+            output = ''
+            if 'display-message' in argv:
+                output = argv[-1]
+                for field, value in {'pane_pid': 123, 'pane_current_command': 'zsh', 'pane_in_mode': 0,
+                                     'cursor_y': state[1], 'cursor_x': state[2], 'pane_width': width}.items():
+                    output = output.replace('#{' + field + '}', str(value))
+            elif 'capture-pane' in argv:
+                lines = state[0].split('\n')
+                output = '\n'.join(lines if '-N' in argv else [line.rstrip() for line in lines]) + '\n'
+            elif 'paste-buffer' in argv and pasted is not None:
+                state[:] = pasted
+            return subprocess.CompletedProcess(argv, 0, stdout=output)
+
+        return run, calls
+
+    def test_start_agent_confirms_launch_wrapped_in_a_28_column_pane(self):
+        prompt = 'user@host:~/apps/project % '
+        for agent, command in terminal.LAUNCHERS.items():
+            with self.subTest(agent=agent):
+                # The first command character fills the prompt row; the rest wraps below it.
+                run, calls = self.pane(28, prompt, 0, 27, (prompt + command[0] + '\n' + command[1:], 1, len(command) - 1))
+                with patch.object(terminal.time, 'monotonic', side_effect=[0, 0, 10]):
+                    terminal.start_agent(self.entry, agent, run=run)
+                self.assertEqual([argv[-1] for argv, _ in calls if 'send-keys' in argv], ['Enter'])
+                self.assertEqual([kwargs['input'] for argv, kwargs in calls if 'load-buffer' in argv], [command.encode()])
+
+    def test_start_agent_confirms_a_prompt_wider_than_the_pane(self):
+        run, calls = self.pane(8, 'user@hos\nt:~/apps\n/project\n % ', 3, 3,
+                               ('user@hos\nt:~/apps\n/project\n % claud\ne', 4, 1))
+        terminal.start_agent(self.entry, 'claude', run=run)
+        self.assertEqual([argv[-1] for argv, _ in calls if 'send-keys' in argv], ['Enter'])
+
+    def test_shell_prompt_preserves_spaces_between_wrapped_rows(self):
+        run, _ = self.pane(7, 'user@ho\nst:~ % \nclaude', 2, 6)
+        self.assertEqual(terminal.shell_prompt(self.entry, run), 'user@host:~ % claude')
+
+    def test_shell_prompt_preserves_unwrapped_and_empty_cursor_row_cases(self):
+        for screen, row, column, width, expected in (
+                ('previous output\nuser@host:~$ ', 1, 13, 80, 'user@host:~$'),
+                ('abcdefghijklmnopqr$ ', 1, 0, 20, 'abcdefghijklmnopqr$'),
+                ('user@ho\nst:~ % ', 2, 0, 7, 'user@host:~ %'),
+                ('short prompt $ ', 1, 0, 80, 'short prompt $')):
+            with self.subTest(screen=screen):
+                run, _ = self.pane(width, screen, row, column)
+                self.assertEqual(terminal.shell_prompt(self.entry, run), expected)
+
+    def test_start_agent_refuses_draft_after_cursor(self):
+        run, calls = self.pane(80, 'user@host:~$ keep this draft', 0, 13)
+        with self.assertRaisesRegex(RuntimeError, 'There is terminal input'):
+            terminal.start_agent(self.entry, 'claude', run=run)
+        self.assertFalse(any('load-buffer' in argv or 'send-keys' in argv for argv, _ in calls))
+
+    def test_start_agent_accepts_autosuggestion_after_pasted_command(self):
+        run, calls = self.pane(80, 'user@host:~$ ', 0, 13,
+                               ('user@host:~$ claude --resume', 0, 19))
+        terminal.start_agent(self.entry, 'claude', run=run)
+        self.assertEqual([argv[-1] for argv, _ in calls if 'send-keys' in argv], ['Enter'])
+
+
 class FakeClaudePane:
     """Stateful stand-in for tmux: tracks the text in Claude's input box."""
     def __init__(self, text='', swallow_enters=0, ghost=False, card=False):

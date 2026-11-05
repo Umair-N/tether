@@ -1273,18 +1273,23 @@ def shell_prompt(entry, run=subprocess.run):
     if process.joinpath('comm').read_text().strip() not in ('bash', 'zsh', 'fish') or fields[2] != fields[5]:
         raise RuntimeError('Wait for the foreground program to finish before starting an agent.')
     state = run([paths.TMUX, 'display-message', '-p', '-t', entry['id'],
-                 '#{pane_pid}\t#{pane_current_command}\t#{pane_in_mode}\t#{cursor_y}\t#{cursor_x}'],
+                 '#{pane_pid}\t#{pane_current_command}\t#{pane_in_mode}\t#{cursor_y}\t#{cursor_x}\t#{pane_width}'],
                 check=True, capture_output=True, text=True, timeout=5).stdout.strip().split('\t')
-    if len(state) != 5 or state[0] != str(entry['pane_pid']) or state[1] not in ('bash', 'zsh', 'fish') or state[2] != '0':
+    if len(state) != 6 or state[0] != str(entry['pane_pid']) or state[1] not in ('bash', 'zsh', 'fish') or state[2] != '0':
         raise RuntimeError('This pane is not at an idle shell prompt.')
-    lines = capture(entry, run).splitlines()
-    row, column = int(state[3]), int(state[4])
+    lines = run([paths.TMUX, 'capture-pane', '-p', '-N', '-t', entry['id']],
+                check=True, capture_output=True, text=True, timeout=5).stdout.splitlines()
+    row, column, width = int(state[3]), int(state[4]), int(state[5])
     if row >= len(lines):
         # A prompt that fills the last row puts the cursor on a new, empty row that capture-pane drops.
         lines += [''] * (row + 1 - len(lines))
+    start = row
+    while start > 0 and len(lines[start - 1]) == width:
+        start -= 1
+    prefix = ''.join(lines[start:row])  # Keep spaces at wrap boundaries until the logical line is complete.
     if lines[row][column:].strip():
-        return lines[row].rstrip()  # text after the cursor: a draft, which the caller refuses
-    before = lines[row][:column].rstrip()
+        return (prefix + lines[row]).rstrip()  # text after the cursor: a draft, which the caller refuses
+    before = (prefix + lines[row][:column]).rstrip()
     if not before and row > 0:
         return lines[row - 1].rstrip()  # the prompt filled the row above and the cursor wrapped
     return before
