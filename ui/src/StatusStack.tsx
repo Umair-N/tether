@@ -10,7 +10,7 @@ export function StatusStack({ priorityKey, items, chips }: { priorityKey: string
   const stack = useRef<HTMLElement>(null)
   const [selection, setSelection] = useState<{ priority: string; id: string | null } | null>(null)
   const available = items.filter(item => item.active)
-  const preferred = available.find(item => item.id === 'action' || item.id === 'browser-ask' || item.id === 'heads')?.id ?? null
+  const preferred = available.find(item => item.id === 'action' || item.id === 'browser-ask' || item.id === 'browser-signed-ask' || item.id === 'heads')?.id ?? null
   const selected = selection?.priority === priorityKey ? selection.id : preferred
   const open = available.find(item => item.id === selected)
   useLayoutEffect(() => { if (stack.current) stack.current.scrollTop = 0 }, [open?.id, priorityKey])
@@ -34,7 +34,7 @@ export function StatusStack({ priorityKey, items, chips }: { priorityKey: string
   return <section ref={stack} hidden={!available.length && !chips} className="status-stack" aria-label="Session status" style={height ? { maxHeight: height } : undefined}>
     {open && <div className="status-grip" role="separator" aria-orientation="horizontal" aria-label="Resize status panel. Drag, or use the arrow keys. Double-tap to reset." tabIndex={0} aria-valuenow={height ?? undefined} {...grip}><span /></div>}
     <div className="status-rail">
-      {available.map(item => <button key={item.id} type="button" className={`status-chip ${item.id === 'action' || item.id === 'browser-ask' ? 'needs-action' : ''}`} aria-expanded={open?.id === item.id} aria-controls={`${prefix}-${item.id}`} onClick={() => toggle(item.id)}>{item.label}</button>)}
+      {available.map(item => <button key={item.id} type="button" className={`status-chip ${item.id === 'action' || item.id === 'browser-ask' || item.id === 'browser-signed-ask' ? 'needs-action' : ''}${item.id === 'browser-signed-ask' ? ' gemini-glow' : ''}`} aria-expanded={open?.id === item.id} aria-controls={`${prefix}-${item.id}`} onClick={() => toggle(item.id)}>{item.label}</button>)}
       {chips}
     </div>
     {available.map(item => <div key={item.id} id={`${prefix}-${item.id}`} className="status-content" hidden={open?.id !== item.id}>
