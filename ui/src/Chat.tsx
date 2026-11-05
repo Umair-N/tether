@@ -143,7 +143,9 @@ function savePending() {
   try { localStorage.setItem(PENDING_KEY, JSON.stringify(Object.fromEntries([...pendingByPane].filter(([, list]) => list.length)))) } catch { /* storage full or blocked: keep them in memory */ }
 }
 const squash = (text: string) => text.replace(/\s+/g, ' ').trim()
-const matches = (messages: ChatMessage[], key: string) => messages.filter(item => item.role === 'user' && squash(item.text).includes(key)).length
+// Claude stores a shell command "!ls" as "! ls", and "!! ls" as "! ! ls". Compare with the "!" marks joined, so a run command leaves the queue.
+const sameCommand = (text: string) => text.replace(/^(?:!\s*)+/, '!')
+const matches = (messages: ChatMessage[], key: string) => messages.filter(item => item.role === 'user' && sameCommand(squash(item.text)).includes(sameCommand(key))).length
 // Panes shown as a live terminal; kept for the visit so switching panes and back keeps the mode.
 const terminalPanes = new Set<string>()
 
