@@ -152,7 +152,8 @@ def serve_get(handler, store, action, query):
         one = lambda key, default='': query.get(key, [default])[0]
         if one('trash', '0') not in ('0', '1'):
             raise ShareError(400, 'Choose trash 0 or 1.')
-        answer(handler, 200, store.list(one('kind', 'all'), one('q'), one('trash', '0') == '1', one('cursor') or None, one('limit', '60')))
+        answer(handler, 200, store.list(one('kind', 'all'), one('q'), one('trash', '0') == '1', one('cursor') or None,
+                                        one('limit', '60'), source=one('source', 'all')))
     elif action.startswith('raw/'):
         send_file(handler, store, action[4:], query)
     elif action.startswith('thumb/') and handler.command == 'GET':

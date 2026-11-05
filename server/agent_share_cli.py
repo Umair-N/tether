@@ -17,9 +17,11 @@ def main(argv=None):
     put = commands.add_parser('put')
     put.add_argument('path')
     put.add_argument('--name')
+    put.add_argument('--from', dest='agent', default=os.environ.get('TETHER_AGENT', 'agent'))
     listing = commands.add_parser('list')
     listing.add_argument('--kind', default='all')
     listing.add_argument('--limit', type=int, default=60)
+    listing.add_argument('--source', default='all')
     for command in ('stat', 'path'):
         commands.add_parser(command).add_argument('id')
     args = parser.parse_args(argv)
@@ -32,9 +34,10 @@ def main(argv=None):
                 info = os.fstat(source.fileno())
                 if not stat.S_ISREG(info.st_mode):
                     raise ShareError(400, 'Choose a regular file.')
-                result = {'file': store.put(source, info.st_size, args.name or path.name, mimetypes.guess_type(path.name)[0] or '')}
+                result = {'file': store.put(source, info.st_size, args.name or path.name, mimetypes.guess_type(path.name)[0] or '',
+                                            source='agent:' + args.agent)}
         elif args.command == 'list':
-            result = store.list(kind=args.kind, limit=args.limit)
+            result = store.list(kind=args.kind, limit=args.limit, source=args.source)
         elif args.command == 'stat':
             result = {'file': store.stat(args.id)}
         else:

@@ -58,6 +58,42 @@ class StoreTests(unittest.TestCase):
         with self.store.connection() as db:
             return self.store.object_path(self.store.row(db, file['id'], trash=True))
 
+    def test_old_database_adds_source_and_preserves_files(self):
+        file = self.put()
+        with self.store.connection(write=True) as db:
+            db.execute('''CREATE TABLE old_files AS SELECT
+                          id,owner_id,sha,size,name,mime,kind,inline_mime,created,modified,deleted_at,
+                          width,height,duration,thumb_mime FROM files''')
+            db.execute('DROP TABLE files')
+            db.execute('ALTER TABLE old_files RENAME TO files')
+        for _ in range(2):
+            store = share.Store(self.root)
+            with store.connection() as db:
+                self.assertIn('source', {row['name'] for row in db.execute('PRAGMA table_info(files)')})
+                self.assertIsNone(db.execute('SELECT source FROM files').fetchone()[0])
+            self.assertEqual(store.list()['files'], [dict(file, source='you')])
+
+    def test_sources_are_validated_stored_and_filtered(self):
+        browser = self.put()
+        agent = self.put(source='agent:codex')
+        self.assertEqual(browser['source'], 'you')
+        self.assertEqual(agent['source'], 'agent:codex')
+        self.assertEqual(self.store.stat(agent['id']), agent)
+        self.assertEqual(self.store.list(source='you')['files'], [browser])
+        self.assertEqual(self.store.list(source='agent')['files'], [agent])
+        self.assertEqual(len(self.store.list(source='all')['files']), 2)
+        for source in ('agent:A_z.0-9', 'agent:' + 'a' * 64):
+            self.assertEqual(self.put(source=source)['source'], source)
+        for source in ('', 'you', 'agent:', 'agent:' + 'a' * 65, 'agent:a/b', 'agent:é', 'agent:x\n', 1, False, []):
+            with self.subTest(source=source):
+                with self.assertRaises(share.ShareError) as caught:
+                    self.put(source=source)
+                self.assertEqual((caught.exception.status, str(caught.exception)), (400, 'Choose a valid source.'))
+        for source in ('bad', '', None):
+            with self.assertRaises(share.ShareError) as caught:
+                self.store.list(source=source)
+            self.assertEqual((caught.exception.status, str(caught.exception)), (400, 'Choose a valid source.'))
+
     def test_stream_exact_length_short_body_and_cleanup(self):
         source = Reader(share.CHUNK * 2 + 19)
         file = self.store.put(source, source.remaining, 'large.bin')

@@ -1,5 +1,6 @@
 """Real private-port Handler tests. The live server and tmux are never used."""
 import http.client
+import io
 import json
 from pathlib import Path
 import socket
@@ -71,6 +72,21 @@ class ShareAPItests(unittest.TestCase):
             self.assertIn('error', json.loads(body))
         status, headers, body = self.request('HEAD', 'raw/' + file['id'])
         self.assertEqual((status, body, headers['Content-Length']), (200, b'', '11'))
+
+    def test_source_filters_and_upload_ignores_source_header(self):
+        status, _, body = self.request('POST', 'upload', b'browser',
+                                       {'X-File-Name': 'browser.txt', 'X-Source': 'agent:x'})
+        self.assertEqual(status, 200, body)
+        browser = json.loads(body)['file']
+        self.assertEqual(browser['source'], 'you')
+        agent = share_api.get_store().put(io.BytesIO(b'agent'), 5, 'agent.txt', source='agent:codex')
+        for source, expected in (('you', [browser]), ('agent', [agent])):
+            status, _, body = self.request('GET', 'list?source=' + source)
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body)['files'], expected)
+        status, _, body = self.request('GET', 'list?source=bad')
+        self.assertEqual(status, 400)
+        self.assertEqual(json.loads(body), {'error': 'Choose a valid source.'})
 
     def test_html_svg_and_claimed_images_are_attachments(self):
         for name, mime, data in [('attack.html', 'text/html', b'<script>bad</script>'),

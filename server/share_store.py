@@ -153,11 +153,13 @@ class Store:
                     id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, sha TEXT NOT NULL, size INTEGER NOT NULL,
                     name TEXT NOT NULL, mime TEXT NOT NULL, kind TEXT NOT NULL, inline_mime TEXT,
                     created TEXT NOT NULL, modified TEXT NOT NULL, deleted_at TEXT,
-                    width INTEGER, height INTEGER, duration REAL, thumb_mime TEXT);
+                    width INTEGER, height INTEGER, duration REAL, thumb_mime TEXT, source TEXT);
                 CREATE INDEX IF NOT EXISTS file_listing ON files(owner_id, deleted_at, created, id);
                 CREATE TABLE IF NOT EXISTS uploads (
                     id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, size INTEGER NOT NULL, expires REAL NOT NULL);
             ''')
+            if 'source' not in {row['name'] for row in db.execute('PRAGMA table_info(files)')}:
+                db.execute('ALTER TABLE files ADD COLUMN source TEXT')
         self.reconcile()
 
     @staticmethod
@@ -218,6 +220,7 @@ class Store:
     def public(row):
         result = {k: row[k] for k in ('id', 'name', 'size', 'mime', 'kind', 'created', 'modified')}
         result['has_thumb'] = bool(row['thumb_mime'])
+        result['source'] = row['source'] if row['source'] is not None else 'you'
         for k in ('width', 'height', 'duration', 'deleted_at'):
             if row[k] is not None:
                 result[k] = row[k]
@@ -232,10 +235,12 @@ class Store:
         row = db.execute('SELECT COALESCE(SUM(size),0), COUNT(*) FROM files WHERE owner_id=?', (actor,)).fetchone()
         return {'used': row[0], 'quota': self.quota, 'count': row[1]}
 
-    def list(self, kind='all', q='', trash=False, cursor=None, limit=60, actor=OWNER):
+    def list(self, kind='all', q='', trash=False, cursor=None, limit=60, actor=OWNER, source='all'):
         authorize(actor, {'owner_id': actor})
         if kind not in ('all', 'image', 'video', 'audio', 'doc', 'other'):
             raise ShareError(400, 'Choose a valid file kind.')
+        if source not in ('all', 'you', 'agent'):
+            raise ShareError(400, 'Choose a valid source.')
         try:
             limit = int(limit)
             if not 1 <= limit <= 200:
@@ -244,6 +249,10 @@ class Store:
             raise ShareError(400, 'Choose a limit from 1 to 200.') from exc
         clauses = ['owner_id=?', 'deleted_at IS NOT NULL' if trash else 'deleted_at IS NULL', 'instr(lower(name), lower(?)) > 0']
         args = [actor, q]
+        if source == 'you':
+            clauses.append('source IS NULL')
+        elif source == 'agent':
+            clauses.append("source LIKE 'agent:%'")
         # Match the last extension, including names containing multiple dots.
         doc = "(kind IN ('pdf','text') OR " + ' OR '.join('lower(name) LIKE ?' for _ in OFFICE) + ')'
         if kind == 'doc':
@@ -274,8 +283,10 @@ class Store:
                 next_cursor = base64.urlsafe_b64encode(json.dumps([last['created'], last['id']]).encode()).decode().rstrip('=')
             return {'files': [self.public(row) for row in rows[:limit]], 'next': next_cursor, 'usage': self.usage(db, actor)}
 
-    def put(self, stream, size, name, mime='', actor=OWNER, **values):
+    def put(self, stream, size, name, mime='', actor=OWNER, source=None, **values):
         authorize(actor, {'owner_id': actor})
+        if source is not None and (not isinstance(source, str) or not re.fullmatch(r'agent:[A-Za-z0-9._-]{1,64}', source)):
+            raise ShareError(400, 'Choose a valid source.')
         if not isinstance(size, int) or isinstance(size, bool) or size < 0:
             raise ShareError(400, 'Send the file size in Content-Length.')
         if size > self.max_bytes:
@@ -322,10 +333,10 @@ class Store:
                     os.replace(temp, final)
                     self._sync_dir(final.parent)
                     db.execute('INSERT INTO objects VALUES (?,?,?)', (actor, sha, size))
-                db.execute('''INSERT INTO files (id,owner_id,sha,size,name,mime,kind,inline_mime,created,modified,width,height,duration)
-                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                db.execute('''INSERT INTO files (id,owner_id,sha,size,name,mime,kind,inline_mime,created,modified,width,height,duration,source)
+                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                            (identifier, actor, sha, size, name, mime, kind, inline, now, now,
-                            values.get('width'), values.get('height'), values.get('duration')))
+                            values.get('width'), values.get('height'), values.get('duration'), source))
                 db.execute('DELETE FROM uploads WHERE id=?', (identifier,))
                 return self.public(self.row(db, identifier, actor))
         except OSError as exc:
