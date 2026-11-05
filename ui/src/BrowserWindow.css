@@ -1,5 +1,5 @@
 /* Desktop: the Browser panel popped out of the side column (BrowserWindow.tsx). */
-.browser-window { position: fixed; z-index: 45; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line); border-radius: 10px;
+.browser-window { position: fixed; z-index: 45; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius);
   background: var(--bg); color: var(--text); box-shadow: 0 2px 6px rgb(0 0 0 / .08), 0 16px 40px rgb(0 0 0 / .22); }
 .browser-window > .browser-panel { flex: 1; min-height: 0; }
 .browser-window-head { display: flex; flex: none; align-items: center; gap: 6px; height: 36px; padding: 0 4px 0 2px; border-bottom: 1px solid var(--line);
@@ -7,7 +7,7 @@
 .browser-window-head:active { cursor: grabbing; }
 .browser-window-head strong { flex: 1; font-size: 13px; }
 .browser-window-head button { min-height: 0; }
-.browser-window-grip { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border-radius: 6px; color: var(--muted); cursor: inherit; }
+.browser-window-grip { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border-radius: var(--radius-sm); color: var(--muted); cursor: inherit; }
 .browser-window :is(.browser-window-grip, .browser-icon):focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .browser-window-size { position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize; touch-action: none; }
 .browser-away { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; height: 100%; color: var(--muted); }
