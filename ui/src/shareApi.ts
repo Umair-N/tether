@@ -127,7 +127,7 @@ function draw(source: CanvasImageSource, width: number, height: number) {
 export interface ShareUpload { id: string; name: string; size: number; offset: number; mime: string; created: string; expires: number }
 export const CHUNK = 8 * 1024 * 1024
 export const listUploads = (signal?: AbortSignal) => request<{ uploads: ShareUpload[] }>('share/uploads', undefined, signal).then(r => r.uploads)
-export const cancelUpload = (id: string) => request<{ ok: true }>(`share/uploads/${encodeURIComponent(id)}/cancel`, {})
+export const cancelUpload = (id: string) => request<{ ok: true }>(`share/uploads/${encodeURIComponent(id)}/cancel`, {}).then(r => { forget(id); return r })
 export type Wait = 'offline' | 'retrying' | null
 
 const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
@@ -138,6 +138,25 @@ const online = (signal?: AbortSignal) => navigator.onLine ? Promise.resolve() : 
   window.addEventListener('online', () => resolve(), { once: true })
   signal?.addEventListener('abort', () => reject(new DOMException('Upload stopped.', 'AbortError')), { once: true })
 })
+
+// A file with the same name and size is not always the same file. Each session keeps a fingerprint in this browser
+// (modified time and a hash of the first 64 KiB), so Resume joins only the same file.
+const PRINT = 'tether.shareUpload.'
+async function fingerprint(file: File) {
+  const head = new Uint8Array(await file.slice(0, 64 * 1024).arrayBuffer())
+  let hash = 0x811c9dc5 // FNV-1a: works without a secure context, unlike crypto.subtle.
+  for (const byte of head) hash = Math.imul(hash ^ byte, 0x01000193)
+  return `${file.lastModified}:${file.size}:${(hash >>> 0).toString(16)}`
+}
+const remember = (id: string, print: string) => { try { localStorage.setItem(PRINT + id, print) } catch { /* no storage */ } }
+const recall = (id: string) => { try { return localStorage.getItem(PRINT + id) } catch { return null } }
+const forget = (id: string) => { try { localStorage.removeItem(PRINT + id) } catch { /* no storage */ } }
+/** True when `file` may continue `session`: same name and size, and the same fingerprint when this browser has one. */
+export async function sameFile(session: ShareUpload, file: File) {
+  if (session.name !== file.name || session.size !== file.size) return false
+  const known = recall(session.id)
+  return known == null || known === await fingerprint(file)
+}
 
 function sendChunk(id: string, offset: number, body: Blob, onProgress: (sent: number) => void, signal?: AbortSignal) {
   return new Promise<{ status: number; data: { upload?: ShareUpload; file?: ShareFile; offset?: number; error?: string } }>((resolve, reject) => {
@@ -160,10 +179,13 @@ function sendChunk(id: string, offset: number, body: Blob, onProgress: (sent: nu
  */
 export async function uploadResumable(file: File, meta: UploadMeta, onProgress: (sent: number) => void, onWait: (wait: Wait) => void,
   signal?: AbortSignal, resume?: ShareUpload): Promise<ShareFile | null> {
-  let session = resume
+  const print = await fingerprint(file)
+  // A different file under the same name starts its own upload. The old session stays, so its own file can still resume it.
+  let session = resume && (recall(resume.id) ?? print) === print ? resume : undefined
   if (!session) {
     try {
       session = (await request<{ upload: ShareUpload }>('share/uploads', { name: file.name, size: file.size, mime: file.type || 'application/octet-stream', ...meta }, signal)).upload
+      remember(session.id, print)
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) return null
       throw e
@@ -175,9 +197,10 @@ export async function uploadResumable(file: File, meta: UploadMeta, onProgress: 
     await online(signal)
     const end = Math.min(file.size, offset + CHUNK)
     const { status, data } = await sendChunk(session.id, offset, file.slice(offset, end), sent => onProgress(offset + sent), signal)
-    if (status === 200 && data.file) { onWait(null); return data.file }
+    if (status === 200 && data.file) { onWait(null); forget(session.id); return data.file }
     if (status === 200 && data.upload) { offset = data.upload.offset; tries = 0; onWait(null); onProgress(offset); continue }
-    if (status === 409 && typeof data.offset === 'number') { offset = data.offset; onProgress(offset); continue }
+    // 409 with a new offset: go on from there. With the same offset, an earlier chunk still holds the session: wait below.
+    if (status === 409 && typeof data.offset === 'number' && data.offset !== offset) { offset = data.offset; onProgress(offset); continue }
     // Lost connection, a restart (502/503) or a busy disk: wait and ask again. Anything else is final.
     if (status === 0 || status >= 500 || status === 409) {
       onWait(navigator.onLine ? 'retrying' : 'offline')
@@ -185,7 +208,7 @@ export async function uploadResumable(file: File, meta: UploadMeta, onProgress: 
       if (navigator.onLine) {
         const fresh = await request<{ upload: ShareUpload }>(`share/uploads/${encodeURIComponent(session.id)}`, undefined, signal).catch((e: unknown) => e)
         if (signal?.aborted) throw new DOMException('Upload stopped.', 'AbortError')
-        if (fresh instanceof ApiError && fresh.status === 404) throw new ApiError(404, 'The server lost this upload. Add the file again.')
+        if (fresh instanceof ApiError && fresh.status === 404) { forget(session.id); throw new ApiError(404, 'The server lost this upload. Add the file again.') }
         if (fresh && typeof fresh === 'object' && 'upload' in fresh) { offset = (fresh as { upload: ShareUpload }).upload.offset; onProgress(offset) }
       }
       continue

@@ -3,7 +3,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { ArrowLeft, Bot, Check, ChevronsRight, Download, ExternalLink, File, FileText, Film, Image as ImageIcon, MessageSquarePlus, Music, Pencil, Plus, RotateCcw, Search, Trash2, TriangleAlert, Upload, X } from 'lucide-react'
 import { errorText } from './api'
 import { ImageViewer, type Media } from './ImageViewer'
-import { backfillThumb, cancelUpload, CHUNK, inspect, listShare, listUploads, putThumb, rawUrl, renameShare, restoreShare, shareToChat, textPreview, thumbUrl, trashShare, uploadResumable, uploadShare, type ShareFile, type ShareFilter, type ShareKind, type ShareUpload, type ShareUsage, type Wait } from './shareApi'
+import { backfillThumb, cancelUpload, CHUNK, inspect, listShare, listUploads, putThumb, rawUrl, renameShare, restoreShare, sameFile, shareToChat, textPreview, thumbUrl, trashShare, uploadResumable, uploadShare, type ShareFile, type ShareFilter, type ShareKind, type ShareUpload, type ShareUsage, type Wait } from './shareApi'
 import './Share.css'
 
 const PdfView = lazy(() => import('./SharePdfView').then(m => ({ default: m.PdfView })))
@@ -277,16 +277,17 @@ export function Share({ wide, onAddToMessage }: { wide: boolean; onAddToMessage?
     const t = setTimeout(() => { setUploads([]); started.current.clear() }, 2600)
     return () => clearTimeout(t)
   }, [busy, failed, uploads.length])
-  const add = (list: FileList | globalThis.File[] | null) => {
+  const add = async (list: FileList | globalThis.File[] | null) => {
     if (!list?.length) return
     if (trash) setView('all')
-    const stamp = Date.now(), open = [...unfinished]
-    const next = [...list].map((file, i) => {
-      const at = open.findIndex(s => s.name === file.name && s.size === file.size)
-      const resume = at >= 0 ? open.splice(at, 1)[0] : undefined
-      return { key: `${stamp}-${i}`, file, sent: resume?.offset ?? 0, state: 'waiting' as const, resume }
-    })
-    setUnfinished(open)
+    const stamp = Date.now(), files = [...list], open = [...unfinished], taken = new Set<string>()
+    const next: Upload[] = []
+    for (const [i, file] of files.entries()) {
+      let resume: ShareUpload | undefined
+      for (const s of open) if (!taken.has(s.id) && await sameFile(s, file).catch(() => false)) { resume = s; taken.add(s.id); break }
+      next.push({ key: `${stamp}-${i}`, file, sent: resume?.offset ?? 0, state: 'waiting' as const, resume })
+    }
+    setUnfinished(current => current.filter(s => !taken.has(s.id)))
     setUploads(current => [...current.filter(u => u.state !== 'done'), ...next])
   }
   const discard = () => { const list = unfinished; setUnfinished([]); for (const s of list) void cancelUpload(s.id).catch(() => {}) }
@@ -346,8 +347,8 @@ export function Share({ wide, onAddToMessage }: { wide: boolean; onAddToMessage?
   const drop = {
     onDragOver: (e: React.DragEvent) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragging(true) } },
     onDragLeave: (e: React.DragEvent) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false) },
-    onDrop: (e: React.DragEvent) => { if (!e.dataTransfer.files.length) return; e.preventDefault(); setDragging(false); add(e.dataTransfer.files) },
-    onPaste: (e: React.ClipboardEvent) => { if (e.clipboardData.files.length && !(e.target instanceof HTMLInputElement)) { e.preventDefault(); add(e.clipboardData.files) } },
+    onDrop: (e: React.DragEvent) => { if (!e.dataTransfer.files.length) return; e.preventDefault(); setDragging(false); void add(e.dataTransfer.files) },
+    onPaste: (e: React.ClipboardEvent) => { if (e.clipboardData.files.length && !(e.target instanceof HTMLInputElement)) { e.preventDefault(); void add(e.clipboardData.files) } },
   }
   const quota = usage ? `${size(usage.used)} of ${size(usage.quota)}` : ''
   const empty = trash ? 'Trash is empty.' : q ? `No files match “${q}”.` : view === 'all' ? 'Nothing here yet. Drop files anywhere on this screen, or press Add.' : 'No files of this kind.'
@@ -360,7 +361,7 @@ export function Share({ wide, onAddToMessage }: { wide: boolean; onAddToMessage?
         <label className="text-field sh-search"><Search aria-hidden="true" /><input type="search" placeholder="Search Share" aria-label="Search Share" value={query} onChange={e => setQuery(e.target.value)} /></label>
         <button type="button" className="ghost" aria-pressed={selectMode} onClick={() => { setSelectMode(!selectMode); setPicked([]) }}>{selectMode ? 'Done' : 'Select'}</button>
         <button type="button" className="primary" onClick={() => input.current?.click()}><Plus aria-hidden="true" />Add</button>
-        <input ref={input} type="file" multiple hidden onChange={e => { add(e.target.files); e.target.value = '' }} />
+        <input ref={input} type="file" multiple hidden onChange={e => { void add(e.target.files); e.target.value = '' }} />
       </header>
       <nav className="tab-bar sh-views" aria-label="Show">{VIEWS.map(v => <button key={v.id} type="button" aria-pressed={view === v.id} onClick={() => { setView(v.id); setOpenId(null) }}>{v.label}</button>)}</nav>
       <div className="sh-scroll">
