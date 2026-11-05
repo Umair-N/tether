@@ -1,4 +1,5 @@
-/* Live mode: one full-screen stage over the app. The orb sits in the middle, the spoken words below it,
+/* Live mode: a floating window over the app (drag the top bar, resize from any edge), a bubble while the call
+   runs in the background, or one full-screen stage. The orb sits in the middle, the spoken words below it,
    three controls at the thumb. On a wide screen a rail of chats on the left shows where each command goes.
    Every color comes from the Settings scheme: --accent is the person's voice, --live-agent (set in Live.tsx,
    the accent's opposite hue) is the agent's, --attention is "needs your OK". */
@@ -10,6 +11,7 @@
   --live-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
   position: fixed; inset: 0; z-index: 200; display: grid; grid-template-columns: 1fr;
   background: var(--bg); color: var(--text); overflow: hidden; -webkit-tap-highlight-color: transparent;
+  container: live / size;
 }
 .live button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
 .live :focus-visible { outline: 2px solid var(--text); outline-offset: 3px; border-radius: var(--radius); }
@@ -88,15 +90,76 @@ button.live-chip:hover { background: var(--hover); }
 .live-rail { display: none; }
 .live-note { margin: 0; padding: 10px; font-size: 12px; line-height: 1.5; color: var(--muted); }
 @media (min-width: 980px) {
-  .live { grid-template-columns: 300px 1fr; }
-  .live-rail { position: relative; z-index: 2; display: flex; flex-direction: column; gap: 4px; min-height: 0; overflow: auto; padding: 20px 14px; border-right: 1px solid var(--line); background: var(--sidebar); }
-  .live-rail .live-note { margin-top: auto; }
-  .live-target-wrap { display: none; }
-  .live-words { min-height: 11em; }
-  .live-said { font-size: 34px; }
-  .live-reply { font-size: 20px; }
+  .live-full { grid-template-columns: 300px 1fr; }
+  .live-full .live-rail { position: relative; z-index: 2; display: flex; flex-direction: column; gap: 4px; min-height: 0; overflow: auto; padding: 20px 14px; border-right: 1px solid var(--line); background: var(--sidebar); }
+  .live-full .live-rail .live-note { margin-top: auto; }
+  .live-full .live-target-wrap { display: none; }
+  .live-full .live-words { min-height: 11em; }
+  .live-full .live-said { font-size: 34px; }
+  .live-full .live-reply { font-size: 20px; }
 }
-@media (max-height: 640px) { .live-words { min-height: 7em; } .live-orb { width: min(54vw, 36vh); } }
+@media (max-height: 640px) { .live-full .live-words { min-height: 7em; } .live-full .live-orb { width: min(54vw, 36vh); } }
+
+/* Title bar buttons: shrink to a bubble, full screen and back. */
+.live-window-buttons { display: inline-flex; gap: 2px; }
+.live .live-icon { display: grid; place-items: center; width: var(--control); height: var(--control); border-radius: var(--radius); color: var(--muted); }
+.live .live-icon:hover { background: var(--hover); color: var(--text); }
+.live .live-grip { cursor: grab; touch-action: none; margin-left: -6px; }
+
+/* Window: a card over the app. The app stays usable around it. Its size is the container, so the
+   orb and words scale with the window instead of the screen. */
+.live-window { inset: auto; left: 0; top: 0; z-index: 60; border: 1px solid var(--line); border-radius: var(--radius-xl);
+  box-shadow: 0 2px 6px rgb(0 0 0 / .1), 0 24px 60px rgb(0 0 0 / .28); animation: live-open .22s cubic-bezier(.23, 1, .32, 1) both; }
+.live-window .live-top { cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
+.live-window.moving, .live-window.moving * { cursor: grabbing; user-select: none; -webkit-user-select: none; }
+.live-window .live-stage { padding: 8px 14px 14px; grid-template-rows: auto minmax(0, 1fr) auto auto auto; }
+.live-window .live-orb { width: min(62cqw, 34cqh, 300px); }
+.live-window .live-words { min-height: 4.5em; max-height: 32cqh; padding-bottom: 10px; }
+.live-window .live-said { font-size: clamp(18px, 6cqw, 24px); }
+.live-window .live-reply { font-size: 16px; }
+.live-window .live-popover { max-height: 60cqh; width: min(300px, calc(100cqw - 28px)); }
+.live-window .live-controls { gap: clamp(16px, 9cqw, 40px); }
+.live-window .live-round { width: 48px; height: 48px; }
+.live-window .live-talk .live-round { width: 64px; height: 64px; }
+.live-window .live-approval { margin-bottom: 10px; padding: 12px; }
+@container live (max-width: 440px) { .live-window .live-info { display: none; } }
+@container live (max-height: 470px) { .live-window .live-words { min-height: 3em; } .live-window .live-ctl > span { display: none; } }
+
+/* Resize: thin strips on each edge and corner, plus a visible, focusable grip at the bottom right. */
+.live-edge { position: absolute; z-index: 30; touch-action: none; }
+.live-edge-n, .live-edge-s { left: 14px; right: 14px; height: 8px; cursor: ns-resize; }
+.live-edge-n { top: -4px; } .live-edge-s { bottom: -4px; }
+.live-edge-e, .live-edge-w { top: 14px; bottom: 14px; width: 8px; cursor: ew-resize; }
+.live-edge-e { right: -4px; } .live-edge-w { left: -4px; }
+.live-edge-ne, .live-edge-nw, .live-edge-se, .live-edge-sw { width: 18px; height: 18px; }
+.live-edge-ne { top: -4px; right: -4px; cursor: nesw-resize; } .live-edge-sw { bottom: -4px; left: -4px; cursor: nesw-resize; }
+.live-edge-nw { top: -4px; left: -4px; cursor: nwse-resize; } .live-edge-se { bottom: -4px; right: -4px; cursor: nwse-resize; }
+.live .live-grip-resize { position: absolute; z-index: 31; right: 2px; bottom: 2px; width: 24px; height: 24px; padding: 0; cursor: nwse-resize; touch-action: none; border-radius: 0 0 var(--radius-xl) 0;
+  background: linear-gradient(135deg, transparent 52%, var(--line) 52% 58%, transparent 58% 68%, var(--line) 68% 74%, transparent 74%); }
+.live .live-grip-resize:hover { background-color: transparent; filter: brightness(.8); }
+@media (pointer: coarse) { .live .live-grip-resize { width: 32px; height: 32px; } .live-edge-n, .live-edge-s { height: 16px; } .live-edge-n { top: -8px; } .live-edge-s { bottom: -8px; } }
+
+/* Bubble: the call keeps running and the orb stays alive in a small floating circle. Tap it to open, drag it anywhere. */
+.live-bubble { inset: auto; left: 0; top: 0; z-index: 60; border-radius: 50%; display: block; border: 1px solid var(--line);
+  background: radial-gradient(circle at 50% 40%, var(--surface), var(--bg));
+  box-shadow: 0 2px 6px rgb(0 0 0 / .12), 0 10px 28px rgb(0 0 0 / .24); animation: live-open .22s cubic-bezier(.23, 1, .32, 1) both; }
+.live-bubble .live-stage { position: absolute; inset: 0; display: block; padding: 0; pointer-events: none; }
+.live-bubble .live-stage > :not(.live-center), .live-bubble .live-status, .live-bubble .live-edge { display: none; }
+.live-bubble .live-center { position: absolute; inset: 0; gap: 0; }
+.live-bubble .live-orb { width: 210%; max-width: none; }
+.live .live-bubble-hit { position: absolute; inset: 0; z-index: 5; border-radius: 50%; cursor: grab; touch-action: none; }
+.live .live-bubble-hit:focus-visible { outline-offset: 4px; border-radius: 50%; }
+.live-bubble.moving { scale: 1.08; }
+.live-bubble.moving .live-bubble-hit { cursor: grabbing; }
+/* A chat needs your OK: the ring pulses in the attention color until you open Friday. */
+.live-bubble[data-asking="true"] { border-color: var(--attention); }
+.live-bubble[data-asking="true"]::after { content: ''; position: absolute; inset: -1px; border-radius: 50%; border: 2px solid var(--attention); pointer-events: none; animation: live-call 2s cubic-bezier(.23, 1, .32, 1) infinite; }
+.live-bubble[data-phase="paused"] { opacity: .75; }
+@keyframes live-call { 0% { opacity: .8; transform: scale(1); } 70%, 100% { opacity: 0; transform: scale(1.35); } }
+@keyframes live-open { from { opacity: 0; scale: .92; } to { opacity: 1; scale: 1; } }
+
 @media (prefers-reduced-motion: reduce) {
-  .live-reply { animation: none; }
+  .live-reply, .live-window, .live-bubble { animation: none; }
+  .live-bubble[data-asking="true"]::after { animation: none; }
 }
+.live:focus { outline: none; }

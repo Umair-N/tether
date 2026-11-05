@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { AudioLines, Check, ChevronDown, Mic, MicOff, X } from 'lucide-react'
+import { AudioLines, Check, ChevronDown, GripHorizontal, Maximize2, Mic, MicOff, Minimize2, Minus, X } from 'lucide-react'
 import { errorText, SESSION_NAME, type Api, type Approval, type ChatData, type Choice, type Pane, type SessionsData } from './api'
 import type { Command } from './CommandMenu'
 import { agentNames, paneTitle } from './Sidebar'
 import { agentReady, FridayAgent, type AgentChatList, type AgentChats, type AgentEvent, type ToolHandler } from './fridayAgent'
 import { LiveVoice, sentences } from './liveVoice'
+import { useFloatingWindow, type Edge, type Rect } from './floatingWindow'
 import { speakable } from './speech'
 import './Live.css'
 
@@ -26,6 +27,15 @@ const approvalOf = (pane: Pane) => {
   const approval = pane.approval as Approval | null
   return approval?.id && approval.options?.length ? approval : null
 }
+// The floating window opens at the bottom right on a wide screen, and across the bottom on a phone, above the tab bar.
+const BUBBLE = 64
+const EDGES: Edge[] = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw']
+const firstRect = (): Rect => {
+  const vw = window.innerWidth, vh = window.innerHeight
+  if (vw < 600) { const h = Math.min(520, Math.round(vh * 0.62)); return { x: 8, y: Math.max(8, vh - h - 80), w: vw - 16, h } }
+  const w = Math.min(400, vw - 32), h = Math.min(600, vh - 48)
+  return { x: vw - w - 24, y: vh - h - 24, w, h }
+}
 const name = (pane: Pane) => `${paneTitle(pane)} · ${agentNames[pane.agent]}`
 const lastReply = (data: ChatData) => [...data.messages].reverse().find(item => item.role === 'assistant' && !item.kind && item.text.trim()) ?? null
 const shortText = (text: string, limit: number) => { const plain = speakable(text); return plain.length > limit ? `${plain.slice(0, limit).replace(/\s+\S*$/, '')}…` : plain }
@@ -39,7 +49,10 @@ const findPane = (agents: Pane[], wanted: string) => {
 const chatState = (pane: Pane) => approvalOf(pane) ? 'needs approval' : pane.needs ? `needs ${pane.needs.kind}` : pane.state.toLowerCase()
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
-export function Live({ api, panes, selected, commands, onClose }: { api: Api; panes: Pane[]; selected?: Pane; commands: Command[]; onClose: () => void }) {
+export function Live({ api, panes, selected, commands, onClose, reveal = 0 }: { api: Api; panes: Pane[]; selected?: Pane; commands: Command[]; onClose: () => void; reveal?: number }) {
+  const { mode, setMode, moving, windowStyle, bubbleStyle, move, resize, bubbleHandlers } = useFloatingWindow('tether.live-window.v1', { minW: 300, minH: 360, bubble: BUBBLE, initial: firstRect, initialMode: 'window' })
+  const root = useRef<HTMLDivElement>(null)
+  const bubbleButton = useRef<HTMLButtonElement>(null)
   const agents = panes.filter(pane => pane.agent !== 'shell')
   const [targetId, setTargetId] = useState(() => (selected && selected.agent !== 'shell' ? selected : agents[0])?.id ?? '')
   const target = agents.find(pane => pane.id === targetId)
@@ -554,15 +567,24 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
     void flow.current.choose(approvalPane, approval, option, yes ? 'Approved.' : 'Denied.')
   }
 
-  // Space talks, Esc ends.
+  // Space talks. Esc steps down: full screen to window, window to bubble. Only End stops the call.
+  // Outside full screen Tether stays usable, so the keys work only while focus is inside Friday.
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.preventDefault(); if (menu) setMenu(false); else onClose() }
-      else if (event.key === ' ' && !(event.target as Element).closest('input, textarea, [role="menu"]')) { event.preventDefault(); talkButton.current?.click() }
+      const target = event.target as Element
+      if (mode !== 'full' && !root.current?.contains(target)) return
+      if (event.key === 'Escape') { event.preventDefault(); if (menu) setMenu(false); else if (mode === 'full') setMode('window'); else if (mode === 'window') { setMode('bubble'); window.setTimeout(() => bubbleButton.current?.focus()) } }
+      else if (event.key === ' ' && mode !== 'bubble' && !target.closest('input, textarea, button, [role="menu"]')) { event.preventDefault(); talkButton.current?.click() }
     }
     window.addEventListener('keydown', key)
     return () => window.removeEventListener('keydown', key)
-  }, [menu, onClose])
+  }, [menu, mode, setMode])
+  // The rail button or the command menu asks again while the call runs: bring the window back.
+  // The bubble button goes away when the window opens: move focus into the window, not to the page.
+  const lastMode = useRef(mode)
+  useEffect(() => { if (lastMode.current === 'bubble' && mode !== 'bubble') root.current?.focus(); lastMode.current = mode }, [mode])
+  const revealed = useRef(reveal)
+  useEffect(() => { if (reveal !== revealed.current) { revealed.current = reveal; if (mode === 'bubble') setMode('window') } }, [reveal, mode, setMode])
   useEffect(() => { talkButton.current?.focus() }, [])
 
   const working = agents.filter(pane => pane.state === 'Working').length
@@ -572,23 +594,36 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
     <i aria-hidden="true" /><span><b>{paneTitle(pane)}</b><small>{agentNames[pane.agent]}{approvalOf(pane) ? ' · needs your OK' : pane.state === 'Working' ? ' · working' : ''}</small></span><Check size={15} className="live-check" aria-hidden="true" />
   </button>)
 
-  return <div className="live" role="dialog" aria-modal="true" aria-label={`${ASSISTANT} Live mode`} data-phase={phase}>
+  const asks = !!(approval && approvalPane)
+  const bubbleLabel = `Open ${ASSISTANT}: ${status}${asks ? ', a chat needs your OK' : ''}`
+  return <div ref={root} className={`live live-${mode}${moving ? ' moving' : ''}`} style={mode === 'window' ? windowStyle : mode === 'bubble' ? bubbleStyle : undefined}
+    tabIndex={-1} role="dialog" aria-modal={mode === 'full'} aria-label={`${ASSISTANT} Live mode`} data-phase={phase} data-asking={asks}>
+    {mode === 'bubble' && <button ref={bubbleButton} type="button" className="live-bubble-hit" aria-label={bubbleLabel} title={bubbleLabel} {...bubbleHandlers} />}
+    {mode === 'window' && EDGES.map(edge => <span key={edge} className={`live-edge live-edge-${edge}`} aria-hidden="true" {...resize(edge)} />)}
+    {mode === 'window' && <button type="button" className="live-grip-resize" aria-label="Resize Friday window. Use the arrow keys." title="Drag to resize" {...resize('se')} />}
     <aside className="live-rail" aria-label="Commands go to">
       <h2>Commands go to</h2>
       <div role="menu" aria-label="Send voice commands to">{picker}</div>
       <p className="live-note">{agentOn ? 'Just talk. Friday sends your requests to the chats, answers questions, and tells you when a chat finishes or needs you.' : 'Just talk: each pause sends what you said. Say “switch to” and a chat name to change it, or “what\'s running” for a briefing.'}</p>
     </aside>
-    <section className="live-stage">
+    <section className="live-stage" inert={mode === 'bubble'}>
       <div className="live-aurora" aria-hidden="true" />
-      <header className="live-top">
+      <header className="live-top" onPointerDown={mode === 'window' ? move.onPointerDown : undefined} onPointerMove={move.onPointerMove} onPointerUp={move.onPointerUp} onPointerCancel={move.onPointerCancel}>
+        {mode === 'window' && <button type="button" className="live-icon live-grip" data-float-grip aria-label="Move Friday window. Use the arrow keys." title="Drag to move" onKeyDown={move.onKeyDown}><GripHorizontal size={16} aria-hidden="true" /></button>}
         <span className="live-tag"><i aria-hidden="true" />{ASSISTANT}</span>
-        <span className="live-chip" title={awake ? 'The screen stays on while Live mode runs.' : 'This browser can turn the screen off.'}><span className="live-wake" data-on={awake} aria-hidden="true" />{awake ? 'Screen on' : 'Screen may sleep'}</span>
-        {agentOn && <span className="live-chip" title={voiceKind ? 'This device speaks Friday’s replies, so a busy server cannot break the voice.' : 'The server speaks Friday’s replies.'}>{voiceKind === 'kokoro' ? 'Voice: this device' : voiceKind === 'system' ? 'Voice: device basic' : 'Voice: server'}</span>}
+        <span className="live-chip live-info" title={awake ? 'The screen stays on while Live mode runs.' : 'This browser can turn the screen off.'}><span className="live-wake" data-on={awake} aria-hidden="true" />{awake ? 'Screen on' : 'Screen may sleep'}</span>
+        {agentOn && <span className="live-chip live-info" title={voiceKind ? 'This device speaks Friday’s replies, so a busy server cannot break the voice.' : 'The server speaks Friday’s replies.'}>{voiceKind === 'kokoro' ? 'Voice: this device' : voiceKind === 'system' ? 'Voice: device basic' : 'Voice: server'}</span>}
         <span className="live-target-wrap">
           <button type="button" className="live-chip live-target" aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(open => !open)}>
             {target ? <>{paneTitle(target)}<span className="live-k">{agentNames[target.agent]}</span></> : 'No chat'}<ChevronDown size={14} aria-hidden="true" />
           </button>
           {menu && <div className="live-popover" role="menu" aria-label="Send voice commands to"><h3>Commands go to</h3>{picker.length ? picker : <p className="live-note">No agent chats are open.</p>}</div>}
+        </span>
+        <span className="live-window-buttons">
+          <button type="button" className="live-icon" aria-label="Shrink Friday to a bubble" title="Shrink to a bubble (Esc). The call stays on." onClick={() => setMode('bubble')}><Minus size={18} aria-hidden="true" /></button>
+          {mode === 'full'
+            ? <button type="button" className="live-icon" aria-label="Show Friday in a window" title="Window" onClick={() => setMode('window')}><Minimize2 size={16} aria-hidden="true" /></button>
+            : <button type="button" className="live-icon" aria-label="Show Friday full screen" title="Full screen" onClick={() => setMode('full')}><Maximize2 size={16} aria-hidden="true" /></button>}
         </span>
       </header>
 
@@ -614,7 +649,7 @@ export function Live({ api, panes, selected, commands, onClose }: { api: Api; pa
       <div className="live-controls">
         <div className="live-ctl"><button type="button" className="live-round" aria-pressed={muted} aria-label={agentOn ? 'Mute microphone' : muted ? 'Resume listening' : 'Pause listening'} onClick={togglePause} disabled={phase === 'starting'}>{muted ? <MicOff size={22} /> : <Mic size={22} />}</button><span>{agentOn ? (muted ? 'Unmute' : 'Mute') : muted ? 'Paused' : 'Pause'}</span></div>
         <div className="live-ctl live-talk" data-on={!agentOn && phase === 'listening'}><button ref={talkButton} type="button" className="live-round" aria-label={talkLabel} onClick={talk} disabled={agentOn ? phase !== 'speaking' && phase !== 'thinking' : phase === 'starting'}><AudioLines size={28} /></button><span>{talkLabel} <kbd>Space</kbd></span></div>
-        <div className="live-ctl live-end"><button type="button" className="live-round" aria-label="End Live mode" onClick={onClose}><X size={22} /></button><span>End <kbd>Esc</kbd></span></div>
+        <div className="live-ctl live-end"><button type="button" className="live-round" aria-label="End Live mode" onClick={onClose}><X size={22} /></button><span>End</span></div>
       </div>
     </section>
   </div>
