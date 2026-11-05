@@ -6,6 +6,7 @@ import shutil
 HOME = Path(os.environ.get('MOBILE_TMUX_HOME') or Path.home())
 CACHE = Path(os.environ.get('MOBILE_TMUX_CACHE') or HOME / '.cache/mobile-tmux')
 TETHER = Path(os.environ.get('TETHER_HOME') or HOME / '.tether')  # session projects (projects.py)
+SHARE = Path(os.environ.get('TETHER_SHARE') or TETHER / 'share')
 CONFIG = Path(os.environ.get('MOBILE_TMUX_CONFIG') or HOME / '.config/mobile-tmux')
 TMUX = os.environ.get('MOBILE_TMUX_TMUX') or shutil.which('tmux') or '/usr/bin/tmux'
 SYSTEMD_RUN = shutil.which('systemd-run')

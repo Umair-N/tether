@@ -1752,7 +1752,29 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(503, {'error': 'Could not close the tmux session.'})
 
 
+    # Keep Share dispatch together: the existing routes remain the fallback.
+    _get_without_share = do_GET
+    _post_without_share = do_POST
+
+    def do_GET(self):
+        import share_api
+        if not share_api.dispatch(self):
+            self._get_without_share()
+
+    def do_POST(self):
+        import share_api
+        if not share_api.dispatch(self):
+            self._post_without_share()
+
+    def do_HEAD(self):
+        import share_api
+        if not share_api.dispatch(self):
+            self.send_error(404)
+
+
 if __name__ == '__main__':
+    import share_api
+    share_api.get_store()  # Reconcile private storage before accepting requests.
     import atexit
     import browser
     import pane_view

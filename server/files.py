@@ -25,6 +25,7 @@ import zipfile
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
+import paths
 import media_files
 import prefs_sync
 import repo_panel
@@ -745,11 +746,20 @@ class Item:
         os.close(self.folder)
 
 
+def refuse_share_write(path, ancestors=False):
+    """Reserve Share and ancestors that an explorer mutation could move."""
+    share = paths.SHARE.resolve()
+    path = path.resolve()
+    if path == share or share in path.parents or (ancestors and path in share.parents):
+        raise FilesError(403, 'share', 'Use Share to change files in its managed folder.')
+
+
 def write_folder(text, root):
     """(lexical path, real path, descriptor) of a folder a write puts things into. Secret folders are always refused."""
     lex, real, is_dir, _ = locate(text, root, allow_secret=False)
     if not is_dir:
         raise invalid('Choose a folder.')
+    refuse_share_write(real)
     return lex, real, open_dir(root, real)
 
 
@@ -764,6 +774,7 @@ def write_item(text, root):
         raise gone() from exc
     if not inside(parent, root):
         raise outside()
+    refuse_share_write(parent / lex.name, ancestors=True)
     folder = open_dir(root, parent)
     try:
         st = os.stat(lex.name, dir_fd=folder, follow_symlinks=False)
@@ -781,6 +792,7 @@ def write_item(text, root):
 
 
 def refuse_secret_target(folder_lex, folder_real, name, is_dir, root):
+    refuse_share_write(folder_real / name, ancestors=True)
     if secret_parts(parts_of(folder_lex, root) + (name,), is_dir) or secret_parts(parts_of(folder_real, root) + (name,), is_dir):
         raise hidden_secret()
 
