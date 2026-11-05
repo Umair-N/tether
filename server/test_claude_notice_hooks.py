@@ -108,10 +108,12 @@ class ClaudeNoticeHookTests(unittest.TestCase):
         self.feed('PermissionDenied', tool_name='Read', tool_input={'query': 'x' * 200}, reason='y' * 200)
         stored = json.loads((self.cache / 'hooks/notice-session.json').read_text())['denied']
         self.assertEqual((len(stored['detail']), len(stored['reason'])), (160, 160))
-        for extra in ({'tool_input': None, 'reason': 'Classifier unavailable'},
-                      {'tool_input': {'command': 'git push'}, 'reason': ''}):
+        for extra, expected in (({'tool_input': None, 'reason': 'Classifier unavailable'},
+                                 'Bash blocked by auto mode · /permissions · Auto mode: Classifier unavailable'),
+                                ({'tool_input': {'command': 'git push'}, 'reason': ''},
+                                 'Bash(git push) blocked by auto mode · /permissions')):
             self.feed('PermissionDenied', tool_name='Bash', **extra)
-            self.assertEqual(self.overlay()['notices'], ['Bash blocked by auto mode · /permissions · Auto mode: Classifier unavailable'])
+            self.assertEqual(self.overlay()['notices'], [expected])
 
     def test_quota_events_are_saved_once_and_merged(self):
         for error in ('rate_limit', 'billing_error', 'account_on_hold'):
