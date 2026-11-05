@@ -178,9 +178,9 @@ class LaunchTests(unittest.TestCase):
 
 
 class EndpointTests(unittest.TestCase):
-    def request(self, payload, headers=None, denied=False):
+    def request(self, payload, headers=None, denied=False, path='/mobile/api/delegate'):
         handler = object.__new__(server.Handler)
-        handler.path = '/mobile/api/delegate'
+        handler.path = path
         handler.command = 'POST'
         encoded = json.dumps(payload).encode()
         handler.rfile = io.BytesIO(encoded)
@@ -190,6 +190,59 @@ class EndpointTests(unittest.TestCase):
         handler.respond = Mock()
         handler.do_POST()
         return handler.respond.call_args.args
+
+    def test_review_stop_returns_result_without_choose_or_tmux_writes(self):
+        with patch.object(server, 'choose') as choose, \
+                patch.object(server.subprocess, 'run') as run, \
+                patch.object(server.review_links, 'remove') as remove:
+            for stopped in (True, False):
+                remove.return_value = stopped
+                self.assertEqual(self.request({'worker': '%13'}, path='/mobile/api/review-stop'),
+                                 (200, {'stopped': stopped}))
+                remove.assert_called_with('%13')
+        choose.assert_not_called()
+        run.assert_not_called()
+
+    def test_review_stop_rejects_bad_worker_with_specific_error(self):
+        with patch.object(server.review_links, 'remove') as remove:
+            for worker in (None, '', '13', '%13;pwd', '%13\n', 13, [], {}):
+                with self.subTest(worker=worker):
+                    self.assertEqual(self.request({'worker': worker}, path='/mobile/api/review-stop'),
+                                     (400, {'error': 'Select a tab to stop reviewing.'}))
+        remove.assert_not_called()
+
+    def test_review_stop_preserves_auth_guards(self):
+        with patch.object(server.review_links, 'remove') as remove:
+            for headers in ({'Origin': 'https://evil.test'}, {'X-Codex-Mobile': ''}):
+                self.assertEqual(self.request({'worker': '%13'}, headers=headers,
+                                              path='/mobile/api/review-stop')[0], 403)
+            handler = object.__new__(server.Handler)
+            handler.path = '/mobile/api/review-stop'
+            handler.deny = Mock(return_value=True)
+            handler.respond = Mock()
+            handler.do_POST()
+            handler.respond.assert_not_called()
+        remove.assert_not_called()
+
+    def test_sessions_adds_reviewed_by_and_survives_store_read_errors(self):
+        rows = [{'id': '%13'}, {'id': '%12'}, {'id': '%20'}]
+        handler = object.__new__(server.Handler)
+        handler.path = '/mobile/api/sessions'
+        handler.deny = Mock(return_value=False)
+        handler.respond = Mock()
+        with patch.object(server, 'sessions', return_value=rows), \
+                patch.object(server, 'session_row', side_effect=lambda row: dict(row)), \
+                patch.object(server, 'settings', return_value={'thread': THREAD}), \
+                patch.object(server.review_links, 'reviewed_by', return_value={'%13': '%12'}) as reviewed_by:
+            handler.do_GET()
+            reviewed_by.assert_called_once_with()
+            handler.respond.assert_called_with(200, {'sessions': [
+                {'id': '%13', 'reviewed_by': '%12'}, {'id': '%12'}, {'id': '%20'}], 'default_thread': THREAD})
+            reviewed_by.reset_mock()
+            reviewed_by.side_effect = OSError('disk')
+            handler.do_GET()
+            reviewed_by.assert_called_once_with()
+            handler.respond.assert_called_with(200, {'sessions': rows, 'default_thread': THREAD})
 
     def test_route_bypasses_default_choose_and_holds_send_lock(self):
         source = entry()

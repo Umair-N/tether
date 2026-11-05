@@ -36,6 +36,37 @@ class ReviewLinksTests(unittest.TestCase):
         self.states.update(states)
         review_links.observe([self.worker, self.reviewer], self.status, self.send, self.reply)
 
+    def test_reviewed_by_reads_once_under_lock_and_skips_malformed_rows(self):
+        links = [*self.links(), {'worker': '%20', 'reviewer': '%21'}, None, [], {},
+                 {'worker': [], 'reviewer': '%12'}, {'worker': '%30'},
+                 {'worker': '%31', 'reviewer': 12}, {'worker': 'bad', 'reviewer': '%12'},
+                 {'worker': '%32', 'reviewer': '%12\n'}]
+        def read():
+            self.assertTrue(review_links._lock.locked())
+            return links
+        with patch.object(review_links, '_read', side_effect=read) as read_store:
+            self.assertEqual(review_links.reviewed_by(), {'%13': '%12', '%20': '%21'})
+        read_store.assert_called_once_with()
+
+    def test_remove_drops_every_matching_link_and_keeps_other_rows_under_lock(self):
+        link, = self.links()
+        other = dict(link, worker='%20')
+        self.file.write_text(json.dumps([link, other, dict(link, reviewer='%21'), None, {}]))
+        write_store = review_links._write
+        def write(links):
+            self.assertTrue(review_links._lock.locked())
+            write_store(links)
+        with patch.object(review_links, '_write', side_effect=write) as write_mock:
+            self.assertTrue(review_links.remove('%13'))
+        write_mock.assert_called_once_with([other, None, {}])
+        self.assertEqual(self.links(), [other, None, {}])
+
+    def test_remove_missing_worker_returns_false_without_writing(self):
+        with patch.object(review_links, '_write') as write:
+            self.assertFalse(review_links.remove('%99'))
+        write.assert_not_called()
+        self.assertEqual(review_links.reviewed_by(), {'%13': '%12'})
+
     def test_store_fields_atomic_replace_and_bound(self):
         link, = self.links()
         self.assertEqual(set(link), {'worker', 'reviewer', 'reviewer_thread', 'name', 'agent',

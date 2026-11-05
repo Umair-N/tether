@@ -83,3 +83,6 @@
   .task-pop::before { opacity: 0; }
   .pane-tabs .tab-add svg, .task-switch input::after { transition: none; }
 }
+
+/* A tab with a reviewer shows a small eye. Stop it in the ⋯ menu. */
+.pane-tabs .tab-reviewed { flex-shrink: 0; color: var(--muted); }

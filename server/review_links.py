@@ -1,6 +1,7 @@
 """Persistent worker/reviewer links and one bounded watcher step."""
 import json
 import os
+import re
 import tempfile
 import threading
 import time
@@ -42,6 +43,24 @@ def add(*, worker, reviewer, reviewer_thread, name, agent):
     with _lock:
         links = [item for item in _read() if isinstance(item, dict) and item.get('worker') != worker]
         _write((links + [link])[-MAX_LINKS:])
+
+
+def reviewed_by():
+    with _lock:
+        return {link['worker']: link['reviewer'] for link in _read()
+                if isinstance(link, dict)
+                and all(isinstance(link.get(key), str) and re.fullmatch(r'%[0-9]+', link[key])
+                        for key in ('worker', 'reviewer'))}
+
+
+def remove(worker):
+    with _lock:
+        links = _read()
+        remaining = [link for link in links if not isinstance(link, dict) or link.get('worker') != worker]
+        if len(remaining) == len(links):
+            return False
+        _write(remaining)
+        return True
 
 
 def _step(link, entries, status, send, last_reply):
