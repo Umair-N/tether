@@ -18,7 +18,8 @@ Tether runs one shared browser that the user can watch from desktop or phone.
 - Playwright MCP already uses it. Do not pass --isolated or launch another browser.
 - In scripts, connect instead of launching: Node `chromium.connectOverCDP(process.env.TETHER_CDP_URL)`, Python `p.chromium.connect_over_cdp(os.environ["TETHER_CDP_URL"])`. Use `browser.contexts[0]`. You get a private context; the user's logins are not in it.
 - Limit: 3 tabs. Close tabs you no longer need.
-- If you need the user in the browser (2FA code, captcha, a password you must not see), run `{command}`, then wait for the user to reply in chat.'''
+- If you need the user in the browser (2FA code, captcha, a password you must not see), run `{command}`, then wait for the user to reply in chat.
+- Sign-ins: this browser is headless and agent-controlled, so Google and most other login pages refuse it ("This browser or app may not be secure"). Do not ask the user to sign in here. Tell the user which account the task needs and stop; they sign in in their own browser.'''
 
 
 def endpoint(cdp, action):
