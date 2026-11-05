@@ -308,9 +308,71 @@ def _pane_list(timeout):
                                    text=True, timeout=timeout)
 
 
+def _darwin_children(uid, deadline, clock):
+    children, owned = {}, set()
+    for pid in procinfo.pids():
+        if clock() >= deadline:
+            break
+        try:
+            if procinfo.uid(pid) != uid or clock() >= deadline:
+                continue
+            parent = procinfo.parent(pid)
+            owned.add(pid)
+            children.setdefault(parent, []).append(pid)
+        except OSError:
+            continue
+    return children, owned
+
+
+def _darwin_stale_panes(endpoint, pane_reader, clock, uid, cache):
+    if not endpoint:
+        return []
+    uid = os.getuid() if uid is None else uid
+    cache = _STALE_CACHE if cache is None else cache
+    key = ('darwin', endpoint, pane_reader, clock, uid)
+    now = clock()
+    cached = cache.get(key)
+    if cached and now < cached[0]:
+        return list(cached[1])
+    deadline, stale = now + 2, []
+    try:
+        panes = []
+        for line in pane_reader(max(.01, deadline - clock())).splitlines():
+            fields = line.split()
+            if len(fields) == 2 and re.fullmatch(r'%[0-9]+', fields[0]) and fields[1].isdigit():
+                panes.append((fields[0], int(fields[1])))
+        children, owned = _darwin_children(uid, deadline, clock)
+        for pane, root in panes:
+            pending, visited = deque([root]), set()
+            while pending and clock() < deadline:
+                pid = pending.popleft()
+                if pid in visited or pid not in owned:
+                    continue
+                visited.add(pid)
+                try:
+                    argv = procinfo.argv(pid)
+                    if any(arg.rsplit(b'/', 1)[-1] in (b'claude', b'codex') for arg in argv[:2]):
+                        if clock() >= deadline:
+                            break
+                        env = procinfo.environ(pid)
+                        if env is not None and ('TETHER_CDP_URL=' + endpoint).encode() not in env:
+                            stale.append(pane)
+                        break  # The top-most agent owns the pane, even when its environment is hidden.
+                except OSError:
+                    continue
+                pending.extend(children.get(pid, []))
+    except (OSError, subprocess.SubprocessError):
+        pass
+    cache.clear()
+    cache[key] = (clock() + 10, tuple(stale))
+    return stale
+
+
 def stale_panes(endpoint, *, read_text=_read_text, read_bytes=_read_bytes, list_dir=procinfo.list_dir,
                 uid_of=_uid_of, pane_reader=_pane_list, clock=time.monotonic, uid=None, cache=None):
     """Read each process tree once, within two seconds; cache a result for ten seconds."""
+    if procinfo.DARWIN:
+        return _darwin_stale_panes(endpoint, pane_reader, clock, uid, cache)
     if not endpoint:
         return []
     uid = os.getuid() if uid is None else uid

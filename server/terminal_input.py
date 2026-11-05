@@ -752,7 +752,10 @@ def verify(entry, run=subprocess.run):
                   '#{pane_pid}\t#{pane_current_command}\t#{pane_in_mode}'],
                  check=True, capture_output=True, text=True, timeout=5)
     root, command, mode = result.stdout.strip().split('\t')
-    if mode != '0' or command not in {'claude': ('claude',), 'codex': ('node', 'codex'), 'antigravity': ('agy', 'exe')}[entry['agent']]:
+    valid_command = command in {'claude': ('claude',), 'codex': ('node', 'codex'), 'antigravity': ('agy', 'exe')}[entry['agent']]
+    if procinfo.DARWIN and entry['agent'] == 'claude' and re.fullmatch(r'\d+\.\d+\.\d+', command):
+        valid_command = True
+    if mode != '0' or not valid_command:
         raise RuntimeError('Return to the agent prompt in Termius before sending.')
     ancestor = pid
     while ancestor != int(root) and ancestor > 1:

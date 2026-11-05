@@ -120,7 +120,7 @@ def live_entry(pids, cwd=None):
         # Only a conversation reported since this process started can be its own: a fresh agy has none yet, and borrowing the
         # newest one in the same folder showed another conversation's chat and context.
         try:
-            began = time.time() - procinfo.uptime() + int(process_start(owner)) / os.sysconf('SC_CLK_TCK')
+            began = procinfo.start_ms(process_start(owner)) / 1000
         except (OSError, ValueError):
             began = 0
         candidates = []

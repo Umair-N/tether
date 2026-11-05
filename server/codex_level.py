@@ -302,6 +302,15 @@ def is_run(argv):
 
 def processes(proc=Path('/proc')):
     """{pid: (ppid, argv)} for every process we can read."""
+    if procinfo.DARWIN:
+        out = {}
+        for pid in procinfo.pids():
+            try:
+                argv = procinfo.argv(pid)
+                out[pid] = (procinfo.parent(pid), [part.decode(errors='replace') for part in argv if part])
+            except OSError:
+                continue
+        return out
     out = {}
     for pid in procinfo.pids(proc):
         try:

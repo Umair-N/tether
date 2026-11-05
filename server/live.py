@@ -152,7 +152,23 @@ def shell_output(thread, identifier):
     return {'output': _tail(task['output']) if task.get('output') else None}
 
 
+def _darwin_processes():
+    result = {}
+    for pid in procinfo.pids():
+        try:
+            fields = procinfo.stat_fields(pid)
+            args = procinfo.argv(pid)
+            result[pid] = {'uid': procinfo.uid(pid), 'group': int(fields[2]), 'start': fields[19],
+                           'parent': int(fields[1]), 'state': fields[0], 'name': procinfo.comm(pid),
+                           'args': [os.fsdecode(arg) for arg in args if arg]}
+        except (OSError, ValueError, IndexError):
+            continue
+    return result
+
+
 def _processes():
+    if procinfo.DARWIN:
+        return _darwin_processes()
     result = {}
     for pid in procinfo.pids():
         try:

@@ -64,7 +64,7 @@ def footer_cwd(run, pane):
 
 
 def started_ms(ticks):
-    """Wall-clock start of a process, in milliseconds, from the clock ticks since boot that /proc reports."""
+    """Wall-clock start of a process, in milliseconds, from its platform start token."""
     return procinfo.start_ms(ticks)
 
 
@@ -89,7 +89,7 @@ def codex_thread(connection, pid, ticks, cwd):
 def match_unresolved_codex(connection, entries):
     """A Codex pane whose folder cannot be read (a narrow pane cuts its footer off) is matched by time instead: it owns the
     conversations begun after it started and before the next Codex process did."""
-    codex = sorted((e for e in entries if e['agent'] == 'codex'), key=lambda e: int(e.get('process_start') or 0))
+    codex = sorted((e for e in entries if e['agent'] == 'codex'), key=lambda e: (float if procinfo.DARWIN else int)(e.get('process_start') or 0))
     for index, entry in enumerate(codex):
         if not entry.get('pending_conversation'):
             continue
@@ -130,12 +130,7 @@ def discover(config, run):
         fields = line.split('\t')
         if len(fields) > 9 and fields[-1]:
             positions[(fields[1], fields[-1])] = fields[3]
-    ps = run(['ps', '-eo', 'pid=,ppid=,comm='], capture_output=True, text=True, timeout=5)
-    processes = {}
-    for line in ps.stdout.splitlines():
-        fields = line.strip().split(None, 2)
-        if len(fields) == 3:
-            processes[int(fields[0])] = (int(fields[1]), fields[2])
+    processes = procinfo.table(run)
     claude = []
     for path in (HOME / '.claude/sessions').glob('*.json'):
         try:
@@ -224,7 +219,7 @@ def discover(config, run):
             entry['label'] += ':' + entry['position']
     # Two Codex processes can never be one conversation: the older process keeps it, the newer one starts empty until it has its own.
     claimed = set()
-    for entry in sorted((e for e in entries if e['agent'] == 'codex' and not e.get('pending_conversation')), key=lambda e: int(e.get('process_start') or 0)):
+    for entry in sorted((e for e in entries if e['agent'] == 'codex' and not e.get('pending_conversation')), key=lambda e: (float if procinfo.DARWIN else int)(e.get('process_start') or 0)):
         if entry['thread'] in claimed:
             pending = 'pending-' + str(entry['owner_pid']) + '-' + str(entry['process_start'])
             entry.update(thread=pending, transcript=str(HOME / '.codex/sessions/pending' / (pending + '.jsonl')), pending_conversation=True)

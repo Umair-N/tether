@@ -3,7 +3,8 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import procinfo
 
@@ -88,6 +89,27 @@ class ProcinfoTests(unittest.TestCase):
         (self.proc / 'uptime').write_text('invalid')
         with self.assertRaises(ValueError):
             procinfo.start_ms('12345', self.proc, now=2000)
+
+
+class ProcessTableTests(unittest.TestCase):
+    def test_linux_table_preserves_discovery_run_contract(self):
+        run = Mock(return_value=SimpleNamespace(stdout=' 42 7 codex\n 7 1 name with spaces\nshort\n'))
+        with patch.object(procinfo, 'DARWIN', False):
+            self.assertEqual(procinfo.table(run), {42: (7, 'codex'), 7: (1, 'name with spaces')})
+        run.assert_called_once_with(['ps', '-eo', 'pid=,ppid=,comm='],
+                                    capture_output=True, text=True, timeout=5)
+
+    def test_linux_socket_owner_uses_inode_and_uid(self):
+        with patch.object(procinfo, 'DARWIN', False), \
+                patch.object(procinfo, 'tcp_socket_inode', return_value='987') as inode, \
+                patch.object(procinfo, 'pid_with_socket', return_value=42) as owner:
+            self.assertEqual(procinfo.socket_owner(1234, 5678, 1000), 42)
+            inode.assert_called_once_with(1234, 5678, 1000)
+            owner.assert_called_once_with('987', 1000)
+            inode.return_value = None
+            owner.reset_mock()
+            self.assertIsNone(procinfo.socket_owner(1234, 5678, 1000))
+            owner.assert_not_called()
 
 
 if __name__ == '__main__':

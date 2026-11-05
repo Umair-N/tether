@@ -46,11 +46,38 @@ def _pane_list(timeout):
                                    text=True, timeout=timeout)
 
 
+def _darwin_peer_pane(peer_port, server_port, pane_reader, clock, uid):
+    deadline = clock() + 2
+    uid = os.getuid() if uid is None else uid
+    try:
+        if clock() >= deadline:
+            return None
+        pid = procinfo.socket_owner(peer_port, server_port, uid)
+        if not pid or clock() >= deadline:
+            return None
+        panes = {}
+        for line in pane_reader(max(.01, deadline - clock())).splitlines():
+            parts = line.split()
+            if len(parts) == 2 and re.fullmatch(r'%\d+', parts[0]):
+                panes[int(parts[1])] = parts[0]
+        visited = set()
+        while pid > 0 and pid not in visited and clock() < deadline:
+            if pid in panes:
+                return panes[pid]
+            visited.add(pid)
+            pid = procinfo.parent(pid)
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        pass
+    return None
+
+
 def peer_pane(peer_port, server_port, *, read_text=_read_text, list_dir=procinfo.list_dir,
               read_link=procinfo.read_link, uid_of=procinfo.uid_of,
               pane_reader=_pane_list, clock=time.monotonic, uid=None):
     """Resolve the client's socket inode, then its process ancestors, within two seconds.
     All /proc and tmux readers are injectable; no process or terminal is changed."""
+    if procinfo.DARWIN:
+        return _darwin_peer_pane(peer_port, server_port, pane_reader, clock, uid)
     deadline = clock() + 2
     uid = os.getuid() if uid is None else uid
     try:
