@@ -71,16 +71,15 @@ See the official [Actions settings guide](https://docs.github.com/en/repositorie
 
 Only the maintainer creates release tags. A push to `main` does not release software to users.
 
-1. Bump root `VERSION` and `integrations/claude/tether/.claude-plugin/plugin.json` together.
-   Update the bootstrap tag in README Quick start for stable releases.
-2. Run the server tests and UI checks listed in [AGENTS.md](../AGENTS.md).
-3. Commit the release changes to `main` after review.
-4. Create the matching tag with `git tag v0.2.0`.
-5. Push that tag with `git push origin v0.2.0`.
-6. Check the `release` workflow and the published assets.
+Run `python3 scripts/release.py X.Y.Z` from any checkout.
+
+- The script makes a clean worktree and bumps the version. It preserves your checkout and its uncommitted work.
+- It runs all tests locally, including real tmux and Chromium tests, plus the UI checks and build.
+- It commits the version changes, creates an annotated tag, and pushes `main` before the tag.
+- It waits for the release if `gh` is available. Use `--no-push` to keep the release local, or `--keep` to keep the worktree.
 
 The tag must equal `v` plus the contents of `VERSION`.
-The workflow tests the tagged tree and builds the UI.
+CI only builds the UI, packages, and publishes. Tests run locally before the tag.
 It creates `tether-<version>.tar.gz` with the tracked tree and `ui/dist`, plus `SHA256SUMS`.
 The archive excludes git metadata, dependencies, and untracked test data.
 Only the publication job has `contents: write` permission.

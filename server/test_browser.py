@@ -394,6 +394,8 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(handler.replies[0][0], 404)
 
 
+@unittest.skipUnless(os.environ.get('TETHER_REAL_BROWSER_TEST') == '1',
+                     'Set TETHER_REAL_BROWSER_TEST=1 to run the real Chromium test')
 @unittest.skipUnless(browser.find_chrome(), 'Chromium is not installed')
 class RealChromiumSmokeTest(unittest.TestCase):
     def test_launch_load_and_get_one_frame(self):

@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 
 import paths
@@ -97,7 +98,13 @@ class SideShellTests(unittest.TestCase):
         pane = side_shells.open_shell(odd, run=self.run_tmux)
         second = side_shells.open_shell(odd, new=True, run=self.run_tmux)
         for item in (pane, second):
-            path = self.tmux('display-message', '-p', '-t', item, '#{pane_current_path}').stdout.strip()
+            # Right after the window opens, tmux can still report its own folder. Wait for the shell's folder.
+            deadline = time.monotonic() + 5
+            while True:
+                path = self.tmux('display-message', '-p', '-t', item, '#{pane_current_path}').stdout.strip()
+                if os.path.realpath(path) == os.path.realpath(odd) or time.monotonic() > deadline:
+                    break
+                time.sleep(0.05)
             self.assertEqual(os.path.realpath(path), os.path.realpath(odd))
         names = self.tmux('list-windows', '-t', '=tether-shells', '-F', '#{window_name}').stdout.split('\n')
         self.assertIn(os.path.basename(odd), names)
