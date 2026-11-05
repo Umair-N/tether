@@ -173,10 +173,10 @@ class GrantHarness:
         self.waiters.append(thread)
         wait_for(lambda: self.access.state()['requests'])
         row = self.access.state()['requests'][0]
-        self.assertEqual(row['browser'], 'mac')
+        self.assertEqual(row['browser'], 'chrome')
         self.access.allow(row['id'])
         thread.join(timeout=3)
-        self.assertEqual(result[0]['browser'], 'mac')
+        self.assertEqual(result[0]['browser'], 'chrome')
         self.assertTrue(result[0]['ok'])
         return self.access.grants[row['id']]
 
@@ -361,6 +361,53 @@ class RealContextTests(GrantHarness, unittest.TestCase):
 
 
 class GrantTests(GrantHarness, unittest.TestCase):
+    def test_panel_alias_query_body_and_stream_emit_chrome(self):
+        panel_browser = Mock()
+        panel_browser.list_tabs.return_value = {'tabs': []}
+        panel_browser.input.return_value = {'ok': True}
+        with patch.object(mac, 'BROKER', self.broker), patch.object(self.broker, 'browser', panel_browser):
+            for ident in ('mac', 'chrome'):
+                handler = FakeHandler(browser_api.PREFIX + 'tabs?browser=' + ident)
+                browser_api.get(handler)
+                self.assertEqual(handler.replies[0][0], 200)
+                self.assertEqual(handler.replies[0][1]['browser'], 'chrome')
+                handler = FakeHandler(browser_api.PREFIX + 'input', {'browser': ident, 'tab': 'T7', 'events': []})
+                browser_api.post(handler)
+                self.assertEqual(handler.replies[0], (200, {'ok': True, 'browser': 'chrome'}))
+                with patch.object(browser_api, 'stream') as stream:
+                    handler = FakeHandler(browser_api.PREFIX + 'stream?browser=' + ident + '&tab=T7')
+                    browser_api.get(handler)
+                    self.assertEqual(stream.call_args.args[5], 'chrome')
+                self.assertIn('"browser": "chrome"', browser.frame_event((1, {}, 'jpeg', 0), ident).decode())
+
+    def test_ask_signed_body_alias_emits_chrome_through_grant_and_end(self):
+        from urllib.request import Request, urlopen
+        with tempfile.TemporaryDirectory() as folder:
+            proxy = cdp.Proxy(config_path=Path(folder) / 'config.json', env_runner=Mock(), pane_finder=lambda *a: '%12')
+            proxy.signed_access = mac.RoutedAccess(signed.Access(Mock()), self.access)
+            proxy.start()
+            self.addCleanup(proxy.stop)
+            url = proxy.url.replace('ws:', 'http:').replace('/cdp/', '/ask-signed/')
+            for ident in ('mac', 'chrome'):
+                results = []
+                def request():
+                    body = json.dumps({'text': 'Requested task', 'browser': ident}).encode()
+                    with urlopen(Request(url, data=body), timeout=5) as response:
+                        results.append(json.load(response))
+                thread = threading.Thread(target=request)
+                self.waiters.append(thread)
+                thread.start()
+                wait_for(lambda: self.access.state()['requests'])
+                row = self.access.state()['requests'][0]
+                self.assertEqual(row['browser'], 'chrome')
+                self.access.allow(row['id'])
+                thread.join(timeout=3)
+                self.assertFalse(thread.is_alive())
+                self.assertEqual(results[0]['browser'], 'chrome')
+                self.assertEqual(self.access.state()['grants'][0]['browser'], 'chrome')
+                self.access.end(row['id'], 'expired')
+                self.assertEqual(self.access.state()['ended'][-1]['browser'], 'chrome')
+
     def test_extension_end_reason_row_http_and_open_socket(self):
         signed.Access._listen(self.access)
         grant = self.grant()
@@ -373,7 +420,7 @@ class GrantTests(GrantHarness, unittest.TestCase):
         wait_for(lambda: grant.row['id'] not in self.access.grants)
         self.assertEqual(grant.end_reason, 'debugger_detached')
         row = self.access.state()['ended'][0]
-        self.assertEqual(row, dict(id=grant.row['id'], pane='%12', agent='agent', browser='mac',
+        self.assertEqual(row, dict(id=grant.row['id'], pane='%12', agent='agent', browser='chrome',
                                    reason='debugger_detached', message=message, at=row['at']))
         assert_ended_http(self, url, 'debugger_detached', message)
         panel = FakeHandler(browser_api.PREFIX + 'signed/access')
@@ -539,9 +586,9 @@ class GrantTests(GrantHarness, unittest.TestCase):
         self.device.handle({'type': 'event', 'epoch': self.device.epoch, 'grant': 'old', 'tab': 7,
                             'method': 'Page.screencastFrame', 'params': {'sessionId': 1, 'data': 'wrong'}})
         self.assertEqual(tab.seq, 3)
-        self.assertIn('"browser": "mac"', browser.frame_event(tab.frame, 'mac').decode())
+        self.assertIn('"browser": "chrome"', browser.frame_event(tab.frame, 'chrome').decode())
 
-    def test_auto_routing_is_pinned_and_explicit_mac_fails_offline(self):
+    def test_auto_routing_is_pinned_and_explicit_chrome_fails_offline(self):
         server = Mock()
         routed = mac.RoutedAccess(server, self.access)
         with patch.object(self.access, 'ask', return_value={'ok': True}) as ask:
@@ -553,7 +600,7 @@ class GrantTests(GrantHarness, unittest.TestCase):
         routed.ask('Task', '%12')
         self.assertEqual(server.ask.call_count, 2)
         with self.assertRaises(ValueError):
-            routed.ask('Task', '%12', browser='mac')
+            routed.ask('Task', '%12', browser='chrome')
         with self.assertRaises(ValueError):
             routed.ask('Task', '%12', browser='bad')
 
@@ -621,7 +668,7 @@ class GrantTests(GrantHarness, unittest.TestCase):
         self.addCleanup(server.stop)
         routed = mac.RoutedAccess(server, self.access)
         results = []
-        first = threading.Thread(target=lambda: results.append(routed.ask('Mac task', '%12', browser='mac')))
+        first = threading.Thread(target=lambda: results.append(routed.ask('Mac task', '%12', browser='chrome')))
         self.waiters.append(first)
         first.start()
         wait_for(lambda: self.access.pending)

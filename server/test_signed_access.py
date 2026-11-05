@@ -92,7 +92,7 @@ class EndedHistoryTests(unittest.TestCase):
             now[0] += 1
         rows = routed.state()['ended']
         self.assertEqual([row['id'] for row in rows], [str(index) for index in range(5, 25)])
-        self.assertEqual({row['browser'] for row in rows}, {'mac', 'server'})
+        self.assertEqual({row['browser'] for row in rows}, {'chrome', 'server'})
         self.assertEqual(rows[-1]['message'], 'Access ended.')
         self.assertEqual(rows[-1]['reason'], 'future_reason')
         versions = (server.browser.version, mac.browser.version)

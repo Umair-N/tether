@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
-import { ArrowLeft, ArrowRight, Bot, Check, ChevronDown, Crosshair, FlaskConical, HatGlasses, Keyboard, KeyRound, Laptop, Monitor, PenLine, PictureInPicture2, Plus, RotateCw, Send, Smartphone, Square, Tablet, Trash2, Type, UserRound, X } from 'lucide-react'
+import { AppWindow, ArrowLeft, ArrowRight, Bot, Check, ChevronDown, Crosshair, FlaskConical, HatGlasses, Keyboard, KeyRound, Monitor, PenLine, PictureInPicture2, Plus, RotateCw, Send, Smartphone, Square, Tablet, Trash2, Type, UserRound, X } from 'lucide-react'
 import { errorText } from './api'
 import type { Api, BrowserAvailability, BrowserId, Pane } from './api'
 import { usePaneLabel, WATCH_EVENT } from './AgentBrowser'
@@ -78,11 +78,12 @@ const savedNote = (host: string) => `Saved logins · readable by agents on ${hos
 const signedNote = (host: string) => `Your sign-ins · agents cannot drive this browser, but can read its files on ${host}`
 const WHICH_KEY = 'tether-browser-which'
 const tabKey = (which: BrowserId) => which === 'test' ? 'tether-browser-tab' : `tether-browser-tab-${which}`
-const asBrowser = (value: unknown): BrowserId => value === 'signed' || value === 'mac' ? value : 'test'
+// 'mac' is the old id for 'chrome', still saved in some browsers' localStorage.
+const asBrowser = (value: unknown): BrowserId => value === 'mac' || value === 'chrome' ? 'chrome' : value === 'signed' ? 'signed' : 'test'
 const BROWSERS: { id: BrowserId; label: string; note: string; icon: typeof UserRound }[] = [
   { id: 'test', label: 'Test', note: 'Agents can use it. No sign-ins.', icon: FlaskConical },
   { id: 'signed', label: 'Signed in', note: 'Google Chrome with your sign-ins. Agents cannot use it.', icon: UserRound },
-  { id: 'mac', label: 'Mac Chrome', note: 'Chrome on your Mac. Agents use a tab only after you allow it.', icon: Laptop },
+  { id: 'chrome', label: 'Your Chrome', note: 'Your own Chrome, through the Tether extension. Agents use a tab only after you allow it.', icon: AppWindow },
 ]
 
 /** Two server browsers: 'test' (headless, agents can drive it) and 'signed' (headed Google Chrome, people only).
@@ -169,8 +170,8 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
   async function load() {
     try { apply(await api<BrowserState>('browser/tabs')); setFailure('') } catch (error) { setFailure(errorText(error)) } finally { setLoaded(true) }
   }
-  // An empty Mac view has no stream, so check for a newly allowed tab every few seconds.
-  const macEmpty = which === 'mac' && loaded && !tabs.length
+  // An empty Chrome view has no stream, so check for a newly allowed tab every few seconds.
+  const macEmpty = which === 'chrome' && loaded && !tabs.length
   useEffect(() => {
     if (!active || !macEmpty) return
     const timer = window.setInterval(() => void load(), 4000)
@@ -519,7 +520,7 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
     {switchMenu.open && <div className="browser-menu" role="menu">
       {BROWSERS.map(item => {
         const row = browsers.find(entry => entry.id === item.id)
-        const off = row && item.id !== 'mac' ? !row.available : false
+        const off = row && item.id !== 'chrome' ? !row.available : false
         return <button key={item.id} type="button" role="menuitemradio" aria-checked={item.id === which} autoFocus={item.id === which} disabled={off}
           onClick={() => { switchMenu.setOpen(false); if (item.id !== which) onSwitch(item.id) }}>
           <item.icon size={16} /><span>{item.label} browser<small>{off || (row && !row.available) ? row?.reason : item.note}</small></span>{item.id === which && <Check size={16} />}
@@ -528,14 +529,14 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
     </div>}
   </div>
 
-  if (!loaded) return <div className="browser-panel"><p className="browser-empty">{active ? (which === 'signed' ? 'Starting Google Chrome…' : which === 'mac' ? 'Connecting to your Mac…' : 'Starting the browser…') : ''}</p></div>
+  if (!loaded) return <div className="browser-panel"><p className="browser-empty">{active ? (which === 'signed' ? 'Starting Google Chrome…' : which === 'chrome' ? 'Connecting to your Chrome…' : 'Starting the browser…') : ''}</p></div>
   if (failure && !tabs.length) return <div className="browser-panel"><div className="browser-empty"><p>{failure}</p><button type="button" className="browser-text-button" onClick={() => { setLoaded(false); void load() }}>Try again</button>
     {which !== 'test' && <button type="button" className="browser-text-button" onClick={() => onSwitch('test')}>Use the test browser</button>}</div></div>
 
-  // Mac Chrome opens tabs only through Allow, so an empty Mac view is the pairing card.
-  if (which === 'mac' && !tabs.length) return <div className="browser-panel">
+  // Your Chrome opens tabs only through Allow, so an empty Chrome view is the pairing card.
+  if (which === 'chrome' && !tabs.length) return <div className="browser-panel">
     <div className="browser-tabs" role="toolbar" aria-label="Browser">{switcher}</div>
-    <MacPairing api={baseApi} connected={!!browsers.find(row => row.id === 'mac')?.available} />
+    <MacPairing api={baseApi} connected={!!browsers.find(row => row.id === 'chrome')?.available} />
   </div>
 
   return <div className="browser-panel" onKeyDown={event => { if (noting && event.key === 'Escape' && !event.defaultPrevented) stopNotes() }}>
@@ -551,7 +552,7 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
           <button type="button" className="browser-tab-close" aria-label={`Close ${name}`} onClick={() => void closeTab(item.id)}><X size={14} /></button>
         </div>
       })}
-      {which !== 'mac' && <div className="browser-menu-anchor" ref={tabMenu.ref} onKeyDown={tabMenu.onKeyDown}>
+      {which !== 'chrome' && <div className="browser-menu-anchor" ref={tabMenu.ref} onKeyDown={tabMenu.onKeyDown}>
         <button type="button" className="browser-icon" aria-label="New tab" aria-haspopup={which === 'signed' ? undefined : 'menu'} aria-expanded={which === 'signed' ? undefined : tabMenu.open} onClick={() => which === 'signed' ? void newTab('saved') : tabMenu.setOpen(!tabMenu.open)}><Plus size={17} /></button>
         {tabMenu.open && <div className="browser-menu" role="menu">
           <button type="button" role="menuitem" autoFocus onClick={() => void newTab('private')}><HatGlasses size={16} /><span>New private tab<small>Logins go away when the tab closes</small></span></button>

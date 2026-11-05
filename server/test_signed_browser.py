@@ -53,7 +53,7 @@ class SignedTests(unittest.TestCase):
         self.assertEqual(self.get(query='')[1]['tabs'], [])
         self.test.list_tabs.assert_called_once()
         self.assertEqual([(b['id'], b['available'], b['running']) for b in state['browsers']],
-                         [('test', True, False), ('signed', True, True), ('mac', False, False)])
+                         [('test', True, False), ('signed', True, True), ('chrome', False, False)])
         self.assertEqual(self.get(query='browser=other')[0], 400)
         self.assertEqual(self.post('new', browser=['signed'])[0], 400)
         self.assertEqual(self.post('new')[1], {'id': 'TEST'})

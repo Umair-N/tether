@@ -19,7 +19,7 @@ Tether runs one shared browser that the user can watch from desktop or phone.
 - Playwright MCP already uses it. Do not pass --isolated or launch another browser.
 - In scripts, connect instead of launching: Node `chromium.connectOverCDP(process.env.TETHER_CDP_URL)`, Python `p.chromium.connect_over_cdp(os.environ["TETHER_CDP_URL"])`. Use `browser.contexts[0]`. You get a private context; the user's logins are not in it.
 - Limit: 3 tabs. Close tabs you no longer need.
-- ask-signed uses Mak's Mac Chrome when connected, after Mak allows access; otherwise it uses the server signed browser.
+- ask-signed uses Mak's own Chrome (through the Tether extension) when connected, after Mak allows access; otherwise it uses the server signed browser.
 - Ask for signed-in access only for a task Mak asked for.
 - If the signed CDP URL returns 410 or its socket closes with "Access ended", tell Mak the reason in chat. Ask again only if the task still needs access.
 - If you need the user in the browser (2FA code, captcha, a password you must not see), run `{command}`, then wait for the user to reply in chat.
@@ -102,7 +102,8 @@ def ask_signed(args):
         parser.add_argument('text')
         parser.add_argument('--minutes', type=int, default=15)
         parser.add_argument('--url')
-        parser.add_argument('--browser', choices=('auto', 'mac', 'server'), default='auto')
+        parser.add_argument('--browser', type=lambda value: 'chrome' if value == 'mac' else value,
+                            choices=('auto', 'chrome', 'server'), default='auto')
         values = parser.parse_args(args)
         if not values.text.strip() or not 1 <= values.minutes <= 60:
             raise ValueError('Invalid signed browser request.')

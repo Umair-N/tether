@@ -493,7 +493,7 @@ class Client(cdp.AgentClient):
                         return
                     target = self.sessions[session]
                     tab = self.proxy.browser.tabs.get(target)
-                    if self.proxy.browser_id == 'mac' and tab and tab.controller == 'user':
+                    if self.proxy.browser_id == 'chrome' and tab and tab.controller == 'user':
                         raise ValueError('The user controls this tab. Give back control first.')
                     emulation = (method.startswith(('Emulation.', 'Network.emulate'))
                                  or method in ('Network.setUserAgentOverride', 'Network.overrideNetworkState'))
@@ -544,7 +544,7 @@ class Client(cdp.AgentClient):
             self.conn.call(method, {'sessionId': real})
             self.result(message)
         elif method in ('Target.closeTarget', 'Target.activateTarget') and not session:
-            if self.proxy.browser_id == 'mac' and self.proxy.browser.tab(params['targetId']).controller == 'user':
+            if self.proxy.browser_id == 'chrome' and self.proxy.browser.tab(params['targetId']).controller == 'user':
                 raise ValueError('The user controls this tab. Give back control first.')
             self.result(message, self.conn.call(method, {'targetId': params['targetId']}))
         elif method == 'Target.createTarget' and not session:

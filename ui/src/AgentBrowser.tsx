@@ -111,8 +111,8 @@ export function usePaneLabel(pane: string | null | undefined) {
 }
 
 /** Open the browser on an agent's tab: the desktop panel, or the phone sheet. App.tsx listens.
- * browser 'signed' or 'mac': a tab Mak allowed an agent to use in the signed-in browser or in Chrome on the Mac. */
-export function watchTab(tab: string, pane: string, browser: 'test' | 'signed' | 'mac' = 'test') {
+ * browser 'signed' or 'chrome': a tab Mak allowed an agent to use in the signed-in browser or in Mak's own Chrome. */
+export function watchTab(tab: string, pane: string, browser: 'test' | 'signed' | 'chrome' = 'test') {
   try { localStorage.setItem(browser === 'test' ? TAB_KEY : `${TAB_KEY}-${browser}`, tab) } catch { /* private mode: the panel picks the first tab */ }
   window.dispatchEvent(new CustomEvent(WATCH_EVENT, { detail: { tab, pane, browser } }))
 }
@@ -129,8 +129,8 @@ export function agentBrowserItems(api: Api, state: AgentBrowserStatus | null, pa
   const grant = state?.signed.grants.find(item => item.pane === pane)
   // Rows run oldest to newest: show the newest one.
   const ended = state?.signed.ended.filter(item => item.pane === pane).pop()
-  const signedItems = signedAsk ? [{ id: 'browser-signed-ask', label: signedAsk.browser === 'mac' ? 'Wants Chrome on your Mac' : 'Wants your signed-in browser', active: true, content: <SignedAskCard api={api} request={signedAsk} /> }]
-    : grant ? [{ id: 'browser-signed', label: grant.browser === 'mac' ? 'Using Chrome on your Mac' : 'Using your signed-in browser', active: true, content: <SignedGrantCard api={api} grant={grant} /> }]
+  const signedItems = signedAsk ? [{ id: 'browser-signed-ask', label: signedAsk.browser === 'chrome' ? 'Wants your Chrome' : 'Wants your signed-in browser', active: true, content: <SignedAskCard api={api} request={signedAsk} /> }]
+    : grant ? [{ id: 'browser-signed', label: grant.browser === 'chrome' ? 'Using your Chrome' : 'Using your signed-in browser', active: true, content: <SignedGrantCard api={api} grant={grant} /> }]
     : ended ? [{ id: 'browser-signed-ended', label: 'Access ended', active: true, content: <SignedEndedCard api={api} ended={ended} /> }] : []
   if (!tabs.length && !ask) return signedItems
   const first = tabs.find(tab => tab.url && tab.url !== 'about:blank') ?? tabs[0]
@@ -155,11 +155,11 @@ function SignedAskCard({ api, request }: { api: Api; request: SignedRequest }) {
     <div className="agent-browser-ask signed-ask" role="alert">
       <KeyRound size={16} aria-hidden="true" />
       <div className="signed-ask-text">
-        <p><strong>{name}</strong> wants to use {request.browser === 'mac' ? 'Chrome on your Mac' : 'your signed-in browser'} for {request.minutes} min.</p>
+        <p><strong>{name}</strong> wants to use {request.browser === 'chrome' ? 'your Chrome' : 'your signed-in browser'} for {request.minutes} min.</p>
         <p className="signed-ask-reason">“{request.reason}”</p>
         {request.url && <p className="signed-ask-meta">Opens {hostOf(request.url)}</p>}
-        <p className="signed-ask-meta">It gets one new tab with your sign-ins{request.browser === 'mac' ? ' on your Mac' : ''}. It cannot see your other tabs, cookies or settings.</p>
-        {request.browser === 'mac' && <p className="signed-ask-meta"><strong>Chrome shows a debugging bar. Keep it open: closing it ends access.</strong></p>}
+        <p className="signed-ask-meta">It gets one new tab with your sign-ins{request.browser === 'chrome' ? ' in your Chrome' : ''}. It cannot see your other tabs, cookies or settings.</p>
+        {request.browser === 'chrome' && <p className="signed-ask-meta"><strong>Chrome shows a debugging bar. Keep it open: closing it ends access.</strong></p>}
       </div>
       <div className="agent-browser-actions">
         <button type="button" className="primary signed-allow" disabled={busy} onClick={() => void answer('allow')}>Allow</button>
@@ -182,8 +182,8 @@ function SignedGrantCard({ api, grant }: { api: Api; grant: SignedGrant }) {
     <ul className="agent-browser-tabs">
       <li>
         <KeyRound size={15} aria-hidden="true" />
-        <span><strong>{grant.browser === 'mac' ? 'Mac Chrome tab' : 'Signed-in tab'}</strong><small>{left ? `${left} min left` : 'Ending'} · {grant.browser === 'mac' ? 'Keep Chrome’s debugging bar open' : grant.reason}</small></span>
-        <button type="button" className="secondary" onClick={() => watchTab(grant.tab, grant.pane, grant.browser === 'mac' ? 'mac' : 'signed')}>Watch</button>
+        <span><strong>{grant.browser === 'chrome' ? 'Your Chrome tab' : 'Signed-in tab'}</strong><small>{left ? `${left} min left` : 'Ending'} · {grant.browser === 'chrome' ? 'Keep Chrome’s debugging bar open' : grant.reason}</small></span>
+        <button type="button" className="secondary" onClick={() => watchTab(grant.tab, grant.pane, grant.browser === 'chrome' ? 'chrome' : 'signed')}>Watch</button>
         <button type="button" className="secondary" onClick={() => void answerSigned(api, 'end', grant.id).catch(failure => setError(errorText(failure)))}>End now</button>
       </li>
     </ul>
@@ -307,7 +307,7 @@ function SignedEndedCard({ api, ended }: { api: Api; ended: SignedEnded }) {
     <ul className="agent-browser-tabs">
       <li className="ended">
         <CircleSlash size={15} aria-hidden="true" />
-        <span><strong>{ended.browser === 'mac' ? 'Chrome on your Mac' : 'Signed-in browser'}</strong><small>{ended.message}</small></span>
+        <span><strong>{ended.browser === 'chrome' ? 'Your Chrome' : 'Signed-in browser'}</strong><small>{ended.message}</small></span>
         <button type="button" className="secondary" onClick={() => void answerSigned(api, 'dismiss', ended.id).catch(failure => setError(errorText(failure)))}>Dismiss</button>
       </li>
     </ul>

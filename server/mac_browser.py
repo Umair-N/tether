@@ -25,14 +25,14 @@ SHARED_DOMAINS = {'Runtime', 'Page', 'DOM', 'Network', 'Log', 'Performance', 'Ac
 
 def check_command(method, params):
     if method not in PAGE_ALLOWED or not isinstance(params, dict):
-        raise browser.BrowserError('Not allowed through Mac browser access.')
+        raise browser.BrowserError('Not allowed through your Chrome access.')
     # A debugger session can only address the approved tab. Never forward routing selectors.
     def check(value):
         if isinstance(value, dict):
             for key, item in value.items():
                 if key in ('targetId', 'browserContextId', 'sessionId') and not (
                         method == 'Page.screencastFrameAck' and key == 'sessionId' and value is params):
-                    raise browser.BrowserError('Outside this Mac tab.')
+                    raise browser.BrowserError('Outside this Chrome tab.')
                 check(item)
         elif isinstance(value, list):
             for item in value:
@@ -164,7 +164,7 @@ class Device:
 
     def send(self, message):
         if self.closed or self.transport.closed:
-            raise browser.BrowserError('Mac browser disconnected. Ask again.')
+            raise browser.BrowserError('Your Chrome disconnected. Ask again.')
         self.transport.message(dict(message, epoch=self.epoch))
 
     def request(self, message, timeout=15):
@@ -172,17 +172,17 @@ class Device:
         slot = {'event': threading.Event(), 'reply': None, 'grant': message.get('grant', ident)}
         with self.lock:
             if len(self.waiters) >= 128:
-                raise browser.BrowserError('Too many Mac commands.')
+                raise browser.BrowserError('Too many Chrome commands.')
             self.waiters[ident] = slot
         try:
             self.send(dict(message, id=ident))
             if not slot['event'].wait(timeout):
                 # Uncertain delivery must never leave authority available for a retry.
                 self.close()
-                raise browser.BrowserError('Mac command timed out. Ask again.')
+                raise browser.BrowserError('Chrome command timed out. Ask again.')
             reply = slot['reply']
             if not reply or reply.get('type') in ('error', 'ended'):
-                raise browser.BrowserError('Mac command refused or grant ended.')
+                raise browser.BrowserError('Chrome command refused or grant ended.')
             return reply
         finally:
             with self.lock:
@@ -329,7 +329,7 @@ class Connection:
         grant = tab.agent_client
         if (not grant or not self.owner.agent_proxy.valid(grant) or grant.device.closed
                 or grant.row['id'] in grant.device.ended):
-            raise browser.BrowserError('That Mac grant has ended.')
+            raise browser.BrowserError('That Chrome grant has ended.')
         if method in ('Page.close', 'Page.bringToFront'):
             params = {}
         def request():
@@ -424,13 +424,13 @@ class MacBrowser(browser.Browser):
 
     def ensure(self):
         if not self.running():
-            raise browser.BrowserError('Mac Chrome is disconnected.')
+            raise browser.BrowserError('Your Chrome is disconnected.')
 
     def list_tabs(self):
         return self.state()  # never create a tab outside an Allow decision
 
     def new_tab(self, *args, **kwargs):
-        raise ValueError('Ask for Mac browser access to open a tab.')
+        raise ValueError('Ask for your Chrome access to open a tab.')
 
     def close_tab(self, target):
         self.conn.call('Target.closeTarget', {'targetId': target})
@@ -459,7 +459,7 @@ class MacBrowser(browser.Browser):
 
 
 class MacAccess(signed.Access):
-    browser_id = 'mac'
+    browser_id = 'chrome'
     page_allowed = PAGE_ALLOWED - {'Page.startScreencast', 'Page.stopScreencast', 'Page.screencastFrameAck'}
 
     def __init__(self, broker, **kwargs):
@@ -469,13 +469,13 @@ class MacAccess(signed.Access):
 
     def ask(self, reason, pane, duration=15, url=None):
         if not self.broker.connected():
-            raise ValueError('Mac Chrome is disconnected. Ask again or choose server.')
+            raise ValueError('Your Chrome is disconnected. Ask again or choose server.')
         return super().ask(reason, pane, duration, url)
 
     def request_binding(self):
         device = self.broker.connected()
         if not device:
-            raise ValueError('Mac Chrome is disconnected. Ask again.')
+            raise ValueError('Your Chrome is disconnected. Ask again.')
         return device
 
     def allow(self, ident, duration=None):
@@ -486,10 +486,10 @@ class MacAccess(signed.Access):
                 if duration > slot['row']['minutes']:
                     raise ValueError('Allow may shorten the requested time only.')
                 if self.grants or self.reserved:
-                    raise ValueError('End the active Mac grant first.')
+                    raise ValueError('End the active Chrome grant first.')
                 device = slot['binding']
                 if device.closed:
-                    raise browser.BrowserError('Mac Chrome disconnected. Ask again.')
+                    raise browser.BrowserError('Your Chrome disconnected. Ask again.')
                 self.reserved.add(ident)
             try:
                 self._listen()
@@ -497,16 +497,16 @@ class MacAccess(signed.Access):
                                         'minutes': duration, 'url': slot['row']['url']}, timeout=65)
                 if (type(reply.get('tab')) is not int or not isinstance(reply.get('target'), str)
                         or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', reply['target'])):
-                    raise browser.BrowserError('Invalid Mac tab.')
+                    raise browser.BrowserError('Invalid Chrome tab.')
                 target = reply['target']  # Playwright requires root target id == the main frame id.
                 grant = signed.Grant(slot['row'], target, duration, self.clock())
-                grant.row['browser'] = 'mac'
+                grant.row['browser'] = 'chrome'
                 grant.row['expires'] = min(grant.row['expires'], reply.get('expires', 0) / 1000)
                 grant.device, grant.tab_id = device, reply['tab']
                 with self.lock:
                     if (slot['event'].is_set() or time.monotonic() >= slot['deadline'] or self.stopped or device.closed
                             or ident in device.ended or grant.row['expires'] <= self.clock()):
-                        raise browser.BrowserError('That Mac request has ended.')
+                        raise browser.BrowserError('That Chrome request has ended.')
                     session = secrets.token_urlsafe(12)
                     tab = browser.Tab(target, session, mode='agent')
                     self.browser.tabs[target] = self.browser.by_session[session] = tab
@@ -518,7 +518,7 @@ class MacAccess(signed.Access):
                     grant.timer = threading.Timer(max(0, grant.row['expires'] - self.clock()), self.end, args=(ident, 'expired'))
                     grant.timer.daemon = True
                     grant.timer.start()
-                    self._answer(slot, {'ok': True, 'browser': 'mac', 'cdp': self.url(grant), 'tab': target,
+                    self._answer(slot, {'ok': True, 'browser': 'chrome', 'cdp': self.url(grant), 'tab': target,
                                         'expires': grant.row['expires']})
             except Exception:
                 if not device.closed:
@@ -593,9 +593,10 @@ class RoutedAccess:
         mac.history = server.history
 
     def ask(self, reason, pane, duration=15, url=None, browser='auto'):
-        if browser not in ('auto', 'mac', 'server'):
-            raise ValueError('Choose auto, mac, or server.')
-        access = self.mac if browser == 'mac' or browser == 'auto' and self.mac.broker.connected() else self.server
+        browser = 'chrome' if browser == 'mac' else browser
+        if browser not in ('auto', 'chrome', 'server'):
+            raise ValueError('Choose auto, chrome, or server.')
+        access = self.mac if browser == 'chrome' or browser == 'auto' and self.mac.broker.connected() else self.server
         return access.ask(reason, pane, duration, url)
 
     def state(self):

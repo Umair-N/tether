@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Copy, Laptop } from 'lucide-react'
+import { AppWindow, Copy } from 'lucide-react'
 import { errorText } from './api'
 import type { Api, BrowserExtensionDevice, BrowserExtensionDevices, BrowserExtensionPair } from './api'
 
@@ -13,7 +13,7 @@ function ago(seconds: number, now: number) {
 
 const chromeVersion = (agent: string) => /Chrome\/(\d+)/.exec(agent)?.[1] ?? ''
 
-/** Mac Chrome with no open tab: pair the Tether extension (server/mac_browser.py) and manage paired Macs.
+/** Your Chrome with no open tab: pair the Tether extension (server/mac_browser.py) and manage paired browsers.
  * Tabs appear here only after Mak taps Allow on an agent's request. */
 export function MacPairing({ api, connected }: { api: Api; connected: boolean }) {
   const [devices, setDevices] = useState<BrowserExtensionDevice[] | null>(null)
@@ -50,14 +50,14 @@ export function MacPairing({ api, connected }: { api: Api; connected: boolean })
   }
 
   return <div className="mac-pairing">
-    <Laptop size={22} aria-hidden="true" className="mac-pairing-icon" />
-    <h3>{connected ? 'Your Mac is connected' : 'Connect Chrome on your Mac'}</h3>
+    <AppWindow size={22} aria-hidden="true" className="mac-pairing-icon" />
+    <h3>{connected ? 'Your Chrome is connected' : 'Connect your Chrome'}</h3>
     <p className="mac-pairing-lead">{connected
-      ? 'No Mac tab is open. When an agent asks for your browser, tap Allow. Its tab shows here.'
+      ? 'No tab is open. When an agent asks for your browser, tap Allow. Its tab shows here.'
       : 'Agents can then use a tab in your own Chrome, after you tap Allow.'}</p>
 
     {!connected && <ol className="mac-pairing-steps">
-      <li>On the Mac, open <code>chrome://extensions</code>, turn on Developer mode, and load the Tether extension folder.</li>
+      <li>On your computer, open <code>chrome://extensions</code>, turn on Developer mode, and load the Tether extension folder.</li>
       <li>Open the extension’s options. Enter this address and a pairing code.</li>
       <li>Click Allow when Chrome asks for access.</li>
     </ol>}
@@ -69,9 +69,9 @@ export function MacPairing({ api, connected }: { api: Api; connected: boolean })
         <button type="button" className="browser-icon" aria-label="Copy the code" onClick={() => void copy(live.code)}><Copy size={15} /></button></div> : null}
     </div>
     <p className="mac-pairing-meta" role="status">{copied ? 'Copied' : live ? `The code works once. It expires in ${left} min.` : ''}</p>
-    <button type="button" className={connected ? 'secondary' : 'primary'} disabled={busy} onClick={() => void pair()}>{live ? 'New code' : connected ? 'Pair another Mac' : 'Get a pairing code'}</button>
+    <button type="button" className={connected ? 'secondary' : 'primary'} disabled={busy} onClick={() => void pair()}>{live ? 'New code' : connected ? 'Pair another browser' : 'Get a pairing code'}</button>
 
-    {devices && devices.length > 0 && <ul className="mac-pairing-devices" aria-label="Paired Macs">
+    {devices && devices.length > 0 && <ul className="mac-pairing-devices" aria-label="Paired browsers">
       {devices.map(device => <li key={device.id}>
         <span className={device.connected ? 'mac-dot on' : 'mac-dot'} aria-hidden="true" />
         <span className="mac-pairing-name"><strong>{device.name}</strong><small>{device.connected ? 'Connected' : `Last seen ${ago(device.lastSeen, now)}`}{chromeVersion(device.chrome) ? ` · Chrome ${chromeVersion(device.chrome)}` : ''}</small></span>

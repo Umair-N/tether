@@ -153,7 +153,9 @@ class CliTests(unittest.TestCase):
         self.assertEqual(run.returncode, 0)
         self.assertEqual(self.requests[-1][2], {'text': 'Task', 'minutes': 15, 'pane': '%12', 'browser': 'auto'})
         self.run_cli('ask-signed', 'Task', '--browser', 'mac')
-        self.assertEqual(self.requests[-1][2]['browser'], 'mac')
+        self.assertEqual(self.requests[-1][2]['browser'], 'chrome')
+        self.run_cli('ask-signed', 'Task', '--browser', 'chrome')
+        self.assertEqual(self.requests[-1][2]['browser'], 'chrome')
         self.run_cli('ask-signed', 'Task', '--browser', 'server')
         self.assertEqual(self.requests[-1][2]['browser'], 'server')
 

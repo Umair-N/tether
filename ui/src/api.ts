@@ -1,7 +1,7 @@
 export type Agent = 'claude' | 'codex' | 'antigravity' | 'shell'
 /** Omit browser for the existing test browser. Approved signed tabs use mode: 'agent'. */
-export type BrowserId = 'test' | 'signed' | 'mac'
-export type SignedBrowserSource = 'mac' | 'server'
+export type BrowserId = 'test' | 'signed' | 'chrome'
+export type SignedBrowserSource = 'chrome' | 'server'
 export interface BrowserSelection { browser?: BrowserId }
 export interface BrowserAvailability { id: BrowserId; label: string; running: boolean; available: boolean; reason: string }
 export interface BrowserTab {

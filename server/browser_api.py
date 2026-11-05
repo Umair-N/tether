@@ -27,7 +27,7 @@ def get(handler, the_browser=None, the_proxy=None, the_setup=None, signed_browse
     parts = urlsplit(handler.path)
     query = parse_qs(parts.query)
     name = parts.path[len(PREFIX):]
-    browser_id = query.get('browser', ['test'])[0]
+    browser_id = _canonical(query.get('browser', ['test'])[0])
     if name == 'extension/devices':
         handler.respond(200, mac_browser.BROKER.rows())
         return
@@ -61,7 +61,7 @@ def get(handler, the_browser=None, the_proxy=None, the_setup=None, signed_browse
 def post(handler, the_browser=None, the_proxy=None, the_setup=None, signed_browser=None):
     the_setup = the_setup or agent_browser_setup
     name = handler.path.split('?', 1)[0][len(PREFIX):]
-    browser_id = parse_qs(urlsplit(handler.path).query).get('browser', ['test'])[0]
+    browser_id = _canonical(parse_qs(urlsplit(handler.path).query).get('browser', ['test'])[0])
     try:
         size = int(handler.headers.get('Content-Length', '0') or 0)
         if not 0 < size <= 262144:
@@ -70,7 +70,7 @@ def post(handler, the_browser=None, the_proxy=None, the_setup=None, signed_brows
         body = json.loads(handler.rfile.read(size))
         if not isinstance(body, dict):
             raise ValueError('Invalid request.')
-        browser_id = body.get('browser', browser_id)
+        browser_id = _canonical(body.get('browser', browser_id))
         if name in ('extension/pair', 'extension/revoke'):
             result = mac_browser.BROKER.pair() if name.endswith('/pair') else mac_browser.BROKER.revoke(body.get('id'))
             handler.respond(200, result)
@@ -136,22 +136,26 @@ def post(handler, the_browser=None, the_proxy=None, the_setup=None, signed_brows
         handler.respond(400, _tag({'error': str(exc) or 'Invalid request.'}, browser_id))
 
 
+def _canonical(browser_id):
+    return 'chrome' if browser_id == 'mac' else browser_id
+
+
 def _select(browser_id, test=None, signed=None):
     if browser_id == 'test':
         return test or browser.BROWSER
     if browser_id == 'signed':
         return signed or browser.SIGNED_BROWSER
-    if browser_id == 'mac':
+    if browser_id == 'chrome':
         return mac_browser.BROKER.browser
-    raise ValueError('Choose the test, signed, or Mac browser.')
+    raise ValueError('Choose the test, signed, or your Chrome browser.')
 
 
 def _tag(result, browser_id):
-    return dict(result, browser=browser_id) if browser_id in ('signed', 'mac') else result
+    return dict(result, browser=browser_id) if browser_id in ('signed', 'chrome') else result
 
 
 def _user_only(browser_id, name):
-    if browser_id in ('signed', 'mac') and name in ('agents', 'agents/setup', 'ask/dismiss'):
+    if browser_id in ('signed', 'chrome') and name in ('agents', 'agents/setup', 'ask/dismiss'):
         raise ValueError('Agents cannot access the signed-in browser.')
 
 
@@ -166,8 +170,8 @@ def _browsers(test=None, signed=None):
             reason = 'Xvfb is not installed.'
         rows.append({'id': ident, 'label': label, 'running': instance.running(), 'available': not reason, 'reason': reason})
     connected = mac_browser.BROKER.connected() is not None
-    rows.append({'id': 'mac', 'label': 'Mac Chrome', 'running': connected, 'available': connected,
-                 'reason': '' if connected else 'Mac Chrome is disconnected.'})
+    rows.append({'id': 'chrome', 'label': 'Your Chrome', 'running': connected, 'available': connected,
+                 'reason': '' if connected else 'Your Chrome is disconnected.'})
     return rows
 
 

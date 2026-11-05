@@ -1076,11 +1076,12 @@ def _reap(pid):
 
 def frame_event(frame, browser_id='test'):
     """One SSE 'frame' message: metadata plus the JPEG as base64 (the pipe already carries it that way)."""
+    browser_id = 'chrome' if browser_id == 'mac' else browser_id
     seq, metadata, data, _ = frame
     head = json.dumps({'seq': seq, 'width': metadata.get('deviceWidth'), 'height': metadata.get('deviceHeight'),
                        'top': metadata.get('offsetTop', 0),
                        **{key: metadata[key] for key in ('scrollOffsetX', 'scrollOffsetY', 'pageScaleFactor') if key in metadata},
-                       **({'browser': browser_id} if browser_id in ('signed', 'mac') else {})})
+                       **({'browser': browser_id} if browser_id in ('signed', 'chrome') else {})})
     return ('event: frame\ndata: ' + head[:-1] + ',"jpeg":"' + data + '"}\n\n').encode()
 
 
