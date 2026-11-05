@@ -13,6 +13,7 @@ import tempfile
 import time
 
 import paths
+import procinfo
 
 try:
     import tomllib
@@ -291,15 +292,15 @@ def fix_codex(path=None):
 
 
 def _read_text(path):
-    return Path(path).read_text()
+    return procinfo.read_text(path)
 
 
 def _read_bytes(path):
-    return Path(path).read_bytes()
+    return procinfo.read_bytes(path)
 
 
 def _uid_of(path):
-    return os.stat(path).st_uid
+    return procinfo.uid_of(path)
 
 
 def _pane_list(timeout):
@@ -307,7 +308,7 @@ def _pane_list(timeout):
                                    text=True, timeout=timeout)
 
 
-def stale_panes(endpoint, *, read_text=_read_text, read_bytes=_read_bytes, list_dir=os.listdir,
+def stale_panes(endpoint, *, read_text=_read_text, read_bytes=_read_bytes, list_dir=procinfo.list_dir,
                 uid_of=_uid_of, pane_reader=_pane_list, clock=time.monotonic, uid=None, cache=None):
     """Read each process tree once, within two seconds; cache a result for ten seconds."""
     if not endpoint:
@@ -328,12 +329,12 @@ def stale_panes(endpoint, *, read_text=_read_text, read_bytes=_read_bytes, list_
             if len(fields) == 2 and re.fullmatch(r'%[0-9]+', fields[0]) and fields[1].isdigit():
                 panes.append((fields[0], int(fields[1])))
         children, owned = {}, set()
-        for name in list_dir('/proc'):
+        for name in list_dir(procinfo.ROOT):
             if clock() >= deadline:
                 break
             if not name.isdigit():
                 continue
-            folder = '/proc/' + name
+            folder = procinfo.ROOT + '/' + name
             try:
                 if uid_of(folder) != uid or clock() >= deadline:
                     continue
@@ -350,12 +351,12 @@ def stale_panes(endpoint, *, read_text=_read_text, read_bytes=_read_bytes, list_
                     continue
                 visited.add(pid)
                 try:
-                    argv = read_bytes('/proc/%d/cmdline' % pid).split(b'\0')
+                    argv = read_bytes(procinfo.ROOT + '/%d/cmdline' % pid).split(b'\0')
                     agent = any(arg.rsplit(b'/', 1)[-1] in (b'claude', b'codex') for arg in argv[:2])
                     if agent:
                         if clock() >= deadline:
                             break
-                        env = read_bytes('/proc/%d/environ' % pid).split(b'\0')
+                        env = read_bytes(procinfo.ROOT + '/%d/environ' % pid).split(b'\0')
                         if ('TETHER_CDP_URL=' + endpoint).encode() not in env:
                             stale.append(pane)
                         break  # Only the top-most match determines this pane's starting environment.

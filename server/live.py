@@ -11,6 +11,7 @@ import threading
 import time
 
 import history
+import procinfo
 
 ENDED = re.compile(r'<status>(completed|failed|killed|stopped|error)</status>|Monitor (?:expired|ended|stopped)|\[Monitor (?:expired|ended|stopped)')
 TASK_ID = re.compile(r'<task-id>([^<]+)</task-id>')
@@ -153,17 +154,15 @@ def shell_output(thread, identifier):
 
 def _processes():
     result = {}
-    for entry in Path('/proc').iterdir():
-        if not entry.name.isdigit():
-            continue
+    for pid in procinfo.pids():
         try:
-            fields = (entry / 'stat').read_text().rsplit(')', 1)[1].split()
+            fields = procinfo.stat_fields(pid)
             try:
-                args = (entry / 'cmdline').read_bytes().split(b'\0')
+                args = procinfo.argv(pid)
             except PermissionError:
                 args = []
-            result[int(entry.name)] = {'uid': entry.stat().st_uid, 'group': int(fields[2]), 'start': fields[19],
-                                       'parent': int(fields[1]), 'state': fields[0], 'name': (entry / 'comm').read_text().strip(), 'args': [os.fsdecode(arg) for arg in args if arg]}
+            result[pid] = {'uid': procinfo.uid(pid), 'group': int(fields[2]), 'start': fields[19],
+                           'parent': int(fields[1]), 'state': fields[0], 'name': procinfo.comm(pid), 'args': [os.fsdecode(arg) for arg in args if arg]}
         except (OSError, ValueError, IndexError):
             continue
     return result
@@ -176,7 +175,7 @@ def _groups(output):
             continue
         for fd in (1, 2):
             try:
-                if os.readlink(f'/proc/{pid}/fd/{fd}') == output:
+                if procinfo.fd_target(pid, fd) == output:
                     matches.add(proc['group'])
             except OSError:
                 pass

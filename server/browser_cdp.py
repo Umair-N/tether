@@ -24,6 +24,7 @@ from urllib.parse import quote, urlsplit
 
 import browser
 import paths
+import procinfo
 
 LOG = logging.getLogger(__name__)
 # 29000-29999 is below Linux (32768+) and macOS (49152+) ephemeral ranges, so outgoing connections never take it.
@@ -37,7 +38,7 @@ CONFIG = paths.CONFIG / 'agent-browser.json'
 
 
 def _read_text(path):
-    return Path(path).read_text()
+    return procinfo.read_text(path)
 
 
 def _pane_list(timeout):
@@ -45,8 +46,8 @@ def _pane_list(timeout):
                                    text=True, timeout=timeout)
 
 
-def peer_pane(peer_port, server_port, *, read_text=_read_text, list_dir=os.listdir,
-              read_link=os.readlink, uid_of=lambda path: os.stat(path).st_uid,
+def peer_pane(peer_port, server_port, *, read_text=_read_text, list_dir=procinfo.list_dir,
+              read_link=procinfo.read_link, uid_of=procinfo.uid_of,
               pane_reader=_pane_list, clock=time.monotonic, uid=None):
     """Resolve the client's socket inode, then its process ancestors, within two seconds.
     All /proc and tmux readers are injectable; no process or terminal is changed."""
@@ -54,7 +55,7 @@ def peer_pane(peer_port, server_port, *, read_text=_read_text, list_dir=os.listd
     uid = os.getuid() if uid is None else uid
     try:
         inode = None
-        for table in ('/proc/net/tcp', '/proc/net/tcp6'):
+        for table in (procinfo.ROOT + '/net/tcp', procinfo.ROOT + '/net/tcp6'):
             if clock() >= deadline:
                 return None
             try:
@@ -76,12 +77,12 @@ def peer_pane(peer_port, server_port, *, read_text=_read_text, list_dir=os.listd
         if not inode:
             return None
         pid = None
-        for name in list_dir('/proc'):
+        for name in list_dir(procinfo.ROOT):
             if clock() >= deadline:
                 return None
             if not name.isdigit():
                 continue
-            folder = '/proc/' + name
+            folder = procinfo.ROOT + '/' + name
             try:
                 if uid_of(folder) != uid:
                     continue
@@ -111,7 +112,7 @@ def peer_pane(peer_port, server_port, *, read_text=_read_text, list_dir=os.listd
                 return panes[pid]
             visited.add(pid)
             # comm can contain spaces and parentheses; ppid follows the final ') state'.
-            pid = int(read_text('/proc/%d/stat' % pid).rsplit(')', 1)[1].split()[1])
+            pid = int(read_text(procinfo.ROOT + '/%d/stat' % pid).rsplit(')', 1)[1].split()[1])
     except (OSError, ValueError, IndexError, subprocess.SubprocessError):
         pass
     return None

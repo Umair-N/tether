@@ -11,6 +11,7 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import browser
 import browser_cdp
+import procinfo
 
 CLIENT = r'''
 const { chromium } = require('playwright-core');
@@ -40,14 +41,12 @@ const { chromium } = require('playwright-core');
 def chromium_pss(pid):
     """Total PSS of the Chromium process group, in KiB (not double-counted RSS)."""
     total = 0
-    for path in Path('/proc').iterdir():
-        if not path.name.isdigit():
-            continue
+    for process in procinfo.pids():
         try:
-            stat = (path / 'stat').read_text().rsplit(')', 1)[1].split()
+            stat = procinfo.stat_fields(process)
             if int(stat[2]) != pid:
                 continue
-            for line in (path / 'smaps_rollup').read_text().splitlines():
+            for line in procinfo.read_text(Path(procinfo.ROOT) / str(process) / 'smaps_rollup').splitlines():
                 if line.startswith('Pss:'):
                     total += int(line.split()[1])
         except (OSError, ValueError, IndexError):

@@ -19,6 +19,7 @@ from urllib.request import Request, build_opener, ProxyHandler
 
 import auth
 import paths
+import procinfo
 
 HOOK_PATH = '/mobile/api/ask-hook'
 ANSWER_PATH = '/mobile/api/ask-answer'
@@ -80,7 +81,7 @@ def hook_process(pid, owner):
             return started
         if ancestor <= 1:
             break
-        ancestor = int((Path('/proc') / str(ancestor) / 'stat').read_text().rsplit(')', 1)[1].split()[1])
+        ancestor = procinfo.parent(ancestor)
     raise ValueError('The hook does not belong to this agent.')
 
 
@@ -92,8 +93,7 @@ def verify_entry(entry):
     """
     from agents import process_start
     pid = entry['owner_pid']
-    process = Path('/proc') / str(pid)
-    if (process_start(pid) != entry['process_start'] or process.joinpath('comm').read_text().strip() != 'claude'
+    if (process_start(pid) != entry['process_start'] or procinfo.comm(pid) != 'claude'
             or entry.get('pending_conversation')):
         raise Conflict()
     registry = json.loads(Path(entry['registry']).read_text())
@@ -108,7 +108,7 @@ def verify_entry(entry):
             return socket
         if ancestor <= 1:
             break
-        ancestor = int((Path('/proc') / str(ancestor) / 'stat').read_text().rsplit(')', 1)[1].split()[1])
+        ancestor = procinfo.parent(ancestor)
     raise Conflict()
 
 

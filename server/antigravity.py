@@ -10,6 +10,7 @@ import time
 
 from activity import merge as merge_activity, notice as notice_item, action as activity_action, group_actions
 import paths
+import procinfo
 
 ROOT = paths.ANTIGRAVITY
 CACHE = paths.CACHE / 'antigravity'
@@ -71,9 +72,9 @@ def owner_pid(pids):
     pid_set = set(pids)
     for pid in pids:
         try:
-            stat_path = Path('/proc') / str(pid) / 'stat'
-            if stat_path.is_file():
-                ppid = int(stat_path.read_text().rsplit(')', 1)[1].split()[1])
+            proc = Path(procinfo.ROOT)
+            if procinfo.stat_exists(pid, proc):
+                ppid = procinfo.parent(pid, proc)
                 if ppid not in pid_set:
                     return pid
         except (OSError, IndexError, ValueError):
@@ -84,14 +85,14 @@ def owner_pid(pids):
 def locked_elsewhere(pids):
     """Conversations that another running agy already holds: a fresh agy in the same folder must not borrow them."""
     mine, held = {int(pid) for pid in pids}, set()
-    for entry in Path('/proc').iterdir():
-        if not entry.name.isdigit() or int(entry.name) in mine:
+    proc = Path(procinfo.ROOT)
+    for pid in procinfo.pids(proc):
+        if pid in mine:
             continue
         try:
-            if (entry / 'comm').read_text().strip() not in ('agy', 'exe'):
+            if procinfo.comm(pid, proc) not in ('agy', 'exe'):
                 continue
-            for link in (entry / 'fd').iterdir():
-                target = link.resolve()
+            for target in procinfo.resolved_fds(pid, proc):
                 if target.parent == ROOT / 'presence' and target.suffix == '.lock':
                     held.add(target.stem)
         except OSError:
@@ -102,7 +103,7 @@ def locked_elsewhere(pids):
 def live_entry(pids, cwd=None):
     for pid in pids:
         try:
-            paths = [path.resolve() for path in (Path('/proc') / str(pid) / 'fd').iterdir()]
+            paths = list(procinfo.resolved_fds(pid, Path(procinfo.ROOT)))
             conversations = {path.stem for path in paths if path.parent == ROOT / 'presence' and path.suffix == '.lock'}
             if len(conversations) != 1:
                 continue
@@ -119,7 +120,7 @@ def live_entry(pids, cwd=None):
         # Only a conversation reported since this process started can be its own: a fresh agy has none yet, and borrowing the
         # newest one in the same folder showed another conversation's chat and context.
         try:
-            began = time.time() - float(Path('/proc/uptime').read_text().split()[0]) + int(process_start(owner)) / os.sysconf('SC_CLK_TCK')
+            began = time.time() - procinfo.uptime() + int(process_start(owner)) / os.sysconf('SC_CLK_TCK')
         except (OSError, ValueError):
             began = 0
         candidates = []
@@ -284,5 +285,4 @@ def snapshot(entry, clean, read_records, normalize_usage):
 
 
 def process_start(pid):
-    fields = (Path('/proc') / str(pid) / 'stat').read_text().rsplit(')', 1)[1].split()
-    return fields[19]
+    return procinfo.start_ticks(pid)

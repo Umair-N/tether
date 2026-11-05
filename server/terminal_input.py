@@ -16,6 +16,7 @@ from quota_notices import capture as capture_quota_notices
 from codex_provider import PROFILE_NAME
 import login_flow
 import paths
+import procinfo
 import window_size
 import prompt_actions
 import choice_state
@@ -742,9 +743,9 @@ def _live_status(entry, run, screen, login_screen=None, styled_screen=None):
 
 def verify(entry, run=subprocess.run):
     pid = entry['owner_pid']
-    process = Path('/proc') / str(pid)
+    proc = Path(procinfo.ROOT)
     valid_comm = {'claude': ('claude',), 'codex': ('codex',), 'antigravity': ('agy', 'exe')}[entry['agent']]
-    process_comm = process.joinpath('comm').read_text().strip()
+    process_comm = procinfo.comm(pid, proc)
     if process_start(pid) != entry['process_start'] or process_comm not in valid_comm:
         raise RuntimeError('The agent restarted. Reload its tab before sending.')
     result = run([paths.TMUX, 'display-message', '-p', '-t', entry['id'],
@@ -755,7 +756,7 @@ def verify(entry, run=subprocess.run):
         raise RuntimeError('Return to the agent prompt in Termius before sending.')
     ancestor = pid
     while ancestor != int(root) and ancestor > 1:
-        ancestor = int((Path('/proc') / str(ancestor) / 'stat').read_text().rsplit(')', 1)[1].split()[1])
+        ancestor = procinfo.parent(ancestor, proc)
     if ancestor != int(root):
         raise RuntimeError('The agent no longer belongs to this tmux pane.')
     if entry['agent'] == 'claude':
@@ -767,7 +768,7 @@ def verify(entry, run=subprocess.run):
         if not entry.get('pending_conversation'):
             lock = AGY_ROOT / 'presence' / (entry['thread'] + '.lock')
             if lock.exists():
-                if not any(p.resolve() == lock for p in process.joinpath('fd').iterdir()):
+                if not any(target == lock for target in procinfo.resolved_fds(pid, proc)):
                     raise RuntimeError('The Antigravity conversation changed. Reload its tab.')
             else:
                 cache_file = AGY_CACHE / (entry['thread'] + '.json')
@@ -1306,9 +1307,9 @@ def shell_prompt(entry, run=subprocess.run):
         raise RuntimeError('An agent is already running in this pane.')
     if process_start(entry['pane_pid']) != entry['pane_start']:
         raise RuntimeError('This tmux pane changed. Reload its tab.')
-    process = Path('/proc') / str(entry['pane_pid'])
-    fields = process.joinpath('stat').read_text().rsplit(')', 1)[1].split()
-    if process.joinpath('comm').read_text().strip() not in ('bash', 'zsh', 'fish') or fields[2] != fields[5]:
+    proc = Path(procinfo.ROOT)
+    fields = procinfo.stat_fields(entry['pane_pid'], proc)
+    if procinfo.comm(entry['pane_pid'], proc) not in ('bash', 'zsh', 'fish') or fields[2] != fields[5]:
         raise RuntimeError('Wait for the foreground program to finish before starting an agent.')
     state = run([paths.TMUX, 'display-message', '-p', '-t', entry['id'],
                  '#{pane_pid}\t#{pane_current_command}\t#{pane_in_mode}\t#{cursor_y}\t#{cursor_x}\t#{pane_width}'],
@@ -1379,10 +1380,9 @@ def foreground_program(entry):
     if entry.get('agent') != 'shell' or process_start(entry['pane_pid']) != entry['pane_start']:
         return False
     try:
-        fields = (Path('/proc') / str(entry['pane_pid']) / 'stat').read_text().rsplit(')', 1)[1].split()
+        return procinfo.foreground_differs(entry['pane_pid'], Path(procinfo.ROOT))
     except OSError:
         return False
-    return fields[2] != fields[5]  # the shell's process group is not the terminal's foreground group
 
 
 def answer_program(entry, message, run=subprocess.run):

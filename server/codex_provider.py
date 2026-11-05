@@ -19,6 +19,7 @@ import tomllib
 TOP_PROVIDER = re.compile(r'^model_provider\s*=.*$', re.M)
 
 import paths
+import procinfo
 
 FILE = paths.CACHE / 'codex_provider.json'
 PROFILE = 'foundry'
@@ -165,7 +166,7 @@ def profile_from_args(args):
 def pane_profile(pid):
     """The profile a running Codex process started with, from /proc. None for the plan or when it cannot be read."""
     try:
-        args = (Path('/proc') / str(pid) / 'cmdline').read_bytes().decode(errors='replace').split('\0')
+        args = [arg.decode(errors='replace') for arg in procinfo.argv(pid)]
     except OSError:
         return None
     return profile_from_args(args[1:])

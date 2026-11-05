@@ -26,6 +26,7 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
 import paths  # noqa: E402
+import procinfo  # noqa: E402
 
 LEVELS = (
     ('Off', 'No Codex.'),
@@ -302,16 +303,14 @@ def is_run(argv):
 def processes(proc=Path('/proc')):
     """{pid: (ppid, argv)} for every process we can read."""
     out = {}
-    for entry in proc.iterdir():
-        if not entry.name.isdigit():
-            continue
+    for pid in procinfo.pids(proc):
         try:
-            stat = (entry / 'stat').read_text()
-            argv = (entry / 'cmdline').read_bytes().split(b'\0')
+            stat = procinfo.read_text(proc / str(pid) / 'stat')
+            argv = procinfo.argv(pid, proc)
         except OSError:
             continue
         ppid = int(stat.rsplit(')', 1)[1].split()[1])
-        out[int(entry.name)] = (ppid, [part.decode(errors='replace') for part in argv if part])
+        out[pid] = (ppid, [part.decode(errors='replace') for part in argv if part])
     return out
 
 

@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import codex_level
+import procinfo
 from agents import descendants, iso_ms, tidy_user_text
 
 PATH = '/mobile/api/codex-runs'
@@ -200,12 +201,12 @@ def _argv_prompt(argv):
 def _session(pid, procs, proc, readlink):
     for child in sorted(descendants(pid, procs)):
         try:
-            fds = sorted((proc / str(child) / 'fd').iterdir(), key=lambda p: p.name)
+            fds = sorted(procinfo.fd_names(child, proc))
         except OSError:
             continue
         for fd in fds:
             try:
-                path = Path(readlink(fd))
+                path = Path(procinfo.fd_target(child, fd, proc, readlink=readlink))
             except (OSError, ValueError):
                 continue
             if path.name.startswith('rollout-') and path.suffix == '.jsonl':
@@ -217,9 +218,8 @@ def _session(pid, procs, proc, readlink):
 
 def _process_start(pid, proc, now):
     try:
-        ticks = (proc / str(pid) / 'stat').read_text().rsplit(')', 1)[1].split()[19]
-        uptime = float((proc / 'uptime').read_text().split()[0])
-        return ticks, int((now - uptime + int(ticks) / os.sysconf('SC_CLK_TCK')) * 1000)
+        ticks = procinfo.start_ticks(pid, proc)
+        return ticks, procinfo.start_ms(ticks, proc, now=now)
     except (OSError, ValueError, IndexError):
         return None, int(now * 1000)
 
@@ -263,7 +263,7 @@ def runs_for_pane(pane_pid, procs, now=None, readlink=os.readlink, proc=Path('/p
             _update(run, parsed)
             if not run['cwd']:
                 try:
-                    run['cwd'] = readlink(proc / str(pid) / 'cwd')
+                    run['cwd'] = procinfo.cwd(pid, proc, readlink=readlink)
                 except OSError:
                     pass
             run['pid'] = pid

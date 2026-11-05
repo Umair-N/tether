@@ -14,6 +14,7 @@ import tool_details
 import activity
 import history
 import paths
+import procinfo
 import pane_view
 from side_shells import SESSION as SIDE_SHELLS
 
@@ -64,15 +65,14 @@ def footer_cwd(run, pane):
 
 def started_ms(ticks):
     """Wall-clock start of a process, in milliseconds, from the clock ticks since boot that /proc reports."""
-    boot = time.time() - float(Path('/proc/uptime').read_text().split()[0])
-    return int((boot + int(ticks) / os.sysconf('SC_CLK_TCK')) * 1000)
+    return procinfo.start_ms(ticks)
 
 
 def codex_thread(connection, pid, ticks, cwd):
     """The conversation this Codex process is running: the one named by `codex resume <id>`, else the newest one in
     its directory that was created or touched since the process started. None while it has not begun a conversation."""
     try:
-        arguments = (Path('/proc') / str(pid) / 'cmdline').read_bytes().decode('utf-8', 'ignore').split('\0')
+        arguments = [arg.decode('utf-8', 'ignore') for arg in procinfo.argv(pid)]
     except OSError:
         arguments = []
     for index, argument in enumerate(arguments[:-1]):
