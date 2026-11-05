@@ -94,6 +94,29 @@ Existing `mobile-tmux*.service` units stay untouched unless you add `--replace-l
 The old `server/deploy/install.py` entry point still works.
 To run without a service, use `python3 server/server.py` after the UI build.
 
+### Android (Termux)
+
+1. Install [Termux from F-Droid or GitHub](https://github.com/termux/termux-app#installation), not Google Play.
+2. Install the packages below. Then close and reopen Termux to start [termux-services](https://github.com/termux/termux-services).
+
+   ```sh
+   pkg install python tmux nodejs git ttyd termux-services
+   ```
+
+3. Clone the repository and run the installer:
+
+   ```sh
+   git clone https://github.com/incmak/tether.git
+   cd tether
+   python install.py --plan --no-voice
+   python install.py --apply --no-voice
+   ```
+
+4. Run `termux-wake-lock` so Android does not stop Termux. Optionally, configure [Termux:Boot](https://github.com/termux/termux-boot) to start services after a reboot.
+5. Open the URL that the installer prints in the phone browser.
+
+Voice and automatic updates are not supported on Termux. Agent CLIs on Termux are not tested.
+
 ## Reaching it from other devices
 
 The server binds to `127.0.0.1` by default. Anyone with access can control your agents and run commands as you.

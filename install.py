@@ -16,6 +16,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parent
 DARWIN = sys.platform == 'darwin'
+TERMUX = not DARWIN and (bool(os.environ.get('TERMUX_VERSION')) or os.environ.get('PREFIX', '').startswith('/data/data/com.termux/'))
 UNIT_NAMES = ('tether.service', 'tether-terminal.service', 'tether-voice.service')
 UPDATE_UNITS = ('tether-update.service', 'tether-update.timer')
 LEGACY_UNITS = ('mobile-tmux.service', 'mobile-tmux-terminal.service', 'mobile-tmux-whisper.service')
@@ -65,10 +66,16 @@ def owned_port(unit, port):
         result = probe('lsof', '-nP', '-a', '-p', pid, f'-iTCP:{port}', '-sTCP:LISTEN', '-F', 'p')
         return bool(result and result.returncode == 0 and
                     any(line.startswith('p') for line in result.stdout.splitlines()))
-    result = probe('systemctl', '--user', 'show', unit, '--property=MainPID', '--value')
-    if not result or result.returncode or not result.stdout.strip().isdigit():
-        return False
-    pid = int(result.stdout.strip())
+    if TERMUX:
+        try:
+            pid = int((service_units_dir(Path.home()) / runit_name(unit) / 'supervise/pid').read_text().strip())
+        except (OSError, ValueError):
+            return False
+    else:
+        result = probe('systemctl', '--user', 'show', unit, '--property=MainPID', '--value')
+        if not result or result.returncode or not result.stdout.strip().isdigit():
+            return False
+        pid = int(result.stdout.strip())
     if not pid:
         return False
     try:
@@ -83,12 +90,21 @@ def owned_port(unit, port):
                 # Descriptors can close while the service continues to run.
                 continue
         for name in ('tcp', 'tcp6'):
-            for row in Path('/proc/net', name).read_text().splitlines()[1:]:
+            try:
+                rows = Path('/proc/net', name).read_text().splitlines()[1:]
+            except OSError:
+                if TERMUX and name == 'tcp':
+                    return True
+                raise
+            for row in rows:
                 fields = row.split()
                 if int(fields[1].split(':')[1], 16) == port and f'socket:[{fields[9]}]' in sockets:
                     return True
     except OSError:
         pass
+    except (ValueError, IndexError):
+        if not TERMUX:
+            raise
     return False
 
 
@@ -109,6 +125,9 @@ def free_port(port, taken, reserved, unit=None, legacy_unit=None):
                 sock.bind(('127.0.0.1', port))
         return True
     except OSError:
+        if TERMUX:
+            return bool((unit and owned_port(unit, port)) or
+                        (legacy_unit and owned_port(legacy_unit, port)))
         return False
 
 
@@ -186,11 +205,29 @@ def launchd_label(name):
     return 'local.tether.' + suffix
 
 
+def runit_name(name):
+    return name.removesuffix('.service')
+
+
+def service_units_dir(home):
+    if TERMUX:
+        return Path(os.environ.get('PREFIX', '/data/data/com.termux/files/usr')) / 'var/service'
+    return home / ('Library/LaunchAgents' if DARWIN else '.config/systemd/user')
+
+
 def unit_path(units_dir, name):
+    if TERMUX:
+        return units_dir / runit_name(name) / 'run'
     return units_dir / (launchd_label(name) + '.plist' if DARWIN else name)
 
 
 def service_file(name, description, command, environment, oneshot=False):
+    if TERMUX:
+        prefix = Path(os.environ.get('PREFIX', '/data/data/com.termux/files/usr'))
+        words = (['env', *(key + '=' + str(value) for key, value in sorted(environment.items()))]
+                 if environment else []) + [str(word) for word in command]
+        return (f'#!{prefix}/bin/sh\n# {description} (written by Tether install.py)\n'
+                f'exec 2>&1\nexec {shlex.join(words)}\n')
     if not DARWIN:
         return unit_text(description, command, environment, oneshot=oneshot)
     label = launchd_label(name)
@@ -322,8 +359,8 @@ def wrapped_original(value, script):
 def make_plan(args, repo=ROOT, home=None):
     home = home or Path.home()
     state_file = Path(os.environ.get('TETHER_INSTALL_STATE') or home / '.config/tether/install.json')
-    units_dir = home / ('Library/LaunchAgents' if DARWIN else '.config/systemd/user')
-    unit_names = (*UNIT_NAMES, UPDATE_UNITS[0]) if DARWIN else (*UNIT_NAMES, *UPDATE_UNITS)
+    units_dir = service_units_dir(home)
+    unit_names = UNIT_NAMES if TERMUX else (*UNIT_NAMES, UPDATE_UNITS[0]) if DARWIN else (*UNIT_NAMES, *UPDATE_UNITS)
     saved = {}
     if state_file.exists():
         saved = json.loads(state_file.read_text())
@@ -354,15 +391,20 @@ def make_plan(args, repo=ROOT, home=None):
     def check(name, ok, fix):
         checks.append(dict(name=name, ok=bool(ok), fix=fix))
 
-    if DARWIN:
+    if TERMUX:
+        check('Termux', True, '')
+    elif DARWIN:
         check('macOS', True, '')
     else:
         check('Linux', platform.system() == 'Linux', 'Run the installer on Linux.')
     check('Python >= 3.11', sys.version_info >= (3, 11),
           'Use Python 3.11 or newer, for example: brew install python, then run /opt/homebrew/bin/python3 install.py.'
-          if DARWIN else 'Use Python 3.11 or newer.')
+          if DARWIN else 'Run: pkg install python' if TERMUX else 'Use Python 3.11 or newer.')
     legacy_files = set()
-    if DARWIN:
+    if TERMUX:
+        check('termux-services', shutil.which('sv') and shutil.which('svlogd') and units_dir.is_dir(),
+              'Run: pkg install termux-services, then close and reopen Termux.')
+    elif DARWIN:
         result = probe('launchctl', 'print', f'gui/{os.getuid()}')
         check('launchd GUI session', result is not None and result.returncode == 0,
               'Log in to the Mac desktop as this user, and run the installer from Terminal there, not over SSH.')
@@ -383,7 +425,9 @@ def make_plan(args, repo=ROOT, home=None):
     if args.uninstall:
         installed = [name for name in unit_names
                      if unit_path(units_dir, name).exists() or name in saved.get('unit_names', [])]
-        if DARWIN:
+        if TERMUX:
+            commands = [['sv', 'down', str(units_dir / runit_name(name))] for name in installed]
+        elif DARWIN:
             commands = [['launchctl', 'bootout', f'gui/{os.getuid()}/{launchd_label(name)}'] for name in installed]
         else:
             commands = [['systemctl', '--user', 'disable', '--now', name] for name in installed]
@@ -391,7 +435,11 @@ def make_plan(args, repo=ROOT, home=None):
     else:
         check('tmux', bool(shutil.which('tmux')) or DARWIN and any(
             os.access(path, os.X_OK) for path in ('/opt/homebrew/bin/tmux', '/usr/local/bin/tmux')),
-            'Install tmux and place it on PATH.')
+            'Run: pkg install tmux' if TERMUX else 'Install tmux and place it on PATH.')
+        if TERMUX and options['voice']:
+            check('voice', False, 'Voice is not supported on Termux; use --no-voice.')
+        if TERMUX and options['updates'] == 'auto':
+            check('automatic updates', False, 'Termux has no timer service; use --updates notify.')
         try:
             valid_host = ipaddress.ip_address(options['host']).version == 4
         except ValueError:
@@ -401,17 +449,17 @@ def make_plan(args, repo=ROOT, home=None):
         check('proxy authentication', options['auth'] != 'proxy' or loopback,
               'Use --host 127.0.0.1 with --auth proxy.')
         check('ttyd', not options['terminal'] or bool(shutil.which('ttyd')),
-              'Install ttyd on PATH or use --no-terminal.')
+              'Run: pkg install ttyd, or use --no-terminal.' if TERMUX else 'Install ttyd on PATH or use --no-terminal.')
         build = needs_build(repo) if options['build_ui'] is None else options['build_ui']
         check('UI build', build or (repo / 'ui/dist/index.html').is_file(),
               'Build ui/dist with npm, or use --build-ui after installing Node.js and npm.')
         check('node/npm', not build or bool(shutil.which('node') and shutil.which('npm')),
-              'Install Node.js and npm to build the UI; no usable dist exists or a build was requested.')
+              'Run: pkg install nodejs' if TERMUX else 'Install Node.js and npm to build the UI; no usable dist exists or a build was requested.')
         try:
             taken = occupied_ports()
         except OSError:
             taken = set()
-            if not DARWIN:
+            if not DARWIN and not TERMUX:
                 check('Linux socket table', False, 'Make /proc/net/tcp and /proc/net/tcp6 readable on Linux.')
         reserved = set()
         legacy_chat = LEGACY_UNITS[0] if args.replace_legacy and LEGACY_UNITS[0] in legacy else None
@@ -432,7 +480,7 @@ def make_plan(args, repo=ROOT, home=None):
                                           ('voice_port', options['voice'], 7684, UNIT_NAMES[2])):
             options[key] = None
             if enabled:
-                legacy_unit = LEGACY_UNITS[UNIT_NAMES.index(unit)] if args.replace_legacy and not DARWIN else None
+                legacy_unit = LEGACY_UNITS[UNIT_NAMES.index(unit)] if args.replace_legacy and not DARWIN and not TERMUX else None
                 legacy_port = legacy_config.get(legacy_unit, (None, {}))[0]
                 old = legacy_port if legacy_port is not None else previous.get(key)
                 if old and free_port(old, taken, reserved, unit if unit_path(units_dir, unit).exists() else None,
@@ -443,7 +491,7 @@ def make_plan(args, repo=ROOT, home=None):
                 reserved.add(options[key])
                 check(key, True, '')
         # Homebrew's /opt/homebrew/bin/python3 links into a versioned Cellar folder that `brew upgrade` deletes.
-        python = os.path.abspath(sys.executable) if DARWIN else str(Path(sys.executable).resolve())
+        python = os.path.abspath(sys.executable) if DARWIN or TERMUX else str(Path(sys.executable).resolve())
         env = {'PATH': os.environ.get('PATH', '/usr/local/bin:/usr/bin:/bin'),
                'MOBILE_TMUX_HOST': options['host'], 'MOBILE_TMUX_PORT': port,
                'MOBILE_TMUX_AUTH': options['auth'], 'TMUX_CHAT_DIST': service_repo / 'ui/dist',
@@ -456,6 +504,10 @@ def make_plan(args, repo=ROOT, home=None):
             for directory in ('/opt/homebrew/bin', '/usr/local/bin'):
                 if directory not in env['PATH'].split(os.pathsep):
                     env['PATH'] += os.pathsep + directory
+        if TERMUX:
+            directory = str(Path(os.environ.get('PREFIX', '/data/data/com.termux/files/usr')) / 'bin')
+            if directory not in env['PATH'].split(os.pathsep):
+                env['PATH'] += os.pathsep + directory
         for key in ('TETHER_INSTALL_STATE', 'TETHER_REPO'):
             if os.environ.get(key):
                 env[key] = os.environ[key]
@@ -477,7 +529,7 @@ def make_plan(args, repo=ROOT, home=None):
                 # Keep the prompt across re-applies and release updates: the installed unit wins over legacy.
                 current_env = {}
                 voice_file = unit_path(units_dir, UNIT_NAMES[2])
-                if voice_file.is_file():
+                if voice_file.is_file() and not TERMUX:
                     current_env = (plistlib.loads(voice_file.read_bytes()).get('EnvironmentVariables', {}) if DARWIN
                                    else legacy_settings(UNIT_NAMES[2], units_dir)[1])
                 for source in (os.environ, current_env, legacy_env):
@@ -497,14 +549,18 @@ def make_plan(args, repo=ROOT, home=None):
                 [shutil.which('ttyd') or 'ttyd', '-W', '-i', '127.0.0.1', '-p', str(options['terminal_port']),
                  '-O', '-a', '-b', '/terminal/live', '-t', 'titleFixed=Terminal', '-t', 'fontSize=13',
                  '-t', 'rendererType=dom', '-t', 'scrollback=10000', python, service_repo / 'server/attach.py'],
-                {'PATH': env['PATH']} if DARWIN else {})
-        if options['updates'] == 'auto':
+                {'PATH': env['PATH']} if DARWIN or TERMUX else {})
+        if options['updates'] == 'auto' and not TERMUX:
             files[UPDATE_UNITS[0]] = service_file(UPDATE_UNITS[0], 'Tether automatic update',
                 [python, service_repo / 'tether', 'update', '--auto'], env, oneshot=True)
             if not DARWIN:
                 files[UPDATE_UNITS[1]] = ('[Unit]\nDescription=Check Tether releases daily\n\n[Timer]\n'
                                          'OnCalendar=daily\nRandomizedDelaySec=1h\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n')
-        if DARWIN:
+        if TERMUX:
+            commands.extend([['sv', 'down', str(units_dir / runit_name(name))] for name in unit_names
+                             if name not in files and (units_dir / runit_name(name)).exists()])
+            commands.extend([['sv', 'restart', str(units_dir / runit_name(name))] for name in sorted(files)])
+        elif DARWIN:
             removed = [name for name in unit_names if name not in files and unit_path(units_dir, name).exists()]
             commands.extend([['launchctl', 'bootout', f'gui/{os.getuid()}/{launchd_label(name)}']
                              for name in sorted(set(files) | set(removed))])
@@ -523,7 +579,7 @@ def make_plan(args, repo=ROOT, home=None):
                                  ['systemctl', '--user', 'restart', name]])
     if args.defer_restart:
         commands = [command for command in commands
-                    if (command[0] != 'launchctl' if DARWIN else
+                    if (command[0] != 'sv' if TERMUX else command[0] != 'launchctl' if DARWIN else
                         command[:2] != ['systemctl', '--user'] or command[2] == 'daemon-reload')]
     hooks = []
     old_repo = Path(saved.get('repo', service_repo))
@@ -618,7 +674,8 @@ def make_plan(args, repo=ROOT, home=None):
                 options=options, reused_saved_choices=sorted(set(reused)), checks=checks,
                 legacy_units=legacy, legacy_action='disable and stop' if args.replace_legacy and not args.uninstall else 'leave untouched',
                 units=files, units_dir=str(units_dir), commands=commands, hooks=hooks, state_file=str(state_file),
-                remove_units=[name for name in unit_names if name not in files and unit_path(units_dir, name).exists()],
+                remove_units=[name for name in unit_names if name not in files and
+                              (units_dir / runit_name(name) if TERMUX else unit_path(units_dir, name)).exists()],
                 url=f'http://{"127.0.0.1" if options["host"] in ("localhost", "0.0.0.0") else options["host"]}:{options["port"]}/chat/' if not args.uninstall else None,
                 token_file=str(Path(os.environ.get('MOBILE_TMUX_CONFIG') or home / '.config/mobile-tmux') / 'token'))
 
@@ -628,9 +685,22 @@ def write_units(plan, units_dir):
         (units_dir.parent / 'Logs/tether').mkdir(parents=True, exist_ok=True)
     units_dir.mkdir(parents=True, exist_ok=True)
     for name in plan['remove_units']:
-        unit_path(units_dir, name).unlink(missing_ok=True)
+        if TERMUX:
+            shutil.rmtree(units_dir / runit_name(name), ignore_errors=True)
+        else:
+            unit_path(units_dir, name).unlink(missing_ok=True)
     for name, content in plan['units'].items():
-        unit_path(units_dir, name).write_text(content)
+        path = unit_path(units_dir, name)
+        if TERMUX:
+            (path.parent / 'log').mkdir(parents=True, exist_ok=True)
+            prefix = Path(os.environ.get('PREFIX', '/data/data/com.termux/files/usr'))
+            log = shlex.quote(str(prefix / 'var/log/sv' / runit_name(name)))
+            logger = path.parent / 'log/run'
+            logger.write_text(f'#!{prefix}/bin/sh\nmkdir -p {log}\nexec svlogd -tt {log}\n')
+            logger.chmod(0o755)
+        path.write_text(content)
+        if TERMUX:
+            path.chmod(0o755)
 
 
 def apply_plan(plan, home=None):
@@ -638,16 +708,22 @@ def apply_plan(plan, home=None):
     failed = [item for item in plan['checks'] if not item['ok']]
     if failed:
         raise ValueError('Required checks failed:\n' + '\n'.join(f'{index}. {item["fix"]}' for index, item in enumerate(failed, 1)))
-    units_dir = home / ('Library/LaunchAgents' if DARWIN else '.config/systemd/user')
+    units_dir = service_units_dir(home)
     written = False
     replacing = plan['action'] == 'install' and plan['legacy_action'] == 'disable and stop'
     # Only legacy services running now are stopped by this run, so only they are brought back.
     running = []
-    for name in plan['legacy_units'] if replacing and not DARWIN else []:
+    for name in plan['legacy_units'] if replacing and not DARWIN and not TERMUX else []:
         result = probe('systemctl', '--user', 'is-active', name)
         if result and result.stdout.strip() == 'active':
             running.append(name)
     for command in plan['commands']:
+        if TERMUX and command[0] == 'sv':
+            if command[1] == 'restart' and not written:
+                write_units(plan, units_dir)
+                written = True
+            probe(*command)
+            continue
         if DARWIN and command[:2] == ['launchctl', 'bootout']:
             probe(*command)
             continue
@@ -676,7 +752,7 @@ def apply_plan(plan, home=None):
         # Keep stdout machine-readable for --apply --json, including pip/npm logs.
         run(command, cwd=Path(plan.get('build_repo', plan['repo'])) / 'ui' if command[0] == 'npm' else None, stdout=sys.stderr)
     if not written:
-        if DARWIN:
+        if DARWIN or TERMUX:
             write_units(plan, units_dir)
         else:
             raise ValueError('Plan has no unit reload step.')
@@ -768,11 +844,11 @@ def print_plan(plan):
         print(f'{"PASS" if item["ok"] else "FAIL"}: {item["name"]}')
     for name in plan['legacy_units']:
         print(f'Legacy {name}: {plan["legacy_action"]}')
-    folder = Path('~/Library/LaunchAgents' if DARWIN else '~/.config/systemd/user')
+    folder = Path('$PREFIX/var/service' if TERMUX else '~/Library/LaunchAgents' if DARWIN else '~/.config/systemd/user')
     for name, content in sorted(plan['units'].items()):
         print(f'Write {unit_path(folder, name)}:\n{content}')
     for name in plan['remove_units']:
-        print(f'Remove {unit_path(folder, name)}')
+        print(f'Remove {folder / runit_name(name) if TERMUX else unit_path(folder, name)}')
     for command in plan['commands']:
         print(shlex.join(command) + (' (in ui/)' if command[0] == 'npm' else ''))
     for hook in plan['hooks']:
@@ -782,7 +858,9 @@ def print_plan(plan):
         print('Keep the repository, status lines, user hooks, tokens, dependencies, and data.')
     else:
         print(f'URL: {plan["url"]}\nToken: {plan["token_file"]}')
-        print('LaunchAgents run while you are logged in to the Mac desktop.' if DARWIN else
+        print('Termux services run while Termux runs. Run termux-wake-lock so Android does not stop them. '
+              'Install the Termux:Boot app to start them after a reboot.' if TERMUX else
+              'LaunchAgents run while you are logged in to the Mac desktop.' if DARWIN else
               'loginctl enable-linger $USER keeps services running after logout; it may need admin. This installer does not run it.')
 
 

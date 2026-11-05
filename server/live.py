@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import signal
 import stat
+import tempfile
 import threading
 import time
 
@@ -22,6 +23,7 @@ ANSI = re.compile(r"\x1b(?:\][^\x07\x1b]*(?:\x07|\x1b\\)|\[[0-?]*[ -/]*[@-~]|[@-
 EXITED = re.compile(r'\[exited with code -?\d+\]\s*$')
 _states = {}
 _lock = threading.Lock()
+_TMP = Path('/tmp') if Path('/tmp').is_dir() else Path(tempfile.gettempdir())
 
 
 def _iso(stamp):
@@ -33,7 +35,7 @@ def _iso(stamp):
 
 def _consume(state, record):
     if isinstance(record.get('cwd'), str) and isinstance(record.get('sessionId'), str) and re.fullmatch(r'[\w-]+', record['sessionId']):
-        state['output_dir'] = Path(f'/tmp/claude-{os.getuid()}') / record['cwd'].replace('/', '-') / record['sessionId'] / 'tasks'
+        state['output_dir'] = _TMP / f'claude-{os.getuid()}' / record['cwd'].replace('/', '-') / record['sessionId'] / 'tasks'
     kind = record.get('type')
     message = record.get('message') if isinstance(record.get('message'), dict) else {}
     content = message.get('content')

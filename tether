@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / 'server'))
 import updates
 
 DARWIN = sys.platform == 'darwin'
+TERMUX = not DARWIN and (bool(os.environ.get('TERMUX_VERSION')) or os.environ.get('PREFIX', '').startswith('/data/data/com.termux/'))
 
 
 _spec = importlib.util.spec_from_file_location(
@@ -45,11 +46,20 @@ def launchd_label(name):
     return 'local.tether.' + suffix
 
 
+def runit_name(name):
+    return name.removesuffix('.service')
+
+
 def restart(state):
     units = [unit for unit in state.get('unit_names', ['tether.service'])
              if unit in ('tether.service', 'tether-terminal.service', 'tether-voice.service')]
     if 'tether.service' not in units:
         units.insert(0, 'tether.service')
+    if TERMUX:
+        folder = Path(os.environ.get('PREFIX', '/data/data/com.termux/files/usr')) / 'var/service'
+        for unit in units:
+            run(['sv', 'restart', str(folder / runit_name(unit))])
+        return
     if DARWIN:
         # launchd sets XPC_SERVICE_NAME to the job label. A bootout of the update job from inside that job would
         # stop this update before it finishes, so the running update job keeps its loaded plist until next login.
@@ -103,7 +113,11 @@ def git_checkout(repo):
 
 def snapshot(state_file):
     home = Path.home()
-    if DARWIN:
+    if TERMUX:
+        units = Path(os.environ.get('PREFIX', '/data/data/com.termux/files/usr')) / 'var/service'
+        paths = [units / runit_name(name) / script for name in
+                 ('tether.service', 'tether-terminal.service', 'tether-voice.service') for script in ('run', 'log/run')]
+    elif DARWIN:
         units = home / 'Library/LaunchAgents'
         paths = [units / (launchd_label(name) + '.plist') for name in
                  ('tether.service', 'tether-terminal.service', 'tether-voice.service', 'tether-update.service')]
@@ -132,6 +146,8 @@ def restore(state_file, backup):
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
+            if TERMUX and path.name == 'run':
+                path.chmod(0o755)
 
 
 def migrate(args, root, state_file, state):

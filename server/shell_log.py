@@ -7,6 +7,7 @@ import os
 import pwd
 import re
 import signal
+import shutil
 import subprocess
 import threading
 import time
@@ -18,6 +19,7 @@ from activity import insert_by_time
 
 CACHE = paths.CACHE / 'shell'
 HOME = str(Path.home())
+BASH = '/bin/bash' if os.access('/bin/bash', os.X_OK) else shutil.which('bash') or '/bin/bash'
 TIMEOUT = 20
 MAX_OUTPUT = 20000
 KEEP = 40
@@ -58,8 +60,8 @@ def login_shell():
     try:
         shell = pwd.getpwuid(os.getuid()).pw_shell
     except KeyError:
-        return '/bin/bash'
-    return shell if shell and os.access(shell, os.X_OK) else '/bin/bash'
+        return BASH
+    return shell if shell and os.access(shell, os.X_OK) else BASH
 
 
 def short(path):
@@ -91,7 +93,7 @@ def run(pane, command, start, agent_folder=None, owner=None):
             env['TETHER_COMMAND'] = command
             argv = [login, '-c', 'source ~/.zshrc >/dev/null 2>&1 </dev/null\neval "$TETHER_COMMAND"' + tail]
         else:
-            argv = ['/bin/bash', '-lc', ALIASES + command + tail]
+            argv = [BASH, '-lc', ALIASES + command + tail]
         process = subprocess.Popen(argv, cwd=folder, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT, start_new_session=True)
         stopped = False
