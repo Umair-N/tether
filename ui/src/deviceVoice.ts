@@ -120,6 +120,7 @@ class SystemEngine implements Engine<string> {
   play(text: string) {
     return new Promise<void>((resolve, reject) => {
       const utterance = new SpeechSynthesisUtterance(text)
+      this.voice ??= systemVoice()  // Android often lists its voices late.
       if (this.voice) utterance.voice = this.voice
       utterance.lang = this.voice?.lang ?? 'en-US'
       utterance.onend = () => { this.speaking = false; resolve() }
@@ -209,8 +210,8 @@ export class DeviceVoice {
   /** The built-in voice now (if any), then Kokoro in the background when this device is fast enough. */
   async open() {
     await voicesReady()
-    const voice = systemVoice()
-    if (voice) this.use(new SystemEngine(voice))
+    // Use the built-in voice even when no voice is listed yet: the device default still speaks.
+    if (typeof speechSynthesis !== 'undefined') this.use(new SystemEngine(systemVoice()))
     loadKokoro().then(engine => {
       if (!engine) return
       if (this.closed) { engine.close(); return }
