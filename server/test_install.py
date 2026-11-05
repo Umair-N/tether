@@ -463,7 +463,7 @@ class InstallTests(unittest.TestCase):
         bridge = data['hooks']['PreToolUse'][-1]
         self.assertEqual(bridge['matcher'], 'AskUserQuestion')
         self.assertEqual(bridge['hooks'][0]['timeout'], 600)
-        self.assertEqual(bridge['hooks'][0]['statusMessage'], 'Answer on phone · back here when the phone stops')
+        self.assertEqual(bridge['hooks'][0]['statusMessage'], 'Question sent to Tether · back here in 30 s unless answered there')
         self.assertTrue(self.plan()['options']['ask_bridge'])
         self.assertEqual(data['hooks']['PreToolUse'][:-1], original['hooks']['PreToolUse'])
         for event, groups in original['hooks'].items():
@@ -499,12 +499,15 @@ class InstallTests(unittest.TestCase):
             self.assertEqual(len(groups), 1)
             hook = groups[0]['hooks'][0]
             self.assertEqual(hook['timeout'], 600)
-            self.assertEqual(hook['statusMessage'], 'Answer on phone · back here when the phone stops')
+            self.assertEqual(hook['statusMessage'], f'Question sent to Tether · back here in {seconds} s unless answered there')
         old = json.loads(settings.read_text())
         old['hooks']['PreToolUse'][0]['hooks'][0]['timeout'] = 40
+        old['hooks']['PreToolUse'][0]['hooks'][0]['statusMessage'] = 'Answer on phone · back here when the phone stops'
         settings.write_text(json.dumps(old))
         self.apply(self.plan())
-        self.assertEqual(json.loads(settings.read_text())['hooks']['PreToolUse'][0]['hooks'][0]['timeout'], 600)
+        hook = json.loads(settings.read_text())['hooks']['PreToolUse'][0]['hooks'][0]
+        self.assertEqual(hook['timeout'], 600)
+        self.assertEqual(hook['statusMessage'], 'Question sent to Tether · back here in 120 s unless answered there')
         self.apply(self.plan('--no-ask-bridge'))
         self.assertEqual(json.loads(settings.read_text()), {'hooks': {}})
 

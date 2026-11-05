@@ -201,10 +201,10 @@ def claude_hook_entries(repo):
             for event in events}
 
 
-def ask_bridge_entries(repo):
+def ask_bridge_entries(repo, notice=30):
     return {'PreToolUse': {'matcher': 'AskUserQuestion', 'hooks': [{
         'type': 'command', 'command': shlex.join([sys.executable, str(repo / 'server/ask_bridge.py')]),
-        'timeout': 600, 'statusMessage': 'Answer on phone · back here when the phone stops'}]}}
+        'timeout': 600, 'statusMessage': f'Question sent to Tether · back here in {notice} s unless answered there'}]}}
 
 
 def merge_claude_hooks(data, entries, remove=False):
@@ -478,7 +478,7 @@ def make_plan(args, repo=ROOT, home=None):
     settings = home / '.claude/settings.json'
     if settings.parent.is_dir():
         bridge_remove = args.uninstall or not options['ask_bridge']
-        entries = ask_bridge_entries(old_repo if args.uninstall else service_repo)
+        entries = ask_bridge_entries(old_repo if args.uninstall else service_repo, options['ask_bridge_wait'])
         old_entries = ask_bridge_entries(old_repo) if relocating else None
         try:
             data = json.loads(settings.read_text()) if settings.exists() else {}
