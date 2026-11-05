@@ -73,6 +73,19 @@ def capture(entry, screen):
             continue
         found.append({'id': 'quota:' + identity(text), 'role': 'assistant', 'kind': 'notice',
                       'text': text, 'time': datetime.now(timezone.utc).isoformat()})
+    _store(entry, found)
+
+
+def record(agent, thread, text):
+    """Store a structured quota error without screen matching or server state."""
+    if agent not in ('claude', 'codex') or not thread or not isinstance(text, str) or not text.strip():
+        return
+    _store({'agent': agent, 'thread': thread}, [
+        {'id': 'quota:' + identity(text), 'role': 'assistant', 'kind': 'notice',
+         'text': text, 'time': datetime.now(timezone.utc).isoformat()}])
+
+
+def _store(entry, found):
     if not found:
         return
     with LOCK:

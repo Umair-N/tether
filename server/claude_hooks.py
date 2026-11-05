@@ -112,6 +112,16 @@ def update(state, data, now):
         state['reported_at'] = now
     if agent or event in ('SubagentStart', 'SubagentStop'):
         return
+    if event in ('UserPromptSubmit', 'SessionStart', 'SessionEnd'):
+        state.pop('denied', None)
+    elif event == 'PermissionDenied':
+        tool = data.get('tool_input')
+        tool = tool if isinstance(tool, dict) else {}
+        state['denied'] = {
+            'tool': short(data.get('tool_name')),
+            'detail': next((short(tool.get(key)) for key in
+                            ('command', 'file_path', 'pattern', 'query', 'description') if short(tool.get(key))), ''),
+            'reason': short(data.get('reason')), 'at': now}
     if state.get('agent') == 'codex':
         if event in ('PostToolUse', 'Stop', 'Interrupt', 'UserPromptSubmit', 'SessionStart', 'SessionEnd') or (
                 event == 'PreToolUse' and short(data.get('tool_use_id')) != state.get('approval_tool_use_id')):
@@ -130,7 +140,7 @@ def update(state, data, now):
     elif event == 'SessionEnd':
         state.update(ended=True, busy=False, waiting=False, tools={}, agents={})
     elif event == 'UserPromptSubmit':
-        state.update(ended=False, busy=True, waiting=False, started=now, tools={})
+        state.update(ended=False, busy=True, waiting=False, started=now, prompt_at=now, tools={})
     elif event in ('Stop', 'StopFailure', 'Interrupt') or (event == 'Notification' and data.get('notification_type') == 'idle_prompt'):
         state.update(busy=False, waiting=False, tools={})
     elif event == 'PermissionRequest' or (event == 'Notification' and data.get('notification_type') == 'permission_prompt'):
@@ -159,6 +169,18 @@ def capture(data, now=None, agent='claude'):
     if (not isinstance(data, dict) or not valid_session(data.get('session_id'))
             or data.get('hook_event_name') not in (CODEX_EVENTS if agent == 'codex' else EVENTS)):
         return
+    if (agent == 'claude' and data['hook_event_name'] == 'StopFailure'
+            and data.get('error') in ('rate_limit', 'billing_error', 'account_on_hold')):
+        try:
+            from quota_notices import record
+            text = data.get('last_assistant_message')
+            text = text if isinstance(text, str) and text.strip() else 'Usage limit reached.'
+            details = data.get('error_details')
+            if isinstance(details, str) and details.strip() and details != text:
+                text += '\n' + details
+            record(agent, data['session_id'], text)
+        except Exception:
+            pass  # quota storage must not prevent lifecycle capture or fail the hook
     import fcntl  # only the writer needs a process lock
     now = time.time() if now is None else now
     folder = Path(os.environ.get('MOBILE_TMUX_CACHE') or Path.home() / '.cache/mobile-tmux') / 'hooks'
@@ -352,6 +374,21 @@ def overlay(config, result, now=None, screen_read_at=None):
         if state['session_id'] != config['thread'] or state.get('ended') or age < 0:
             return result
         merged = dict(result)
+        denied = state.get('denied')
+        if (denied and denied['at'] > state.get('prompt_at', 0)
+                and 0 <= now - denied['at'] <= TURN_MAX_AGE):
+            name = f"{denied['tool']}({denied['detail']})" if denied['detail'] else denied['tool']
+            notice = name + ' blocked by auto mode · /permissions'
+            if denied['reason']:
+                notice += ' · Auto mode: ' + denied['reason']
+            notices = list(result.get('notices', []))
+            for index, item in enumerate(notices):
+                if re.search(r'blocked by auto mode', item, re.I):
+                    notices[index] = notice
+                    break
+            else:
+                notices.append(notice)
+            merged['notices'] = notices
         for key in ('mode', 'effort'):
             if key in state:
                 merged[key] = state[key]
