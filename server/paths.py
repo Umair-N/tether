@@ -25,6 +25,8 @@ def tmux_new_session():
 
 CLAUDE = HOME / '.claude'
 CODEX = HOME / '.codex'
+CODEX_HOOKS = Path(os.environ.get('MOBILE_TMUX_CODEX_HOOKS') or
+                   Path(os.environ.get('CODEX_HOME') or CODEX) / 'hooks.json')
 ANTIGRAVITY = HOME / '.gemini/antigravity-cli'
 
 

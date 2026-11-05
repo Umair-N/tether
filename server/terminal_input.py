@@ -19,6 +19,7 @@ import paths
 import window_size
 import prompt_actions
 import choice_state
+import claude_hooks
 
 LAUNCHERS = {'codex': 'codex',
              'claude': 'claude',
@@ -687,8 +688,18 @@ def _live_status(entry, run, screen, login_screen=None, styled_screen=None):
         if entry['agent'] == 'antigravity':
             pending['text'] = reflow_prompt(pending['text'])
         return {'state': 'Approval', 'approval': {k: v for k, v in pending.items() if not k.startswith('_')}}
-    working = bool(WORKING.search(screen))
-    if entry['agent'] == 'codex':
+    live = claude_hooks.codex_live(entry) if entry['agent'] == 'codex' else None
+    # No hook reports an answered approval, so a screen that shows Codex working again overrides "waiting".
+    if live is not None and live['waiting'] and WORKING.search(screen):
+        live = dict(live, waiting=False, busy=True)
+    if live is not None and live['waiting']:
+        prompt_actions.ledger.forget(entry['id'])
+        detail = live.get('approval') or {}
+        text = '\n\n'.join(part for part in ('Codex is waiting for your approval.', detail.get('tool'),
+                          detail.get('text'), '\n'.join(screen.rstrip().splitlines()[-20:])) if part)
+        return {'state': 'Approval', 'approval': {'id': None, 'text': text.strip(), 'actionable': False}}
+    working = live['busy'] and not live['waiting'] if live is not None else bool(WORKING.search(screen))
+    if entry['agent'] == 'codex' and live is None:
         working = working or transcript_busy(entry.get('transcript'))
     registry = {}
     if entry['agent'] == 'claude' and entry.get('registry'):  # a Claude with no conversation yet has no registry
