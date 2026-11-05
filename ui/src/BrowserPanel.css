@@ -4,3 +4,28 @@
 .browser-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .browser-switch > svg:last-child { color: var(--muted); }
 .browser-menu button:disabled { opacity: .55; cursor: not-allowed; }
+
+/* Mac Chrome with no tab: pairing and paired Macs (MacPairing.tsx). */
+.mac-pairing { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 28px 16px; text-align: center; }
+.mac-pairing > * { max-width: 420px; width: 100%; }
+.mac-pairing-icon { color: var(--muted); width: auto; }
+.mac-pairing h3 { margin: 0; font-size: 16px; font-weight: 650; }
+.mac-pairing-lead { margin: 0; font-size: 13.5px; color: var(--muted); text-wrap: pretty; }
+.mac-pairing-steps { margin: 4px 0; padding-left: 20px; list-style: decimal; text-align: left; font-size: 13px; line-height: 1.5; }
+.mac-pairing-steps code { font-size: 12px; }
+.mac-pairing-fields { display: grid; gap: 6px; }
+.mac-pairing-field { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 4px 4px 4px 12px; border: 1px solid var(--line); border-radius: 10px; text-align: left; }
+.mac-pairing-field > span { font-size: 12px; color: var(--muted); }
+.mac-pairing-field code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.mac-pairing-code { font-size: 17px !important; letter-spacing: .08em; font-variant-numeric: tabular-nums; }
+.mac-pairing-meta { min-height: 18px; margin: 0; font-size: 12px; color: var(--muted); }
+.mac-pairing > button { width: auto; min-height: 40px; padding: 0 16px; }
+.mac-pairing-devices { margin: 8px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+.mac-pairing-devices li { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); text-align: left; }
+.mac-pairing-name { flex: 1; min-width: 0; display: grid; }
+.mac-pairing-name strong { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mac-pairing-name small { font-size: 12px; color: var(--muted); }
+.mac-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
+.mac-dot.on { background: #2f9e5b; }
+.mac-pairing-steps li + li { margin-top: 4px; }
+.mac-pairing-devices .browser-text-button { font-size: 13px; font-weight: 500; }

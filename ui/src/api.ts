@@ -1,6 +1,7 @@
 export type Agent = 'claude' | 'codex' | 'antigravity' | 'shell'
 /** Omit browser for the existing test browser. Approved signed tabs use mode: 'agent'. */
-export type BrowserId = 'test' | 'signed'
+export type BrowserId = 'test' | 'signed' | 'mac'
+export type SignedBrowserSource = 'mac' | 'server'
 export interface BrowserSelection { browser?: BrowserId }
 export interface BrowserAvailability { id: BrowserId; label: string; running: boolean; available: boolean; reason: string }
 export interface BrowserTab {
@@ -10,16 +11,47 @@ export interface BrowserTab {
   grant?: { id: string; expires: number }
 }
 export interface SignedBrowserRequest {
+  browser: SignedBrowserSource
   id: string; pane: string; agent: string; reason: string; minutes: number; url: string | null; created: number
 }
 export interface SignedBrowserGrant {
+  browser: SignedBrowserSource
   id: string; pane: string; agent: string; tab: string; expires: number; reason: string
 }
 /** GET signed/access and POST signed/allow, signed/deny, signed/end. No CDP token is exposed to the panel. */
 export interface SignedBrowserAccess { browser: 'signed'; requests: SignedBrowserRequest[]; grants: SignedBrowserGrant[] }
 export interface SignedBrowserDecision { id: string; minutes?: number }
-export type SignedBrowserAskResult = { ok: true; cdp: string; tab: string; expires: number }
+export type SignedBrowserAskResult = { ok: true; browser: SignedBrowserSource; cdp: string; tab: string; expires: number }
   | { ok: false; reason: 'denied' | 'timeout' | 'request failed' }
+/** POST extension/pair {}, authenticated with the normal Tether cookie, Origin and write header. */
+export interface BrowserExtensionPair { code: string; expires: number }
+/** POST extension/exchange, from the extension Origin. Consumes the code once. */
+export interface BrowserExtensionExchange { code: string; name: string }
+export interface BrowserExtensionCredential { id: string; token: string }
+/** GET extension/devices returns BrowserExtensionDevice[]. No credential hashes or tokens. */
+export interface BrowserExtensionDevice {
+  id: string; name: string; connected: boolean; lastSeen: number; chrome: string
+}
+/** POST extension/revoke returns the remaining devices, after disconnect and grant revocation. */
+export interface BrowserExtensionRevoke { id: string }
+export interface BrowserExtensionDevices { devices: BrowserExtensionDevice[] }
+export interface SignedBrowserAsk {
+  text: string; pane?: string; minutes?: number; url?: string; browser?: 'auto' | SignedBrowserSource
+}
+/** WSS extension/connect. Authenticate in the first frame; credentials never enter the URL.
+ * Panel timestamps use Unix seconds. The extension's grant expires value uses Unix milliseconds. */
+export type BrowserExtensionMessage =
+  | { type: 'hello'; token: string; chrome: string }
+  | { type: 'ready' | 'ping' | 'pong'; epoch: string }
+  | { type: 'grant'; epoch: string; id: string; reason: string; minutes: number; url: string | null }
+  | { type: 'granted'; epoch: string; id: string; tab: number; target: string; expires: number }
+  | { type: 'command'; epoch: string; id: string; grant: string; tab: number; method: string; params: Record<string, unknown> }
+  | { type: 'result'; epoch: string; id: string; result: Record<string, unknown> }
+  | { type: 'error'; epoch: string; id: string | null; code: string; message: string }
+  | { type: 'end'; epoch: string; id: string }
+  | { type: 'ended'; epoch: string; id: string; tab?: number; reason: string }
+  | { type: 'event'; epoch: string; grant: string; tab: number; method: string; params: Record<string, unknown> }
+  | { type: 'tab'; epoch: string; grant: string; tab: number; url: string; title: string }
 export interface BrowserTabs extends BrowserSelection {
   running: boolean; version: number; tabs: BrowserTab[]; browsers: BrowserAvailability[]
   presets: { id: string; label: string; width: number; height: number; touch: boolean }[]

@@ -145,6 +145,39 @@ class FramingTests(unittest.TestCase):
         callback.assert_called_once_with({'id': 7, 'result': {}})
 
 
+class ConfigTests(unittest.TestCase):
+    def test_new_config_port_is_in_range(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'config/agent-browser.json'
+            config = cdp.load_config(path)
+            self.assertTrue(29000 <= config['port'] <= 29999)
+            self.assertEqual(json.loads(path.read_text()), config)
+
+    def test_saved_port_migrates_and_preserves_token_and_enabled(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'config/agent-browser.json'
+            for port in (47281, 28999, 30000):
+                for enabled in (True, False):
+                    with self.subTest(port=port, enabled=enabled):
+                        saved = {'enabled': enabled, 'port': port, 'token': 'a' * 43}
+                        cdp.save_config(path, saved)
+                        config = cdp.load_config(path)
+                        self.assertTrue(29000 <= config['port'] <= 29999)
+                        self.assertEqual(config, dict(saved, port=config['port']))
+                        self.assertEqual(json.loads(path.read_text()), config)
+
+    def test_saved_in_range_port_is_preserved(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'config/agent-browser.json'
+            for port in (29000, 29999):
+                with self.subTest(port=port):
+                    saved = {'enabled': True, 'port': port, 'token': 'a' * 43}
+                    cdp.save_config(path, saved)
+                    with patch.object(cdp.secrets, 'randbelow') as random_port:
+                        self.assertEqual(cdp.load_config(path), saved)
+                    random_port.assert_not_called()
+
+
 class ProxyTests(unittest.TestCase):
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
@@ -419,7 +452,9 @@ class ProxyTests(unittest.TestCase):
         self.browser.unwatch(tab)
 
     def test_start_fallback_port_and_shutdown_hooks_without_real_sockets_or_tmux(self):
-        port = self.proxy.config['port']
+        port = 29281
+        self.proxy.config['port'] = port
+        cdp.save_config(self.proxy.config_path, self.proxy.config)
         httpd = Mock(server_port=port + 1)
         saved_handler = []
         previous = Mock()
@@ -429,6 +464,8 @@ class ProxyTests(unittest.TestCase):
              patch.object(cdp.signal, 'signal', side_effect=lambda sig, handler: saved_handler.append(handler)):
             self.proxy.start(shutdown_hooks=True)
             self.assertEqual(factory.call_count, 2)
+            self.assertEqual([call.args[0] for call in factory.call_args_list],
+                             [('127.0.0.1', port), ('127.0.0.1', port + 1)])
             self.assertEqual(cdp.load_config(self.proxy.config_path)['port'], port + 1)
             register.assert_called_once_with(self.proxy.stop)
             saved_handler[0](cdp.signal.SIGTERM, None)
@@ -439,6 +476,29 @@ class ProxyTests(unittest.TestCase):
             with self.assertRaises(PermissionError):
                 self.proxy.start()
             self.assertEqual(factory.call_count, 1)
+
+    def test_busy_top_port_wraps_to_base(self):
+        self.proxy.config['port'] = 29999
+        cdp.save_config(self.proxy.config_path, self.proxy.config)
+        httpd = Mock(server_port=cdp.PORT_BASE)
+        with patch.object(cdp, 'ThreadingHTTPServer',
+                          side_effect=[OSError(errno.EADDRINUSE, 'occupied'), httpd]) as factory:
+            try:
+                self.proxy.start()
+                self.assertEqual([call.args[0] for call in factory.call_args_list],
+                                 [('127.0.0.1', 29999), ('127.0.0.1', cdp.PORT_BASE)])
+                self.assertEqual(cdp.load_config(self.proxy.config_path)['port'], cdp.PORT_BASE)
+            finally:
+                self.proxy.stop()
+
+    def test_all_busy_ports_stay_in_range(self):
+        self.proxy.config['port'] = 29999
+        with patch.object(cdp, 'ThreadingHTTPServer',
+                          side_effect=OSError(errno.EADDRINUSE, 'occupied')) as factory:
+            with self.assertRaisesRegex(OSError, 'No free agent browser port'):
+                self.proxy.start()
+        ports = [call.args[0][1] for call in factory.call_args_list]
+        self.assertEqual(ports, [29999, *range(29000, 29999)])
 
     def test_binary_check_does_not_start_chromium(self):
         self.client.cleanup()

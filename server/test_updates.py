@@ -134,7 +134,7 @@ class DiscoveryTests(unittest.TestCase):
     def test_release_actions_are_pinned(self):
         workflow = (ROOT / '.github/workflows/release.yml').read_text()
         actions = [line.strip() for line in workflow.splitlines() if 'uses:' in line]
-        self.assertEqual(len(actions), 5)
+        self.assertEqual(len(actions), 4)
         for action in actions:
             self.assertRegex(action, r'^- uses: actions/[a-z-]+@[0-9a-f]{40} # v\d+\.\d+\.\d+$')
 

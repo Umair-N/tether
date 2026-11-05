@@ -261,7 +261,15 @@ def owned_command(value, script):
         words = shlex.split(value.get('command', ''))
     except ValueError:
         return False
-    return len(words) == 2 and words[1] == str(script)
+    return (len(words) == 2 or (len(words) == 4 and words[2] == '--then')) and words[1] == str(script)
+
+
+def wrapped_original(value, script):
+    if owned_command(value, script):
+        words = shlex.split(value['command'])
+        if len(words) == 4:
+            return words[3]
+    return None
 
 
 def make_plan(args, repo=ROOT, home=None):
@@ -433,25 +441,44 @@ def make_plan(args, repo=ROOT, home=None):
     hooks = []
     old_repo = Path(saved.get('repo', service_repo))
     relocating = old_repo != service_repo and not args.uninstall
-    if (options['hooks'] or relocating) and not args.uninstall:
+    if options['hooks'] or relocating or args.uninstall:
         for folder, script, extra in (('.claude', 'claude_usage.py', {}),
                                      ('.gemini/antigravity-cli', 'antigravity_status.py', {'enabled': True, 'stack_with_default': True})):
+            if args.uninstall and folder != '.claude':
+                continue
             directory = home / folder
             if not directory.is_dir():
                 continue
             settings = directory / 'settings.json'
+            original = None
             try:
                 data = json.loads(settings.read_text()) if settings.exists() else {}
                 status = 'preserve'
                 if isinstance(data, dict):
-                    if relocating and owned_command(data.get('statusLine'), old_repo / 'server' / script):
+                    value = data.get('statusLine')
+                    if args.uninstall:
+                        original = wrapped_original(value, old_repo / 'server' / script)
+                        if original is not None:
+                            status = 'unwrap'
+                    elif relocating and owned_command(value, old_repo / 'server' / script):
                         status = 'replace'
+                        original = wrapped_original(value, old_repo / 'server' / script)
                     elif 'statusLine' not in data and options['hooks']:
                         status = 'add'
+                    elif (options['hooks'] and folder == '.claude' and isinstance(value, dict)
+                          and value.get('type') == 'command' and isinstance(value.get('command'), str)
+                          and 'claude_usage.py' not in value['command']):
+                        status = 'wrap'
+                        original = value['command']
             except ValueError:
                 status = 'preserve invalid JSON'
+            command = [sys.executable, str(service_repo / 'server' / script)]
+            if original is not None:
+                command.extend(['--then', original])
             hooks.append(dict(path=str(settings), action=status, old_repo=str(old_repo), script=script,
-                              value=dict(type='command', command=shlex.join([sys.executable, str(service_repo / 'server' / script)]), **extra)))
+                              value=dict(type='command', command=shlex.join(command), **extra)))
+            if original is not None:
+                hooks[-1]['original'] = original
     if options['hooks'] or args.uninstall or relocating:
         settings = home / '.claude/settings.json'
         if settings.parent.is_dir():
@@ -571,26 +598,41 @@ def apply_plan(plan, home=None):
         if settings.exists():
             shutil.copy2(settings, settings.with_name(settings.name + '.before-tether'))
         settings.write_text(json.dumps(merged, indent=2) + '\n')
-    if plan['action'] == 'uninstall':
-        # Services have stopped, so they cannot reinstall these hooks during cleanup.
-        run([sys.executable, str(ROOT / 'server/window_size.py'), 'uninstall'], stdout=sys.stderr)
-        state.unlink(missing_ok=True)
-        return
     for hook in plan['hooks']:
-        if hook['action'] not in ('add', 'replace'):
+        if hook['action'] not in ('add', 'replace', 'wrap', 'unwrap'):
             continue
         settings = Path(hook['path'])
-        data = json.loads(settings.read_text()) if settings.exists() else {}
-        if hook['action'] == 'replace':
+        try:
+            data = json.loads(settings.read_text()) if settings.exists() else {}
+        except ValueError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        value = hook['value']
+        if hook['action'] == 'unwrap':
+            original = wrapped_original(data.get('statusLine'), Path(hook['old_repo']) / 'server' / hook['script'])
+            if original is None:
+                continue
+            value = dict(command=original)
+        elif hook['action'] == 'wrap':
+            existing = data.get('statusLine')
+            if not isinstance(existing, dict) or existing.get('command') != hook['original']:
+                continue
+        elif hook['action'] == 'replace':
             if not owned_command(data.get('statusLine'), Path(hook['old_repo']) / 'server' / hook['script']):
                 continue
         elif 'statusLine' in data:
             continue
         if settings.exists():
             shutil.copy2(settings, settings.with_name(settings.name + '.before-tether'))
-        data['statusLine'] = (dict(data['statusLine'], command=hook['value']['command'])
-                              if hook['action'] == 'replace' else hook['value'])
+        data['statusLine'] = (dict(data['statusLine'], command=value['command'])
+                              if hook['action'] != 'add' else value)
         settings.write_text(json.dumps(data, indent=2) + '\n')
+    if plan['action'] == 'uninstall':
+        # Services have stopped, so they cannot reinstall these hooks during cleanup.
+        run([sys.executable, str(ROOT / 'server/window_size.py'), 'uninstall'], stdout=sys.stderr)
+        state.unlink(missing_ok=True)
+        return
     cli_link = cli_link_plan(home, Path(plan['repo']))
     if cli_link:
         if cli_link['action'] == 'create':

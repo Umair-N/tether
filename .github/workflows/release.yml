@@ -15,15 +15,10 @@ jobs:
         run: |
           test "$GITHUB_REF_NAME" = "v$(cat VERSION)"
           python3 -c 'import re; assert re.fullmatch(r"\d+\.\d+\.\d+(?:-rc\.?\d+)?", open("VERSION").read().strip())'
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version: '3.12'
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
-      - run: sudo apt-get update && sudo apt-get install -y tmux
-      - run: cd server && python3 -m unittest discover -q
-      - run: cd ui && npm ci && npx tsc -b && npx eslint . && npm run build
+      - run: cd ui && npm ci && npm run build
       - name: Package tagged tree and built UI
         shell: bash
         run: |

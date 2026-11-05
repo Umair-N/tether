@@ -67,7 +67,9 @@ import tmux_names
 import window_size
 import projects_api
 import codex_level
+import codex_runs
 import browser_api
+import mac_browser
 import browser_cdp
 import updates
 
@@ -1062,6 +1064,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split('?', 1)[0]
+        if path == mac_browser.PREFIX + 'connect':
+            mac_browser.upgrade(self)
+            return
         if path in ('/chat', '/', '/mobile', '/mobile/'):  # old home-screen icons open /mobile/: send them to the new UI
             self.send_response(301)
             self.send_header('Location', '/chat/')
@@ -1137,8 +1142,19 @@ class Handler(BaseHTTPRequestHandler):
                 if config['agent'] == 'codex' and not config.get('ambiguous'):
                     state = history.read(config['transcript'], codex_state, codex_consume)
                     result = footer.codex(codex_metrics(config, state['usage'], state['model'], state.get('effort', ''), state.get('credits')))
+                    live = claude_hooks.codex_live(config)
+                    if live is not None:
+                        result.update(spinner=None, running=None)
+                        if live['busy'] and not live['waiting']:
+                            now = time.time()
+                            result['spinner'] = {'verb': 'Working…', 'detail': claude_hooks.elapsed(live['started'], now)}
+                            if live['tool']:
+                                tool = live['tool']
+                                result['running'] = {'title': tool['title'], 'command': tool['command'],
+                                                     'elapsed': claude_hooks.elapsed(tool['started'], now)}
                 if config['agent'] == 'claude' and not config.get('ambiguous'):
                     result['heads_up'] = footer.card_note(result.get('heads_up'), config.get('thread'), screen=screen)
+                    result['model'] = agents.claude_model(config.get('thread'))
                 self.respond(200, result)
             elif path == '/mobile/api/shell-output':
                 query = parse_qs(urlsplit(self.path).query)
@@ -1241,6 +1257,8 @@ class Handler(BaseHTTPRequestHandler):
                 projects_api.get(self)
             elif codex_level.handles(path):
                 codex_level.get(self)
+            elif codex_runs.handles(path):
+                codex_runs.get(self, choose)
             elif tts.handles(path):
                 tts.get(self)
             elif friday_proxy.handles(path):
@@ -1267,6 +1285,9 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(503, {'error': 'The conversation is currently unavailable.'})
 
     def do_POST(self):
+        if self.path == mac_browser.PREFIX + 'exchange':
+            mac_browser.exchange(self)
+            return
         if self.path == '/mobile/login':
             self.do_login()
             return

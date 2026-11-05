@@ -64,7 +64,7 @@ See the [Claude Code marketplace docs](https://code.claude.com/docs/en/plugin-ma
 The setup skills install the latest stable release by default. To prepare a release without a checkout:
 
 ```sh
-curl -fL https://raw.githubusercontent.com/incmak/tether/v0.1.2/integrations/claude/tether/skills/setup/bootstrap.py -o tether-bootstrap.py
+curl -fL https://raw.githubusercontent.com/incmak/tether/v0.1.4/integrations/claude/tether/skills/setup/bootstrap.py -o tether-bootstrap.py
 python3 tether-bootstrap.py
 python3 ~/.local/share/tether/current/install.py --plan --json --no-build-ui
 python3 ~/.local/share/tether/current/install.py --apply --json --no-build-ui
@@ -133,7 +133,9 @@ Session hooks supply mode, effort, tool activity, turn activity, permission wait
 Mode and effort last until the session ends. A differing mode line from a later screen read takes precedence.
 Open tools have no age limit. Other turn state uses the screen after 30 minutes, or after a newer transcript turn.
 Screen agent rows and other footer fields remain. Missing or invalid hooks use the screen as a fallback.
-The installer preserves an existing status line. To combine one with the recorder, update the agent settings yourself.
+With `--hooks`, the installer wraps an existing Claude status line, so Tether saves the status data and the line looks the same.
+It keeps a `.before-tether` backup.
+Uninstall restores the original command.
 
 For Claude Code, a standalone recorder in `~/.claude/settings.json` looks like this:
 

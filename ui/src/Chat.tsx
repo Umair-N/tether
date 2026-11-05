@@ -34,6 +34,7 @@ import { LiveTerminal } from './Terminal'
 import { WORKSPACE_QUERY } from './workspace'
 import { useHost } from './host'
 import { agentBrowserItems, useAgentBrowser } from './AgentBrowser'
+import { codexRunItems, useCodexRuns } from './CodexRuns'
 
 
 interface ChatProps { liveReplyPreview: boolean; pane: Pane; session: Session | undefined; api: Api; onMenu: () => void; onUpdate: () => void; draft: string; setDraft: (text: string) => void; onOpenPane: (pane: Pane) => void; onSessionActions: (at?: Anchor) => void; onPaneActions: (pane: string, at?: Anchor) => void; onSplit: (direction: 'right' | 'down') => void; onFork: () => void; onReorder: (ids: string[]) => void; micOk: boolean; chime: boolean; readAloud: boolean; handsFree: boolean; slot?: SlotControls; running?: number; sidePin?: SidePinControls }
@@ -592,7 +593,8 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     }
     if (!ok) { cardError.current = true; throw new Error('not taken') }
   }
-  const model = activePane.agent === 'codex' ? footer.model : footer.status?.split('|')[0].trim()
+  // Claude: the model from its status-line JSON; a custom status line's first part when Tether's status line is not set.
+  const model = footer.model || (activePane.agent === 'codex' ? '' : footer.status?.split('|')[0].trim())
   const context = footer.context ? String(Math.round(footer.context.percent)) : /ctx\s+(\d+)%/.exec(footer.status ?? '')?.[1]
   const currentMode = modeBusy || modeKey(footer.mode)
   async function chooseMode(target: string) {
@@ -603,6 +605,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     readFooter.current(); setModeBusy('')
   }
   const background = (footer.agents ?? []).filter(agent => !agent.main)
+  const codexRuns = useCodexRuns(api, activePane.id, activePane.agent !== 'shell')
   // A card key that Claude did not take leaves its error under the message box. Clear it when the card changes or closes.
   const cardError = useRef(false)
   const card = footer.heads_up ? `${footer.heads_up.state}|${footer.heads_up.text}` : ''
@@ -746,6 +749,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
         <button type="button" className="failed-action" onClick={() => editFailed(item)}><Pencil size={13} />Edit</button>
         <button type="button" aria-label="Delete this unsent message" onClick={() => setPending(list => list.filter(other => other.id !== item.id))}><X size={12} /></button></small></div>
       : <div key={item.id} className="user-message pending-message"><span>{item.text}</span><small><Clock3 size={12} />{state === 'Working' ? 'Queued' : 'Sending…'}<button type="button" aria-label={activePane.agent === 'claude' ? 'Cancel this queued message' : 'Hide this queued message'} onClick={() => void unqueue(item.id)}><X size={12} /></button></small></div>)}</> },
+      ...codexRunItems(codexRuns),
       ...agentBrowserItems(api, agentBrowser, activePane.id),
       { id: 'update', label: 'Update ready', active: !!footer.update, content: <>{footer.update && <div className="cli-update" role="status"><RefreshCw size={16} /><span><strong>Claude Code update ready</strong><small>{footer.update.replace(/^[^\w/]+\s*/, '')}</small></span><button type="button" className="secondary" disabled={!writable || state === 'Working'} onClick={() => void send('/restart')}>Restart</button></div>}</> },
     ]} />
@@ -776,7 +780,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     {modelSheet && <ModelSheet api={api} pane={activePane} thread={data?.thread ?? null} currentLabel={model} currentEffort={footer.effort} onClose={() => setModelSheet(false)} onDone={message => { setModelSheet(false); setToast(message); readFooter.current() }} />}
     <Composer options={activePane.agent === 'shell' ? undefined : <span className="composer-pills">
       <button type="button" className="pill" aria-label="Model and effort" disabled={!writable || state === 'Working'} onClick={() => setModelSheet(true)}><span className="pill-text">{model || 'Model'}</span>{footer.effort && <span className="pill-effort">· {footer.effort}</span>}<ChevronDown size={13} /></button>
-      {activePane.agent === 'claude' && footer.status && <span className="mode-container"><button type="button" className="pill" aria-label={`Mode: ${MODES[currentMode]}. Change mode`} aria-expanded={modeMenu} disabled={!writable || !!modeBusy} onClick={() => setModeMenu(!modeMenu)}><Gauge size={13} />{modeBusy ? `${MODES[modeBusy]}…` : MODES[currentMode]}</button>
+      {activePane.agent === 'claude' && (footer.observed || footer.status || footer.mode) && <span className="mode-container"><button type="button" className="pill" aria-label={`Mode: ${MODES[currentMode]}. Change mode`} aria-expanded={modeMenu} disabled={!writable || !!modeBusy} onClick={() => setModeMenu(!modeMenu)}><Gauge size={13} />{modeBusy ? `${MODES[modeBusy]}…` : MODES[currentMode]}</button>
         {modeMenu && <div className="attach-menu mode-menu" role="menu">{Object.entries(MODES).map(([key, label]) => <button key={key} role="menuitemradio" aria-checked={key === currentMode} type="button" onClick={() => void chooseMode(key)}>{label}{key === currentMode && <Check size={16} />}</button>)}</div>}</span>}
     </span>} api={api} pane={activePane} thread={data?.thread ?? null} disabled={!data || !writable} onSend={send} error={sendError} errorAction={draftBlocked ? <button type="button" disabled={acting} onClick={() => void clearAgentInput()}>Clear {agentNames[activePane.agent]}’s input</button> : null} draft={draft} setDraft={setDraft} working={state === 'Working'} onStop={() => void stop()} micOk={micOk} chime={chime} handsFree={handsFree && readAloud} listenRequest={listenRequest} sent={sentPrompts} onTools={() => setTools(true)} hint={ownAnswer ? `Answer ${agentNames[activePane.agent]}’s question` : undefined} />
     </div>{nextPane && <ChatPeek id={nextPane.id} data={chatCache.get(nextPane.id)} api={api} side={1} peekRef={peekNext} />}{previousPane && <ChatPeek id={previousPane.id} data={chatCache.get(previousPane.id)} api={api} side={-1} peekRef={peekPrevious} />}</div>

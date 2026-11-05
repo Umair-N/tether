@@ -74,6 +74,7 @@ Usage comes from native reports, without estimates:
 - Codex: saved token counts and account-limit windows.
 - Claude: `claude_usage.py` captures official status-line context and rate-limit fields,
   configured in `~/.claude/settings.json`; cache: `~/.cache/mobile-tmux/usage/<session>.json`.
+  With `--then <command>`, it saves the status data, then runs the command with the same input and prints its output.
   Fresh sessions can use the latest unexpired Claude allowance report, labeled “last known
   report”; context is never copied from another conversation and waits for native reporting.
 - Antigravity: `antigravity_status.py` captures official status-line usage, model, and state

@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, urlsplit
 import browser
 import browser_cdp
 import agent_browser_setup
+import mac_browser
 
 PREFIX = '/mobile/api/browser/'
 FRAME_INTERVAL = 1 / 30  # at most 30 frames a second per viewer
@@ -25,13 +26,18 @@ def get(handler, the_browser=None, the_proxy=None, the_setup=None, signed_browse
     query = parse_qs(parts.query)
     name = parts.path[len(PREFIX):]
     browser_id = query.get('browser', ['test'])[0]
+    if name == 'extension/devices':
+        handler.respond(200, mac_browser.BROKER.rows())
+        return
     if name == 'signed/access':
         browser_id = 'signed'
     try:
         the_browser = _select(browser_id, the_browser, signed_browser)
         _user_only(browser_id, name)
         if name == 'signed/access':
-            handler.respond(200, _tag(_signed_access(the_browser, the_proxy).state(), browser_id))
+            proxy = the_proxy or browser_cdp.PROXY
+            access = proxy.signed_access if proxy else _signed_access(the_browser, the_proxy)
+            handler.respond(200, _tag(access.state(), browser_id))
         elif name == 'agents':
             handler.respond(200, _agent_state(_proxy(the_proxy), the_setup))
         elif name == 'tabs':
@@ -63,6 +69,10 @@ def post(handler, the_browser=None, the_proxy=None, the_setup=None, signed_brows
         if not isinstance(body, dict):
             raise ValueError('Invalid request.')
         browser_id = body.get('browser', browser_id)
+        if name in ('extension/pair', 'extension/revoke'):
+            result = mac_browser.BROKER.pair() if name.endswith('/pair') else mac_browser.BROKER.revoke(body.get('id'))
+            handler.respond(200, result)
+            return
         if name.startswith('signed/'):
             browser_id = 'signed'
         the_browser = _select(browser_id, the_browser, signed_browser)
@@ -72,7 +82,8 @@ def post(handler, the_browser=None, the_proxy=None, the_setup=None, signed_brows
         _user_only(browser_id, name)
         tab = body.get('tab')
         if name.startswith('signed/'):
-            access = _signed_access(the_browser, the_proxy)
+            proxy = the_proxy or browser_cdp.PROXY
+            access = proxy.signed_access if proxy else _signed_access(the_browser, the_proxy)
             if name == 'signed/allow':
                 result = access.allow(body.get('id'), body.get('minutes'))
             elif name == 'signed/deny':
@@ -126,15 +137,17 @@ def _select(browser_id, test=None, signed=None):
         return test or browser.BROWSER
     if browser_id == 'signed':
         return signed or browser.SIGNED_BROWSER
-    raise ValueError('Choose the test or signed browser.')
+    if browser_id == 'mac':
+        return mac_browser.BROKER.browser
+    raise ValueError('Choose the test, signed, or Mac browser.')
 
 
 def _tag(result, browser_id):
-    return dict(result, browser='signed') if browser_id == 'signed' else result
+    return dict(result, browser=browser_id) if browser_id in ('signed', 'mac') else result
 
 
 def _user_only(browser_id, name):
-    if browser_id == 'signed' and name in ('agents', 'agents/setup', 'ask/dismiss'):
+    if browser_id in ('signed', 'mac') and name in ('agents', 'agents/setup', 'ask/dismiss'):
         raise ValueError('Agents cannot access the signed-in browser.')
 
 
@@ -148,6 +161,9 @@ def _browsers(test=None, signed=None):
         elif ident == 'signed' and not instance.display.finder():
             reason = 'Xvfb is not installed.'
         rows.append({'id': ident, 'label': label, 'running': instance.running(), 'available': not reason, 'reason': reason})
+    connected = mac_browser.BROKER.connected() is not None
+    rows.append({'id': 'mac', 'label': 'Mac Chrome', 'running': connected, 'available': connected,
+                 'reason': '' if connected else 'Mac Chrome is disconnected.'})
     return rows
 
 

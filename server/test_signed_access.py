@@ -109,7 +109,8 @@ class AccessTests(Requests, unittest.TestCase):
     def test_deny_timeout_replacement_and_notification(self):
         ident, first, result = self.ask()
         request = self.access.state()['requests'][0]
-        self.assertEqual(set(request), {'id', 'pane', 'agent', 'reason', 'minutes', 'url', 'created'})
+        self.assertEqual(set(request), {'id', 'pane', 'agent', 'reason', 'minutes', 'url', 'created', 'browser'})
+        self.assertEqual(request['browser'], 'server')
         self.assertEqual(request['agent'], 'codex')
         payload = self.notifier.call_args.args[0]
         self.assertEqual(payload['body'], 'codex wants to use your signed-in browser: Read the requested account')
@@ -141,7 +142,7 @@ class AccessTests(Requests, unittest.TestCase):
         self.access.allow(ident, 5)
         thread.join(timeout=2)
         result = results[0]
-        self.assertEqual(set(result), {'ok', 'cdp', 'tab', 'expires'})
+        self.assertEqual(set(result), {'ok', 'cdp', 'tab', 'expires', 'browser'})
         self.assertAlmostEqual(result['expires'], time.time() + 300, delta=3)
         self.assertRegex(result['cdp'], r'^ws://127\.0\.0\.1:\d+/cdp-signed/[A-Za-z0-9_-]{43}$')
         grant = self.access.grants[ident]

@@ -15,6 +15,7 @@ import secrets
 import select
 import signal
 import socket
+import ssl
 import struct
 import subprocess
 import threading
@@ -25,6 +26,8 @@ import browser
 import paths
 
 LOG = logging.getLogger(__name__)
+# 29000-29999 is below Linux (32768+) and macOS (49152+) ephemeral ranges, so outgoing connections never take it.
+PORT_BASE = 29000
 MAX_MESSAGE = 32 * 1024 * 1024
 MAX_CLIENTS = 8
 TAB_LIMIT = 3
@@ -123,9 +126,12 @@ def load_config(path):
             raise ValueError('Invalid agent browser config.')
         path.parent.chmod(0o700)
         path.chmod(0o600)
+        if not PORT_BASE <= config['port'] < PORT_BASE + 1000:
+            config['port'] = PORT_BASE + secrets.randbelow(1000)
+            save_config(path, config)
         return config
     except FileNotFoundError:
-        config = {'enabled': True, 'port': 47000 + secrets.randbelow(1000), 'token': secrets.token_urlsafe(32)}
+        config = {'enabled': True, 'port': PORT_BASE + secrets.randbelow(1000), 'token': secrets.token_urlsafe(32)}
         save_config(path, config)
         return config
 
@@ -271,7 +277,10 @@ class Transport:
                         if left <= 0 or not select.select([], [self.sock], [], left)[1]:
                             raise TimeoutError('WebSocket write timed out.')
                         try:
-                            written = self.sock.send(remaining, socket.MSG_DONTWAIT)
+                            # TLS sockets reject MSG_DONTWAIT. Their existing read/write timeout
+                            # bounds sends; raw loopback sockets retain nonblocking writes.
+                            written = (self.sock.send(remaining) if isinstance(self.sock, ssl.SSLSocket)
+                                       else self.sock.send(remaining, socket.MSG_DONTWAIT))
                         except BlockingIOError:
                             continue
                         if not written:
@@ -591,7 +600,8 @@ class Proxy:
 
     def start(self, shutdown_hooks=False):
         start_port = self.config['port']
-        for port in [start_port, *(47000 + (start_port + n) % 1000 for n in range(1000))]:
+        for n in range(1000):
+            port = PORT_BASE + (start_port - PORT_BASE + n) % 1000
             try:
                 self.httpd = ThreadingHTTPServer(('127.0.0.1', port), Handler)
                 break
@@ -846,7 +856,8 @@ class Handler(BaseHTTPRequestHandler):
                 access = self.server.proxy.signed_access
                 if access is None:
                     raise ValueError('Signed browser access is unavailable.')
-                self.respond(200, access.ask(body.get('text'), pane, body.get('minutes', 15), body.get('url')))
+                self.respond(200, access.ask(body.get('text'), pane, body.get('minutes', 15), body.get('url'),
+                                            **({'browser': body['browser']} if 'browser' in body else {})))
             else:
                 self.respond(200, self.server.proxy.ask(body.get('text'), pane))
         except (ValueError, UnicodeError) as exc:
@@ -859,6 +870,9 @@ PROXY = None
 def start(notifier, agent_finder=lambda pane: 'agent'):
     global PROXY
     import signed_access
+    import mac_browser
     PROXY = Proxy(notifier=notifier).start(shutdown_hooks=True)
-    PROXY.signed_access = signed_access.Access(notifier=notifier, agent_finder=agent_finder)
+    PROXY.signed_access = mac_browser.RoutedAccess(
+        signed_access.Access(notifier=notifier, agent_finder=agent_finder),
+        mac_browser.MacAccess(mac_browser.BROKER, notifier=notifier, agent_finder=agent_finder))
     return PROXY

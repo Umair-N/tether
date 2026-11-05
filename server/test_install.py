@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import socket
 import subprocess
@@ -447,6 +448,106 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(json.loads(settings.read_text()), original)
         self.apply(self.plan('--uninstall'))
         self.assertEqual(json.loads(settings.read_text()), original)
+
+    def test_claude_status_line_wrap_repeat_and_backup(self):
+        settings = self.home / '.claude/settings.json'
+        settings.parent.mkdir()
+        original = {'type': 'command', 'command': 'echo hi', 'padding': 0}
+        settings.write_text(json.dumps({'statusLine': original}))
+        plan = self.plan('--hooks')
+        hook = next(hook for hook in plan['hooks'] if 'value' in hook)
+        self.assertEqual(hook['action'], 'wrap')
+        self.assertEqual(hook['original'], 'echo hi')
+        with mock.patch('builtins.print') as output:
+            installer.print_plan(plan)
+        output.assert_any_call(f'Hook {settings}: wrap')
+        self.apply(plan)
+        status = json.loads(settings.read_text())['statusLine']
+        self.assertEqual(shlex.split(status['command']),
+                         [sys.executable, str(self.repo / 'server/claude_usage.py'), '--then', 'echo hi'])
+        self.assertEqual(status['padding'], 0)
+        backup = settings.with_name('settings.json.before-tether')
+        self.assertEqual(json.loads(backup.read_text())['statusLine'], original)
+        first = settings.read_bytes()
+        repeated = self.plan('--hooks')
+        self.assertEqual(next(hook['action'] for hook in repeated['hooks'] if 'value' in hook), 'preserve')
+        self.apply(repeated)
+        self.assertEqual(settings.read_bytes(), first)
+
+    def test_claude_status_line_manual_recorder_is_preserved(self):
+        settings = self.home / '.claude/settings.json'
+        settings.parent.mkdir()
+        # Install the independent session hooks before checking byte preservation.
+        self.apply(self.plan('--hooks'))
+        for command in ('python3 /custom/claude_usage.py; echo hi',
+                        shlex.join([sys.executable, '/custom/claude_usage.py', '--then', 'echo hi'])):
+            with self.subTest(command=command):
+                data = json.loads(settings.read_text())
+                data['statusLine'] = {'type': 'command', 'command': command}
+                settings.write_text(json.dumps(data))
+                first = settings.read_bytes()
+                plan = self.plan('--hooks')
+                self.assertEqual(next(hook['action'] for hook in plan['hooks'] if 'value' in hook), 'preserve')
+                self.apply(plan)
+                self.assertEqual(settings.read_bytes(), first)
+
+    def test_claude_status_line_relocation_keeps_wrapped_command(self):
+        settings = self.home / '.claude/settings.json'
+        settings.parent.mkdir()
+        old_repo = Path(self.temp.name) / 'old repo'
+        self.apply(self.plan('--hooks'))
+        state = self.home / '.config/tether/install.json'
+        saved = json.loads(state.read_text())
+        saved['repo'] = str(old_repo)
+        state.write_text(json.dumps(saved))
+        original = "printf '%s' 'hello world'"
+        settings.write_text(json.dumps({'statusLine': {
+            'type': 'command', 'command': shlex.join([
+                sys.executable, str(old_repo / 'server/claude_usage.py'), '--then', original]),
+            'padding': 0}}))
+        plan = self.plan('--hooks')
+        hook = next(hook for hook in plan['hooks'] if 'value' in hook)
+        self.assertEqual(hook['action'], 'replace')
+        self.assertEqual(shlex.split(hook['value']['command']),
+                         [sys.executable, str(self.repo / 'server/claude_usage.py'), '--then', original])
+        self.apply(plan)
+        status = json.loads(settings.read_text())['statusLine']
+        self.assertEqual(shlex.split(status['command']), shlex.split(hook['value']['command']))
+        self.assertEqual(status['padding'], 0)
+
+    def test_claude_status_line_uninstall_restores_original(self):
+        settings = self.home / '.claude/settings.json'
+        settings.parent.mkdir()
+        original = {'type': 'command', 'command': 'echo hi', 'padding': 0, 'refreshInterval': 10}
+        settings.write_text(json.dumps({'statusLine': original}))
+        self.apply(self.plan('--hooks'))
+        plan = self.plan('--uninstall')
+        self.assertIn('unwrap', [hook['action'] for hook in plan['hooks']])
+        with mock.patch('builtins.print') as output:
+            installer.print_plan(plan)
+        output.assert_any_call(f'Hook {settings}: unwrap')
+        self.apply(plan)
+        self.assertEqual(json.loads(settings.read_text())['statusLine'], original)
+        backup = settings.with_name('settings.json.before-tether')
+        self.assertIn('--then', json.loads(backup.read_text())['statusLine']['command'])
+
+    def test_claude_status_line_without_hooks_is_preserved(self):
+        settings = self.home / '.claude/settings.json'
+        settings.parent.mkdir()
+        settings.write_text('{"statusLine": {"type": "command", "command": "echo hi", "padding": 0}}')
+        first = settings.read_bytes()
+        self.apply(self.plan())
+        self.assertEqual(settings.read_bytes(), first)
+
+    def test_claude_status_line_wrap_rechecks_original(self):
+        settings = self.home / '.claude/settings.json'
+        settings.parent.mkdir()
+        settings.write_text('{"statusLine": {"type": "command", "command": "echo hi"}}')
+        plan = self.plan('--hooks')
+        updated = {'type': 'command', 'command': 'echo changed', 'padding': 1}
+        settings.write_text(json.dumps({'statusLine': updated}))
+        self.apply(plan)
+        self.assertEqual(json.loads(settings.read_text())['statusLine'], updated)
 
     def test_ask_bridge_is_opt_in_separate_and_removed_when_disabled(self):
         settings = self.home / '.claude/settings.json'
