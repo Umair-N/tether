@@ -51,3 +51,19 @@
 .signed-ask-reason { overflow-wrap: anywhere; }
 .signed-ask-meta { color: var(--muted); font-size: 12px !important; }
 .agent-browser-tabs li > button + button { margin-left: -4px; }
+
+/* Allow on a signed-in request: a steady ring plus a halo that pulses outward and a light sweep, so the waiting
+   request is easy to spot. The agent waits only 2 minutes. Reduced motion keeps the ring only. */
+.signed-allow { position: relative; overflow: hidden; outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 2px;
+  animation: signed-allow-halo 1.8s ease-out infinite; }
+.signed-allow::after { content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(105deg, transparent 35%, rgb(255 255 255 / .38) 50%, transparent 65%); transform: translateX(-120%);
+  animation: signed-allow-sweep 2.6s ease-in-out infinite; }
+.signed-allow:disabled { animation: none; outline-color: transparent; }
+.signed-allow:disabled::after { display: none; }
+@keyframes signed-allow-halo {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent); }
+  70%, 100% { box-shadow: 0 0 0 12px color-mix(in srgb, var(--accent) 0%, transparent); }
+}
+@keyframes signed-allow-sweep { 0%, 35% { transform: translateX(-120%); } 75%, 100% { transform: translateX(120%); } }
+@media (prefers-reduced-motion: reduce) { .signed-allow, .signed-allow::after { animation: none; } .signed-allow::after { display: none; } }

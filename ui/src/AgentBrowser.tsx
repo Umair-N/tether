@@ -156,7 +156,7 @@ function SignedAskCard({ api, request }: { api: Api; request: SignedRequest }) {
         {request.browser === 'mac' && <p className="signed-ask-meta"><strong>Chrome shows a debugging bar. Keep it open: closing it ends access.</strong></p>}
       </div>
       <div className="agent-browser-actions">
-        <button type="button" className="primary" disabled={busy} onClick={() => void answer('allow')}>Allow</button>
+        <button type="button" className="primary signed-allow" disabled={busy} onClick={() => void answer('allow')}>Allow</button>
         <button type="button" className="secondary" disabled={busy} onClick={() => void answer('deny')}>Deny</button>
       </div>
     </div>
