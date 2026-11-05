@@ -237,7 +237,7 @@ def forget_sessions():
 def session_row(entry):
     """One pane in the session list. `needs` is a one-line summary when the pane waits on the user (the desktop "Needs you" list)."""
     status = shared_status(entry)
-    return dict({key: entry.get(key) for key in ('id', 'tmux_session', 'label', 'agent', 'thread', 'writable', 'pane_name', 'pane_icon', 'agent_name', 'codex_profile')},
+    return dict({key: entry.get(key) for key in ('id', 'tmux_session', 'label', 'agent', 'thread', 'writable', 'pane_name', 'tmux_pane_name', 'pane_icon', 'agent_name', 'codex_profile')},
                 dir=home_path(tab_folder(entry)), **status, **timeline(entry['id']), needs=needs.summary(status))
 
 

@@ -1541,6 +1541,12 @@ button.live-chip:active { background: var(--line); }
 
 .notification-levels { margin: 0 4px 4px 20px; border-left: 1px solid var(--line); padding-left: 4px; }
 .notification-levels button > span { flex: 1; }
+.copy-names { margin: 0 4px 4px 20px; border-left: 1px solid var(--line); padding-left: 4px; }
+.copy-names button { min-width: 0; }
+.copy-names .copy-names-label { flex: none; }
+.copy-names .copy-names-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; text-align: right; }
+.copy-names .copy-names-value + kbd { margin-left: 0; }
+.copy-names .copy-names-done { color: var(--accent); }
 .notification-levels button[aria-pressed="true"] { color: var(--accent); background: var(--hover); }
 .notification-delivery fieldset { min-width: 0; margin: 0; padding: 10px 0; border: 0; border-top: 1px solid var(--line); }
 .notification-delivery legend { padding: 0; font-size: 13px; line-height: 1.4; }

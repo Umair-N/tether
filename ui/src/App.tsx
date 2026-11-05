@@ -30,6 +30,7 @@ import type { Command } from './CommandMenu'
 import { Shortcuts } from './Shortcuts'
 import { StatusBar } from './StatusBar'
 import { toggleTerminal, toggleVoice } from './keys'
+import { copyPaneName, nameKindOf } from './CopyNames'
 import { Rail } from './Rail'
 import type { Screen } from './Rail'
 import { Explorer } from './Explorer'
@@ -273,9 +274,9 @@ function App() {
     update(current => ({ layout: withDesk(current.layout, deskKey, { ...deskFor(current.layout, deskKey), panes: storeSlots(list, list), focus: list.indexOf(pane.id) }) }))
   }
   // The global key handler reads the workspace through this ref, so it does not re-subscribe on each render.
-  const workspaceKeys = useRef<{ count: number; focus: number; focusSlot: (index: number) => void; setCount: (count: DesktopLayout['count']) => void; closeSlot: (index: number) => void; toggleZoom: () => void; toggleSidebar: () => void; togglePanel: (kind: PanelKind) => void; sideChat: () => void } | null>(null)
+  const workspaceKeys = useRef<{ count: number; focus: number; focusSlot: (index: number) => void; setCount: (count: DesktopLayout['count']) => void; closeSlot: (index: number) => void; toggleZoom: () => void; toggleSidebar: () => void; togglePanel: (kind: PanelKind) => void; sideChat: () => void; pane?: Pane } | null>(null)
   useEffect(() => {
-    workspaceKeys.current = view ? { count: slotPanes.length, focus: view.focus, focusSlot, setCount, closeSlot, toggleZoom, toggleSidebar: () => setDesk({ sidebar: !desk.sidebar }), togglePanel: kind => togglePanelKind(setPanels, kind), sideChat: () => void sideChat() } : null
+    workspaceKeys.current = view ? { count: slotPanes.length, focus: view.focus, focusSlot, setCount, closeSlot, toggleZoom, toggleSidebar: () => setDesk({ sidebar: !desk.sidebar }), togglePanel: kind => togglePanelKind(setPanels, kind), sideChat: () => void sideChat(), pane } : null
   })
   useEffect(() => {
     const open = (id: unknown) => {
@@ -370,6 +371,9 @@ function App() {
           if (event.code === 'KeyT') return act(toggleTerminal)
           if (event.code === 'KeyN') return act(() => setNewSession(true))
         }
+        // ⌥⇧S, C, P and T copy a name of the focused pane: the pane menu's Copy name keys (CopyNames.tsx).
+        const copyKind = event.altKey && event.shiftKey && !mod ? nameKindOf(event.code) : undefined
+        if (copyKind && slots.pane) { const target = slots.pane; return act(() => void copyPaneName(target, copyKind).then(setNotice)) }
         if (event.key === '?' && !typing && !mod && !event.altKey) return act(() => setMenu('shortcuts'))
       }
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'k') {

@@ -17,6 +17,7 @@ import { SCHEMES, schemeById } from './schemes'
 import { HostResources } from './HostResources'
 import { GlobalCodexLevel } from './CodexLevel'
 import { AgentBrowserSettings } from './AgentBrowser'
+import { CopyNames } from './CopyNames'
 
 type PaneLevel = 'all' | 'important' | 'urgent' | 'off'
 type Delivery = 'sound' | 'silent' | 'off'
@@ -165,6 +166,7 @@ export function SessionActions({ api, session, pane, pinned, archived, canMoveUp
           <button disabled={pending} onClick={() => { onPin(); onClose() }}>{pinned ? <PinOff size={18} /> : <Pin size={18} />}{pinned ? 'Unpin' : 'Pin to top'}</button>
           <button disabled={pending} onClick={() => { onArchive(); onClose() }}>{archived ? <ArchiveRestore size={18} /> : <Archive size={18} />}{archived ? 'Restore from archive' : 'Archive'}</button>
           <button disabled={pending} onClick={() => setRenaming(true)}><Pencil size={18} />Rename</button>
+          <CopyNames pane={session.panes.find(item => item.id === pane) ?? session.panes[0]} disabled={pending} onCopied={onClose} />
           <button disabled={pending} onClick={onProject}><BookMarked size={18} />Project…</button>
           <button disabled={pending || !canMoveUp} onClick={() => onMove(-1)}><ArrowUp size={18} />Move up</button>
           <button disabled={pending || !canMoveDown} onClick={() => onMove(1)}><ArrowDown size={18} />Move down</button>
@@ -225,6 +227,7 @@ export function PaneActions({ api, session, pane, at, place, targets, onFork, on
         </div>
       : <div className="action-list">
           <button disabled={pending} onClick={() => setMode('rename')}><Pencil size={18} />Rename {words.pane}</button>
+          <CopyNames pane={pane} disabled={pending} onCopied={onClose} />
           <button disabled={pending} onClick={() => setMode('icon')}><Shapes size={18} />Change icon</button>
           <button disabled={pending} onClick={() => setMode('move')}><ArrowRightLeft size={18} />Move to session…</button>
           <hr />
