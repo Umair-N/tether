@@ -199,13 +199,25 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
     observer.observe(box)
     return () => observer.disconnect()
   }, [loaded])
-  useEffect(() => {
-    if (!tab || watching || tab.preset !== 'desktop' || stage.width < 50 || stage.height < 50 || noting) return
+  // The screen in use owns the size; never react to another viewer's size.
+  function claimSize() {
+    const tab = tabRef.current
+    if (!active || !tab || watching || tab.preset !== 'desktop' || stage.width < 50 || stage.height < 50 || noting) return
     const width = Math.max(320, stage.width), height = Math.max(240, stage.height)
     if (Math.abs(width - tab.width) < 3 && Math.abs(height - tab.height) < 3) return
-    const timer = setTimeout(() => void api<BrowserTab>('browser/device', { tab: tab.id, preset: 'desktop', width, height }).then(row => setTabs(list => list.map(item => item.id === row.id ? row : item))).catch(() => undefined), 400)
-    return () => clearTimeout(timer)
-  }, [tab?.id, tab?.preset, tab?.width, tab?.height, stage.width, stage.height, noting, watching]) // eslint-disable-line react-hooks/exhaustive-deps
+    void api<BrowserTab>('browser/device', { tab: tab.id, preset: 'desktop', width, height }).then(row => setTabs(list => list.map(item => item.id === row.id ? row : item))).catch(() => undefined)
+  }
+  useEffect(() => {
+    const timer = setTimeout(claimSize, 400)
+    const onActive = () => { if (document.visibilityState === 'visible') claimSize() }
+    window.addEventListener('focus', onActive)
+    document.addEventListener('visibilitychange', onActive)
+    return () => {
+      clearTimeout(timer)
+      window.removeEventListener('focus', onActive)
+      document.removeEventListener('visibilitychange', onActive)
+    }
+  }, [active, tab?.id, tab?.preset, stage.width, stage.height, noting, watching]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Frames: decode the newest one and skip any that arrive while one decodes.
   const pending = useRef<FrameMessage | null>(null)
