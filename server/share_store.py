@@ -2,6 +2,7 @@
 import base64
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import fcntl
 import hashlib
 import json
 import math
@@ -31,6 +32,12 @@ class ShareError(Exception):
     def __init__(self, status, message):
         super().__init__(message)
         self.status = status
+
+
+class UploadConflict(ShareError):
+    def __init__(self, message, offset):
+        super().__init__(409, message)
+        self.offset = offset
 
 
 def authorize(actor, file):
@@ -160,6 +167,13 @@ class Store:
             ''')
             if 'source' not in {row['name'] for row in db.execute('PRAGMA table_info(files)')}:
                 db.execute('ALTER TABLE files ADD COLUMN source TEXT')
+            columns = {row['name'] for row in db.execute('PRAGMA table_info(uploads)')}
+            for name, definition in (
+                    ('name', 'TEXT'), ('mime', 'TEXT'), ('width', 'INTEGER'), ('height', 'INTEGER'),
+                    ('duration', 'REAL'), ('offset', 'INTEGER NOT NULL DEFAULT 0'), ('created', 'TEXT'),
+                    ('busy_until', 'REAL NOT NULL DEFAULT 0'), ('resumable', 'INTEGER NOT NULL DEFAULT 0')):
+                if name not in columns:
+                    db.execute('ALTER TABLE uploads ADD COLUMN ' + name + ' ' + definition)
         self.reconcile()
 
     @staticmethod
@@ -295,7 +309,8 @@ class Store:
         identifier = uuid.uuid4().hex
         temp = self.root / 'incoming' / (identifier + '.part')
         with self.connection(write=True) as db:
-            reserved = db.execute('SELECT COALESCE(SUM(size),0), COUNT(*) FROM uploads').fetchone()
+            self._expire_uploads(db)
+            reserved = db.execute('SELECT COALESCE(SUM(size),0), COALESCE(SUM(resumable=0 OR busy_until>?),0) FROM uploads', (time.time(),)).fetchone()
             owner_reserved = db.execute('SELECT COALESCE(SUM(size),0) FROM uploads WHERE owner_id=?', (actor,)).fetchone()[0]
             if reserved[1] >= 2:
                 raise ShareError(409, 'Two uploads are already in progress.')
@@ -303,7 +318,7 @@ class Store:
                 raise ShareError(507, 'The Share quota is full.')
             if shutil.disk_usage(self.root).free - reserved[0] - size < MIN_FREE:
                 raise ShareError(507, 'The disk needs at least 20 GiB of free space.')
-            db.execute('INSERT INTO uploads VALUES (?,?,?,?)', (identifier, actor, size, time.time() + UPLOAD_TTL))
+            db.execute('INSERT INTO uploads (id,owner_id,size,expires) VALUES (?,?,?,?)', (identifier, actor, size, time.time() + UPLOAD_TTL))
         try:
             digest, head = hashlib.sha256(), bytearray()
             fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
@@ -321,30 +336,223 @@ class Store:
                 target.flush()
                 os.fsync(target.fileno())
             sha = digest.hexdigest()
-            mime, kind, inline = classification(name, mime, bytes(head))
-            now = stamp()
             with self.connection(write=True) as db:
                 if not db.execute('SELECT 1 FROM uploads WHERE id=?', (identifier,)).fetchone():
                     raise ShareError(409, 'That upload expired. Try again.')
-                final = self.object_path({'owner_id': actor, 'sha': sha})
-                self._directory(final.parent.parent)
-                self._directory(final.parent)
-                if not db.execute('SELECT 1 FROM objects WHERE owner_id=? AND sha=? AND size=?', (actor, sha, size)).fetchone():
-                    os.replace(temp, final)
-                    self._sync_dir(final.parent)
-                    db.execute('INSERT INTO objects VALUES (?,?,?)', (actor, sha, size))
-                db.execute('''INSERT INTO files (id,owner_id,sha,size,name,mime,kind,inline_mime,created,modified,width,height,duration,source)
-                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-                           (identifier, actor, sha, size, name, mime, kind, inline, now, now,
-                            values.get('width'), values.get('height'), values.get('duration'), source))
-                db.execute('DELETE FROM uploads WHERE id=?', (identifier,))
-                return self.public(self.row(db, identifier, actor))
+                return self._publish(db, identifier, actor, temp, sha, size, name, mime, bytes(head), values, source)
         except OSError as exc:
             raise ShareError(507, 'The file could not be stored on disk.') from exc
         finally:
             temp.unlink(missing_ok=True)
             with self.connection(write=True) as db:
                 db.execute('DELETE FROM uploads WHERE id=?', (identifier,))
+
+    def _publish(self, db, identifier, actor, temp, sha, size, name, mime, head, values, source=None):
+        """Publish both upload paths through the same classification and dedupe policy."""
+        mime, kind, inline = classification(name, mime, head)
+        now = stamp()
+        final = self.object_path({'owner_id': actor, 'sha': sha})
+        self._directory(final.parent.parent)
+        self._directory(final.parent)
+        if not db.execute('SELECT 1 FROM objects WHERE owner_id=? AND sha=? AND size=?', (actor, sha, size)).fetchone():
+            # Retain the part until commit so a failed resumable publication can roll back.
+            final.unlink(missing_ok=True)  # replace an unreferenced object from an earlier crash
+            os.link(temp, final, follow_symlinks=False)
+            self._sync_dir(final.parent)
+            db.execute('INSERT INTO objects VALUES (?,?,?)', (actor, sha, size))
+        db.execute('''INSERT INTO files (id,owner_id,sha,size,name,mime,kind,inline_mime,created,modified,width,height,duration,source)
+                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                   (identifier, actor, sha, size, name, mime, kind, inline, now, now,
+                    values.get('width'), values.get('height'), values.get('duration'), source))
+        db.execute('DELETE FROM uploads WHERE id=?', (identifier,))
+        return self.public(self.row(db, identifier, actor))
+
+    @staticmethod
+    def public_upload(row):
+        return {key: row[key] for key in ('id', 'name', 'size', 'offset', 'mime', 'created', 'expires')}
+
+    def _upload_row(self, db, identifier, actor):
+        if not isinstance(identifier, str) or not re.fullmatch(r'[0-9a-f]{32}', identifier):
+            raise ShareError(404, 'That upload is not available.')
+        row = db.execute('SELECT * FROM uploads WHERE id=? AND resumable=1', (identifier,)).fetchone()
+        if row is None or row['expires'] <= time.time():
+            raise ShareError(404, 'That upload is not available.')
+        try:
+            authorize(actor, row)
+        except ShareError as exc:
+            raise ShareError(404, 'That upload is not available.') from exc
+        return row
+
+    def create_upload(self, name, size, mime='', actor=OWNER, **values):
+        authorize(actor, {'owner_id': actor})
+        if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+            raise ShareError(400, 'Send the file size in Content-Length.')
+        if size > self.max_bytes:
+            raise ShareError(413, 'That file exceeds the Share file limit.')
+        name, values = safe_name(name), metadata(values)
+        if not isinstance(mime, str):
+            raise ShareError(400, 'Send a MIME type.')
+        identifier = uuid.uuid4().hex
+        temp = self.root / 'incoming' / (identifier + '.part')
+        try:
+            with self.connection(write=True) as db:
+                self._expire_uploads(db)
+                count = db.execute('SELECT COUNT(*) FROM uploads WHERE owner_id=? AND resumable=1', (actor,)).fetchone()[0]
+                if count >= 8:
+                    raise ShareError(409, 'Finish or cancel an upload first.')
+                reserved = db.execute('SELECT COALESCE(SUM(size),0) FROM uploads').fetchone()[0]
+                owner_reserved = db.execute('SELECT COALESCE(SUM(size),0) FROM uploads WHERE owner_id=?', (actor,)).fetchone()[0]
+                if self.usage(db, actor)['used'] + owner_reserved + size > self.quota:
+                    raise ShareError(507, 'The Share quota is full.')
+                if shutil.disk_usage(self.root).free - reserved - size < MIN_FREE:
+                    raise ShareError(507, 'The disk needs at least 20 GiB of free space.')
+                with os.fdopen(os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), 'wb') as target:
+                    os.fchmod(target.fileno(), 0o600)
+                    os.fsync(target.fileno())
+                self._sync_dir(temp.parent)
+                db.execute('''INSERT INTO uploads
+                              (id,owner_id,size,expires,name,mime,width,height,duration,offset,created,busy_until,resumable)
+                              VALUES (?,?,?,?,?,?,?,?,?,0,?,0,1)''',
+                           (identifier, actor, size, time.time() + UPLOAD_TTL, name, mime,
+                            values.get('width'), values.get('height'), values.get('duration'), stamp()))
+                result = self.public_upload(self._upload_row(db, identifier, actor))
+            return result
+        except BaseException as exc:
+            temp.unlink(missing_ok=True)
+            if isinstance(exc, OSError):
+                raise ShareError(507, 'The file could not be stored on disk.') from exc
+            raise
+
+    def list_uploads(self, actor=OWNER):
+        authorize(actor, {'owner_id': actor})
+        with self.connection() as db:
+            rows = db.execute('''SELECT * FROM uploads WHERE owner_id=? AND resumable=1 AND expires>?
+                                 ORDER BY created DESC, id DESC''', (actor, time.time())).fetchall()
+            for row in rows:
+                authorize(actor, row)
+            return [self.public_upload(row) for row in rows]
+
+    def get_upload(self, identifier, actor=OWNER):
+        with self.connection() as db:
+            return self.public_upload(self._upload_row(db, identifier, actor))
+
+    def append_upload(self, identifier, stream, size, offset, actor=OWNER):
+        claim = time.time() + 120
+        target = None
+        committed = False
+        completed = False
+        try:
+            with self.connection(write=True) as db:
+                row = self._upload_row(db, identifier, actor)
+                if offset != row['offset'] or row['busy_until'] > time.time():
+                    raise UploadConflict('Resume from the stored upload offset.', row['offset'])
+                if not isinstance(size, int) or isinstance(size, bool) or not 1 <= size <= 8 * CHUNK:
+                    raise ShareError(400, 'Send a chunk from 1 byte to 8 MiB.')
+                if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0 or offset + size > row['size']:
+                    raise ShareError(400, 'That chunk exceeds the file size.')
+                temp = self.root / 'incoming' / (identifier + '.part')
+                target = os.fdopen(os.open(temp, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK), 'r+b', buffering=0)
+                if not stat.S_ISREG(os.fstat(target.fileno()).st_mode):
+                    raise ShareError(404, 'That upload is not available.')
+                try:
+                    # A file lock also protects a writer whose lease expires during a slow read.
+                    fcntl.flock(target.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError as exc:
+                    raise UploadConflict('An upload chunk is already in progress.', row['offset']) from exc
+                if os.fstat(target.fileno()).st_size < offset:
+                    raise ShareError(404, 'That upload is not available.')
+                db.execute('UPDATE uploads SET busy_until=? WHERE id=?', (claim, identifier))
+            target.truncate(offset)
+            target.seek(offset)
+            left = size
+            while left:
+                chunk = stream.read(min(CHUNK, left))
+                if not chunk or len(chunk) > left:
+                    raise ShareError(400, 'The upload stopped before the declared length.')
+                data = memoryview(chunk)
+                while data:
+                    written = target.write(data)
+                    if not written:
+                        raise OSError('Short disk write')
+                    data = data[written:]
+                left -= len(chunk)
+            os.fsync(target.fileno())
+            completed = offset + size == row['size']
+            if completed:
+                digest, head = hashlib.sha256(), bytearray()
+                target.seek(0)
+                while chunk := target.read(CHUNK):
+                    digest.update(chunk)
+                    head.extend(chunk[:max(0, 4096 - len(head))])
+            with self.connection(write=True) as db:
+                current = self._upload_row(db, identifier, actor)
+                if current['busy_until'] != claim or current['offset'] != offset:
+                    raise UploadConflict('Resume from the stored upload offset.', current['offset'])
+                db.execute('UPDATE uploads SET offset=?, expires=?, busy_until=0 WHERE id=?',
+                           (offset + size, time.time() + UPLOAD_TTL, identifier))
+                result = {'upload': self.public_upload(self._upload_row(db, identifier, actor))}
+                if completed:
+                    result['file'] = self._publish(db, identifier, actor, temp, digest.hexdigest(), row['size'],
+                                                   row['name'], row['mime'], bytes(head), dict(row))
+            committed = True
+            return result
+        except OSError as exc:
+            raise ShareError(507, 'The file could not be stored on disk.') from exc
+        finally:
+            if target is not None:
+                try:
+                    if not committed:
+                        # Only a claimed writer may roll back bytes, never a rejected contender.
+                        with self.connection(write=True) as db:
+                            owned = db.execute('SELECT 1 FROM uploads WHERE id=? AND busy_until=?', (identifier, claim)).fetchone()
+                            if owned:
+                                try:
+                                    target.truncate(offset)
+                                    os.fsync(target.fileno())
+                                except OSError:
+                                    pass  # the stored offset still permits recovery after a disk failure
+                                db.execute('UPDATE uploads SET busy_until=0 WHERE id=?', (identifier,))
+                    elif completed:
+                        temp.unlink(missing_ok=True)
+                finally:
+                    target.close()
+
+    def cancel_upload(self, identifier, actor=OWNER):
+        with self.connection(write=True) as db:
+            self._upload_row(db, identifier, actor)
+            (self.root / 'incoming' / (identifier + '.part')).unlink(missing_ok=True)
+            db.execute('DELETE FROM uploads WHERE id=?', (identifier,))
+        return {'ok': True}
+
+    def _expire_uploads(self, db):
+        for row in db.execute('SELECT id FROM uploads WHERE expires<=?', (time.time(),)).fetchall():
+            (self.root / 'incoming' / (row['id'] + '.part')).unlink(missing_ok=True)
+            db.execute('DELETE FROM uploads WHERE id=?', (row['id'],))
+
+    def _reconcile_uploads(self, db):
+        self._expire_uploads(db)
+        for row in db.execute('SELECT * FROM uploads WHERE resumable=1').fetchall():
+            temp = self.root / 'incoming' / (row['id'] + '.part')
+            try:
+                fd = os.open(temp, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK)
+            except FileNotFoundError:
+                db.execute('DELETE FROM uploads WHERE id=?', (row['id'],))
+                continue
+            with os.fdopen(fd, 'r+b', buffering=0) as target:
+                try:
+                    # A live writer holds this lock before its database claim becomes visible.
+                    fcntl.flock(target.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    continue
+                info = os.fstat(target.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_size < row['offset']:
+                    temp.unlink(missing_ok=True)
+                    db.execute('DELETE FROM uploads WHERE id=?', (row['id'],))
+                    continue
+                if info.st_size > row['offset']:
+                    target.truncate(row['offset'])
+                    os.fsync(target.fileno())
+                db.execute('UPDATE uploads SET busy_until=0 WHERE id=?', (row['id'],))
 
     @staticmethod
     def _sync_dir(path):
@@ -442,7 +650,7 @@ class Store:
             cutoff = datetime.fromtimestamp(time.time() - TRASH_TTL, timezone.utc).isoformat()
             for row in db.execute('SELECT * FROM files WHERE deleted_at < ?', (cutoff,)).fetchall():
                 self._purge(db, row)
-            db.execute('DELETE FROM uploads WHERE expires < ?', (time.time(),))
+            self._reconcile_uploads(db)
             live_uploads = {row[0] + '.part' for row in db.execute('SELECT id FROM uploads')}
             for path in (self.root / 'incoming').iterdir():
                 if path.name not in live_uploads and path.lstat().st_mtime < time.time() - UPLOAD_TTL:

@@ -2,6 +2,7 @@
 import http.client
 import io
 import json
+from email.message import Message
 from pathlib import Path
 import socket
 import threading
@@ -13,6 +14,7 @@ import auth
 import paths
 import server
 import share_api
+import share_store
 
 
 class ShareAPItests(unittest.TestCase):
@@ -187,3 +189,174 @@ class ShareAPItests(unittest.TestCase):
                 self.assertIn('error', json.loads(response.read()))
             finally:
                 sock.close()
+
+
+class FakeShareHandler(server.Handler):
+    """Exercise dispatch and the real authentication gate without a socket."""
+    def __init__(self, method, action, body, headers):
+        self.command = method
+        self.path = share_api.PREFIX + action
+        self.rfile, self.wfile = io.BytesIO(body), io.BytesIO()
+        self.headers = Message()
+        for key, value in headers.items():
+            if value is not None:
+                self.headers[key] = value
+        self.client_address = ('127.0.0.1', 12345)
+        self.close_connection = False
+        self.response_headers = {}
+
+    def send_response(self, status, message=None):
+        self.status = status
+
+    def send_header(self, key, value):
+        self.response_headers[key] = value
+
+    def end_headers(self):
+        pass
+
+
+class ResumableAPITests(unittest.TestCase):
+    def setUp(self):
+        self.temp = TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name) / 'share'
+        for item in (patch.object(auth, 'MODE', 'proxy'), patch.object(paths, 'SHARE', self.root),
+                     patch.object(share_api, '_store', None),
+                     patch.object(share_store.shutil, 'disk_usage', return_value=type('Disk', (), {'free': 10**12})())):
+            item.start()
+            self.addCleanup(item.stop)
+        self.store = share_api.get_store()
+
+    def request(self, method, action, body=b'', headers=None):
+        sent = {'Host': 'phone.test', 'Origin': 'http://phone.test', 'X-Codex-Mobile': '1', 'Content-Length': str(len(body))}
+        sent.update(headers or {})
+        handler = FakeShareHandler(method, action, body, sent)
+        self.assertTrue(share_api.dispatch(handler))
+        self.assertEqual(handler.close_connection, method == 'POST')
+        self.assertEqual(handler.response_headers['X-Content-Type-Options'], 'nosniff')
+        return handler.status, json.loads(handler.wfile.getvalue())
+
+    def create(self, name='note.txt', size=6, **values):
+        status, body = self.request('POST', 'uploads', json.dumps(dict(name=name, size=size, **values)).encode())
+        self.assertEqual(status, 200, body)
+        self.assertEqual(set(body), {'upload'})
+        return body['upload']
+
+    def test_create_list_get_append_three_chunks_finalize_and_single_shot_dedupe(self):
+        upload = self.create('../../note.txt', 6, mime='text/plain', width=10, height=20, duration=3)
+        identifier = upload['id']
+        self.assertEqual(upload['name'], 'note.txt')
+        self.assertEqual(upload['offset'], 0)
+        self.assertEqual(set(upload), {'id', 'name', 'size', 'offset', 'mime', 'created', 'expires'})
+        self.assertEqual(self.request('GET', 'uploads'), (200, {'uploads': [upload]}))
+        self.assertEqual(self.request('GET', 'uploads/' + identifier), (200, {'upload': upload}))
+        for offset, data in ((0, b'ab'), (2, b'cd'), (4, b'ef')):
+            status, result = self.request('POST', f'uploads/{identifier}?offset={offset}', data)
+            self.assertEqual(status, 200, result)
+            self.assertEqual(result['upload']['offset'], offset + 2)
+            self.assertEqual('file' in result, offset == 4)
+        file = result['file']
+        self.assertEqual((file['size'], file['mime'], file['width'], file['height'], file['duration']), (6, 'text/plain', 10, 20, 3))
+        self.assertEqual(self.request('GET', 'uploads'), (200, {'uploads': []}))
+        self.assertEqual(self.request('GET', 'uploads/' + identifier)[0], 404)
+        status, result = self.request('POST', 'upload', b'abcdef', {'X-File-Name': 'copy.txt'})
+        self.assertEqual(status, 200, result)
+        with self.store.connection() as db:
+            first = self.store.row(db, file['id'])
+            second = self.store.row(db, result['file']['id'])
+            self.assertEqual(first['sha'], second['sha'])
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM objects').fetchone()[0], 1)
+            self.assertEqual(self.store.object_path(first).read_bytes(), b'abcdef')
+
+    def test_offset_conflicts_overflow_short_body_and_restart(self):
+        identifier = self.create()['id']
+        route = 'uploads/' + identifier
+        self.assertEqual(self.request('POST', route + '?offset=0', b'ab')[0], 200)
+        status, body = self.request('POST', route + '?offset=0', b'cd')
+        self.assertEqual((status, body['offset']), (409, 2))
+        self.assertIn('error', body)
+        self.assertEqual(self.request('POST', route + '?offset=2', b'cdefg')[0], 400)
+        self.assertEqual(self.request('POST', route + '?offset=2', b'c', {'Content-Length': '2'})[0], 400)
+        self.assertEqual(self.request('GET', route)[1]['upload']['offset'], 2)
+        self.assertEqual((self.root / 'incoming' / (identifier + '.part')).read_bytes(), b'ab')
+        share_api._store = None
+        self.assertEqual(self.request('GET', route)[1]['upload']['offset'], 2)
+        status, body = self.request('POST', route + '?offset=2', b'cdef')
+        self.assertEqual((status, body['upload']['offset'], body['file']['size']), (200, 6, 6))
+
+    def test_busy_append_returns_offset_and_does_not_consume_body(self):
+        identifier = self.create()['id']
+        with self.store.connection(write=True) as db:
+            db.execute('UPDATE uploads SET busy_until=?', (share_store.time.time() + 120,))
+        handler = FakeShareHandler('POST', 'uploads/' + identifier + '?offset=0', b'ab',
+                                   {'Host': 'phone.test', 'Origin': 'http://phone.test',
+                                    'X-Codex-Mobile': '1', 'Content-Length': '2'})
+        share_api.dispatch(handler)
+        self.assertEqual(handler.status, 409)
+        self.assertEqual(json.loads(handler.wfile.getvalue())['offset'], 0)
+        self.assertEqual(handler.rfile.tell(), 0)
+
+    def test_cancel_invalid_ids_expiration_and_other_owner(self):
+        upload = self.create()
+        route = 'uploads/' + upload['id']
+        self.assertEqual(self.request('POST', route + '/cancel'), (200, {'ok': True}))
+        self.assertFalse((self.root / 'incoming' / (upload['id'] + '.part')).exists())
+        for identifier in (upload['id'], 'BAD', 'A' * 32, 'a' * 31, '../bad', 'a' * 33, '0' * 32):
+            for method, suffix, body in (('GET', '', b''), ('POST', '?offset=0', b'a'), ('POST', '/cancel', b'')):
+                self.assertEqual(self.request(method, 'uploads/' + identifier + suffix, body)[0], 404)
+        identifier = self.create()['id']
+        with self.store.connection(write=True) as db:
+            db.execute("UPDATE uploads SET owner_id='someone'")
+        for method, suffix, body in (('GET', '', b''), ('POST', '?offset=0', b'a'), ('POST', '/cancel', b'')):
+            with patch.object(share_store, 'authorize', wraps=share_store.authorize) as policy:
+                self.assertEqual(self.request(method, 'uploads/' + identifier + suffix, body)[0], 404)
+                self.assertTrue(policy.called)
+        self.assertEqual(self.request('GET', 'uploads'), (200, {'uploads': []}))
+        with self.store.connection(write=True) as db:
+            db.execute("UPDATE uploads SET owner_id='local', expires=0")
+        self.assertEqual(self.request('GET', 'uploads/' + identifier)[0], 404)
+
+    def test_all_session_routes_use_authentication_and_write_csrf_checks(self):
+        identifier = self.create()['id']
+        requests = [('GET', 'uploads', b''), ('GET', 'uploads/' + identifier, b''),
+                    ('POST', 'uploads', b'{"name":"new","size":1}'),
+                    ('POST', 'uploads/' + identifier + '?offset=0', b'a'),
+                    ('POST', 'uploads/' + identifier + '/cancel', b'')]
+        with patch.object(auth, 'signed_in', return_value=False), patch.object(auth, 'tailscale_signed_in', return_value=False):
+            for method, route, body in requests:
+                self.assertEqual(self.request(method, route, body)[0], 401)
+        for method, route, body in requests[2:]:
+            for headers in ({'Origin': None}, {'Origin': 'http://evil.test'}, {'X-Codex-Mobile': None}, {'X-Codex-Mobile': '0'}):
+                self.assertEqual(self.request(method, route, body, headers)[0], 403)
+        self.assertEqual(len(self.store.list_uploads()), 1)
+        self.assertEqual(self.store.get_upload(identifier)['offset'], 0)
+
+    def test_creation_validation_quota_and_ninth_session_limit(self):
+        for body in (b'[]', b'null', b'{', b'{}', b'{"name":"x","size":true}',
+                     b'{"name":"x","size":-1}', b'{"name":"x","size":1,"width":"nan"}'):
+            self.assertEqual(self.request('POST', 'uploads', body)[0], 400)
+        body = json.dumps({'name': 'huge', 'size': self.store.max_bytes + 1}).encode()
+        self.assertEqual(self.request('POST', 'uploads', body)[0], 413)
+        self.create(size=6)
+        with patch.object(self.store, 'quota', 10):
+            self.assertEqual(self.request('POST', 'uploads', b'{"name":"x","size":5}')[0], 507)
+        for _ in range(7):
+            self.create(size=1)
+        self.assertEqual(self.request('POST', 'uploads', b'{"name":"x","size":1}'),
+                         (409, {'error': 'Finish or cancel an upload first.'}))
+
+    def test_append_length_framing_offset_and_chunk_limits(self):
+        route = 'uploads/' + self.create()['id']
+        for headers, expected in (({'Content-Length': None}, 400), ({'Content-Length': '-1'}, 400),
+                                  ({'Content-Length': '0'}, 400), ({'Content-Length': str(8 * share_store.CHUNK + 1)}, 413),
+                                  ({'Content-Length': '9' * 5000}, 413), ({'Transfer-Encoding': 'chunked'}, 400)):
+            self.assertEqual(self.request('POST', route + '?offset=0', b'a', headers)[0], expected)
+        for query in ('', '?offset=-1', '?offset=abc', '?offset=', '?offset=0&offset=0', '?offset=' + '9' * 5000):
+            self.assertEqual(self.request('POST', route + query, b'a')[0], 400)
+        self.assertEqual(self.store.get_upload(route[8:])['offset'], 0)
+
+    def test_single_shot_http_upload_works_with_three_idle_sessions(self):
+        for _ in range(3):
+            self.create()
+        status, body = self.request('POST', 'upload', b'hello', {'X-File-Name': 'hello.txt'})
+        self.assertEqual((status, body['file']['size']), (200, 5))

@@ -1,5 +1,6 @@
 """Share persistence and recovery, entirely under temporary folders."""
 import io
+import multiprocessing
 import os
 from pathlib import Path
 import shutil
@@ -29,6 +30,14 @@ class Reader:
         size = min(size, self.remaining)
         self.remaining -= size
         return b'x' * size
+
+
+def append_in_process(root, identifier, started, release, results):
+    try:
+        store = share.Store(root)
+        results.put(store.append_upload(identifier, Reader(2, started, release), 2, 0))
+    except BaseException as exc:
+        results.put(repr(exc))
 
 
 class StoreTests(unittest.TestCase):
@@ -191,7 +200,7 @@ class StoreTests(unittest.TestCase):
 
     def test_reservation_counts_against_quota_and_is_released_on_failure(self):
         with self.store.connection(write=True) as db:
-            db.execute('INSERT INTO uploads VALUES (?,?,?,?)', ('reserved', 'local', 6, time.time() + 3600))
+            db.execute('INSERT INTO uploads (id,owner_id,size,expires) VALUES (?,?,?,?)', ('reserved', 'local', 6, time.time() + 3600))
         with patch.object(self.store, 'quota', 10):
             self.error(507, self.put)
         with self.store.connection(write=True) as db:
@@ -209,7 +218,7 @@ class StoreTests(unittest.TestCase):
         self.store.change('delete', [old['id']])
         with self.store.connection(write=True) as db:
             db.execute("UPDATE files SET deleted_at='2000-01-01T00:00:00+00:00' WHERE id=?", (old['id'],))
-            db.execute('INSERT INTO uploads VALUES (?,?,?,?)', ('stale', 'local', 5, 0))
+            db.execute('INSERT INTO uploads (id,owner_id,size,expires) VALUES (?,?,?,?)', ('stale', 'local', 5, 0))
         temp = self.root / 'incoming' / 'stale.part'
         temp.write_bytes(b'partial')
         os.utime(temp, (0, 0))
@@ -283,3 +292,249 @@ class StoreTests(unittest.TestCase):
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         self.error(400, self.put, name='\ud800')
         self.error(400, self.store.change, 'delete', [{}])
+
+    def part(self, upload):
+        return self.root / 'incoming' / (upload['id'] + '.part')
+
+    def test_resumable_three_chunks_classification_metadata_and_dedupe(self):
+        data = b'\x89PNG\r\n\x1a\n' + b'picture' * 12
+        with patch.object(share, 'stamp', return_value='2026-01-01T00:00:00+00:00'):
+            single = self.put(data, 'pic.png', mime='text/plain', width=12, height=9, duration=1.5)
+            upload = self.store.create_upload('../../pic.png', len(data), 'text/plain', width=12, height=9, duration=1.5)
+            self.assertRegex(upload['id'], r'^[0-9a-f]{32}$')
+            self.assertEqual(set(upload), {'id', 'name', 'size', 'offset', 'mime', 'created', 'expires'})
+            self.assertEqual(self.part(upload).stat().st_mode & 0o777, 0o600)
+            for first, last in ((0, 3), (3, 20), (20, len(data))):
+                with patch.object(share.time, 'time', return_value=time.time() + 10):
+                    result = self.store.append_upload(upload['id'], io.BytesIO(data[first:last]), last - first, first)
+                    self.assertEqual(result['upload']['expires'], share.time.time() + share.UPLOAD_TTL)
+                self.assertEqual(result['upload']['offset'], last)
+                if last != len(data):
+                    self.assertNotIn('file', result)
+                    self.assertEqual(self.part(upload).read_bytes(), data[:last])
+            file = result['file']
+            self.assertEqual(file, dict(single, id=upload['id']))
+        self.assertEqual(self.object(file), self.object(single))
+        self.assertEqual(self.object(file).read_bytes(), data)
+        self.assertFalse(self.part(upload).exists())
+        self.assertEqual(self.store.list_uploads(), [])
+        with self.store.connection() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM objects').fetchone()[0], 1)
+            self.assertEqual(db.execute('SELECT COUNT(DISTINCT sha) FROM files').fetchone()[0], 1)
+        self.error(404, self.store.get_upload, upload['id'])
+
+    def test_resumable_wrong_offset_and_overflow(self):
+        upload = self.store.create_upload('note.txt', 6)
+        self.store.append_upload(upload['id'], io.BytesIO(b'ab'), 2, 0)
+        for offset in (0, 3, 99):
+            with self.assertRaises(share.ShareError) as caught:
+                self.store.append_upload(upload['id'], io.BytesIO(b'x'), 1, offset)
+            self.assertEqual((caught.exception.status, caught.exception.offset), (409, 2))
+        self.error(400, self.store.append_upload, upload['id'], io.BytesIO(b'abcde'), 5, 2)
+        self.assertEqual(self.store.get_upload(upload['id'])['offset'], 2)
+        self.assertEqual(self.part(upload).read_bytes(), b'ab')
+
+    def test_resumable_short_read_and_disk_failure_roll_back_and_release_claim(self):
+        upload = self.store.create_upload('note.txt', 8)
+        self.store.append_upload(upload['id'], io.BytesIO(b'ab'), 2, 0)
+        self.error(400, self.store.append_upload, upload['id'], io.BytesIO(b'cd'), 3, 2)
+        self.assertEqual(self.store.get_upload(upload['id'])['offset'], 2)
+        self.assertEqual(self.part(upload).read_bytes(), b'ab')
+        with patch.object(share.os, 'fsync', side_effect=OSError('full')):
+            self.error(507, self.store.append_upload, upload['id'], io.BytesIO(b'cd'), 2, 2)
+        self.assertEqual(self.store.get_upload(upload['id'])['offset'], 2)
+        self.assertEqual(self.part(upload).read_bytes(), b'ab')
+        with self.store.connection() as db:
+            self.assertEqual(db.execute('SELECT busy_until FROM uploads').fetchone()[0], 0)
+        file = self.store.append_upload(upload['id'], io.BytesIO(b'cdefgh'), 6, 2)['file']
+        self.assertEqual(self.object(file).read_bytes(), b'abcdefgh')
+
+    def test_resumable_finalization_failure_keeps_part_and_offset(self):
+        upload = self.store.create_upload('note.txt', 4)
+        self.store.append_upload(upload['id'], io.BytesIO(b'ab'), 2, 0)
+        with patch.object(self.store, 'row', side_effect=RuntimeError('publication failed')):
+            with self.assertRaises(RuntimeError):
+                self.store.append_upload(upload['id'], io.BytesIO(b'cd'), 2, 2)
+        self.assertEqual(self.store.get_upload(upload['id'])['offset'], 2)
+        self.assertEqual(self.part(upload).read_bytes(), b'ab')
+        self.assertEqual(self.store.list()['files'], [])
+        file = self.store.append_upload(upload['id'], io.BytesIO(b'cd'), 2, 2)['file']
+        self.assertEqual(self.object(file).read_bytes(), b'abcd')
+
+    def test_resumable_restart_keeps_session_and_resumes(self):
+        upload = self.store.create_upload('note.txt', 6)
+        first = self.store.append_upload(upload['id'], io.BytesIO(b'ab'), 2, 0)['upload']
+        restarted = share.Store(self.root)
+        self.assertEqual(restarted.get_upload(upload['id']), first)
+        self.assertEqual(restarted.list_uploads(), [first])
+        file = restarted.append_upload(upload['id'], io.BytesIO(b'cdef'), 4, 2)['file']
+        self.assertEqual(self.object(file).read_bytes(), b'abcdef')
+
+    def test_resumable_reconcile_repairs_crash_tail_missing_and_short_parts(self):
+        tail, missing, short = [self.store.create_upload(name, 6) for name in ('tail', 'missing', 'short')]
+        for upload in (tail, missing, short):
+            self.store.append_upload(upload['id'], io.BytesIO(b'ab'), 2, 0)
+        with self.part(tail).open('ab') as target:
+            target.write(b'crash')
+        self.part(missing).unlink()
+        self.part(short).write_bytes(b'a')
+        with self.store.connection(write=True) as db:
+            db.execute('UPDATE uploads SET busy_until=?', (time.time() - 1,))
+            # A crashed writer can leave a future lease without a live file lock.
+            db.execute('UPDATE uploads SET busy_until=? WHERE id=?', (time.time() + 120, tail['id']))
+        self.store.reconcile()
+        self.assertEqual(self.part(tail).read_bytes(), b'ab')
+        self.assertEqual(self.store.get_upload(tail['id'])['offset'], 2)
+        for upload in (missing, short):
+            self.error(404, self.store.get_upload, upload['id'])
+            self.assertFalse(self.part(upload).exists())
+        with self.store.connection() as db:
+            self.assertEqual(db.execute('SELECT busy_until FROM uploads').fetchone()[0], 0)
+
+    def test_resumable_expiration_removes_recent_parts_and_excludes_sessions(self):
+        upload = self.store.create_upload('note.txt', 6)
+        with self.store.connection(write=True) as db:
+            db.execute('UPDATE uploads SET expires=0')
+        self.error(404, self.store.get_upload, upload['id'])
+        self.error(404, self.store.cancel_upload, upload['id'])
+        self.error(404, self.store.append_upload, upload['id'], io.BytesIO(b'a'), 1, 0)
+        self.assertEqual(self.store.list_uploads(), [])
+        self.store.reconcile()
+        self.assertFalse(self.part(upload).exists())
+        with self.store.connection() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM uploads').fetchone()[0], 0)
+
+    def test_resumable_reconcile_disk_failure_preserves_session(self):
+        upload = self.store.create_upload('note', 6)
+        self.store.append_upload(upload['id'], io.BytesIO(b'ab'), 2, 0)
+        with self.part(upload).open('ab') as target:
+            target.write(b'crash')
+        with patch.object(share.os, 'fsync', side_effect=OSError('disk unavailable')):
+            with self.assertRaises(OSError):
+                self.store.reconcile()
+        self.assertEqual(self.store.get_upload(upload['id'])['offset'], 2)
+        self.assertEqual(self.part(upload).read_bytes(), b'ab')
+        self.store.reconcile()
+        self.store.append_upload(upload['id'], io.BytesIO(b'cdef'), 4, 2)
+
+    def test_resumable_quota_disk_file_size_metadata_and_session_limit(self):
+        self.error(413, self.store.create_upload, 'huge', self.store.max_bytes + 1)
+        for size in (-1, True, '1', None):
+            self.error(400, self.store.create_upload, 'invalid', size)
+        self.error(400, self.store.create_upload, '\ud800', 1)
+        self.error(400, self.store.create_upload, 'invalid', 1, width='nan')
+        self.error(400, self.store.create_upload, 'invalid', 1, mime=[])
+        with patch.object(share.shutil, 'disk_usage', return_value=shutil._ntuple_diskusage(10**12, 0, share.MIN_FREE)):
+            self.error(507, self.store.create_upload, 'note', 1)
+        first = self.store.create_upload('first', 6)
+        with patch.object(self.store, 'quota', 10):
+            self.error(507, self.store.create_upload, 'second', 5)
+            self.error(507, self.put)
+            self.store.cancel_upload(first['id'])
+            self.assertEqual(self.put()['size'], 5)
+        uploads = [self.store.create_upload(str(i), 1) for i in range(8)]
+        with self.assertRaises(share.ShareError) as caught:
+            self.store.create_upload('ninth', 1)
+        self.assertEqual((caught.exception.status, str(caught.exception)), (409, 'Finish or cancel an upload first.'))
+        self.assertEqual(self.store.list_uploads(), list(reversed(uploads)))
+        self.store.cancel_upload(uploads[0]['id'])
+        self.store.create_upload('replacement', 1)
+
+    def test_resumable_cancel_bad_ids_and_authorization(self):
+        upload = self.store.create_upload('note', 6)
+        for identifier in ('', '../bad', 'A' * 32, 'a' * 31, 'a' * 33, '0' * 32, None):
+            for function, args in ((self.store.get_upload, (identifier,)), (self.store.cancel_upload, (identifier,)),
+                                   (self.store.append_upload, (identifier, io.BytesIO(b'a'), 1, 0))):
+                self.error(404, function, *args)
+        for function, args in ((self.store.get_upload, (upload['id'],)), (self.store.cancel_upload, (upload['id'],)),
+                               (self.store.append_upload, (upload['id'], io.BytesIO(b'a'), 1, 0))):
+            with patch.object(share, 'authorize', wraps=share.authorize) as policy:
+                self.error(404, function, *args, actor='someone')
+                self.assertTrue(policy.called)
+        with self.store.connection(write=True) as db:
+            db.execute("UPDATE uploads SET owner_id='someone'")
+        self.assertEqual(self.store.list_uploads(), [])
+        self.error(404, self.store.get_upload, upload['id'])
+        with self.store.connection(write=True) as db:
+            db.execute("UPDATE uploads SET owner_id='local'")
+        self.assertEqual(self.store.cancel_upload(upload['id']), {'ok': True})
+        self.assertFalse(self.part(upload).exists())
+        self.error(404, self.store.cancel_upload, upload['id'])
+
+    def test_resumable_cross_process_append_claim_and_live_restart(self):
+        upload = self.store.create_upload('note', 4)
+        context = multiprocessing.get_context('fork')
+        started, release, results = context.Event(), context.Event(), context.Queue()
+        process = context.Process(target=append_in_process, args=(self.root, upload['id'], started, release, results))
+        process.start()
+        try:
+            self.assertTrue(started.wait(5))
+            restarted = share.Store(self.root)
+            with self.assertRaises(share.ShareError) as caught:
+                restarted.append_upload(upload['id'], io.BytesIO(b'ab'), 2, 0)
+            self.assertEqual((caught.exception.status, caught.exception.offset), (409, 0))
+            # Even an expired lease must not permit a second writer or startup truncation.
+            with patch.object(share.time, 'time', return_value=time.time() + 121):
+                share.Store(self.root)
+                self.error(409, restarted.append_upload, upload['id'], io.BytesIO(b'ab'), 2, 0)
+        finally:
+            release.set()
+            process.join(5)
+            if process.is_alive():
+                process.kill()
+                process.join(5)
+            self.assertFalse(process.is_alive())
+        self.assertEqual(results.get(timeout=5)['upload']['offset'], 2)
+        results.close()
+        results.join_thread()
+        share.Store(self.root)
+        self.assertEqual(self.part(upload).read_bytes(), b'xx')
+        self.store.append_upload(upload['id'], io.BytesIO(b'ab'), 2, 2)
+
+    def test_single_shot_works_with_idle_sessions_and_counts_active_appends(self):
+        uploads = [self.store.create_upload(str(i), 4) for i in range(3)]
+        self.assertEqual(self.put()['size'], 5)
+        starts, releases, threads, results = [], [], [], []
+        def append(upload, started, release):
+            try:
+                results.append(self.store.append_upload(upload['id'], Reader(2, started, release), 2, 0))
+            except BaseException as exc:
+                results.append(exc)
+        try:
+            for upload in uploads[:2]:
+                started, release = threading.Event(), threading.Event()
+                starts.append(started)
+                releases.append(release)
+                thread = threading.Thread(target=append, args=(upload, started, release))
+                threads.append(thread)
+                thread.start()
+                self.assertTrue(started.wait(5))
+            self.error(409, self.put)
+            share.Store(self.root)
+        finally:
+            for release in releases:
+                release.set()
+            for thread in threads:
+                thread.join(5)
+                self.assertFalse(thread.is_alive())
+        self.assertEqual(len(results), 2)
+        self.assertTrue(all(isinstance(result, dict) for result in results), results)
+        self.assertEqual(self.put()['size'], 5)
+
+    def test_old_uploads_table_migrates_and_preserves_single_shot_reservation(self):
+        with self.store.connection(write=True) as db:
+            db.execute('DROP TABLE uploads')
+            db.execute('CREATE TABLE uploads (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, size INTEGER NOT NULL, expires REAL NOT NULL)')
+            db.execute('INSERT INTO uploads VALUES (?,?,?,?)', ('old', share.OWNER, 6, time.time() + 3600))
+        for _ in range(2):
+            store = share.Store(self.root)
+            with store.connection() as db:
+                row = db.execute('SELECT * FROM uploads WHERE id=?', ('old',)).fetchone()
+                self.assertEqual(row['resumable'], 0)
+                self.assertEqual(row['offset'], 0)
+                self.assertEqual(row['busy_until'], 0)
+                self.assertEqual(row['size'], 6)
+            self.assertEqual(store.list_uploads(), [])
+        upload = store.create_upload('new', 4)
+        file = store.append_upload(upload['id'], io.BytesIO(b'data'), 4, 0)['file']
+        self.assertEqual(self.object(file).read_bytes(), b'data')
