@@ -74,6 +74,10 @@ export function QuickReply({ api, pane, id, focus, onOpen, onSuccess }: Props) {
     finally { writing.current = false; setBusy(false); await refresh() }
   }
   // A bridged Claude question: the answers go to the waiting hook as data. null gives the question back to the terminal.
+  // The phone person is using the form: keep the question here (the server extends the deadline). Returns the new deadline.
+  async function askEngage(ask: AskBridge) {
+    try { return (await api<{ expires: number }>('ask-engage', { session: pane.id, id: ask.id, nonce: ask.nonce })).expires } catch { return null }
+  }
   async function askAnswer(ask: AskBridge, answers: Record<string, string | string[]> | null) {
     if (!data || disabled || writing.current) return null
     writing.current = true
@@ -104,7 +108,7 @@ export function QuickReply({ api, pane, id, focus, onOpen, onSuccess }: Props) {
         : data.plan ? <div className="side-pin-plan"><p>{agent} wants you to review a plan.</p><button type="button" className="primary" disabled={disabled} onClick={onOpen}>Open chat</button></div>
         : <>
           {(approval || attention) && <ChoiceDock key={approval?.id ?? attention?.id ?? 'choice'} approval={approval} attention={attention} plan={data.plan} agent={agent} disabled={disabled}
-            onChoose={choose} onKey={key => { void write('key', { key }, true) }} onAction={action => promptAction(attention!, action)} onAsk={askAnswer} onType={(text, loginUrl) => write('type', { text, enter: true, ...loginUrl ? { login_url: loginUrl } : {} }, true)} onFocusReply={() => input.current?.focus()} />}
+            onChoose={choose} onKey={key => { void write('key', { key }, true) }} onAction={action => promptAction(attention!, action)} onAsk={askAnswer} onAskEngage={askEngage} onType={(text, loginUrl) => write('type', { text, enter: true, ...loginUrl ? { login_url: loginUrl } : {} }, true)} onFocusReply={() => input.current?.focus()} />}
           {reply && <form className="side-pin-reply-field" onSubmit={event => { event.preventDefault(); send() }}>
             <textarea ref={input} rows={1} maxLength={4000} placeholder={`Message ${title}`} aria-label={`Message ${title}`} value={text} disabled={disabled}
               onChange={event => setText(event.target.value)} onKeyDown={event => {

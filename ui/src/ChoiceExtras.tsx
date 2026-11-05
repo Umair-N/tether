@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Check } from 'lucide-react'
 import type { AskBridge, ChoiceState } from './api'
 import './ChoiceExtras.css'
@@ -35,15 +35,28 @@ type Answers = Record<string, string | string[]>
 function secondsLeft(expires: number) { return Math.max(0, Math.round(expires - Date.now() / 1000)) }
 
 // Claude's question, sent to the phone by the ask bridge before the terminal draws it. Answers go back as data, not keys.
-// "Answer in the terminal" gives the question back at once; the countdown says when it goes back by itself.
-export function AskForm({ ask, disabled, onAnswer }: { ask: AskBridge; disabled: boolean; onAnswer: (answers: Answers | null) => Promise<string | null> }) {
+// "Answer in the terminal" gives the question back at once. The question stays here while the person uses the form:
+// opening it and each tap or keystroke renew the server's deadline. Only a pause sends it back by itself.
+export function AskForm({ ask, disabled, onAnswer, onEngage }: { ask: AskBridge; disabled: boolean; onAnswer: (answers: Answers | null) => Promise<string | null>; onEngage?: () => Promise<number | null> }) {
   const [picked, setPicked] = useState<Record<number, string[]>>({})
   const [other, setOther] = useState<Record<number, string>>({})
   const [busy, setBusy] = useState<'send' | 'back' | ''>('')
   const [failed, setFailed] = useState('')
-  const [left, setLeft] = useState(() => secondsLeft(ask.expires))
-  useEffect(() => { setPicked({}); setOther({}); setFailed('') }, [ask.id, ask.nonce])
-  useEffect(() => { const timer = setInterval(() => setLeft(secondsLeft(ask.expires)), 1000); setLeft(secondsLeft(ask.expires)); return () => clearInterval(timer) }, [ask.expires])
+  // The newest deadline: from the attention record, or sooner from an engage reply. Never moves back.
+  const [renewed, setRenewed] = useState(0)
+  const expires = Math.max(ask.expires, renewed)
+  const [left, setLeft] = useState(() => secondsLeft(expires))
+  const lastEngage = useRef(0)
+  useEffect(() => { setPicked({}); setOther({}); setFailed(''); setRenewed(0); lastEngage.current = 0 }, [ask.id, ask.nonce])
+  useEffect(() => { const timer = setInterval(() => setLeft(secondsLeft(expires)), 1000); setLeft(secondsLeft(expires)); return () => clearInterval(timer) }, [expires])
+  // At most one call per 5 s. A hidden page never renews: a phone left on a desk must not hold the question.
+  const engage = useCallback(() => {
+    if (!onEngage || document.visibilityState !== 'visible' || Date.now() - lastEngage.current < 5000) return
+    lastEngage.current = Date.now()
+    void onEngage().then(next => { if (next) setRenewed(old => Math.max(old, next)) })
+  }, [onEngage])
+  useEffect(() => { engage() }, [engage, ask.id, ask.nonce])
+  useEffect(() => { document.addEventListener('visibilitychange', engage); return () => document.removeEventListener('visibilitychange', engage) }, [engage])
   const answerOf = (at: number) => {
     const typed = other[at]?.trim()
     const labels = picked[at] ?? []
@@ -62,7 +75,7 @@ export function AskForm({ ask, disabled, onAnswer }: { ask: AskBridge; disabled:
   }
   const submit = () => { if (missing === -1) void send(Object.fromEntries(ask.questions.map((item, at) => [item.question, answerOf(at)]))) }
   const off = disabled || !!busy || left === 0
-  return <form className="ask-form" onSubmit={event => { event.preventDefault(); submit() }}>
+  return <form className="ask-form" onSubmit={event => { event.preventDefault(); submit() }} onPointerDown={engage} onKeyDown={engage} onInput={engage}>
     {ask.questions.map((item, at) => {
       const multi = !!item.multiSelect
       const name = `ask-${ask.id}-${at}`
@@ -82,7 +95,7 @@ export function AskForm({ ask, disabled, onAnswer }: { ask: AskBridge; disabled:
           <input type="text" value={other[at] ?? ''} disabled={off} maxLength={2000} onChange={event => { const value = event.target.value; setOther(old => ({ ...old, [at]: value })); if (!multi && value.trim()) setPicked(old => ({ ...old, [at]: [] })) }} /></label>
       </fieldset>
     })}
-    <p className="ask-form-time" role="timer" aria-live="off">{left > 0 ? `The question goes back to the terminal in ${left} s.` : 'The question is back in the terminal.'}</p>
+    <p className="ask-form-time" role="timer" aria-live="off">{left === 0 ? 'The question is back in the terminal.' : onEngage ? `Stays here while you answer. Back to the terminal after ${ask.idle ?? 60} s without a tap (${left} s left).` : `The question goes back to the terminal in ${left} s.`}</p>
     {failed && <p className="info-error" role="alert">{failed}</p>}
     <div className="ask-form-actions">
       <button type="submit" className="primary" disabled={off || missing !== -1}>{busy === 'send' ? 'Sending…' : ask.questions.length > 1 ? 'Send answers' : 'Send answer'}</button>

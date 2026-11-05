@@ -59,7 +59,8 @@ export interface Approval { id: string | null; text: string; actionable: boolean
 export interface AskQuestion { question: string; header: string; multi: boolean; options: { label: string; description: string }[] }
 /** Original hook questions use Claude's multiSelect field, unlike transcript AskQuestion. */
 export interface AskBridgeQuestion { question: string; header: string; multiSelect?: boolean; options: { label: string; description?: string; preview?: string }[] }
-export interface AskBridge { id: string; nonce: string; questions: AskBridgeQuestion[]; expires: number }
+// expires: unix seconds, the current deadline. Each ask-engage call moves it to now + idle (capped by the server).
+export interface AskBridge { id: string; nonce: string; questions: AskBridgeQuestion[]; expires: number; idle?: number }
 /** null hands the question back to the native terminal. A retry must reuse the exact request. */
 export interface AskAnswerRequest { session: string; id: string; nonce: string; answers: Record<string, string | string[]> | null; requestId: string }
 export interface AskAnswerResult { status: 'submitted' | 'handoff' }

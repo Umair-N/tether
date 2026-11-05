@@ -45,8 +45,8 @@ function InfoPanel({ info, disabled, onAction }: { info: Attention; disabled: bo
   </div>
 }
 
-export function ChoiceDock({ approval, attention, plan, agent, disabled, onChoose, onKey, onAction, onAsk, onType, onFocusReply }: { plan?: ChatData['plan']; approval: Approval | null; attention: Attention | null; agent: string; disabled: boolean
-  onChoose: (kind: 'approval' | 'menu', option: Choice, approval: Approval | null, feedback?: string) => Promise<void>; onKey: (key: string) => void; onAction?: (action: PromptAction) => Promise<string | null>; onAsk?: (ask: AskBridge, answers: Record<string, string | string[]> | null) => Promise<string | null>; onType?: (text: string, loginUrl?: string) => Promise<boolean>; onFocusReply?: () => void }) {
+export function ChoiceDock({ approval, attention, plan, agent, disabled, onChoose, onKey, onAction, onAsk, onAskEngage, onType, onFocusReply }: { plan?: ChatData['plan']; approval: Approval | null; attention: Attention | null; agent: string; disabled: boolean
+  onChoose: (kind: 'approval' | 'menu', option: Choice, approval: Approval | null, feedback?: string) => Promise<void>; onKey: (key: string) => void; onAction?: (action: PromptAction) => Promise<string | null>; onAsk?: (ask: AskBridge, answers: Record<string, string | string[]> | null) => Promise<string | null>; onAskEngage?: (ask: AskBridge) => Promise<number | null>; onType?: (text: string, loginUrl?: string) => Promise<boolean>; onFocusReply?: () => void }) {
   const [feedback, setFeedback] = useState('')
   const [code, setCode] = useState('')
   const [sending, setSending] = useState(false)
@@ -84,7 +84,7 @@ export function ChoiceDock({ approval, attention, plan, agent, disabled, onChoos
   return <section ref={root} className={`choice-dock ${plan ? 'plan-review' : ''} open`} aria-label={title}>
     <div className="choice-head"><span className="choice-mark" />{title}</div>
     <>
-      {bridge ? <AskForm ask={bridge} disabled={disabled} onAnswer={answers => onAsk!(bridge, answers)} /> : plan ? <div className="plan-text assistant-message" tabIndex={0} aria-label="Plan"><TextMessagePartProvider text={plan.text}><Markdown /></TextMessagePartProvider></div> : info ? <InfoPanel info={info} disabled={disabled} onAction={onAction} /> : panel ? <PanelPre text={text} /> : picker ? <div className="picker-card">
+      {bridge ? <AskForm ask={bridge} disabled={disabled} onAnswer={answers => onAsk!(bridge, answers)} onEngage={onAskEngage && (() => onAskEngage(bridge))} /> : plan ? <div className="plan-text assistant-message" tabIndex={0} aria-label="Plan"><TextMessagePartProvider text={plan.text}><Markdown /></TextMessagePartProvider></div> : info ? <InfoPanel info={info} disabled={disabled} onAction={onAction} /> : panel ? <PanelPre text={text} /> : picker ? <div className="picker-card">
         {picker.subtitle && <p className="picker-subtitle">{picker.subtitle}</p>}
         {choice && <ChoiceMeta choice={choice} />}
         {choice ? <ChoiceList choice={choice} label={picker.title || 'Items'} /> : <ul className="picker-list" aria-label={picker.title || 'Items'}>
