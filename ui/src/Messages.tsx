@@ -1,6 +1,6 @@
 import { copyText } from './clipboard'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Blocks, Clock3, Layers, Check, Copy, Share2, ChevronRight, X, TextSelect, MessageSquare, Info, ShieldAlert, Square, Volume2 } from 'lucide-react'
+import { Blocks, Clock3, Layers, Check, Copy, Share2, ChevronRight, X, TextSelect, MessageSquare, Info, ShieldAlert, Square, Volume2, Eye } from 'lucide-react'
 import { MessagePrimitive } from '@assistant-ui/react'
 import type { ThreadMessageLike } from '@assistant-ui/react'
 import { MarkdownTextPrimitive } from '@assistant-ui/react-markdown'
@@ -107,6 +107,9 @@ export function Message({ id, role, kind, title, text, count, time, tools, api, 
   // A "!" line the person sent: the agent ran it in its terminal. Show it as the prompt line of the output below it.
   const command = role === 'user' && !kind ? /^!\s*(\S[\s\S]*)$/.exec(text) : null
   if (command) return <div className="shell-command" data-msg-id={id} role="group" aria-label="Shell command"><span className="shell-sigil" aria-hidden="true">$</span><code>{command[1]}</code></div>
+  // Tether's review loop types these into a tab: a review request to the reviewer, or its feedback to the worker.
+  const review = role === 'user' && !kind ? parseReview(text) : null
+  if (review) return <ReviewCard id={id} text={text} review={review} />
   // Claude puts the whole summary in a user message after /compact or an auto-compact. Fold it like a tool row.
   if (role === 'user' && text.startsWith('This session is being continued from a previous conversation')) {
     return <details className="tool-row compact-row" data-msg-id={id}><summary><Layers size={15} />Conversation compacted<ChevronRight size={15} /></summary><pre>{text}</pre></details>
@@ -114,6 +117,27 @@ export function Message({ id, role, kind, title, text, count, time, tools, api, 
   return <LongPressMenu text={text}>{press => <MessagePrimitive.Root className={role === 'user' ? 'user-message' : 'assistant-message'} data-msg-id={id} {...press}>
     {role === 'user' ? <MessagePrimitive.Parts /> : <><MessagePrimitive.Parts components={{ Text: Markdown }} />{actions && <MessageActions text={text} time={time} />}</>}
   </MessagePrimitive.Root>}</LongPressMenu>
+}
+type Review = { feedback: boolean; tab: string; agent?: string; name?: string; reply: string; transcript?: string; last?: boolean }
+const REVIEW_REQUEST = /^\[Tether review\] The (\S+) tab “([^”]*)” \((%\d+)\) finished a turn\.[\s\S]*?Its last reply:\s*([\s\S]*?)\s*Transcript: (\S*)( This is the last round: your reply stays here\.)?\s*$/
+const REVIEW_FEEDBACK = /^\[Tether review\] Feedback from the reviewer tab \((%\d+)\):\s*([\s\S]*?)\s*Fix what it raises, then stop and wait\.\s*$/
+function parseReview(text: string): Review | null {
+  const request = REVIEW_REQUEST.exec(text)
+  if (request) return { feedback: false, agent: request[1], name: request[2], tab: request[3], reply: request[4], transcript: request[5], last: !!request[6] }
+  const feedback = REVIEW_FEEDBACK.exec(text)
+  return feedback ? { feedback: true, tab: feedback[1], reply: feedback[2] } : null
+}
+// A request starts folded: its body is the other tab's reply, which that tab already shows. Feedback starts open: it is what this tab acts on.
+function ReviewCard({ id, text, review }: { id: string; text: string; review: Review }) {
+  const preview = review.reply.split('\n').find(line => line.trim())?.replace(/^#+\s*/, '')
+  return <LongPressMenu text={text}>{press => <details className="peer-message review-message" data-msg-id={id} open={review.feedback} {...press}>
+    <summary><Eye size={15} /><strong>{review.feedback ? `Review from ${review.tab}` : `Review request · ${review.name || review.tab}`}</strong>{review.last && <span className="badge">Last round</span>}<span className="peer-preview">{preview}</span><ChevronRight size={15} /></summary>
+    <p className="review-meta">{review.feedback
+      ? 'Tether sent the reviewer tab’s reply here. This tab fixes what it raises.'
+      : `The ${review.agent} tab ${review.tab} finished a turn. Reply APPROVED, or list what is wrong. Tether sends your reply to that tab.`}</p>
+    <div className="review-quote"><Linked text={review.reply} /></div>
+    {review.transcript && <p className="review-meta review-path" title={review.transcript}>{review.transcript}</p>}
+  </details>}</LongPressMenu>
 }
 // Long-press a message: Copy, Share or Select text (touch screens select nothing by themselves, so a scroll never starts a selection).
 type PressHandlers = Pick<React.HTMLAttributes<HTMLElement>, 'onTouchStart' | 'onTouchMove' | 'onTouchEnd' | 'onTouchCancel' | 'onContextMenu'>
