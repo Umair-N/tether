@@ -67,6 +67,7 @@ import tmux_names
 import window_size
 import projects_api
 import codex_level
+import codex_runs
 import browser_api
 import mac_browser
 import browser_cdp
@@ -1256,6 +1257,8 @@ class Handler(BaseHTTPRequestHandler):
                 projects_api.get(self)
             elif codex_level.handles(path):
                 codex_level.get(self)
+            elif codex_runs.handles(path):
+                codex_runs.get(self, choose)
             elif tts.handles(path):
                 tts.get(self)
             elif friday_proxy.handles(path):

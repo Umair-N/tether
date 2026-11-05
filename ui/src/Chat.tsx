@@ -34,6 +34,7 @@ import { LiveTerminal } from './Terminal'
 import { WORKSPACE_QUERY } from './workspace'
 import { useHost } from './host'
 import { agentBrowserItems, useAgentBrowser } from './AgentBrowser'
+import { codexRunItems, useCodexRuns } from './CodexRuns'
 
 
 interface ChatProps { liveReplyPreview: boolean; pane: Pane; session: Session | undefined; api: Api; onMenu: () => void; onUpdate: () => void; draft: string; setDraft: (text: string) => void; onOpenPane: (pane: Pane) => void; onSessionActions: (at?: Anchor) => void; onPaneActions: (pane: string, at?: Anchor) => void; onSplit: (direction: 'right' | 'down') => void; onFork: () => void; onReorder: (ids: string[]) => void; micOk: boolean; chime: boolean; readAloud: boolean; handsFree: boolean; slot?: SlotControls; running?: number; sidePin?: SidePinControls }
@@ -604,6 +605,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     readFooter.current(); setModeBusy('')
   }
   const background = (footer.agents ?? []).filter(agent => !agent.main)
+  const codexRuns = useCodexRuns(api, activePane.id, activePane.agent !== 'shell')
   // A card key that Claude did not take leaves its error under the message box. Clear it when the card changes or closes.
   const cardError = useRef(false)
   const card = footer.heads_up ? `${footer.heads_up.state}|${footer.heads_up.text}` : ''
@@ -747,6 +749,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
         <button type="button" className="failed-action" onClick={() => editFailed(item)}><Pencil size={13} />Edit</button>
         <button type="button" aria-label="Delete this unsent message" onClick={() => setPending(list => list.filter(other => other.id !== item.id))}><X size={12} /></button></small></div>
       : <div key={item.id} className="user-message pending-message"><span>{item.text}</span><small><Clock3 size={12} />{state === 'Working' ? 'Queued' : 'Sending…'}<button type="button" aria-label={activePane.agent === 'claude' ? 'Cancel this queued message' : 'Hide this queued message'} onClick={() => void unqueue(item.id)}><X size={12} /></button></small></div>)}</> },
+      ...codexRunItems(codexRuns),
       ...agentBrowserItems(api, agentBrowser, activePane.id),
       { id: 'update', label: 'Update ready', active: !!footer.update, content: <>{footer.update && <div className="cli-update" role="status"><RefreshCw size={16} /><span><strong>Claude Code update ready</strong><small>{footer.update.replace(/^[^\w/]+\s*/, '')}</small></span><button type="button" className="secondary" disabled={!writable || state === 'Working'} onClick={() => void send('/restart')}>Restart</button></div>}</> },
     ]} />
