@@ -35,6 +35,7 @@ import { Explorer } from './Explorer'
 import { mentionText } from './fileWrites'
 import type { FilesTarget } from './Explorer'
 import { ExplorerPhone } from './ExplorerPhone'
+import { Share } from './Share'
 import { PhoneTabs } from './PhoneTabs'
 import { ASSISTANT, Live } from './Live'
 import { BrowserSheet, WATCH_EVENT, browserAsks, setPaneLabels, useAgentBrowser, watchTab } from './AgentBrowser'
@@ -129,16 +130,17 @@ function App() {
   const [filesTarget, setFilesTarget] = useState<FilesTarget | null>(null)
   const files = wide && screen === 'files'
   const phoneFiles = !wide && screen === 'files'
+  const share = screen === 'share'
   const chooseScreen = useCallback((next: Screen) => {
     setScreen(next)
-    if (next === 'files') return
+    if (next === 'files' || next === 'share') return
     setTimeout(() => {
       const toggle = document.querySelector<HTMLButtonElement>('.slot.focused .terminal-toggle')
       if (toggle && (toggle.getAttribute('aria-pressed') === 'true') !== (next === 'terminals')) toggle.click()
     }, 0)
   }, [])
   const screenKeys = useRef<{ files: boolean; choose: (next: Screen) => void } | null>(null)
-  useEffect(() => { screenKeys.current = wide ? { files, choose: chooseScreen } : null }, [wide, files, chooseScreen])
+  useEffect(() => { screenKeys.current = wide ? { files: files || share, choose: chooseScreen } : null }, [wide, files, share, chooseScreen])
   useEffect(() => {
     const open = (event: Event) => { const { path, select } = (event as CustomEvent<Partial<FilesTarget>>).detail ?? {}; if (!path) return; setFilesTarget({ path, select }); setScreen('files') }
     window.addEventListener('tether:open-files', open)
@@ -335,17 +337,17 @@ function App() {
       const typing = (event.target as Element | null)?.closest('input, textarea, select, [contenteditable="true"], dialog')
       const slots = workspaceKeys.current
       const rail = screenKeys.current
-      // ⌘1–3 (Ctrl off a Mac) pick Chats, Files or Terminals. A browser tab may keep these keys; an installed app window gets them.
-      const screenKey = /^Digit([1-3])$/.exec(event.code)
+      // ⌘1–4 (Ctrl off a Mac) pick Chats, Files, Terminals or Share. A browser tab may keep these keys; an installed app window gets them.
+      const screenKey = /^Digit([1-4])$/.exec(event.code)
       if (rail && screenKey && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && !document.querySelector('dialog[open]')) {
         event.preventDefault()
-        rail.choose((['chats', 'files', 'terminals'] as const)[Number(screenKey[1]) - 1])
+        rail.choose((['chats', 'files', 'terminals', 'share'] as const)[Number(screenKey[1]) - 1])
         return
       }
       if (event.altKey && !event.ctrlKey && !event.metaKey && (event.code === 'BracketRight' || event.code === 'BracketLeft')) {
         if (pinKeys.current(event.code === 'BracketRight' ? 1 : -1)) { event.preventDefault(); return }
       }
-      // The Files screen handles its own keys; the hidden workspace must not take them.
+      // The Files and Share screens handle their own keys; the hidden workspace must not take them.
       if (rail?.files) return
       if (slots && !document.querySelector('dialog[open]')) {
         // Browsers keep Cmd+1-9, Cmd+W and Cmd+N, so slot keys use Alt. Read event.code: Alt+letter types a symbol on a Mac.
@@ -524,7 +526,7 @@ function App() {
     return <Chat sidePin={sidePin} liveReplyPreview={prefs.liveReplyPreview} key={target.id} pane={target} session={owner} api={api} onMenu={() => setDrawer(true)} onUpdate={() => void refresh()} draft={prefs.drafts[target.id]?.text ?? ''} setDraft={text => setDraft(target.id, text)} onOpenPane={openPane} onSessionActions={at => { if (owner) { setMenuAt(view ? at : undefined); setActionsDelete(false); setActions(owner.id) } }} onPaneActions={(id, at) => { setMenuAt(view ? at : undefined); setPaneActions(id) }} onSplit={direction => void split(direction, target)} onFork={() => void fork(target)} onReorder={ids => { if (owner) update(current => ({ paneOrder: { ...current.paneOrder, [owner.id]: ids } })) }} micOk={!prefs.voiceOff} chime={prefs.voiceSound} readAloud={prefs.readAloud} handsFree={prefs.handsFree} slot={slot} running={running} />
   }
   if (unauthorized) return <main className="signin"><Terminal size={32} strokeWidth={1.4} /><h1>Sign in</h1><p>Sign in to access your terminal sessions.</p><a className="primary" href="/mobile/login?next=/chat/">Sign in</a></main>
-  return <WordsContext.Provider value={words}><main className={['app-shell', view && !desk.sidebar && 'no-sidebar', wide && 'with-rail', files && 'screen-files', !wide && 'phone-tabs', phoneFiles && 'phone-files'].filter(Boolean).join(' ')}>{wide && <Rail screen={screen} onScreen={chooseScreen} onLive={() => setLive(true)} />}<aside className="sidebar"><Sidebar {...sidebarProps} /></aside><dialog {...drawerModal} className="drawer" aria-label="Sessions" onClick={event => { const box = event.currentTarget.getBoundingClientRect(); if (event.target === event.currentTarget && (event.clientX > box.right || event.clientX < box.left || event.clientY < box.top || event.clientY > box.bottom)) setDrawer(false) }} onTouchStart={event => { drawerTouch.current = (event.target as Element).closest('.swipe-row') ? null : { x: event.touches[0].clientX, y: event.touches[0].clientY } }} onTouchEnd={event => { const start = drawerTouch.current; drawerTouch.current = null; if (!start) return; const dx = event.changedTouches[0].clientX - start.x, dy = event.changedTouches[0].clientY - start.y; if (dx < -60 && Math.abs(dy) < Math.abs(dx) * 0.6) setDrawer(false) }}>{drawer && <Sidebar {...sidebarProps} onClose={() => setDrawer(false)} />}</dialog>
+  return <WordsContext.Provider value={words}><main className={['app-shell', view && !desk.sidebar && 'no-sidebar', wide && 'with-rail', files && 'screen-files', wide && share && 'screen-share', !wide && 'phone-tabs', phoneFiles && 'phone-files', !wide && share && 'phone-share'].filter(Boolean).join(' ')}>{wide && <Rail screen={screen} onScreen={chooseScreen} onLive={() => setLive(true)} />}<aside className="sidebar"><Sidebar {...sidebarProps} /></aside><dialog {...drawerModal} className="drawer" aria-label="Sessions" onClick={event => { const box = event.currentTarget.getBoundingClientRect(); if (event.target === event.currentTarget && (event.clientX > box.right || event.clientX < box.left || event.clientY < box.top || event.clientY > box.bottom)) setDrawer(false) }} onTouchStart={event => { drawerTouch.current = (event.target as Element).closest('.swipe-row') ? null : { x: event.touches[0].clientX, y: event.touches[0].clientY } }} onTouchEnd={event => { const start = drawerTouch.current; drawerTouch.current = null; if (!start) return; const dx = event.changedTouches[0].clientX - start.x, dy = event.changedTouches[0].clientY - start.y; if (dx < -60 && Math.abs(dy) < Math.abs(dx) * 0.6) setDrawer(false) }}>{drawer && <Sidebar {...sidebarProps} onClose={() => setDrawer(false)} />}</dialog>
     {pane ? (view ? <Workspace layout={desk} slots={slotPanes} focus={view.focus} zoomed={zoomed && multi} onCount={setCount} onFocus={focusSlot} onLayout={setDesk}
       renderSlot={(target, index, shown) => chatFor(target, shown > 1 || zoomed ? { index, zoomed, onZoom: toggleZoom, onClose: zoomed ? undefined : () => closeSlot(index), onPick: () => setPicking(index), onDragStart: event => { event.dataTransfer.setData(DRAG_SLOT, String(index)); event.dataTransfer.effectAllowed = 'move' } } : undefined)}
       onDropPane={dropPane} onDropSession={dropSession} onSwap={swap}
@@ -537,6 +539,11 @@ function App() {
       panelTools={<PanelTools desk={desk} pane={pane} setPanels={setPanels} onSideChat={() => void sideChat()} />}
       panels={<PanelColumn api={api} desk={desk} pane={pane} setPanels={setPanels} renderChat={id => { const target = panes.find(item => item.id === id); return target ? chatFor(target) : null }} />} /> : chatFor(pane)) : <section className="no-session"><header><button className="icon-button mobile-menu" aria-label="Open sessions" onClick={() => setDrawer(true)}><Menu /></button></header><div><Terminal size={32} strokeWidth={1.4} /><h1>{loading ? 'Finding your sessions…' : 'Space for your next task.'}</h1><p>{error || 'Open a session, or start something new.'}</p><button className="primary" onClick={() => setNewSession(true)}><Plus size={18} />New session</button></div></section>}
     {files && <Explorer api={api} panes={panes} pane={pane} target={filesTarget} onTarget={() => setFilesTarget(null)} onAddToMessage={addToMessage} onTerminalHere={terminalHere} onPin={pinTarget} />}
+    {share && <Share wide={wide} onAddToMessage={wide ? addToMessage : pane ? paths => {
+      const before = prefs.drafts[pane.id]?.text ?? ''
+      setDraft(pane.id, before + (before && !/\s$/.test(before) ? ' ' : '') + mentionText(paths))
+      choosePhoneScreen('chats', setScreen)
+    } : undefined} />}
     {phoneFiles && <ExplorerPhone api={api} target={filesTarget?.path ?? null} onTarget={() => setFilesTarget(null)} onPin={pinTarget} chatName={pane ? (pane.pane_name || owner?.name || pane.label) : undefined}
       onAddToChat={pane ? paths => {
         // "Add to chat": append @~/path to the open chat's unsent draft, then go back to the chat.
@@ -571,7 +578,7 @@ function App() {
     {view && menu === 'commands' && <CommandMenu sessions={sortByPrefs(sessions, prefs.order).filter(item => !isArchived(item, prefs.archived))} seen={prefs.seen} selected={pane?.id} slots={multi ? view.slots : []} commands={commands} onPane={openPane} onSession={showSession} onClose={() => setMenu(null)} />}
     {view && menu === 'shortcuts' && <Shortcuts onClose={() => setMenu(null)} />}
     {agentsPage && <AgentsPage api={api} sessions={sessions} seen={prefs.seen} selected={pane?.id} onOpen={openPane} onMarkRead={markRead} startMessaging={agentsPage === 'message'} onClose={() => setAgentsPage(false)} />}
-    {view && !files && <StatusBar panes={panes} loading={loading} error={error} />}
+    {view && !files && !(wide && share) && <StatusBar panes={panes} loading={loading} error={error} />}
     {updated && <div className="update-banner" role="status"><span>A new version of Tether is ready.</span><button type="button" onClick={reload}>Reload</button></div>}
   </main></WordsContext.Provider>
 }
