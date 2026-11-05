@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { Bot, Hand, X } from 'lucide-react'
+import { Bot, ChevronDown, Globe, Hand, X } from 'lucide-react'
 import { errorText } from './api'
 import type { Api, Pane } from './api'
 import type { BrowserAskRow } from './needs'
@@ -146,19 +146,35 @@ function AgentBrowserCard({ api, pane, tabs, ask }: { api: Api; pane: string; ta
 }
 
 /** Phone: the browser panel full screen, over the chat. */
+// Phone: a sheet over the chat. Minimise keeps the browser's tabs and shows a round button; the stream stops meanwhile.
 export function BrowserSheet({ api, pane, onClose }: { api: Api; pane: Pane; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null)
+  const bubble = useRef<HTMLButtonElement>(null)
+  const [small, setSmall] = useState(false)
   useEffect(() => {
     const box = dialog.current
-    if (box && !box.open) box.showModal()
+    if (!box) return
+    if (!small && !box.open) box.showModal()
+    if (small && box.open) { box.close(); bubble.current?.focus() }
+  }, [small])
+  // "Watch" on a chat card while minimised: open the sheet again.
+  useEffect(() => {
+    const onWatch = () => setSmall(false)
+    window.addEventListener(WATCH_EVENT, onWatch)
+    return () => window.removeEventListener(WATCH_EVENT, onWatch)
   }, [])
-  return <dialog ref={dialog} className="browser-sheet" aria-label="Browser" onCancel={event => { event.preventDefault(); onClose() }}>
-    <header className="browser-sheet-head">
-      <button type="button" className="icon-button" aria-label="Close the browser" onClick={onClose}><X /></button>
-      <strong>Browser</strong>
-    </header>
-    <BrowserPanel api={api} pane={pane} folder={null} active />
-  </dialog>
+  return <>
+    <dialog ref={dialog} className="browser-sheet" aria-label="Browser" onCancel={event => { event.preventDefault(); setSmall(true) }}
+      onClick={event => { if (event.target === event.currentTarget && event.clientY < event.currentTarget.getBoundingClientRect().top) setSmall(true) }}>
+      <header className="browser-sheet-head">
+        <button type="button" className="icon-button" aria-label="Minimise the browser" title="Minimise" onClick={() => setSmall(true)}><ChevronDown /></button>
+        <strong>Browser</strong>
+        <button type="button" className="icon-button" aria-label="Close the browser" title="Close" onClick={onClose}><X /></button>
+      </header>
+      <BrowserPanel api={api} pane={pane} folder={null} active={!small} />
+    </dialog>
+    {small && <button ref={bubble} type="button" className="browser-bubble" aria-label="Open the browser" title="Browser" onClick={() => setSmall(false)}><Globe size={22} /></button>}
+  </>
 }
 
 /** Settings › System: the switch and why it is off. */

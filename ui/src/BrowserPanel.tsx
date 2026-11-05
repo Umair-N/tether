@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
-import { ArrowLeft, ArrowRight, Bot, Check, Crosshair, HatGlasses, Keyboard, KeyRound, Monitor, PenLine, Plus, RotateCw, Send, Smartphone, Square, Tablet, Trash2, Type, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Bot, Check, Crosshair, HatGlasses, Keyboard, KeyRound, Monitor, PenLine, PictureInPicture2, Plus, RotateCw, Send, Smartphone, Square, Tablet, Trash2, Type, X } from 'lucide-react'
 import { errorText } from './api'
 import type { Api, Pane } from './api'
 import { usePaneLabel, WATCH_EVENT } from './AgentBrowser'
 import { useHost } from './host'
 
 // Same shape as PanelProps in src/panels.ts (frame lane); kept here until the lanes merge.
-export interface BrowserPanelProps { api: Api; pane: Pane; folder: string | null; active: boolean }
+// onPopOut: show a button that moves the panel into its own window (BrowserWindow.tsx).
+export interface BrowserPanelProps { api: Api; pane: Pane; folder: string | null; active: boolean; onPopOut?: () => void }
 
 type Mode = 'private' | 'saved'
 // 'agent': a tab an agent opened over CDP (server/browser_cdp.py). The agent owns its size until a person takes over
@@ -72,7 +73,7 @@ function usePageVisible() {
 // A phone: tabs it opens or takes over start at phone width.
 const onPhone = () => typeof matchMedia === 'function' && matchMedia('(pointer: coarse) and (max-width: 820px)').matches
 const savedNote = (host: string) => `Saved logins · readable by agents on ${host}`
-export function BrowserPanel({ api, pane, active }: BrowserPanelProps) {
+export function BrowserPanel({ api, pane, active, onPopOut }: BrowserPanelProps) {
   const host = useHost()
   const [tabs, setTabs] = useState<BrowserTab[]>([])
   const [presets, setPresets] = useState<Preset[]>([])
@@ -482,6 +483,7 @@ export function BrowserPanel({ api, pane, active }: BrowserPanelProps) {
           <button type="button" role="menuitem" onClick={() => void newTab('saved')}><KeyRound size={16} /><span>New saved tab<small>{savedNote(host)}</small></span></button>
         </div>}
       </div>
+      {onPopOut && <button type="button" className="browser-icon browser-popout" aria-label="Open the browser in its own window" title="Open in a window" onClick={onPopOut}><PictureInPicture2 size={17} /></button>}
     </div>
 
     {noting ? <div className="browser-bar browser-notes" role="toolbar" aria-label="Notes">

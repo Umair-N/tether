@@ -16,9 +16,17 @@
 .browser-agent > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .browser-agent .browser-text-button { min-height: 28px; padding: 0 8px; font-size: 12px; }
 
-.browser-sheet[open] { position: fixed; inset: 0; width: 100%; height: 100dvh; max-width: none; max-height: none; margin: 0; border: 0; display: flex; flex-direction: column;
-  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); background: var(--bg); color: var(--text); }
-.browser-sheet-head { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 0 12px 0 4px; border-bottom: 1px solid var(--line); }
+/* Phone: a sheet over the chat. The chat's top stays in view; a tap there or Minimise folds it into .browser-bubble. */
+.browser-sheet[open] { position: fixed; inset: calc(env(safe-area-inset-top) + 40px) 0 0 0; width: 100%; height: auto; max-width: none; max-height: none; margin: 0; border: 0; display: flex; flex-direction: column;
+  padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); border-radius: 14px 14px 0 0; overflow: hidden; background: var(--bg); color: var(--text);
+  box-shadow: 0 -8px 28px rgb(0 0 0 / .18); }
+.browser-sheet::backdrop { background: rgb(0 0 0 / .32); }
+.browser-sheet-head { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 0 4px; border-bottom: 1px solid var(--line); }
+.browser-sheet-head strong { flex: 1; }
+.browser-bubble { position: fixed; right: calc(16px + env(safe-area-inset-right)); bottom: calc(56px + env(safe-area-inset-bottom) + 16px); z-index: 41; width: 52px; height: 52px; padding: 0;
+  display: grid; place-items: center; border-radius: 50%; border: 1px solid var(--line); background: var(--surface); color: var(--accent);
+  box-shadow: 0 1px 2px rgb(0 0 0 / .08), 0 6px 18px rgb(0 0 0 / .14); }
+.browser-bubble:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .browser-sheet > .browser-panel { flex: 1; min-height: 0; }
 
 /* "Needs you" list row for a browser ask (Inbox.tsx). */

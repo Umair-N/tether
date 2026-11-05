@@ -9,7 +9,7 @@ import { hasPanel, newPanelId, panelCols, togglePanel } from './workspace'
 import { TerminalPanel } from './TerminalPanel'
 import { PlanPanel, TasksPanel } from './SidePanels'
 import { ChangesPanel } from './ChangesPanel'
-import { BrowserPanel } from './BrowserPanel'
+import { BrowserDock } from './BrowserWindow'
 import { FilesPanel } from './FilesPanel'
 
 export type { PanelItem, PanelKind }
@@ -39,7 +39,7 @@ function ComingSoon({ item }: PanelBodyProps) {
 export const PANELS: Record<PanelKind, PanelSpec> = {
   terminal: { title: 'Terminal', icon: Terminal, body: TerminalPanel, multi: true },
   changes: { title: 'Changes', icon: Diff, body: ChangesPanel },
-  browser: { title: 'Browser', icon: Globe, body: BrowserPanel },
+  browser: { title: 'Browser', icon: Globe, body: BrowserDock },
   files: { title: 'Files', icon: Folder, body: FilesPanel },
   chat: { title: 'Side chat', icon: MessageSquare, body: ComingSoon, menu: true },
   tasks: { title: 'Background tasks', icon: Layers, body: TasksPanel, menu: true },
