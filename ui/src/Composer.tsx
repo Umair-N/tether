@@ -96,14 +96,25 @@ export function Composer({ api, pane, thread, disabled, onSend, error, errorActi
       await attach([file])
     } catch (failure) { setSpeechError(errorText(failure)) }
   }
+  const filesFallback = useRef(false)
   async function pickFiles() {
     setMenu(false)
     const open = openPicker()
-    if (!open) { picker.current?.click(); return }
+    if (!open || filesFallback.current) { picker.current?.click(); return }
+    // Step names show where it stops: the phone gives no other trace, and nothing reaches the server.
+    let step = 'open the Files app'
     try {
       const handles = await open.call(window, { multiple: true })
-      await attach(await Promise.all(handles.map(handle => handle.getFile())))
-    } catch (failure) { if ((failure as Error)?.name !== 'AbortError') setSpeechError(errorText(failure)) }
+      step = `read ${handles.length} file(s)`
+      const chosen = await Promise.all(handles.map(handle => handle.getFile()))
+      if (!chosen.length) throw new Error('No file came back')
+      await attach(chosen)
+    } catch (failure) {
+      const name = (failure as Error)?.name || 'Error'
+      // Cancel and failure both look like AbortError on some phones, so say it and use the plain picker next time.
+      filesFallback.current = true
+      setSpeechError(`Files could not ${step} (${name}: ${(failure as Error)?.message || errorText(failure)}). Tap Files again to use the other picker.`)
+    }
   }
   async function changeFolder() {
     await forgetFolder()
