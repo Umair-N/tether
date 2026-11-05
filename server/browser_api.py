@@ -9,7 +9,7 @@ import browser_cdp
 import agent_browser_setup
 
 PREFIX = '/mobile/api/browser/'
-FRAME_INTERVAL = 1 / 15  # at most 15 frames a second per viewer
+FRAME_INTERVAL = 1 / 30  # at most 30 frames a second per viewer
 STREAM_LIFETIME = 600
 KEEPALIVE = 15
 POST_NAMES = {'new', 'close', 'navigate', 'history', 'input', 'device', 'agents', 'agents/setup', 'ask/dismiss',
@@ -40,7 +40,8 @@ def get(handler, the_browser=None, the_proxy=None, the_setup=None, signed_browse
                                         the_browser if browser_id == 'signed' else signed_browser)
             handler.respond(200, _tag(state, browser_id))
         elif name == 'stream':
-            stream(handler, the_browser, query.get('tab', [''])[0], _int(query, 'w', 1280), _int(query, 'h', 800), browser_id)
+            css = {'css_size': (_int(query, 'cssw', 0), _int(query, 'cssh', 0))} if 'cssw' in query or 'cssh' in query else {}
+            stream(handler, the_browser, query.get('tab', [''])[0], _int(query, 'w', 1280), _int(query, 'h', 800), browser_id, **css)
         else:
             handler.respond(404, _tag({'error': 'Not found'}, browser_id))
     except browser.BrowserError as exc:
@@ -175,9 +176,9 @@ def _agent_state(proxy, the_setup=None, state=None):
     return result
 
 
-def stream(handler, the_browser, target, width, height, browser_id='test'):
+def stream(handler, the_browser, target, width, height, browser_id='test', css_size=None):
     """Server-sent events for one tab: `frame` (JPEG), `tabs` (tab list and back/forward state), `closed`."""
-    tab = the_browser.watch(target, width, height)
+    tab = the_browser.watch(target, width, height, css_size) if css_size is not None else the_browser.watch(target, width, height)
     try:
         handler.send_response(200)
         handler.send_header('Content-Type', 'text/event-stream; charset=utf-8')
@@ -192,9 +193,10 @@ def stream(handler, the_browser, target, width, height, browser_id='test'):
         seen, version = 0, None
         first = True
         checked = started
+        next_frame = started
         while time.monotonic() - started < STREAM_LIFETIME:
-            frame = the_browser.first_frame(tab) if first else the_browser.wait_frame(tab, seen, 1.0)
-            first = False
+            # Pace before taking the slot, so a slow write or a sleep never leaves an old frame queued for output.
+            time.sleep(max(0.0, next_frame - time.monotonic()))
             if time.monotonic() - checked >= 1.0:
                 checked = time.monotonic()
                 the_browser.refresh(tab)
@@ -211,16 +213,15 @@ def stream(handler, the_browser, target, width, height, browser_id='test'):
                     state['nav'] = {'back': False, 'forward': False}
                 handler.wfile.write(('event: tabs\ndata: ' + json.dumps(_tag(state, browser_id)) + '\n\n').encode())
                 wrote = time.monotonic()
+            frame = the_browser.first_frame(tab) if first else the_browser.wait_frame(tab, seen, 1.0)
+            first = False
             if frame is not None and not the_browser.heal(tab, frame):
                 seen = frame[0]  # a frame at the wrong size would map clicks wrongly; the next one fits
-                the_browser.ack(tab, frame)
             elif frame is not None:
-                sent = time.monotonic()
+                next_frame = time.monotonic() + FRAME_INTERVAL
                 handler.wfile.write(browser.frame_event(frame, browser_id))
                 handler.wfile.flush()
                 seen, wrote = frame[0], time.monotonic()
-                time.sleep(max(0.0, FRAME_INTERVAL - (wrote - sent)))
-                the_browser.ack(tab, frame)
             elif time.monotonic() - wrote >= KEEPALIVE:
                 handler.wfile.write(('event: idle\ndata: ' + json.dumps(_tag({}, browser_id)) + '\n\n').encode())
                 wrote = time.monotonic()
@@ -229,7 +230,7 @@ def stream(handler, the_browser, target, width, height, browser_id='test'):
     except (BrokenPipeError, ConnectionResetError, TimeoutError):
         return
     finally:
-        the_browser.unwatch(tab)
+        the_browser.unwatch(tab, (width, height), css_size)
 
 
 def _int(query, key, default):

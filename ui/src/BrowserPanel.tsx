@@ -226,7 +226,7 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
   const streamHeight = Math.min(2560, Math.max(160, Math.ceil(stage.height * devicePixelRatio / 64) * 64))
   useEffect(() => {
     if (!active || !visible || !tabId || noting || !stage.width) return
-    const source = new EventSource(`/mobile/api/browser/stream?tab=${encodeURIComponent(tabId)}&w=${streamWidth}&h=${streamHeight}${which === 'signed' ? '&browser=signed' : ''}`)
+    const source = new EventSource(`/mobile/api/browser/stream?tab=${encodeURIComponent(tabId)}&w=${streamWidth}&h=${streamHeight}&cssw=${Math.max(1, stage.width)}&cssh=${Math.max(1, stage.height)}${which === 'signed' ? '&browser=signed' : ''}`)
     source.addEventListener('frame', event => { pending.current = JSON.parse((event as MessageEvent).data); setLive(true); if (!decoding.current) void paint() })
     source.addEventListener('tabs', event => apply(JSON.parse((event as MessageEvent).data)))
     source.addEventListener('closed', () => void load())
