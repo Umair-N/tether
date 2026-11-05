@@ -25,6 +25,7 @@ import type { NoticeVariant } from './Notices'
 import { State } from './NewSession'
 import { Linked, Message, convertMessage } from './Messages'
 import { Composer } from './Composer'
+import { expandPlaceholders } from './pasteText'
 import { ChoiceDock, HeadsUp, taskLabel, SessionInfo, LiveSheet, SearchSheet } from './Dock'
 import { AskBar } from './ChoiceExtras'
 import { LiveTerminal } from './Terminal'
@@ -463,8 +464,9 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     try {
       const { restored } = await api<{ restored?: string }>('key', { session: pane.id, thread: data?.thread ?? null, key: 'Escape', stop: true })
       if (restored) {
+        const text = expandPlaceholders(restored, [...sentPrompts, ...pending.map(item => item.text)])
         setPending(list => list.filter(other => other.failed))
-        setDraft(draft.trim() ? `${restored}\n\n${draft}` : restored)
+        setDraft(draft.trim() ? `${text}\n\n${draft}` : text)
         setToast('Stopped. Your message is back in the box.')
       }
       await refresh(); onUpdate()

@@ -22,3 +22,15 @@ export function inlinePaste(draft: string, paste: Paste) {
   if (!draft.trim()) return paste.text
   return paste.first ? `${paste.text}\n\n${draft}` : `${draft.replace(/\s+$/, '')}\n\n${paste.text}`
 }
+// Stop: Claude puts a stopped message back in its box, but a long one shows as "[Pasted text #12 +3 lines]".
+// Swap each placeholder, in order, for the latest long messages Tether sent. Unknown ones stay as they are.
+const PLACEHOLDER = /\[Pasted text #\d+(?: \+\d+ lines?)?\]/g
+export function expandPlaceholders(restored: string, sent: string[]) {
+  const count = restored.match(PLACEHOLDER)?.length ?? 0
+  if (!count) return restored
+  const long = sent.filter((text, at) => longPaste(text) && sent.lastIndexOf(text) === at)
+  const texts = long.slice(-count)
+  const offset = count - texts.length
+  let at = 0
+  return restored.replace(PLACEHOLDER, match => { const text = at >= offset ? texts[at - offset] : match; at++; return text })
+}

@@ -36,3 +36,12 @@ assert.equal(inlinePaste('', after), 'TAIL')
 assert.equal(inlinePaste('question  \n', after), 'question\n\nTAIL')
 assert.equal(inlinePaste('question', before), 'LOG\n\nquestion')
 console.log('paste: "Edit as text" puts the text where it would have been sent')
+
+const { expandPlaceholders } = moduleExports
+const four = 'line one\nline two\nline three\nline four'
+assert.equal(expandPlaceholders('short message', [four]), 'short message')
+assert.equal(expandPlaceholders('[Pasted text #12 +3 lines]', ['old', four]), four)
+assert.equal(expandPlaceholders('[Pasted text #9]', ['y'.repeat(900)]), 'y'.repeat(900))
+assert.equal(expandPlaceholders('[Pasted text #3 +3 lines]\n[Pasted text #4 +3 lines]', [four + '!', 'short', four, four + '!']), `${four}\n${four}!`)
+assert.equal(expandPlaceholders('[Pasted text #1 +3 lines] and [Pasted text #2 +3 lines]', [four]), `[Pasted text #1 +3 lines] and ${four}`)
+console.log('paste: Stop swaps Claude placeholders for the long messages Tether sent')
