@@ -41,3 +41,4 @@
 .picker-card .choice-meta { margin: 0 0 8px; }
 .ask-bar { display: flex; flex-direction: column; gap: 8px; margin: 8px 12px; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 12px; background: var(--hover); font-size: 14px; line-height: 1.4; }
 .ask-bar p { margin: 0; }
+.ask-progress { margin: 8px 16px 6px; font-size: 12px; font-weight: 600; letter-spacing: 0.3px; text-transform: uppercase; color: var(--muted); }

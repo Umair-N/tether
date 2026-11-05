@@ -557,6 +557,10 @@ def attention(entry, screen, working, now=None, login_screen=None, styled_screen
         choice = choice_state.parse(styled_screen or screen, entry['agent'])
         if choice is not None:
             found['choice'] = choice
+    if entry['agent'] == 'claude':
+        current = choice_state.ask_current(styled_screen or screen)
+        if current is not None:
+            found['ask_current'] = current
     return found
 
 

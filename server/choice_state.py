@@ -293,6 +293,87 @@ def parse(frame, agent):
     return found['choice'] if found is not None else None
 
 
+def ask_current(frame):
+    """Claude's native question, only when its complete surface is visible.
+
+    This is display state, not write authority. Never fill gaps from a
+    transcript: checkbox chips mean answered, background means active, the
+    cursor means focused, and [✔] means checked. Submit is not a question.
+    """
+    rows = _rows(frame)
+    footer = _footer(rows)
+    if footer is None:
+        return None
+    stop, _, hints = footer
+    if ' '.join(hints) != 'Enter to select Tab/Arrow keys to navigate Esc to cancel':
+        return None
+    chips = [(i, re.fullmatch(r'\s*←\s+(.+?)\s+✔ Submit\s+→\s*', text))
+             for i, (text, _) in enumerate(rows[:stop])]
+    chips = [(i, match) for i, match in chips if match]
+    if len(chips) != 1:
+        return None
+    top, chip = chips[0]
+    tabs = []
+    text, styles = rows[top]
+    for match in re.finditer(r'([☐☒])\s+([^☐☒]+?)(?=\s+[☐☒]|$)', chip[1]):
+        label = match[2].strip()
+        if not label or '…' in label or '...' in label:
+            return None
+        start, end = chip.start(1) + match.start(), chip.start(1) + match.end()
+        tabs.append({'label': label, 'active': _emphasis(styles[start:end]),
+                     'answered': match[1] == '☒'})
+    active = [i for i, tab in enumerate(tabs) if tab['active']]
+    if not 1 <= len(tabs) <= 4 or len(active) != 1:
+        return None
+    # Require the whole chip row, not a partial label before the first chip.
+    if not re.fullmatch(r'(?:[☐☒]\s+[^☐☒]+\s*)+', chip[1]):
+        return None
+    item_row = re.compile(r'^\s*(?P<cursor>❯\s+)?(?P<id>\d+)\.\s+'
+                          r'(?P<text>(?:(?P<box>\[[ ✔]\])\s+)?(?P<label>\S.*))$')
+    first = next((i for i in range(top + 1, stop) if item_row.fullmatch(rows[i][0])), None)
+    if first is None:
+        return None
+    question = ' '.join(text.strip() for text, _ in rows[top + 1:first] if text.strip())
+    if not question or '…' in question or any(RULE.fullmatch(text) or CHAT.match(text)
+                                            for text, _ in rows[top + 1:first] if text.strip()):
+        return None
+    options, divider = [], False
+    for text, _ in rows[first:stop]:
+        if not text.strip():
+            continue
+        if RULE.fullmatch(text):
+            divider = True
+            continue
+        if match := item_row.fullmatch(text):
+            if divider and match['label'] != 'Chat about this':
+                return None
+            option = {'id': int(match['id']), 'label': match['label'], 'text': match['text'],
+                      'description': '', 'selected': bool(match['cursor']), 'kind': 'option'}
+            if match['box']:
+                option['checked'] = match['box'] == '[✔]'
+            options.append(option)
+        elif options and len(text) - len(text.lstrip()) >= 5 and not divider:
+            # Native multiselect draws an unnumbered Next below the free field.
+            if text.strip() != 'Next' or options[-1]['label'] != 'Type something':
+                options[-1]['description'] = ' '.join(filter(None, (options[-1]['description'], text.strip())))
+        else:
+            return None
+    if (len(options) < 4 or not divider or options[-1]['label'] != 'Chat about this'
+            or [o['id'] for o in options] != list(range(1, len(options) + 1))
+            or sum(o['selected'] for o in options) != 1
+            or any('…' in o['label'] or '...' in o['label'] for o in options)):
+        return None
+    multi = 'checked' in options[0]
+    if any(('checked' in o) != multi for o in options[:-1]):
+        return None
+    options[-2]['kind'], options[-1]['kind'] = 'free', 'chat'
+    index = active[0]
+    return {'index': index, 'total': len(tabs), 'header': tabs[index]['label'],
+            'question': question, 'multi': multi, 'options': options, 'tabs': tabs,
+            'keys': [str(o['id']) for o in options[:-2]] +
+                    ['Up', 'Down', 'Left', 'Right', 'Tab', 'Enter', 'Escape']}
+
+
 def cursor_picker(frame, agent):
     """Codex picker display fields; existing Claude display fields stay intact."""
     if agent != 'codex':

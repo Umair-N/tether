@@ -57,7 +57,11 @@ export function ChoiceDock({ approval, attention, plan, agent, disabled, onChoos
   const bridge = !approval && onAsk ? attention?.askBridge : undefined
   // What the server proved about the list on screen: ticked boxes, tabs, filter, hidden rows, footer hints.
   const choice = !approval && !bridge ? attention?.choice : undefined
-  const checkedById = new Map((choice?.items ?? []).filter(item => item.checked !== undefined).map(item => [item.id, item.checked!]))
+  // Claude's native question, read from the screen: which question is active and which boxes are ticked.
+  const current = !approval && !bridge ? attention?.ask_current : undefined
+  const checkedById = new Map([...(choice?.items ?? []).filter(item => item.checked !== undefined).map(item => [item.id, item.checked!] as const),
+    ...(current?.options ?? []).filter(item => item.checked !== undefined).map(item => [item.id, item.checked!] as const)])
+  const multiBox = current ? current.multi : choice?.selection === 'multi'
   const spaceKey = choice?.selection === 'multi' && choice.hints.some(hint => /\bspace\b/i.test(hint))
   const options = (approval ? (approval.actionable ? approval.options : undefined) : attention?.options?.filter(option => option.id <= 9)) ?? []
   const keepPlanning = plan && approval?.actionable ? options.find(option => /^No,?\s+keep planning\b/i.test(option.text)) : undefined
@@ -69,7 +73,7 @@ export function ChoiceDock({ approval, attention, plan, agent, disabled, onChoos
   const ask = !approval && !options.length && !panel && !info && !picker ? attention?.ask?.questions : undefined
   // A sign-in screen: its URL wraps over several lines, so the terminal can't open or copy it in one piece.
   const login = !approval && !options.length && !panel && !info && !picker ? attention?.login : undefined
-  const keys = ask?.length === 1 ? Array.from({ length: Math.min(9, ask[0].options.length + 2) }, (_, at) => String(at + 1)) : ['1', '2', '3']
+  const keys = ask ? [...Array.from({ length: Math.min(9, Math.max(...ask.map(item => item.options.length)) + 2) }, (_, at) => String(at + 1)), ...(ask.length > 1 ? ['Left', 'Tab'] : [])] : ['1', '2', '3']
   const title = plan ? 'Review plan' : bridge ? `${agent} asks` : info ? `${agent} · ${info.title || 'panel'}` : login ? `${agent} sign-in` : approval ? `${agent} needs your permission` : panel ? `${agent} panel` : picker ? `${agent} · ${picker.title || 'Choose an item'}` : options.length || ask ? `${agent} asks` : `${agent} is waiting for you`
   const text = approval ? approval.text : attention?.question || attention?.text || ''
   const root = useRef<HTMLElement>(null)
@@ -107,16 +111,18 @@ export function ChoiceDock({ approval, attention, plan, agent, disabled, onChoos
         <p className="ask-question"><Linked text={item.question} /></p>
         <ol className="ask-options">{item.options.map(option => <li key={option.label}><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</li>)}
           <li><strong>Type something</strong><small>Write your own answer in the terminal.</small></li><li><strong>Chat about this</strong></li></ol></div>)}
-        {ask.length === 1 ? <p className="ask-hint">Press a number to choose. The pane is too short to show the whole question.</p> : <p className="ask-hint">Answer each question in turn. The pane is too short to show the whole question.</p>}</div> : text && <div className={`choice-text ${approval || !options.length ? 'mono' : ''}`}>{approval || !options.length ? <PanelText text={text} /> : <Linked text={text} />}</div>}
+        {ask.length === 1 ? <p className="ask-hint">Press a number to choose. The pane is too short to show the whole question.</p> : <p className="ask-hint">The pane is too short to show the question, so this card cannot follow your answers. The terminal shows one question at a time: press a number to answer it, then the next one opens.{ask.some(item => item.multi) ? ' In a “choose one or more” question, a number ticks a box; press Question → when done.' : ''} Open the terminal view to see where you are.</p>}</div> : text && <div className={`choice-text ${approval || !options.length ? 'mono' : ''}`}>{approval || !options.length ? <PanelText text={text} /> : <Linked text={text} />}</div>}
       {keepPlanning && <label className="plan-feedback">Keep planning — optional feedback<textarea value={feedback} onChange={event => setFeedback(event.target.value)} maxLength={10000} rows={2} disabled={disabled || picked !== null} placeholder="Tell Claude what to change" /></label>}
+      {current && current.total > 1 && options.length > 0 && <p className="ask-progress">Question {current.index + 1} of {current.total} · {current.header}{current.multi ? ' · choose one or more' : ''}</p>}
       {!picker && choice && options.length > 0 && <ChoiceMeta choice={choice} />}
       {options.length > 0 && <div className="choice-options" role="list">{options.map(option => <button key={option.id} type="button" role="listitem" className={[option.selected ? 'current' : '', approval ? /^yes\b/i.test(option.text) ? 'accept' : /^no\b/i.test(option.text) ? 'decline' : '' : ''].filter(Boolean).join(' ')} disabled={disabled || picked !== null} onClick={() => void pick(option)}>
-        <span className="choice-number">{picked === option.id ? '…' : option.id}</span>{checkedById.has(option.id) && <Box checked={checkedById.get(option.id)!} multi={choice!.selection === 'multi'} />}{option.free
+        <span className="choice-number">{picked === option.id ? '…' : option.id}</span>{checkedById.has(option.id) && <Box checked={checkedById.get(option.id)!} multi={multiBox} />}{option.free
           ? <span><strong>Type your own answer</strong><small>{option.text === 'Type something.' ? 'Write it in the message box below, then send.' : `In the terminal now: “${option.text}”. Your answer from the message box replaces it.`}</small></span>
-          : <span><strong>{option.text}</strong>{chat(option) ? <small>Close the question and talk it through in the message box.</small> : option.detail && <small>{option.detail}</small>}</span>}</button>)}</div>}
+          : <span><strong>{checkedById.has(option.id) ? option.text.replace(/^\[[ ✔xX]\]\s+/, '') : option.text}</strong>{chat(option) ? <small>Close the question and talk it through in the message box.</small> : option.detail && <small>{option.detail}</small>}</span>}</button>)}</div>}
       {!picker && choice && options.length > 0 && (choice.more_above !== 0 || choice.more_below !== 0) && <p className="choice-hints">{[choice.more_above !== 0 && (choice.more_above === -1 ? 'More options above.' : `${choice.more_above} more above.`), choice.more_below !== 0 && (choice.more_below === -1 ? 'More options below.' : `${choice.more_below} more below.`)].filter(Boolean).join(' ')} Use ↑ and ↓ to reach them.</p>}
       {bridge ? null : info ? <div className="choice-keys">{(info.body ?? text) && <CopyButton text={info.body ?? text} label="Copy panel text" className="copy-chip" />}</div> : <div className="choice-keys">
-        {!options.length && !panel && !login && [...(picker ? [] : keys), 'Up', 'Down', ...(spaceKey ? ['Space'] : []), 'Enter'].map(key => <button key={key} type="button" disabled={disabled} onClick={() => onKey(key)} aria-label={ask?.length === 1 && /^\d$/.test(key) ? `Choose ${key}: ${ask[0].options[Number(key) - 1]?.label ?? (Number(key) === ask[0].options.length + 1 ? 'Type something' : 'Chat about this')}` : undefined}>{key === 'Up' ? '↑' : key === 'Down' ? '↓' : key}</button>)}
+        {!options.length && !panel && !login && [...(picker ? [] : keys), 'Up', 'Down', ...(spaceKey ? ['Space'] : []), 'Enter'].map(key => <button key={key} type="button" disabled={disabled} onClick={() => onKey(key)} aria-label={ask?.length === 1 && /^\d$/.test(key) ? `Choose ${key}: ${ask[0].options[Number(key) - 1]?.label ?? (Number(key) === ask[0].options.length + 1 ? 'Type something' : 'Chat about this')}` : undefined}>{key === 'Up' ? '↑' : key === 'Down' ? '↓' : key === 'Left' ? '← Question' : key === 'Tab' ? 'Question →' : key}</button>)}
+        {!!options.length && current && current.total > 1 && ['Left', 'Tab'].map(key => <button key={key} type="button" disabled={disabled} onClick={() => onKey(key)}>{key === 'Left' ? '← Previous question' : 'Next question →'}</button>)}
         {!!options.length && spaceKey && ['Up', 'Down', 'Space', 'Enter'].map(key => <button key={key} type="button" disabled={disabled} onClick={() => onKey(key)}>{key === 'Up' ? '↑' : key === 'Down' ? '↓' : key}</button>)}
         <button type="button" disabled={disabled} onClick={() => onKey('Escape')}>{options.length || picker ? 'Cancel (Esc)' : 'Close (Esc)'}</button>
         {!options.length && !login && !picker && text && <CopyButton text={text} label="Copy panel text" className="copy-chip" />}

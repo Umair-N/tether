@@ -1,0 +1,33 @@
+[38;5;246m[49m────────────────────────────────────────────────────────────────────────────────
+← [38;5;16m[48;5;153m ☐ Library [39m[49m ☐ Features  ☐ Name  ✔ Submit  →
+
+[1m[38;5;231mWhich library?[0m
+
+[38;5;153m❯[39m [38;5;246m1.[39m [38;5;153mReact[39m
+     [38;5;246mThis option applies to every screen in the phone and desktop application [39m
+     [38;5;246mand will guide the next implementation phase. Use reusable components for [39m
+     [38;5;246mthe application. Keep the familiar development tools and support a large [39m
+     [38;5;246mset of existing libraries for every page.[39m
+  [38;5;246m2.[39m Vue
+     [38;5;246mThis option applies to every screen in the phone and desktop application [39m
+     [38;5;246mand will guide the next implementation phase. Use a framework with [39m
+     [38;5;246mtemplates for the application. Keep the build process simple and support [39m
+     [38;5;246mthe existing team workflow for every page.[39m
+  [38;5;246m3.[39m Svelte
+     [38;5;246mThis option applies to every screen in the phone and desktop application [39m
+     [38;5;246mand will guide the next implementation phase. Use a compiler for the [39m
+     [38;5;246mapplication. Keep the browser bundle small and support a separate [39m
+     [38;5;246mdevelopment workflow for every page.[39m
+  [38;5;246m4. Type something.[39m
+[38;5;246m────────────────────────────────────────────────────────────────────────────────
+[39m  5. Chat about this
+
+[38;5;246mEnter to select · Tab/Arrow keys to navigate · Esc to cancel[39m
+
+
+
+
+
+
+
+
