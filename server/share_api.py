@@ -148,7 +148,11 @@ def send_file(handler, store, identifier, query, thumb=False):
 
 def serve_get(handler, store, action, query):
     authorize(OWNER, {'owner_id': OWNER})
-    if action == 'list' and handler.command == 'GET':
+    if action == 'uploads' and handler.command == 'GET':
+        answer(handler, 200, {'uploads': store.list_uploads()})
+    elif action.startswith('uploads/') and handler.command == 'GET':
+        answer(handler, 200, {'upload': store.get_upload(action[8:])})
+    elif action == 'list' and handler.command == 'GET':
         one = lambda key, default='': query.get(key, [default])[0]
         if one('trash', '0') not in ('0', '1'):
             raise ShareError(400, 'Choose trash 0 or 1.')
@@ -164,6 +168,9 @@ def serve_get(handler, store, action, query):
 
 def serve_post(handler, store, action):
     authorize(OWNER, {'owner_id': OWNER})
+    if action == 'uploads' or action.startswith('uploads/'):
+        serve_upload_post(handler, store, action)
+        return
     if action == 'upload':
         size = length(handler, store.max_bytes)
         name = handler.headers.get('X-File-Name', '')
@@ -201,6 +208,34 @@ def serve_post(handler, store, action):
     answer(handler, 200, result)
 
 
+def serve_upload_post(handler, store, action):
+    if action == 'uploads':
+        try:
+            body = json.loads(read_body(handler, 64 * 1024))
+        except (ValueError, UnicodeError) as exc:
+            raise ShareError(400, 'Send a JSON object.') from exc
+        if not isinstance(body, dict):
+            raise ShareError(400, 'Send a JSON object.')
+        upload = store.create_upload(body.get('name'), body.get('size'), body.get('mime', ''),
+                                     **{key: body.get(key) for key in ('width', 'height', 'duration')})
+        answer(handler, 200, {'upload': upload})
+        return
+    identifier = action[8:]
+    if identifier.endswith('/cancel'):
+        answer(handler, 200, store.cancel_upload(identifier[:-7]))
+        return
+    store.get_upload(identifier)
+    size = length(handler, 8 * CHUNK)
+    if size == 0:
+        raise ShareError(400, 'Send a chunk from 1 byte to 8 MiB.')
+    query = parse_qs(urlsplit(handler.path).query, keep_blank_values=True)
+    offsets = query.get('offset', [])
+    if len(offsets) != 1 or not re.fullmatch(r'[0-9]{1,20}', offsets[0]):
+        raise ShareError(400, 'Send a valid upload offset.')
+    result = store.append_upload(identifier, handler.rfile, size, int(offsets[0]))
+    answer(handler, 200, result)
+
+
 def dispatch(handler):
     """Return False for another API. Authenticate before reading a Share request."""
     parsed = urlsplit(handler.path)
@@ -222,7 +257,10 @@ def dispatch(handler):
         else:
             serve_get(handler, store, action, parse_qs(parsed.query, keep_blank_values=True))
     except ShareError as exc:
-        answer(handler, exc.status, {'error': str(exc)})
+        value = {'error': str(exc)}
+        if hasattr(exc, 'offset'):
+            value['offset'] = exc.offset
+        answer(handler, exc.status, value)
     except (BrokenPipeError, ConnectionResetError):
         handler.close_connection = True
     except (OSError, sqlite3.Error):
