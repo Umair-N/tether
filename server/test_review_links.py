@@ -173,12 +173,45 @@ class ReviewLinksTests(unittest.TestCase):
                 self.assertFalse(self.links()[0]['seen_working'])
                 self.assertEqual(self.send.call_count, 31 if blocked == 'draft' else 1)
 
-    def test_missing_worker_or_reviewer_or_changed_reviewer_thread_drops_link(self):
-        for entries in ([self.reviewer], [self.worker], [self.worker, dict(self.reviewer, thread='new-thread')]):
+    def test_missing_worker_survives_grace_then_drops(self):
+        with patch.object(review_links.time, 'time', return_value=1000):
             self.add()
-            review_links.observe(entries, self.status, self.send, self.reply)
+        original = self.links()
+        for now, expected in ((1001, original), (1030, []), (1031, [])):
+            with self.subTest(now=now):
+                self.file.write_text(json.dumps(original))
+                with patch.object(review_links.time, 'time', return_value=now):
+                    review_links.observe([self.reviewer], self.status, self.send, self.reply)
+                self.assertEqual(self.links(), expected)
+        self.status.assert_not_called()
+        self.send.assert_not_called()
+
+    def test_missing_reviewer_survives_within_grace(self):
+        with patch.object(review_links.time, 'time', return_value=1000):
+            self.add()
+        original = self.links()
+        with patch.object(review_links.time, 'time', return_value=1001):
+            review_links.observe([self.worker], self.status, self.send, self.reply)
+        self.assertEqual(self.links(), original)
+        self.status.assert_not_called()
+        self.send.assert_not_called()
+
+    def test_changed_reviewer_thread_drops_link_even_with_missing_worker(self):
+        for entries in ([self.worker, dict(self.reviewer, thread='new-thread')],
+                        [dict(self.reviewer, thread='new-thread')]):
+            with patch.object(review_links.time, 'time', return_value=1000):
+                self.add()
+                review_links.observe(entries, self.status, self.send, self.reply)
             self.assertEqual(self.links(), [])
         self.send.assert_not_called()
+
+    def test_malformed_created_is_skipped_without_stopping_other_links(self):
+        link, = self.links()
+        bad = dict(link, worker='%99', created='invalid')
+        self.file.write_text(json.dumps([bad, link]))
+        self.observe(**{'%13': 'Working'})
+        self.assertEqual(self.links()[0], bad)
+        self.assertTrue(self.links()[1]['seen_working'])
 
     def test_worker_thread_is_pinned_once_known_and_changes_drop_link(self):
         self.worker['thread'] = None

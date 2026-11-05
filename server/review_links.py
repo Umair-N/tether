@@ -12,6 +12,7 @@ from terminal_input import DraftError
 FILE = paths.CACHE / 'review-links.json'
 MAX_LINKS = 50
 MAX_RETRIES = 30
+GRACE = 30
 _lock = threading.Lock()
 
 
@@ -66,8 +67,10 @@ def remove(worker):
 def _step(link, entries, status, send, last_reply):
     worker = entries.get(link['worker'])
     reviewer = entries.get(link['reviewer'])
-    if worker is None or reviewer is None or reviewer.get('thread') != link['reviewer_thread']:
+    if reviewer is not None and reviewer.get('thread') != link['reviewer_thread']:
         return None
+    if worker is None or reviewer is None:
+        return link if time.time() - link.get('created', 0) < GRACE else None
     thread = worker.get('thread')
     if link['worker_thread'] is None:
         if thread:
