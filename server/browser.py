@@ -41,6 +41,22 @@ PRESETS = {
     'tablet': {'label': 'iPad Air', 'width': 820, 'height': 1180, 'scale': 2, 'mobile': True, 'ua': IPAD_UA},
 }
 
+# Defaults undo panel overrides when an agent never set that property. AgentClient records successful commands
+# by target under Browser.lock, so a control handoff can replay the exact parameters, including clear requests.
+AGENT_EMULATION = {
+    'Emulation.setDeviceMetricsOverride': 'metrics',
+    'Emulation.clearDeviceMetricsOverride': 'metrics',
+    'Emulation.setTouchEmulationEnabled': 'touch',
+    'Emulation.setEmitTouchEventsForMouse': 'mouse',
+    'Emulation.setUserAgentOverride': 'ua',
+}
+AGENT_DEFAULTS = {
+    'metrics': ('Emulation.clearDeviceMetricsOverride', {}),
+    'touch': ('Emulation.setTouchEmulationEnabled', {'enabled': False}),
+    'mouse': ('Emulation.setEmitTouchEventsForMouse', {'enabled': False}),
+    'ua': ('Emulation.setUserAgentOverride', {'userAgent': ''}),
+}
+
 
 class BrowserError(RuntimeError):
     """A problem worth showing to the person (no browser installed, page gone, bad URL)."""
@@ -273,6 +289,8 @@ class Tab:
         self.target, self.session = target, session
         self.mode, self.context = mode, context  # private tabs own an in-memory browser context
         self.owner = owner
+        self.controller = 'agent' if mode == 'agent' else 'user'
+        self.agent_client = None
         self.url, self.title = 'about:blank', ''
         self.preset = 'desktop'
         self.size = DESKTOP
@@ -291,6 +309,7 @@ class Tab:
                'width': width, 'height': height, 'touch': preset['mobile']}
         if self.mode == 'agent':
             row['owner'] = self.owner or {'pane': None}
+            row['controller'] = self.controller
         return row
 
 
@@ -539,14 +558,26 @@ class Browser:
 
     # device presets ---------------------------------------------------------------------------------------------
     def set_device(self, target, preset, width=None, height=None):
-        if preset not in PRESETS:
+        """A panel preset takes viewport control; 'agent' restores the agent's saved emulation on an agent tab."""
+        preset = 'pixel' if preset == 'phone' else preset
+        if preset not in PRESETS and preset != 'agent':
             raise ValueError('Unknown device.')
         self.ensure()
         with self.lock:
             tab = self.tab(target)
-            if tab.mode == 'agent':
-                raise ValueError("The agent controls this tab's size.")
-            self._apply_preset(tab, preset, width, height)
+            if preset == 'agent':
+                if tab.mode != 'agent':
+                    raise ValueError('That tab has no agent.')
+                if tab.controller == 'user':
+                    saved = tab.agent_client.emulation.get(target, {}) if tab.agent_client else {}
+                    for slot, default in AGENT_DEFAULTS.items():
+                        method, params = saved.get(slot, default)
+                        self.conn.call(method, params, tab.session)
+                    tab.controller, tab.preset = 'agent', 'desktop'
+                    self._agent_size(tab)
+            else:
+                tab.controller = 'user'
+                self._apply_preset(tab, preset, width, height)
             with tab.changed:
                 tab.frame = None  # a frame at the old size would map clicks wrongly; first_frame takes a new one
             self._restart_cast(tab)
@@ -554,7 +585,7 @@ class Browser:
             return tab.row()
 
     def _apply_preset(self, tab, preset, width=None, height=None):
-        if tab.mode == 'agent':
+        if tab.controller == 'agent':
             return
         spec = PRESETS[preset]
         session = tab.session
@@ -618,7 +649,7 @@ class Browser:
                 self.conn.send('Page.stopScreencast', session=tab.session)
 
     def _start_cast(self, tab, size):
-        if tab.mode == 'agent':
+        if tab.controller == 'agent':
             self._agent_size(tab)
         tab.casting = size
         self.conn.call('Page.startScreencast', {'format': 'jpeg', 'quality': QUALITY, 'maxWidth': size[0], 'maxHeight': size[1],
@@ -627,6 +658,9 @@ class Browser:
     def _restart_cast(self, tab):
         if tab.casting:
             self.conn.call('Page.stopScreencast', session=tab.session)
+            # Flush the resized compositor before streaming. Otherwise Chromium can label a desktop-shaped JPEG
+            # with the new phone dimensions, even though the page already lays out at the phone width.
+            self.conn.call('Page.captureScreenshot', {'format': 'jpeg', 'quality': QUALITY}, tab.session)
             self._start_cast(tab, tab.casting)
 
     def ack(self, tab, frame):
@@ -655,7 +689,7 @@ class Browser:
         """True when the frame has the tab's viewport size. Otherwise apply the device again and return False.
         Chromium 147: after a reload or navigation under phone emulation, the screencast captures the whole window
         (1280 wide) while the page still lays out at 412. Applying the preset again restores the emulated capture."""
-        if tab.mode == 'agent':
+        if tab.controller == 'agent':
             metadata = frame[1] or {}
             if metadata.get('deviceWidth') and metadata.get('deviceHeight'):
                 size = (metadata['deviceWidth'], metadata['deviceHeight'])
@@ -681,7 +715,7 @@ class Browser:
         frame = self.wait_frame(tab, 0, wait)
         if frame is not None or tab.target not in self.tabs:
             return frame
-        if tab.mode == 'agent':
+        if tab.controller == 'agent':
             self._agent_size(tab)
         row = tab.row()  # the emulated viewport; layout metrics can report the window size under phone emulation
         shot = self.conn.call('Page.captureScreenshot', {'format': 'jpeg', 'quality': QUALITY}, tab.session).get('data') or ''
@@ -743,7 +777,8 @@ class Browser:
             if (self.running() and not client.closed and info['targetId'] not in self.tabs
                     and info['targetId'] in client.targets):
                 try:
-                    self._adopt(info['targetId'], info, 'agent', info.get('browserContextId'), {'pane': client.pane})
+                    tab = self._adopt(info['targetId'], info, 'agent', info.get('browserContextId'), {'pane': client.pane})
+                    tab.agent_client = client
                 except BrowserError:
                     pass
 

@@ -315,9 +315,87 @@ class ProxyTests(unittest.TestCase):
         self.assertEqual(tab.size, (321, 456))
         handler = FakeHandler('/mobile/api/browser/device', {'tab': target, 'preset': 'desktop'})
         browser_api.post(handler, self.browser, self.proxy)
-        self.assertEqual(handler.replies, [(400, {'error': "The agent controls this tab's size."})])
+        self.assertEqual(handler.replies[0][0], 200)
+        self.assertEqual(handler.replies[0][1]['controller'], 'user')
         self.browser.close_tab(target)
         self.assertFalse(self.fake.sent('Target.disposeBrowserContext'))
+
+    def adopted(self):
+        target = self.request('Target.createTarget')['result']['targetId']
+        deadline = time.monotonic() + 2
+        while target not in self.browser.tabs and time.monotonic() < deadline:
+            time.sleep(.01)
+        with self.browser.lock:  # wait for adoption, including the client reference
+            tab = self.browser.tabs[target]
+        session = self.request('Target.attachToTarget', {'targetId': target, 'flatten': True})['result']['sessionId']
+        return tab, session
+
+    def test_device_handoff_preserves_exact_agent_emulation_and_rejects_competing_writes(self):
+        tab, session = self.adopted()
+        commands = {
+            'Emulation.setDeviceMetricsOverride': {'width': 901, 'height': 601, 'mobile': False, 'deviceScaleFactor': 1.5,
+                                                  'screenOrientation': {'type': 'landscapePrimary', 'angle': 90}},
+            'Emulation.setTouchEmulationEnabled': {'enabled': True, 'maxTouchPoints': 2},
+            'Emulation.setUserAgentOverride': {'userAgent': 'Agent test UA', 'acceptLanguage': 'fr'},
+        }
+        for method, params in commands.items():
+            self.assertNotIn('error', self.request(method, params, session))
+        self.browser.watch(tab.target, 400, 800)
+        row = self.browser.set_device(tab.target, 'phone')
+        self.assertEqual((row['mode'], row['controller'], row['preset'], row['width'], row['height'], row['touch']),
+                         ('agent', 'user', 'pixel', 412, 915, True))
+        self.assertEqual(row['owner'], {'pane': '%12'})
+        count = len(self.fake.sent('Emulation.setDeviceMetricsOverride'))
+        reply = self.request('Emulation.setDeviceMetricsOverride', {'width': 1000}, session)
+        self.assertIn('user controls', reply['error']['message'])
+        self.assertEqual(len(self.fake.sent('Emulation.setDeviceMetricsOverride')), count)
+        self.assertTrue(self.browser.heal(tab, (1, {'deviceWidth': 412, 'deviceHeight': 915}, '', 4)))
+        self.assertEqual(tab.row()['width'], 412)
+        self.assertIsNone(tab.frame)
+        row = self.browser.set_device(tab.target, 'desktop', 500, 700)
+        self.assertEqual((row['width'], row['height'], row['controller']), (500, 700, 'user'))
+        restored = self.browser.set_device(tab.target, 'agent')
+        self.assertEqual(restored['controller'], 'agent')
+        for method, params in commands.items():
+            self.assertEqual(self.fake.sent(method)[-1]['params'], params)
+        self.assertEqual(self.fake.sent('Emulation.setEmitTouchEventsForMouse')[-1]['params'], {'enabled': False})
+        self.assertNotIn('error', self.request('Emulation.setDeviceMetricsOverride', commands['Emulation.setDeviceMetricsOverride'], session))
+        self.browser.unwatch(tab)
+
+    def test_handoff_without_agent_overrides_clears_panel_emulation_and_is_idempotent(self):
+        tab, session = self.adopted()
+        self.browser.set_device(tab.target, 'phone')
+        self.browser.set_device(tab.target, 'agent')
+        for method, params in browser.AGENT_DEFAULTS.values():
+            self.assertEqual(self.fake.sent(method)[-1]['params'], params)
+        count = len(self.fake.sent('Emulation.clearDeviceMetricsOverride'))
+        self.browser.set_device(tab.target, 'agent')
+        self.assertEqual(len(self.fake.sent('Emulation.clearDeviceMetricsOverride')), count)
+        self.assertNotIn('error', self.request('Emulation.clearDeviceMetricsOverride', session=session))
+        self.browser.set_device(tab.target, 'tablet')
+        self.browser.set_device(tab.target, 'agent')
+        self.assertEqual(len(self.fake.sent('Emulation.clearDeviceMetricsOverride')), count + 2)
+
+    def test_phone_alias_for_user_tab_and_invalid_handoff_do_not_change_agent_tab(self):
+        tab, _ = self.adopted()
+        with self.assertRaisesRegex(ValueError, 'Unknown device'):
+            self.browser.set_device(tab.target, 'toaster')
+        self.assertEqual(tab.controller, 'agent')
+        user = self.browser.new_tab()
+        self.assertEqual(self.browser.set_device(user['id'], 'phone')['width'], 412)
+        with self.assertRaisesRegex(ValueError, 'no agent'):
+            self.browser.set_device(user['id'], 'agent')
+
+    def test_failed_agent_emulation_does_not_replace_the_saved_viewport(self):
+        tab, session = self.adopted()
+        params = {'width': 900, 'height': 600, 'deviceScaleFactor': 1, 'mobile': False}
+        self.assertNotIn('error', self.request('Emulation.setDeviceMetricsOverride', params, session))
+        with patch.object(self.browser.conn, 'call', side_effect=browser.BrowserError('Invalid parameters')):
+            rejected = self.request('Emulation.setDeviceMetricsOverride', {'width': -1}, session)
+        self.assertIn('Invalid parameters', rejected['error']['message'])
+        self.browser.set_device(tab.target, 'phone')
+        self.browser.set_device(tab.target, 'agent')
+        self.assertEqual(self.fake.sent('Emulation.setDeviceMetricsOverride')[-1]['params'], params)
 
     def test_agent_tabs_do_not_use_user_tab_limit(self):
         self.request('Target.createTarget')

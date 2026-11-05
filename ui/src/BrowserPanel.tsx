@@ -10,8 +10,9 @@ import { useHost } from './host'
 export interface BrowserPanelProps { api: Api; pane: Pane; folder: string | null; active: boolean }
 
 type Mode = 'private' | 'saved'
-// 'agent': a tab an agent opened over CDP (server/browser_cdp.py). The agent owns its size.
-interface BrowserTab { id: string; url: string; title: string; preset: string; mode: Mode | 'agent'; width: number; height: number; touch: boolean; owner?: { pane: string | null } | null }
+// 'agent': a tab an agent opened over CDP (server/browser_cdp.py). The agent owns its size until a person takes over
+// (controller 'user'); Stop gives the agent its own viewport back.
+interface BrowserTab { id: string; url: string; title: string; preset: string; mode: Mode | 'agent'; width: number; height: number; touch: boolean; owner?: { pane: string | null } | null; controller?: 'user' | 'agent' }
 interface Preset { id: string; label: string; width: number; height: number; touch: boolean }
 interface BrowserState { tabs: BrowserTab[]; presets: Preset[]; nav?: { back: boolean; forward: boolean } }
 interface FrameMessage { seq: number; width: number; height: number; jpeg: string }
@@ -68,6 +69,8 @@ function usePageVisible() {
 }
 
 /** A tab of the server's headless Chromium: tabs, address bar, device presets, the streamed page, and notes on a still frame. */
+// A phone: tabs it opens or takes over start at phone width.
+const onPhone = () => typeof matchMedia === 'function' && matchMedia('(pointer: coarse) and (max-width: 820px)').matches
 const savedNote = (host: string) => `Saved logins · readable by agents on ${host}`
 export function BrowserPanel({ api, pane, active }: BrowserPanelProps) {
   const host = useHost()
@@ -93,8 +96,9 @@ export function BrowserPanel({ api, pane, active }: BrowserPanelProps) {
   const tab = tabs.find(item => item.id === current) ?? tabs[0] ?? null
   const tabId = tab?.id ?? null
   // Agent tabs are watch-only until the person takes over: no clicks, keys or navigation reach the page.
-  const [control, setControl] = useState<string | null>(null)
-  const watching = tab?.mode === 'agent' && control !== tab.id
+  // The server holds who controls the viewport, so every phone and desktop shows the same state.
+  const watching = tab?.mode === 'agent' && tab.controller !== 'user'
+  const [handing, setHanding] = useState(false)
   const watchingRef = useRef(watching)
   watchingRef.current = watching
   const owner = usePaneLabel(tab?.owner?.pane)
@@ -144,12 +148,12 @@ export function BrowserPanel({ api, pane, active }: BrowserPanelProps) {
     return () => observer.disconnect()
   }, [loaded])
   useEffect(() => {
-    if (!tab || tab.mode === 'agent' || tab.preset !== 'desktop' || stage.width < 50 || stage.height < 50 || noting) return
+    if (!tab || watching || tab.preset !== 'desktop' || stage.width < 50 || stage.height < 50 || noting) return
     const width = Math.max(320, stage.width), height = Math.max(240, stage.height)
     if (Math.abs(width - tab.width) < 3 && Math.abs(height - tab.height) < 3) return
     const timer = setTimeout(() => void api<BrowserTab>('browser/device', { tab: tab.id, preset: 'desktop', width, height }).then(row => setTabs(list => list.map(item => item.id === row.id ? row : item))).catch(() => undefined), 400)
     return () => clearTimeout(timer)
-  }, [tab?.id, tab?.preset, tab?.width, tab?.height, stage.width, stage.height, noting]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tab?.id, tab?.preset, tab?.width, tab?.height, stage.width, stage.height, noting, watching]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Frames: decode the newest one and skip any that arrive while one decodes.
   const pending = useRef<FrameMessage | null>(null)
@@ -324,7 +328,8 @@ export function BrowserPanel({ api, pane, active }: BrowserPanelProps) {
     tabMenu.setOpen(false)
     const row = await act<BrowserTab>('browser/new', { mode })
     if (!row) return
-    setTabs(list => [...list.filter(item => item.id !== row.id), row])
+    const fitted = onPhone() ? await act<BrowserTab>('browser/device', { tab: row.id, preset: 'phone' }) : null
+    setTabs(list => [...list.filter(item => item.id !== row.id), fitted ?? row])
     choose(row.id)
     requestAnimationFrame(() => urlRef.current?.focus())
   }
@@ -344,12 +349,21 @@ export function BrowserPanel({ api, pane, active }: BrowserPanelProps) {
     setDraft(null)
     urlRef.current?.blur()
   }
+  async function sendDevice(body: Record<string, unknown>) {
+    const row = await act<BrowserTab>('browser/device', body)
+    if (row) { setTabs(list => list.map(item => item.id === row.id ? row : item)); setFrame(null) }
+    return row
+  }
   async function setDevice(preset: string) {
     deviceMenu.setOpen(false)
     if (!tab) return
-    const body = preset === 'desktop' ? { tab: tab.id, preset, width: Math.max(320, stage.width), height: Math.max(240, stage.height) } : { tab: tab.id, preset }
-    const row = await act<BrowserTab>('browser/device', body)
-    if (row) { setTabs(list => list.map(item => item.id === row.id ? row : item)); setFrame(null) }
+    await sendDevice(preset === 'desktop' ? { tab: tab.id, preset, width: Math.max(320, stage.width), height: Math.max(240, stage.height) } : { tab: tab.id, preset })
+  }
+  // Take over: a device request takes the viewport from the agent. Stop: the server puts back the agent's own viewport.
+  async function handOver(toUser: boolean) {
+    if (!tab || handing) return
+    setHanding(true)
+    try { await sendDevice(!toUser ? { tab: tab.id, preset: 'agent' } : onPhone() ? { tab: tab.id, preset: 'phone' } : { tab: tab.id, preset: 'desktop', width: Math.max(320, stage.width), height: Math.max(240, stage.height) }) } finally { setHanding(false) }
   }
 
   // Notes: draw on a still copy of the frame, then hand the PNG to this pane's composer.
@@ -485,7 +499,7 @@ export function BrowserPanel({ api, pane, active }: BrowserPanelProps) {
         value={draft ?? shown(tab?.url ?? '')} onFocus={event => { setDraft(shown(tab?.url ?? '')); event.currentTarget.select() }} onBlur={() => setDraft(null)} onChange={event => setDraft(event.target.value)}
         onKeyDown={event => { if (event.key === 'Escape') { setDraft(null); event.currentTarget.blur() } }} />
       <div className="browser-menu-anchor" ref={deviceMenu.ref} onKeyDown={deviceMenu.onKeyDown}>
-        <button type="button" className="browser-icon" aria-label={`Device: ${presetLabel}`} title={`Device: ${presetLabel}`} aria-haspopup="menu" aria-expanded={deviceMenu.open} disabled={!tab || tab.mode === 'agent'} onClick={() => deviceMenu.setOpen(!deviceMenu.open)}><DeviceIcon preset={tab?.preset ?? 'desktop'} /></button>
+        <button type="button" className="browser-icon" aria-label={`Device: ${presetLabel}`} title={`Device: ${presetLabel}`} aria-haspopup="menu" aria-expanded={deviceMenu.open} disabled={!tab || watching} onClick={() => deviceMenu.setOpen(!deviceMenu.open)}><DeviceIcon preset={tab?.preset ?? 'desktop'} /></button>
         {deviceMenu.open && <div className="browser-menu end" role="menu">
           {presets.map(item => <button key={item.id} type="button" role="menuitemradio" aria-checked={item.id === tab?.preset} autoFocus={item.id === tab?.preset} onClick={() => void setDevice(item.id)}>
             <DeviceIcon preset={item.id} /><span>{item.label}<small>{item.id === 'desktop' ? 'Fits the panel' : `${item.width} × ${item.height}`}</small></span>{item.id === tab?.preset && <Check size={16} />}
@@ -500,7 +514,7 @@ export function BrowserPanel({ api, pane, active }: BrowserPanelProps) {
     {tab?.mode === 'agent' && <div className="browser-agent" role="note">
       <Bot size={14} aria-hidden="true" />
       <span>{watching ? `${owner ?? 'An agent'} uses this tab. You watch.` : `You control this tab. ${owner ?? 'The agent'} can still act.`}</span>
-      <button type="button" className="browser-text-button" aria-pressed={!watching} onClick={() => setControl(watching ? tab.id : null)}>{watching ? 'Take over' : 'Stop'}</button>
+      <button type="button" className="browser-text-button" aria-pressed={!watching} disabled={handing} onClick={() => void handOver(watching)}>{handing ? '…' : watching ? 'Take over' : 'Give back'}</button>
     </div>}
 
     <div className={typing ? 'browser-stage typing' : 'browser-stage'} ref={stageRef} tabIndex={-1} aria-label="Page">

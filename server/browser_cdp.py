@@ -303,6 +303,7 @@ class AgentClient:
         self.contexts = set()
         self.created_contexts = set()
         self.sessions = {}  # child session -> target id
+        self.emulation = {}  # target -> successful viewport commands; guarded by Browser.lock
         self.targets = {}  # live owned targets
         self.known_targets = set()  # retain ids until disconnect to filter destruction events
         self.pending_pages = 0
@@ -377,6 +378,22 @@ class AgentClient:
                     self.proxy.log_denied(method)
                     self.error(message, 'Not allowed through Tether.', -32601)
                     return
+        if session and method in browser.AGENT_EMULATION:
+            # Serialize these commands with panel handoffs. Never wait with self.lock held: the reader uses it.
+            with self.proxy.browser.lock:
+                target = self.sessions.get(session)
+                tab = self.proxy.browser.tabs.get(target)
+                if tab is not None and tab.controller == 'user':
+                    self.error(message, "The user controls this tab's viewport. Return control to the agent first.")
+                    return
+                try:
+                    result = self.conn.call(method, params, session)
+                except browser.BrowserError as exc:
+                    self.error(message, str(exc))
+                    return
+                self.emulation.setdefault(target, {})[browser.AGENT_EMULATION[method]] = (method, params)
+                self.transport.message({'id': message['id'], 'sessionId': session, 'result': result})
+            return
         outgoing = dict(message, params=params, sessionId=session or self.root)
         completed = threading.Event() if root and method == 'Target.createTarget' else None
         def answered(reply):
