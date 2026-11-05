@@ -18,6 +18,9 @@ PREFIX = '/mobile/api/browser/extension/'
 ORIGIN = re.compile(r'chrome-extension://[a-p]{32}')
 PAGE_ALLOWED = (signed.PAGE_ALLOWED - {'Network.getCookies', 'DOM.setFileInputFiles'}) | {
     'Page.startScreencast', 'Page.stopScreencast', 'Page.screencastFrameAck'}
+# Passive event domains share the extension's single debugger attachment. Fetch has
+# command-specific interception settings and must still reach Chrome unchanged.
+SHARED_DOMAINS = {'Runtime', 'Page', 'DOM', 'Network', 'Log', 'Performance', 'Accessibility'}
 
 
 def check_command(method, params):
@@ -243,6 +246,8 @@ class Connection:
         self.owner = owner
         self.sessions, self.sinks = {}, {}
         self.lock = threading.RLock()
+        self.domain_lock = threading.RLock()  # Never held by the extension event reader.
+        self.enabled, self.contexts, self.runtime_started = {}, {}, set()
 
     def register_sink(self, session, sink):
         with self.lock:
@@ -251,6 +256,43 @@ class Connection:
     def unregister_sink(self, session):
         with self.lock:
             self.sinks.pop(session, None)
+
+    def detach(self, session):
+        with self.domain_lock, self.lock:
+            self.sessions.pop(session, None)
+            self.sinks.pop(session, None)
+            self.enabled.pop(session, None)
+
+    def domain_command(self, method, params, session, target, request):
+        domain, action = method.split('.', 1)
+        # Keep Runtime warm until grant removal, even between clients. Otherwise
+        # navigation while nobody subscribes could leave a stale context cache.
+        with self.domain_lock:
+            with self.lock:
+                enabled = self.enabled.setdefault(session, set())
+                if domain == 'Runtime' and action == 'enable' and domain in enabled:
+                    return {}
+                shared = any(domain in domains and self.sessions.get(other) == target
+                             for other, domains in self.enabled.items() if other != session)
+                started = target in self.runtime_started
+            if action == 'disable':
+                result = {} if domain == 'Runtime' or shared else request()
+                with self.lock:
+                    enabled.discard(domain)
+                return result
+            result = {} if domain == 'Runtime' and started else request()
+            with self.lock:
+                enabled.add(domain)
+                if domain == 'Runtime':
+                    self.runtime_started.add(target)
+                    sink = self.sinks.get(session)
+                    # Replay and live delivery use the same lock. A destruction or
+                    # creation event cannot overtake this snapshot, or appear twice.
+                    if sink:
+                        for context in self.contexts.get(target, {}).values():
+                            sink({'method': 'Runtime.executionContextCreated',
+                                  'params': {'context': context}, 'sessionId': session})
+            return result
 
     def info(self, target):
         tab = self.owner.tab(target)
@@ -273,7 +315,7 @@ class Connection:
             self.sessions[ident] = params['targetId']
             return {'sessionId': ident}
         if method == 'Target.detachFromTarget':
-            self.sessions.pop(params.get('sessionId'), None)
+            self.detach(params.get('sessionId'))
             return {}
         if method in ('Target.closeTarget', 'Target.activateTarget'):
             target = params.get('targetId')
@@ -290,11 +332,32 @@ class Connection:
             raise browser.BrowserError('That Mac grant has ended.')
         if method in ('Page.close', 'Page.bringToFront'):
             params = {}
-        reply = grant.device.request({'type': 'command', 'grant': grant.row['id'], 'tab': grant.tab_id,
-                                      'method': method, 'params': params}, timeout)
-        return reply.get('result') or {}
+        def request():
+            reply = grant.device.request({'type': 'command', 'grant': grant.row['id'], 'tab': grant.tab_id,
+                                          'method': method, 'params': params}, timeout)
+            return reply.get('result') or {}
+        domain, _, action = method.partition('.')
+        if domain in SHARED_DOMAINS and action in ('enable', 'disable'):
+            return self.domain_command(method, params, session, target, request)
+        if method == 'Page.setLifecycleEventsEnabled':
+            with self.domain_lock:
+                with self.lock:
+                    enabled = self.enabled.setdefault(session, set())
+                    shared = any('lifecycle' in domains and self.sessions.get(other) == target
+                                 for other, domains in self.enabled.items() if other != session)
+                result = {} if not params.get('enabled') and shared else request()
+                with self.lock:
+                    if params.get('enabled'):
+                        enabled.add('lifecycle')
+                    else:
+                        enabled.discard('lifecycle')
+                return result
+        return request()
 
     def send(self, method, params=None, session=None):
+        if method == 'Target.detachFromTarget':
+            self.detach((params or {}).get('sessionId'))
+            return
         # Only housekeeping uses fire-and-forget; no thread or command queue is needed for ACKs.
         target = self.sessions.get(session)
         tab = self.owner.tabs.get(target)
@@ -320,10 +383,28 @@ class Connection:
         # Existing p18 path acknowledges on receipt and replaces the single newest-frame slot.
         self.owner._event(method, params, tab.session)
         with self.lock:
+            if self.owner.tabs.get(target) is not tab or not self.owner.agent_proxy.valid(grant):
+                return  # Grant removal can race the reader after the initial identity check.
+            contexts = self.contexts.setdefault(target, {})
+            if method == 'Runtime.executionContextCreated':
+                context = params.get('context') or {}
+                if type(context.get('id')) is int:
+                    contexts[context['id']] = context
+            elif method == 'Runtime.executionContextDestroyed':
+                contexts.pop(params.get('executionContextId'), None)
+                unique = params.get('executionContextUniqueId')
+                if unique:
+                    for ident, context in list(contexts.items()):
+                        if context.get('uniqueId') == unique:
+                            contexts.pop(ident)
+            elif method == 'Runtime.executionContextsCleared':
+                contexts.clear()
             sinks = [(session, sink) for session, sink in self.sinks.items() if self.sessions.get(session) == target]
-        for session, sink in sinks:
-            if method != 'Page.screencastFrame':  # panel owns the cast and its acknowledgments
-                sink({'method': method, 'params': params, 'sessionId': session})
+            for session, sink in sinks:
+                if method.startswith('Runtime.') and 'Runtime' not in self.enabled.get(session, set()):
+                    continue
+                if method != 'Page.screencastFrame':  # panel owns the cast and its acknowledgments
+                    sink({'method': method, 'params': params, 'sessionId': session})
 
 
 class MacBrowser(browser.Browser):
@@ -368,8 +449,10 @@ class MacBrowser(browser.Browser):
                 self.order.remove(target)
                 for session, attached in list(self.conn.sessions.items()):
                     if attached == target:
-                        self.conn.sessions.pop(session, None)
-                        self.conn.unregister_sink(session)
+                        self.conn.detach(session)
+                with self.conn.lock:
+                    self.conn.contexts.pop(target, None)
+                    self.conn.runtime_started.discard(target)
                 with tab.changed:
                     tab.changed.notify_all()
                 self._bump()
