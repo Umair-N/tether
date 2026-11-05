@@ -58,8 +58,12 @@ async function uploadFile(file: File, session: string, thread: string | null): P
 
 interface ComposerProps { api: Api; pane: Pane; thread: string | null; disabled: boolean; onSend: (text: string) => Promise<boolean>; error: string; errorAction?: React.ReactNode; draft: string; setDraft: (text: string) => void; working: boolean; onStop: () => void; micOk: boolean; hint?: string; chime: boolean; options?: React.ReactNode; onTools: () => void; handsFree: boolean; listenRequest: number; sent?: string[] }
 // With no accept list, Chrome on Android opens the system app chooser (Camera, Camcorder, Media picker).
-// A list of document types opens the Files app directly. Photos and videos go through Gallery instead.
-const FILES_ACCEPT = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent) ? 'application/*,text/*' : undefined
+// showOpenFilePicker (Chrome 132+ on Android) opens the Files app directly, with every file type.
+// Older Android Chrome falls back to a list of document types, which also skips the chooser.
+const ANDROID = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent)
+const FILES_ACCEPT = ANDROID ? 'application/*,text/*' : undefined
+type OpenPicker = (options: { multiple: boolean }) => Promise<{ getFile(): Promise<File> }[]>
+const openPicker = () => ANDROID ? (window as unknown as { showOpenFilePicker?: OpenPicker }).showOpenFilePicker : undefined
 export function Composer({ api, pane, thread, disabled, onSend, error, errorAction, draft, setDraft, working, onStop, micOk, chime, options, onTools, hint, handsFree, listenRequest, sent = [] }: ComposerProps) {
   const host = useHost()
   const [menu, setMenu] = useState(false)
@@ -91,6 +95,15 @@ export function Composer({ api, pane, thread, disabled, onSend, error, errorActi
       setHasFolder(true)
       await attach([file])
     } catch (failure) { setSpeechError(errorText(failure)) }
+  }
+  async function pickFiles() {
+    setMenu(false)
+    const open = openPicker()
+    if (!open) { picker.current?.click(); return }
+    try {
+      const handles = await open.call(window, { multiple: true })
+      await attach(await Promise.all(handles.map(handle => handle.getFile())))
+    } catch (failure) { if ((failure as Error)?.name !== 'AbortError') setSpeechError(errorText(failure)) }
   }
   async function changeFolder() {
     await forgetFolder()
@@ -312,7 +325,7 @@ export function Composer({ api, pane, thread, disabled, onSend, error, errorActi
         <div className="attach-tiles">
           <button role="menuitem" type="button" onClick={() => { setMenu(false); photos.current?.click() }}><span><ImagePlus size={24} /></span>Gallery</button>
           <button role="menuitem" type="button" onClick={() => { setMenu(false); camera.current?.click() }}><span><Camera size={24} /></span>Camera</button>
-          <button role="menuitem" type="button" onClick={() => { setMenu(false); picker.current?.click() }}><span><Paperclip size={24} /></span>Files</button>
+          <button role="menuitem" type="button" onClick={() => void pickFiles()}><span><Paperclip size={24} /></span>Files</button>
         </div>
         <button role="menuitem" type="button" onClick={() => void attachLatest()}><Smartphone size={18} />Latest screenshot</button>
         {hasFolder && <button role="menuitem" type="button" onClick={() => void changeFolder()}><FolderOpen size={18} />Change screenshot folder</button>}
