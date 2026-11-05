@@ -6,6 +6,7 @@ After=network.target tether-llm.service
 # Set TETHER_REPO to the checkout that contains server/friday_agent.py.
 Environment=TETHER_REPO=%h/apps/tether
 Environment=HF_HUB_OFFLINE=1
+EnvironmentFile=-%h/.config/tether/friday.env
 ExecStart=%h/.local/share/tether/friday-venv/bin/python ${TETHER_REPO}/server/friday_agent.py
 Restart=always
 RestartSec=3

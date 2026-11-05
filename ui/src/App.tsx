@@ -23,12 +23,13 @@ import { PanelColumn, PanelTools } from './PanelColumn'
 import { PANELS, TOOLBAR_PANELS, extraPanels, togglePanelKind } from './panels'
 import type { PanelKind, SetPanels } from './panels'
 import type { Side } from './workspace'
+import { withoutShells } from './sideShells'
 import type { DesktopLayout, SidePin } from './prefs'
 import { CommandMenu } from './CommandMenu'
 import type { Command } from './CommandMenu'
 import { Shortcuts } from './Shortcuts'
 import { StatusBar } from './StatusBar'
-import { toggleTerminal } from './keys'
+import { toggleTerminal, toggleVoice } from './keys'
 import { Rail } from './Rail'
 import type { Screen } from './Rail'
 import { Explorer } from './Explorer'
@@ -345,6 +346,11 @@ function App() {
       if (event.altKey && !event.ctrlKey && !event.metaKey && (event.code === 'BracketRight' || event.code === 'BracketLeft')) {
         if (pinKeys.current(event.code === 'BracketRight' ? 1 : -1)) { event.preventDefault(); return }
       }
+      // ⌥V turns voice input on or off, also while typing. Read event.code: Alt+V types √ on a Mac.
+      if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.code === 'KeyV' && !document.querySelector('dialog[open]')) {
+        if (toggleVoice()) event.preventDefault()
+        return
+      }
       // The Files screen handles its own keys; the hidden workspace must not take them.
       if (rail?.files) return
       if (slots && !document.querySelector('dialog[open]')) {
@@ -497,7 +503,7 @@ function App() {
   }
   const canMessage = sessions.some(item => item.panes.some(p => p.agent !== 'shell' && p.writable))
   const words = useMemo(() => wordsFor(prefs.tmuxWords), [prefs.tmuxWords])
-  const sidebarProps = { api, sessions, marks, onMarks: loadMarks, selected: pane?.id, slots: multi ? view?.slots : undefined, drag: !!view, prefs, update, loading, error, onRetry: () => void refresh(), onOpen: openPane, onNew: () => { setDrawer(false); setNewSession(true) }, onActions: (item: Session, remove?: boolean, at?: Anchor) => { if (remove) setDrawer(false); setMenuAt(view ? at : undefined); setActionsDelete(!!remove); setActions(item.id) }, onPaneActions: (item: Pane, at?: Anchor) => { setDrawer(false); setMenuAt(view ? at : undefined); setPaneActions(item.id) }, onPastChat: pickPastChat, onSettings: () => { setDrawer(false); setSettings(true) }, onCommandMenu: view ? () => setMenu('commands') : undefined, onMessageAll: canMessage ? () => { setDrawer(false); setAgentsPage('message') } : undefined, onAddPane: (item: Session) => { const target = item.panes.find(entry => entry.id === prefs.lastPane[item.id]) ?? item.panes[0]; void split('right', target) } }
+  const sidebarProps = { api, sessions, marks, onMarks: loadMarks, selected: pane?.id, slots: multi ? view?.slots : undefined, drag: !!view, prefs, update, loading, error, onRetry: () => void refresh(), onOpen: openPane, onNew: () => { setDrawer(false); setNewSession(true) }, onActions: (item: Session, remove?: boolean, at?: Anchor) => { if (remove) setDrawer(false); setMenuAt(view ? at : undefined); setActionsDelete(!!remove); setActions(item.id) }, onPaneActions: (item: Pane, at?: Anchor) => { setDrawer(false); setMenuAt(view ? at : undefined); setPaneActions(item.id) }, onPastChat: pickPastChat, onSettings: () => { setDrawer(false); setSettings(true) }, onCommandMenu: view ? () => setMenu('commands') : undefined, onMessageAll: canMessage ? () => { setDrawer(false); setAgentsPage('message') } : undefined, onOpenShell: view ? openShell : undefined, onShellsEnded: shellsEnded, onAddPane: (item: Session) => { const target = item.panes.find(entry => entry.id === prefs.lastPane[item.id]) ?? item.panes[0]; void split('right', target) } }
   // The command menu runs the same actions as the keys. A command shows only when it would do something now.
   const commands: Command[] = view ? [
     ...(slotPanes.length < 3 ? [{ label: 'Split right', key: '⌘\\', run: () => setCount(Math.max(2, slotPanes.length + 1) as DesktopLayout['count']) }] : []),

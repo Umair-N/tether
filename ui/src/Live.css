@@ -50,13 +50,15 @@ button.live-chip:hover { background: var(--hover); }
 .live-pane[aria-checked="true"] { border-color: color-mix(in oklab, var(--live-you) 50%, var(--line)); background: color-mix(in oklab, var(--live-you) 8%, transparent); }
 .live-pane[aria-checked="true"] .live-check { opacity: 1; }
 
-.live-center { position: relative; z-index: 1; display: grid; place-items: center; min-height: 0; }
-.live-orb { position: relative; width: min(64vw, 42vh, 380px); aspect-ratio: 1; max-width: 100%; }
+/* The orb and its status share one column, so a long reply can never cover the status. */
+.live-center { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; min-height: 0; overflow: hidden; }
+.live-orb { position: relative; flex: none; width: min(64vw, 42vh, 380px); aspect-ratio: 1; max-width: 100%; }
 .live-orb canvas { display: block; width: 100%; height: 100%; cursor: pointer; }
-.live-status { position: absolute; left: 50%; bottom: -6px; transform: translateX(-50%); white-space: nowrap; font-family: var(--live-mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.live-status { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--live-mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
 
-.live-words { position: relative; z-index: 2; display: grid; align-content: end; gap: 12px; justify-self: center; width: 100%; max-width: 34em; min-height: 9.5em; padding-bottom: 14px; }
+.live-words { position: relative; z-index: 2; display: flex; flex-direction: column; gap: 12px; justify-self: center; width: 100%; max-width: 34em; min-height: 9.5em; max-height: 38vh; overflow-y: auto; overscroll-behavior: contain; padding-bottom: 14px; }
 .live-words p { margin: 0; }
+.live-words > :first-child { margin-top: auto; } /* bottom-aligned, but long text stays scrollable */
 .live-said { font-family: var(--live-display); font-style: italic; font-weight: 300; font-size: clamp(20px, 5vw, 30px); line-height: 1.22; text-wrap: balance; color: var(--muted); }
 .live-reply { font-size: clamp(16px, 3.9vw, 19px); line-height: 1.5; color: var(--text); animation: live-in .25s cubic-bezier(.23, 1, .32, 1) both; }
 .live-who { display: block; margin-bottom: 4px; font-family: var(--live-mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--live-agent); }

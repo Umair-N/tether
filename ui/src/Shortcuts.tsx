@@ -28,6 +28,7 @@ const GROUPS = [
   { name: 'Act', items: [
     ['Send', '↵'],
     ['New line', '⇧↵'],
+    ['Voice input on or off', '⌥V'],
     ['This list', '?'],
   ] },
 ] as const

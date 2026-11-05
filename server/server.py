@@ -1270,6 +1270,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.stream_chat(query.get('session', [None])[0], query.get('mode') == ['shell'], window_limit(query), preview=query.get('preview') == ['1'])
             elif path == '/mobile/api/sessions':
                 self.respond(200, {'sessions': [session_row(entry) for entry in sessions()], 'default_thread': settings()['thread']})
+            elif path == '/mobile/api/side-shells':
+                self.respond(200, {'shells': side_shells.list_shells()})
             elif path == '/mobile/api/tmux-sessions':
                 result = subprocess.run([paths.TMUX, 'list-sessions', '-F', '#{session_id}\t#{session_name}\t#{session_windows}'],
                                         capture_output=True, text=True, timeout=5)
@@ -1508,8 +1510,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if self.path == '/mobile/api/side-shell/end':
                 with SEND_LOCK:
-                    side_shells.end_shell(body.get('pane'))
-                self.respond(200, {'ended': True})
+                    if 'pane' in body:
+                        side_shells.end_shell(body.get('pane'))
+                        response = {'ended': True}
+                    else:
+                        response = {'ended': True, 'panes': side_shells.end_shells(body.get('which'))}
+                self.respond(200, response)
                 return
             if self.path == '/mobile/api/split':
                 pane, direction = body.get('session'), body.get('direction')

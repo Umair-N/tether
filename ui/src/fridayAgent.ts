@@ -9,7 +9,9 @@ export type ToolResult = Record<string, unknown>
 export type ToolHandler = (args: Record<string, unknown>) => Promise<ToolResult>
 export interface AgentMetrics { turn: number; stop_to_first_audio: number; stt: number; llm_ttft: number; tts_ttfb: number }
 export interface AgentEvent { id: string; chat: string; kind: 'approval' | 'question' | 'plan' | 'done' | 'error'; text: string; priority: 'now' | 'idle' }
-export interface AgentChats { chats: { name: string; agent: string; state: string; needs: string }[]; target: string }
+// Kept small: the state goes into the LLM prompt on most turns (about 7 ms per token on this CPU).
+export interface AgentChats { target: string; busy: string[]; needs: { chat: string; needs: string }[]; idle: number }
+export interface AgentChatList { target: string; chats: string[] }
 
 export interface AgentEvents {
   onTurn: (turn: AgentTurn) => void
