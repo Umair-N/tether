@@ -28,7 +28,7 @@ class ReviewLinksTests(unittest.TestCase):
         self.add()
 
     def add(self, **extra):
-        review_links.add(**dict(worker='%13', reviewer='%12', reviewer_thread=THREAD, name='Fix the bug', agent='codex', **extra))
+        review_links.add(**dict({'worker': '%13', 'reviewer': '%12', 'reviewer_thread': THREAD, 'name': 'Fix the bug', 'agent': 'codex'}, **extra))
 
     def links(self):
         return json.loads(self.file.read_text())
@@ -46,7 +46,7 @@ class ReviewLinksTests(unittest.TestCase):
             self.assertTrue(review_links._lock.locked())
             return links
         with patch.object(review_links, '_read', side_effect=read) as read_store:
-            self.assertEqual(review_links.reviewed_by(), {'%13': '%12', '%20': '%21'})
+            self.assertEqual(review_links.reviewed_by(), {'%13': ['%12'], '%20': ['%21']})
         read_store.assert_called_once_with()
 
     def test_remove_drops_every_matching_link_and_keeps_other_rows_under_lock(self):
@@ -66,7 +66,60 @@ class ReviewLinksTests(unittest.TestCase):
         with patch.object(review_links, '_write') as write:
             self.assertFalse(review_links.remove('%99'))
         write.assert_not_called()
-        self.assertEqual(review_links.reviewed_by(), {'%13': '%12'})
+        self.assertEqual(review_links.reviewed_by(), {'%13': ['%12']})
+
+    def test_pairs_are_unique_and_reviewers_keep_store_order_without_duplicates(self):
+        self.add(reviewer='%21')
+        self.add(name='Replacement')
+        self.assertEqual([(link['reviewer'], link['name']) for link in self.links()],
+                         [('%21', 'Fix the bug'), ('%12', 'Replacement')])
+        self.file.write_text(json.dumps(self.links() + self.links()))
+        self.assertEqual(review_links.reviewed_by(), {'%13': ['%21', '%12']})
+        self.assertTrue(review_links.remove('%13', '%21'))
+        self.assertEqual(review_links.reviewed_by(), {'%13': ['%12']})
+        self.assertFalse(review_links.remove('%13', '%21'))
+        self.assertTrue(review_links.remove('%13'))
+        self.assertEqual(self.links(), [])
+
+    def test_unpinned_reviewer_waits_for_uuid_then_sends_when_both_idle(self):
+        self.add(reviewer_thread=None, seen_working=True)
+        for thread in (None, 'pending-123-1', 'pending-123-2', 'not-a-uuid', THREAD.upper()):
+            self.reviewer['thread'] = thread
+            self.observe()
+            self.assertIsNone(self.links()[0]['reviewer_thread'])
+            self.send.assert_not_called()
+        self.reviewer['thread'] = THREAD
+        self.observe(**{'%12': 'Working'})
+        self.assertEqual(self.links()[0]['reviewer_thread'], THREAD)
+        self.send.assert_not_called()
+        self.observe(**{'%12': 'Idle'})
+        self.send.assert_called_once()
+        self.assertEqual(self.send.call_args.args[0], self.reviewer)
+        self.observe()
+        self.assertEqual(self.send.call_count, 1)
+
+    def test_unpinned_reviewer_expires_only_after_start_wait(self):
+        self.assertEqual(review_links.START_WAIT, 300)
+        with patch.object(review_links.time, 'time', return_value=1000):
+            self.add(reviewer_thread=None, seen_working=True)
+        self.reviewer['thread'] = 'pending-1-1'
+        for now in (1031, 1299, 1300):
+            with patch.object(review_links.time, 'time', return_value=now):
+                self.observe()
+            self.assertEqual(len(self.links()), 1)
+        with patch.object(review_links.time, 'time', return_value=1301):
+            self.observe()
+        self.assertEqual(self.links(), [])
+        self.send.assert_not_called()
+
+    def test_several_reviewers_receive_each_workers_turn(self):
+        self.add(reviewer='%21')
+        reviewer = dict(self.reviewer, id='%21')
+        self.states['%21'] = 'Idle'
+        for state in ('Working', 'Idle'):
+            self.states['%13'] = state
+            review_links.observe([self.worker, self.reviewer, reviewer], self.status, self.send, self.reply)
+        self.assertEqual([call.args[0]['id'] for call in self.send.call_args_list], ['%12', '%21'])
 
     def test_store_fields_atomic_replace_and_bound(self):
         link, = self.links()

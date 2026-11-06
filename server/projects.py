@@ -15,6 +15,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -348,6 +349,13 @@ def render(pid, agent='claude', home=None):
         parts.append(f'\n## Pinned files\nRead a file when the task needs it.\n{lines}\n')
     parts.append('\n## Tab icon\nOnce the task is clear, run `tmux set-option -p -t "$TMUX_PANE" @chat_icon NAME`. NAME: a lucide.dev '
                  f'icon name, or svg-X after you write a 24x24 stroke SVG to {paths.TETHER}/icons/X.svg. Skip it if @chat_icon_by is "user".\n')
+    cli = Path(__file__).resolve().with_name('agent_tab_cli.py')
+    parts.append(f'\n## New tabs and reviewers\nTo start a new tab or session, or a reviewer, run `{sys.executable} {cli} start ...`, not raw tmux. '
+                 'It opens a tab Tether can track. Options: `--review-it` (this tab reviews the new tab; Tether sends you a review request '
+                 'after each of its turns and sends your reply back), `--reviews-me` (the new tab reviews this tab), '
+                 '`--agent claude|codex`, `--name NAME`, `--cwd DIR`, `--context`. '
+                 '`stop --worker %N [--reviewer %N]` ends a review; `list` shows this tab\'s links. '
+                 'Start your review reply with APPROVED when nothing is wrong.\n')
     parts.append(f'\n## Notes\nSave a project fact that other agents in this session need as a Markdown file in {folder}/notes/ '
                  '(one topic per file, a "# Title" first line). Keep your own memory as before. The user reviews notes in Tether.\n')
     if found:

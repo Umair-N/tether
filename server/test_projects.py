@@ -75,13 +75,19 @@ class ProjectTests(unittest.TestCase):
             with self.assertRaises(projects.ProjectError):
                 projects.bundle(bad)
 
-    def test_empty_project_injects_only_notes_and_writes_no_folder(self):
+    def test_empty_project_injects_agent_guidance_and_writes_no_folder(self):
         text = projects.render(PID)
         self.assertIn('## Notes', text)
         self.assertIn(str(projects.bundle(PID) / 'notes'), text)
         self.assertNotIn('## Instructions', text)
         self.assertIn('@chat_icon', text)  # agents learn to set their tab icon
-        self.assertLess(len(text), 700)
+        self.assertLess(len(text), 1500)
+        self.assertLess(text.index('## Tab icon'), text.index('## New tabs and reviewers'))
+        self.assertLess(text.index('## New tabs and reviewers'), text.index('## Notes'))
+        self.assertIn(str(Path(projects.__file__).with_name('agent_tab_cli.py')), text)
+        for option in ('--review-it', '--reviews-me', '--agent claude|codex', '--name NAME',
+                       '--cwd DIR', '--context', 'stop --worker %N [--reviewer %N]', '`list`', 'APPROVED'):
+            self.assertIn(option, text)
         self.assertFalse(projects.has_context(PID, self.home))
         state = projects.state(PID, self.home)
         self.assertEqual((state['chars'] > 0, state['revision']), (True, 0))

@@ -1,0 +1,25 @@
+/* The eye in the chat header and its list of linked tabs (ReviewLinks.tsx). It shows only when a link exists. */
+.review-toggle { position: relative; margin-left: auto; }
+/* The eye starts the right-hand group, so the buttons after it stay beside it. */
+.chat-header .review-toggle ~ :is(.side-pin-toggle, .search-toggle, .terminal-toggle) { margin-left: 0; }
+.review-toggle[aria-expanded="true"] { color: var(--accent); }
+.review-count { position: absolute; top: 2px; right: 0; min-width: 14px; height: 14px; padding: 0 3px; border-radius: var(--radius-sm); background: var(--surface); box-shadow: 0 0 0 1px var(--line); color: var(--muted); font-size: 10px; font-weight: 600; line-height: 14px; text-align: center; font-variant-numeric: tabular-nums; }
+
+.sheet.popover.review-pop { width: 300px; padding: 6px; }
+.review-pop section + section { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line); }
+.sheet.popover.review-pop h2 { margin: 0; padding: 6px 8px 4px; color: var(--muted); font-size: 12px; font-weight: 500; }
+.review-pop ul { margin: 0; padding: 0; list-style: none; }
+.review-row { display: flex; align-items: center; gap: 2px; }
+.review-go { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 8px; border-radius: 8px; font-size: 13.5px; text-align: left; }
+.review-go:hover:not(:disabled) { background: var(--hover); }
+.review-go svg { flex-shrink: 0; }
+.review-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.review-stop { flex-shrink: 0; display: grid; place-items: center; width: 36px; height: 44px; border-radius: 8px; color: var(--muted); }
+.review-stop:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.review-go:focus-visible, .review-stop:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+@media (pointer: fine) {
+  .review-go { min-height: 34px; }
+  .review-stop { width: 30px; height: 34px; }
+}
+.workspace .review-toggle svg { width: 16px; height: 16px; }
+.workspace .review-count { top: 0; right: -2px; }

@@ -16,6 +16,8 @@ MAX_RETRIES = 30
 REVIEW_WAIT = 450
 MAX_ROUNDS = 3
 GRACE = 30
+START_WAIT = 300
+UUID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
 _lock = threading.Lock()
 
 
@@ -41,26 +43,34 @@ def _write(links):
             os.unlink(temporary)
 
 
-def add(*, worker, reviewer, reviewer_thread, name, agent):
+def add(*, worker, reviewer, reviewer_thread, name, agent, seen_working=False):
     link = dict(worker=worker, reviewer=reviewer, reviewer_thread=reviewer_thread,
-                name=name, agent=agent, created=time.time(), seen_working=False, worker_thread=None)
+                name=name, agent=agent, created=time.time(), seen_working=seen_working, worker_thread=None)
     with _lock:
-        links = [item for item in _read() if isinstance(item, dict) and item.get('worker') != worker]
+        links = [item for item in _read() if isinstance(item, dict)
+                 and (item.get('worker'), item.get('reviewer')) != (worker, reviewer)]
         _write((links + [link])[-MAX_LINKS:])
 
 
 def reviewed_by():
     with _lock:
-        return {link['worker']: link['reviewer'] for link in _read()
-                if isinstance(link, dict)
-                and all(isinstance(link.get(key), str) and re.fullmatch(r'%[0-9]+', link[key])
-                        for key in ('worker', 'reviewer'))}
+        result = {}
+        for link in _read():
+            if isinstance(link, dict) and all(
+                    isinstance(link.get(key), str) and re.fullmatch(r'%[0-9]+', link[key])
+                    for key in ('worker', 'reviewer')):
+                reviewers = result.setdefault(link['worker'], [])
+                if link['reviewer'] not in reviewers:
+                    reviewers.append(link['reviewer'])
+        return result
 
 
-def remove(worker):
+def remove(worker, reviewer=None):
     with _lock:
         links = _read()
-        remaining = [link for link in links if not isinstance(link, dict) or link.get('worker') != worker]
+        remaining = [link for link in links if not isinstance(link, dict)
+                     or link.get('worker') != worker
+                     or (reviewer is not None and link.get('reviewer') != reviewer)]
         if len(remaining) == len(links):
             return False
         _write(remaining)
@@ -74,12 +84,18 @@ def _digest(text):
 def _step(link, entries, status, send, last_reply):
     worker = entries.get(link['worker'])
     reviewer = entries.get(link['reviewer'])
-    if reviewer is not None and reviewer.get('thread') != link['reviewer_thread']:
+    if link['reviewer_thread'] is None:
+        thread = reviewer.get('thread') if reviewer is not None else None
+        if isinstance(thread, str) and UUID.fullmatch(thread):
+            link['reviewer_thread'] = thread
+        else:
+            return link if time.time() - link.get('created', 0) <= START_WAIT else None
+    elif reviewer is not None and reviewer.get('thread') != link['reviewer_thread']:
         return None
     if worker is None or reviewer is None:
         return link if time.time() - link.get('created', 0) < GRACE else None
     thread = worker.get('thread')
-    if isinstance(thread, str) and re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', thread):
+    if isinstance(thread, str) and UUID.fullmatch(thread):
         if link.get('worker_thread') is None:
             link['worker_thread'] = thread
         elif thread != link['worker_thread']:

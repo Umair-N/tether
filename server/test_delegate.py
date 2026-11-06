@@ -27,6 +27,36 @@ def body(**extra):
 
 
 class ValidationTests(unittest.TestCase):
+    def test_normalize_review_accepts_only_the_documented_types(self):
+        for value, expected in ((False, None), (True, 'source'), ('source', 'source'), ('new', 'new')):
+            with self.subTest(value=value):
+                self.assertEqual(delegate.normalize_review(value), expected)
+                delegate.validate(body(review=value), [entry()])
+        for value in (0, 1, None, 'false', '', [], {}, 1.0):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'Context and review'):
+                delegate.normalize_review(value)
+
+    def test_new_reviewer_requires_a_saved_writable_source_and_allows_empty_task(self):
+        error = ('A reviewer tab needs a Claude or Codex chat with a saved conversation. '
+                 'Send a first message, then try again.')
+        for source in (entry(thread=None), entry(thread='pending-123-1'), entry(pending_conversation=True),
+                       entry(transcript=None), entry(transcript=''), entry(writable=False),
+                       entry(agent='shell'), entry(agent='antigravity')):
+            with self.subTest(source=source), self.assertRaises(ValueError) as raised:
+                delegate.validate(body(thread=source['thread'], review='new', context=True), [source])
+            self.assertEqual(str(raised.exception), error)
+        for agent in ('claude', 'codex'):
+            delegate.validate(body(review='new', message=' \n\t '), [entry(agent=agent)])
+        for message in (None, 'x' * 20001, '\r'):
+            with self.subTest(message=message), self.assertRaises(ValueError):
+                delegate.validate(body(review='new', message=message), [entry()])
+
+    def test_optional_name_is_bounded_and_has_no_controls(self):
+        for name in (None, 1, '', '  ', 'x' * 61, 'name\n', '\tname', 'name\x7f'):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'tab name'):
+                delegate.validate(body(name=name), [entry()])
+        delegate.validate(body(name='  ' + 'x' * 60 + '  '), [entry()])
+
     def test_accepts_defaults_and_plain_tasks_from_shells(self):
         source = entry()
         self.assertIs(delegate.validate(body(), [source]), source)
@@ -82,6 +112,63 @@ class LaunchTests(unittest.TestCase):
                 ('a' * 30 + ' longer word', 'a' * 30 + '…')):
             with self.subTest(message=message):
                 self.assertEqual(delegate.task_name(message), expected)
+
+    def test_reviewer_prompt_has_exact_instructions_with_optional_recent_turns(self):
+        for agent in ('claude', 'codex'):
+            for recent in ('', 'User: test this'):
+                source = entry(agent=agent, pane_name='Fix this', label='Fallback')
+                expected = (f'You are the reviewer of the {agent.title()} tab “Fix this” (%12) in this project.'
+                            '\n\nWhat to check:\nCheck this')
+                if recent:
+                    expected += '\n\nIts recent turns, cut short:\n\n' + recent
+                expected += ('\n\nIts full transcript (JSONL) is at /project/chat.jsonl. Read it when you review.'
+                             '\n\nDo not change its work and do not send to that tab yourself. Reply only "Ready." now and stop. '
+                             'Tether sends you a review request after that tab finishes a turn, and it sends your reply back to that tab.')
+                with self.subTest(agent=agent, recent=recent):
+                    self.assertEqual(delegate.reviewer_prompt(source, ' Check this ', recent), expected)
+        self.assertIn('tab “Fallback”', delegate.reviewer_prompt(entry(label='Fallback'), '', ''))
+        self.assertIn('What to check:\nCheck the work in that tab.', delegate.reviewer_prompt(entry(), '', ''))
+        self.assertIn('tab “that tab”', delegate.reviewer_prompt(entry(), '', ''))
+
+    def test_new_reviewer_reverses_link_and_always_reads_context(self):
+        source = entry(pane_name='Source title')
+        recent = Mock(return_value=[{'role': 'user', 'text': 'Recent task'}])
+        with patch.object(delegate, 'new_window_after', return_value='%13'), \
+                patch.object(delegate.review_links, 'add') as add:
+            result = delegate.start(source, body(review='new', message='', context=False), '/project',
+                                    run=Mock(), recent=recent)
+        self.assertEqual(result, ('%13', 'Review: Source title'))
+        recent.assert_called_once_with()
+        prompt, = (self.root / 'delegate').glob('*.md')
+        self.assertEqual(prompt.read_text(), delegate.reviewer_prompt(source, '', 'User: Recent task'))
+        add.assert_called_once_with(worker='%12', reviewer='%13', reviewer_thread=None,
+                                    name='Source title', agent='claude', seen_working=True)
+
+    def test_source_reviewer_with_pending_thread_stays_unpinned(self):
+        for thread in (None, 'pending-123-1'):
+            with patch.object(delegate, 'new_window_after', return_value='%13'), \
+                    patch.object(delegate.review_links, 'add') as add:
+                delegate.start(entry(thread=thread), body(review='source'), '/project', run=Mock())
+            add.assert_called_once_with(worker='%13', reviewer='%12', reviewer_thread=None,
+                                        name='Fix the bug', agent='claude')
+
+    def test_name_and_cwd_overrides_and_reviewer_default_names(self):
+        for request, source, expected in (
+                (body(name='  Custom name  ', cwd='/ignored'), entry(), 'Custom name'),
+                (body(review='new'), entry(label='Fallback'), 'Review: Fallback'),
+                (body(review='new'), entry(), 'Review: that tab'),
+                (body(review='new'), entry(pane_name='x' * 80), 'Review: ' + 'x' * 52),
+                (body(review='new', name='Explicit'), entry(), 'Explicit')):
+            with self.subTest(request=request), patch.object(delegate, 'new_window_after', return_value='%13') as window, \
+                    patch.object(delegate.review_links, 'add'):
+                self.assertEqual(delegate.start(source, request, '/project', run=Mock(), cwd=str(self.root)),
+                                 ('%13', expected))
+                self.assertEqual(window.call_args.kwargs['cwd'], str(self.root))
+        for cwd in ('relative', '/does/not/exist', 123, str(self.root / 'file')):
+            with self.subTest(cwd=cwd), patch.object(delegate, 'new_window_after') as window:
+                with self.assertRaisesRegex(ValueError, 'absolute path'):
+                    delegate.start(entry(), body(), '/project', run=Mock(), cwd=cwd)
+                window.assert_not_called()
 
     def test_prompt_context_is_a_short_brief_for_every_pair(self):
         recent = 'User: hi\n\nAgent: hello'
@@ -199,7 +286,7 @@ class EndpointTests(unittest.TestCase):
                 remove.return_value = stopped
                 self.assertEqual(self.request({'worker': '%13'}, path='/mobile/api/review-stop'),
                                  (200, {'stopped': stopped}))
-                remove.assert_called_with('%13')
+                remove.assert_called_with('%13', None)
         choose.assert_not_called()
         run.assert_not_called()
 
@@ -210,6 +297,17 @@ class EndpointTests(unittest.TestCase):
                     self.assertEqual(self.request({'worker': worker}, path='/mobile/api/review-stop'),
                                      (400, {'error': 'Select a tab to stop reviewing.'}))
         remove.assert_not_called()
+
+    def test_review_stop_accepts_a_pair_and_rejects_invalid_reviewer(self):
+        with patch.object(server.review_links, 'remove', return_value=True) as remove:
+            self.assertEqual(self.request({'worker': '%13', 'reviewer': '%12'}, path='/mobile/api/review-stop'),
+                             (200, {'stopped': True}))
+            remove.assert_called_once_with('%13', '%12')
+            remove.reset_mock()
+            for reviewer in (None, '', 12, '%12\n', []):
+                self.assertEqual(self.request({'worker': '%13', 'reviewer': reviewer}, path='/mobile/api/review-stop'),
+                                 (400, {'error': 'Select a tab to stop reviewing.'}))
+            remove.assert_not_called()
 
     def test_review_stop_preserves_auth_guards(self):
         with patch.object(server.review_links, 'remove') as remove:
@@ -224,7 +322,7 @@ class EndpointTests(unittest.TestCase):
             handler.respond.assert_not_called()
         remove.assert_not_called()
 
-    def test_sessions_adds_reviewed_by_and_survives_store_read_errors(self):
+    def test_sessions_adds_reviewers_and_survives_store_read_errors(self):
         rows = [{'id': '%13'}, {'id': '%12'}, {'id': '%20'}]
         handler = object.__new__(server.Handler)
         handler.path = '/mobile/api/sessions'
@@ -233,11 +331,11 @@ class EndpointTests(unittest.TestCase):
         with patch.object(server, 'sessions', return_value=rows), \
                 patch.object(server, 'session_row', side_effect=lambda row: dict(row)), \
                 patch.object(server, 'settings', return_value={'thread': THREAD}), \
-                patch.object(server.review_links, 'reviewed_by', return_value={'%13': '%12'}) as reviewed_by:
+                patch.object(server.review_links, 'reviewed_by', return_value={'%13': ['%12', '%20'], '%12': []}) as reviewed_by:
             handler.do_GET()
             reviewed_by.assert_called_once_with()
             handler.respond.assert_called_with(200, {'sessions': [
-                {'id': '%13', 'reviewed_by': '%12'}, {'id': '%12'}, {'id': '%20'}], 'default_thread': THREAD})
+                {'id': '%13', 'reviewers': ['%12', '%20']}, {'id': '%12'}, {'id': '%20'}], 'default_thread': THREAD})
             reviewed_by.reset_mock()
             reviewed_by.side_effect = OSError('disk')
             handler.do_GET()
@@ -265,6 +363,14 @@ class EndpointTests(unittest.TestCase):
                 patch.object(delegate, 'start', return_value=('%13', 'Fix the bug')) as start:
             self.assertEqual(self.request(body())[0], 201)
             self.assertEqual(start.call_args.args[2], folder)
+
+    def test_browser_ignores_cwd_in_body(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(server, 'sessions', return_value=[entry()]), \
+                patch.object(server, 'agent_folder', return_value=folder), \
+                patch.object(delegate, 'start', return_value=('%13', 'task')) as start:
+            self.assertEqual(self.request(body(cwd='/untrusted/body/path'))[0], 201)
+            self.assertEqual(start.call_args.args[2], folder)
+            self.assertNotIn('cwd', start.call_args.kwargs)
 
     def test_specific_validation_errors_and_auth_guards_prevent_launch(self):
         with patch.object(server, 'sessions', return_value=[entry()]), patch.object(delegate, 'start') as start:

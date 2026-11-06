@@ -8,18 +8,20 @@ import { AgentIcon, agentNames } from './Sidebar'
 import './NewTask.css'
 
 type Worker = 'claude' | 'codex'
+type Review = 'off' | 'source' | 'new'
 const WORKERS: Worker[] = ['claude', 'codex']
+const REVIEWS: [Review, string][] = [['off', 'Off'], ['source', 'This tab reviews'], ['new', 'New tab reviews']]
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const lastWorker = () => { try { return localStorage.getItem('tether.newTask.agent') === 'codex' ? 'codex' : 'claude' } catch { return 'claude' } }
 
 // The + on the tab strip: a task for a new tab. The server opens the tab beside this one, starts the agent with the
-// task, and the user stays here (server/delegate.py). This tab can review each finished turn, and lend its chat as context.
+// task, and the user stays here (server/delegate.py). Either tab can review the other, and this tab can lend its chat as context.
 export function NewTask({ api, pane, at, onClose, onEmpty, onCreated }: { api: Api; pane: Pane; at: Anchor; onClose: () => void; onEmpty: () => void; onCreated: (pane: string) => void }) {
   const modal = useModal(true, () => { if (!pending) onClose() })
   const popover = usePopover(modal.ref, at, onClose)
   const [text, setText] = useState('')
   const [agent, setAgent] = useState<Worker>(lastWorker)
-  const [review, setReview] = useState(false)
+  const [review, setReview] = useState<Review>('off')
   const [context, setContext] = useState(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
@@ -31,17 +33,17 @@ export function NewTask({ api, pane, at, onClose, onEmpty, onCreated }: { api: A
   const agentPane = pane.agent === 'claude' || pane.agent === 'codex'
   const canContext = agentPane && !!pane.thread && UUID.test(pane.thread)
   const canReview = agentPane && pane.writable
-  const here = agentNames[pane.agent] ?? 'this tab'
+  const canReviewNew = canReview && canContext
   async function create(event?: React.FormEvent) {
     event?.preventDefault()
     if (pending) return
     const message = text.trim()
-    if (!message) { setError('Type a task first.'); field.current?.focus(); return }
+    if (!message && review !== 'new') { setError('Type a task first.'); field.current?.focus(); return }
     setPending(true); setError('')
     const abort = new AbortController()
     controller.current = abort
     try {
-      const result = await api<{ pane: string; name: string }>('delegate', { session: pane.id, thread: pane.thread, agent, message, context: context && canContext, review: review && canReview }, abort.signal)
+      const result = await api<{ pane: string; name: string }>('delegate', { session: pane.id, thread: pane.thread, agent, message, context: context && canContext, review: review === 'off' ? false : review }, abort.signal)
       try { localStorage.setItem('tether.newTask.agent', agent) } catch { /* private mode */ }
       onCreated(result.pane)
     } catch (error) {
@@ -53,7 +55,7 @@ export function NewTask({ api, pane, at, onClose, onEmpty, onCreated }: { api: A
     <form onSubmit={create}>
       <div className="task-head"><h2 id="task-title">New tab with a task</h2><button type="button" className="task-empty" disabled={pending} onClick={onEmpty}>Empty tab</button></div>
       <div className="task-field">
-        <textarea ref={field} value={text} rows={3} maxLength={20000} disabled={pending} aria-label="Task" placeholder="What should it work on?"
+        <textarea ref={field} value={text} rows={3} maxLength={20000} disabled={pending} aria-label="Task" placeholder={review === 'new' ? 'What should it check? Optional.' : 'What should it work on?'}
           onChange={event => { setText(event.target.value); if (error) setError('') }}
           onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void create() } }} />
         <div className="task-agents" role="radiogroup" aria-label="Agent">
@@ -63,14 +65,18 @@ export function NewTask({ api, pane, at, onClose, onEmpty, onCreated }: { api: A
         </div>
       </div>
       {agentPane && <div className="task-options">
-        <label className={canReview ? 'task-switch' : 'task-switch off'}>
-          <span><strong>{here} reviews</strong><small>This tab checks each finished turn.</small></span>
-          <input type="checkbox" role="switch" checked={review && canReview} disabled={!canReview || pending} onChange={event => setReview(event.target.checked)} />
-        </label>
-        <label className={canContext ? 'task-switch' : 'task-switch off'}>
+        <div className="task-review">
+          <strong id="task-review-label">Review</strong>
+          <div className="task-agents" role="radiogroup" aria-labelledby="task-review-label">
+            {REVIEWS.map(([choice, label]) => { const usable = choice === 'off' || (choice === 'new' ? canReviewNew : canReview); return <button type="button" key={choice} role="radio" aria-checked={review === choice} disabled={pending || !usable} className={review === choice ? 'on' : ''} title={usable ? undefined : 'Send a first message here first.'} onClick={() => setReview(choice)}>{label}</button> })}
+          </div>
+          {review === 'source' && <small>This tab checks each finished turn of the new tab.</small>}
+          {review === 'new' && <small>The new tab checks each finished turn here and sends feedback back.</small>}
+        </div>
+        {review !== 'new' && <label className={canContext ? 'task-switch' : 'task-switch off'}>
           <span><strong>Use this chat as context</strong><small>{canContext ? 'A short brief of recent turns, not the whole chat.' : 'Send a first message here first.'}</small></span>
           <input type="checkbox" role="switch" checked={context && canContext} disabled={!canContext || pending} onChange={event => setContext(event.target.checked)} />
-        </label>
+        </label>}
       </div>}
       {error && <p className="error task-error" role="alert">{error}</p>}
       <button className="primary task-create" disabled={pending}>
