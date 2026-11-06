@@ -37,8 +37,14 @@ def link_pair(body, entries, last_reply):
     links = review_links.reviewed_by()
     if reviewer in links.get(worker, []):
         raise ValueError('That review link already exists.')
-    if worker in links.get(reviewer, []):
-        raise ValueError('Those tabs cannot review each other.')
+    pending, visited = [reviewer], set()
+    while pending:
+        pane = pending.pop()
+        if pane == worker:
+            raise ValueError('Those tabs cannot review each other.')
+        if pane not in visited:
+            visited.add(pane)
+            pending.extend(links.get(pane, []))
     thread = target.get('thread')
     review_links.add(worker=worker, reviewer=reviewer,
                      reviewer_thread=thread if isinstance(thread, str) and UUID.fullmatch(thread) else None,

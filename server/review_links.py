@@ -12,8 +12,6 @@ from terminal_input import DraftError
 
 FILE = paths.CACHE / 'review-links.json'
 MAX_LINKS = 50
-MAX_RETRIES = 30
-REVIEW_WAIT = 450
 MAX_ROUNDS = 3
 GRACE = 30
 START_WAIT = 300
@@ -112,6 +110,8 @@ def _step(link, entries, status, send, last_reply, awaiting, clear, feedback_sen
         elif thread != link['worker_thread']:
             return None
     state = status(worker)['state']
+    if state == 'Idle' and link.pop('worker_busy_send', False):
+        return link
     feedback = _feedback_turns.get(link['worker'])
     if state == 'Idle' and feedback is not None:
         feedback['working'].discard(link['reviewer'])
@@ -130,6 +130,8 @@ def _step(link, entries, status, send, last_reply, awaiting, clear, feedback_sen
         reviewer_state = status(reviewer)['state']
         if reviewer_state == 'Working':
             link['reviewer_seen_working'] = True
+        elif reviewer_state == 'Idle' and link.pop('reviewer_busy_send', False):
+            return link
         elif reviewer_state == 'Idle' and not link.get('reviewer_seen_working', False) \
                 and _digest(last_reply(reviewer)) == link.get('reviewer_before'):
             # No turn seen yet. A turn shorter than one tick still changes the last reply; none for 30 ticks: give up.
@@ -145,24 +147,26 @@ def _step(link, entries, status, send, last_reply, awaiting, clear, feedback_sen
             elif link.get('rounds', 0) >= MAX_ROUNDS:
                 link['paused'] = True
                 link['awaiting'] = False
-            elif state != 'Idle' or not clear(link['worker']):
-                link['wait_ticks'] = link.get('wait_ticks', 0) + 1
-                if link['wait_ticks'] >= REVIEW_WAIT:
-                    link['awaiting'] = False
+            elif not (state == 'Idle' or state == 'Working' and worker.get('agent') == 'claude') \
+                    or not clear(link['worker']):
+                pass
             else:
-                link.pop('wait_ticks', None)
                 text = (f"[Tether review] Feedback from the reviewer tab ({link['reviewer']}):\n\n"
                         f'{reply[:3000]}\n\nFix what it raises, then stop and wait.')
                 try:
                     send(worker, text, state)
                     _last_sent[link['worker']] = time.monotonic()
                     feedback_sent(link['worker'])
+                    if state == 'Working':
+                        link['worker_busy_send'] = True
+                        link['seen_working'] = True
+                        feedback = _feedback_turns[link['worker']]
+                        feedback['pending'].discard(link['reviewer'])
+                        feedback['working'].add(link['reviewer'])
                     link['rounds'] = link.get('rounds', 0) + 1
                     link['awaiting'] = False
                 except (DraftError, RuntimeError):
-                    link['retries'] = link.get('retries', 0) + 1
-                    if link['retries'] >= MAX_RETRIES:
-                        link['awaiting'] = False
+                    pass
         if not link['awaiting']:
             for key in ('wait_ticks', 'idle_ticks', 'reviewer_before', 'reviewer_seen_working', 'retries'):
                 link.pop(key, None)
@@ -170,22 +174,15 @@ def _step(link, entries, status, send, last_reply, awaiting, clear, feedback_sen
     if state == 'Working':
         if link['worker'] not in awaiting:
             link['seen_working'] = True
-        link.pop('retries', None)
-        link.pop('wait_ticks', None)
     elif link['seen_working'] and state == 'Idle':
         if link.get('paused', False) or link.get('rounds', 0) >= MAX_ROUNDS:
             link['paused'] = True
             link['seen_working'] = False
             return link
         reviewer_state = status(reviewer)['state']
-        if reviewer_state != 'Idle' or not clear(link['reviewer']):
-            link['wait_ticks'] = link.get('wait_ticks', 0) + 1
-            if link['wait_ticks'] >= REVIEW_WAIT:
-                link['seen_working'] = False
-                link.pop('wait_ticks', None)
-                link.pop('retries', None)
+        if not (reviewer_state == 'Idle' or reviewer_state == 'Working' and reviewer.get('agent') == 'claude') \
+                or not clear(link['reviewer']):
             return link
-        link.pop('wait_ticks', None)
         delivered = False
         if reviewer.get('writable'):
             agent = 'Claude' if link['agent'] == 'claude' else 'Codex'
@@ -205,12 +202,8 @@ def _step(link, entries, status, send, last_reply, awaiting, clear, feedback_sen
             link['awaiting'] = True
             link['reviewer_seen_working'] = False
             link['reviewer_before'] = before
-            link.pop('retries', None)
-        else:
-            link['retries'] = link.get('retries', 0) + 1
-            if link['retries'] >= MAX_RETRIES:
-                link['seen_working'] = False
-                link.pop('retries', None)
+            if reviewer_state == 'Working':
+                link['reviewer_busy_send'] = True
     return link
 
 
@@ -241,6 +234,9 @@ def observe(entries, status, send, last_reply):
             except Exception:  # a malformed link or one bad pane must not stop other reviews
                 continue
             if updated != link:
+                if updated is not None:
+                    updated.pop('wait_ticks', None)
+                    updated.pop('retries', None)
                 changes.append((link, updated))
         if not changes:
             return

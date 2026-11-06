@@ -807,6 +807,69 @@ class DraftError(RuntimeError):
     """The agent input box holds text, so sending would mix it with the new message."""
 
 
+DRAFT_QUIET = 10
+_quiet_drafts = {}
+
+
+def stash_quiet_draft(entry, run=subprocess.run, now=time.monotonic):
+    """Stash only Claude drafts that have stayed unchanged for ten seconds."""
+    if entry.get('agent') != 'claude':
+        return None
+    pane = entry['id']
+    try:
+        text = '\n'.join(prompt_draft(entry, run))
+        if not text.strip():
+            _quiet_drafts.pop(pane, None)
+            return None
+        first_text, first_seen = _quiet_drafts.get(pane, (None, None))
+        seen = now()
+        if text != first_text:
+            _quiet_drafts[pane] = (text, seen)
+            raise DraftError('There is an unsent draft. Wait for it to stay unchanged before review delivery.')
+        if seen - first_seen < DRAFT_QUIET:
+            raise DraftError('There is an unsent draft. Wait for it to stay unchanged before review delivery.')
+        verify(entry, run)
+        run([paths.TMUX, 'send-keys', '-t', pane, 'C-s'],
+            check=True, capture_output=True, timeout=5)
+        for attempt in range(11):
+            if not any(prompt_draft(entry, run)):
+                _quiet_drafts.pop(pane, None)
+                return text
+            if attempt < 10:
+                time.sleep(.1)
+        raise DraftError('Could not stash the unsent draft.')
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError('Could not stash the unsent draft.') from exc
+
+
+def restore_check(entry, stashed, run=subprocess.run, sleep=time.sleep):
+    """Claude restores its stash on submit; toggle it only if the box stays empty."""
+    try:
+        for attempt in range(21):
+            text = ''.join(''.join(prompt_draft(entry, run)).split())
+            if text:
+                return
+            if attempt < 20:
+                sleep(.1)
+        verify(entry, run)
+        run([paths.TMUX, 'send-keys', '-t', entry['id'], 'C-s'],
+            check=True, capture_output=True, timeout=5)
+    except (RuntimeError, OSError, subprocess.SubprocessError):
+        # Delivery already succeeded. A failed check must not cause a duplicate send.
+        return
+
+
+def clear_unsent(entry, message, run=subprocess.run):
+    """Remove only the review message left in the box by a failed submit."""
+    try:
+        prefix = ''.join(message.split())[:30]
+        text = ''.join(''.join(prompt_draft(entry, run)).split())
+        if prefix and text.startswith(prefix):
+            clear_draft(entry, run)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError('Could not clear the unsent review message.') from exc
+
+
 class PaneTooSmall(RuntimeError):
     """The pane cannot show enough of the input or control to act safely."""
 
@@ -1229,7 +1292,8 @@ def submit(entry, message, run=subprocess.run):
             # Agents mark picker rows (/model ...) like the input line. A mismatch means a menu opened, except for
             # Claude paste placeholders: the box was empty before our paste, so these still hold our unsent message.
             draft_text = ' '.join(draft)
-            if ('\n' not in message.strip() and not ''.join(draft_text.split()).startswith(sent[:30])
+            if ((entry.get('_review') or '\n' not in message.strip())
+                    and not ''.join(draft_text.split()).startswith(sent[:30])
                     and not (entry['agent'] == 'claude' and CLAUDE_PASTE_PLACEHOLDER.match(draft_text))):
                 return
         raise DraftError('The message reached the agent input but was not submitted. Clear it, then send again.')

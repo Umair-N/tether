@@ -37,6 +37,7 @@ import saved_accounts
 import history
 import live as live_state
 from terminal_input import resume_session, rename_agent
+from terminal_input import stash_quiet_draft, restore_check, clear_unsent, prompt_draft
 import model_picker
 import prompt_actions
 import push
@@ -124,7 +125,7 @@ def monitor_notices():
                     NOTIFIER.observe(entry, shared_status(entry))
             except Exception:  # one odd pane must never stop the monitor for everyone
                 continue
-        review_links.observe(entries, shared_status, send_text, last_reply)
+        review_links.observe(entries, shared_status, review_send, last_reply)
         time.sleep(2)
 
 
@@ -801,6 +802,36 @@ def send_text(config, message, state=None):
     if wants_reply:  # Codex answers its slash commands on the terminal only
         threading.Thread(target=terminal_replies.record, args=(config, before, capture), daemon=True).start()
     return 'queued' if state == 'Working' else 'submitted'
+
+
+def review_send(config, message, state=None):
+    """Deliver a review around a quiet Claude draft, preserving ordinary send guards."""
+    config = dict(config, _review=True)
+    stashed = stash_quiet_draft(config) if config.get('agent') == 'claude' else None
+    try:
+        result = send_text(config, message, state)
+    except Exception as exc:
+        try:
+            if 'reached the agent input' in str(exc):
+                terminal_clear_draft(config)
+            else:
+                clear_unsent(config, message)
+        except (RuntimeError, OSError, subprocess.SubprocessError):
+            pass
+        if stashed:
+            try:
+                if not any(prompt_draft(config)):
+                    verify(config)
+                    subprocess.run([paths.TMUX, 'send-keys', '-t', config['id'], 'C-s'],
+                                   check=True, capture_output=True, timeout=5)
+            except (RuntimeError, OSError, subprocess.SubprocessError):
+                pass
+        if isinstance(exc, (OSError, subprocess.SubprocessError)):
+            raise RuntimeError('Could not deliver the review message.') from exc
+        raise
+    if stashed:
+        restore_check(config, stashed)
+    return result
 
 
 def broadcast_message(body):

@@ -94,6 +94,20 @@ class AgentTabsTests(unittest.TestCase):
                 self.assertEqual((self.root / 'links.json').read_text(), before)
                 review_links.remove(worker, reviewer)
 
+    def test_link_pair_rejects_three_tab_cycle_without_changing_links(self):
+        self.link('%12', '%13')
+        self.link('%13', '%14')
+        before = (self.root / 'links.json').read_text()
+        with self.assertRaisesRegex(ValueError, 'Those tabs cannot review each other.'):
+            agent_tabs.link_pair({'worker': '%14', 'reviewer': '%12'}, self.entries, self.reply)
+        self.assertEqual((self.root / 'links.json').read_text(), before)
+
+    def test_link_pair_allows_chain_without_cycle(self):
+        self.link('%12', '%13')
+        self.assertEqual(agent_tabs.link_pair({'worker': '%13', 'reviewer': '%14'},
+                                              self.entries, self.reply), {'linked': True})
+        self.assertEqual(review_links.reviewed_by(), {'%12': ['%13'], '%13': ['%14']})
+
     def test_link_pair_records_names_threads_and_seen_working(self):
         for thread in (THREAD, None, 'not-a-uuid', 1):
             for names, expected in (({'pane_name': 'Pane', 'agent_name': 'Agent', 'label': 'Label'}, 'Pane'),

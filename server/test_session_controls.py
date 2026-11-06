@@ -5,13 +5,250 @@ import tempfile
 import time
 from pathlib import Path
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import antigravity
 import paths
 import server
 import terminal_input as terminal
 import terminal_input
+
+
+class ReviewDraftTests(unittest.TestCase):
+    entry = {'id': '%1', 'agent': 'claude'}
+    message = '[Tether review] Please review this work.\n\nLast reply: fixed.'
+
+    def setUp(self):
+        self.enterContext(patch.object(terminal, '_quiet_drafts', {}))
+        self.enterContext(patch.object(terminal, 'verify'))
+        self.enterContext(patch.object(terminal.time, 'sleep'))
+        self.draft = self.enterContext(patch.object(terminal, 'prompt_draft', return_value=['my draft']))
+        self.run = Mock(return_value=subprocess.CompletedProcess([], 0, stdout=''))
+        self.clock = Mock(return_value=100)
+
+    def stash(self):
+        return terminal.stash_quiet_draft(self.entry, self.run, self.clock)
+
+    def quiet(self):
+        with self.assertRaises(terminal.DraftError):
+            self.stash()
+        self.clock.return_value += terminal.DRAFT_QUIET
+
+    def test_young_and_changed_drafts_restart_quiet_time_without_keys(self):
+        self.assertEqual(terminal.DRAFT_QUIET, 10)
+        self.quiet()
+        self.clock.return_value -= .1
+        with self.assertRaises(terminal.DraftError):
+            self.stash()
+        self.draft.return_value = ['my draft changed']
+        self.clock.return_value += .1
+        with self.assertRaises(terminal.DraftError):
+            self.stash()
+        self.clock.return_value += 9.9
+        with self.assertRaises(terminal.DraftError):
+            self.stash()
+        self.run.assert_not_called()
+
+    def test_quiet_draft_sends_exactly_one_stash_key_and_waits_for_empty(self):
+        self.draft.return_value = ['my', 'draft']
+        self.quiet()
+        self.draft.side_effect = [['my', 'draft'], ['my', 'draft'], []]
+        self.assertEqual(self.stash(), 'my\ndraft')
+        self.assertEqual([call.args[0][-1] for call in self.run.call_args_list], ['C-s'])
+
+    def test_stash_that_does_not_empty_raises_draft_error_after_one_key(self):
+        self.quiet()
+        with self.assertRaises(terminal.DraftError):
+            self.stash()
+        self.run.assert_called_once()
+        self.assertEqual(self.run.call_args.args[0][-1], 'C-s')
+
+    def test_empty_box_clears_first_seen_time(self):
+        self.quiet()
+        self.draft.return_value = ['']
+        self.assertIsNone(self.stash())
+        self.draft.return_value = ['my draft']
+        with self.assertRaises(terminal.DraftError):
+            self.stash()
+        self.run.assert_not_called()
+
+    def test_codex_and_other_agents_never_stash(self):
+        for agent in ('codex', 'antigravity'):
+            self.assertIsNone(terminal.stash_quiet_draft(dict(self.entry, agent=agent), self.run, self.clock))
+        self.run.assert_not_called()
+        self.draft.assert_not_called()
+
+    def test_restore_check_stash_other_text_and_empty_box(self):
+        for contents, keys in (([' my ', 'draft '], []), (['someone else typed'], []), ([], ['C-s'])):
+            with self.subTest(contents=contents):
+                self.draft.return_value = contents
+                self.run.reset_mock()
+                pause = Mock()
+                terminal.restore_check(self.entry, 'my draft', self.run, pause)
+                self.assertEqual([call.args[0][-1] for call in self.run.call_args_list], keys)
+                self.assertEqual(pause.call_count, 20 if keys else 0)
+
+    def test_restore_check_waits_for_automatic_restore_without_keys(self):
+        self.draft.side_effect = [[], [], ['my', 'draft']]
+        terminal.restore_check(self.entry, 'my draft', self.run, Mock())
+        self.run.assert_not_called()
+
+    def test_clear_unsent_only_clears_our_message(self):
+        for text, clears in ((self.message, True), (self.message[:10], False),
+                             ('my draft', False), ('', False)):
+            with self.subTest(text=text):
+                self.draft.return_value = text.splitlines()
+                with patch.object(terminal, 'clear_draft') as clear:
+                    terminal.clear_unsent(self.entry, self.message, self.run)
+                self.assertEqual(clear.call_count, int(clears))
+
+    def test_stash_subprocess_errors_become_runtime_errors(self):
+        for failure in (OSError('gone'), subprocess.TimeoutExpired('tmux', 5),
+                        subprocess.CalledProcessError(1, 'tmux')):
+            with self.subTest(failure=failure):
+                terminal._quiet_drafts.clear()
+                self.quiet()
+                self.run.side_effect = failure
+                with self.assertRaises(RuntimeError):
+                    self.stash()
+
+    def test_restore_subprocess_errors_do_not_turn_a_delivery_into_a_retry(self):
+        self.draft.side_effect = subprocess.TimeoutExpired('tmux', 5)
+        terminal.restore_check(self.entry, 'my draft', self.run, Mock())
+        self.run.assert_not_called()
+
+    def test_review_send_failure_clears_our_text_restores_and_preserves_exception(self):
+        for failure in (terminal.DraftError('draft'), RuntimeError('failed')):
+            with self.subTest(failure=failure):
+                events = []
+                def clear(*args):
+                    events.append('clear')
+                def press(*args, **kwargs):
+                    events.append(args[0][-1])
+                with patch.object(server, 'stash_quiet_draft', return_value='my draft'), \
+                        patch.object(server, 'send_text', side_effect=failure), \
+                        patch.object(server, 'clear_unsent', side_effect=clear), \
+                        patch.object(server, 'prompt_draft', return_value=[]), \
+                        patch.object(server, 'verify'), \
+                        patch.object(server.subprocess, 'run', side_effect=press):
+                    with self.assertRaises(type(failure)) as caught:
+                        server.review_send(self.entry, self.message, 'Working')
+                self.assertIs(caught.exception, failure)
+                self.assertEqual(events, ['clear', 'C-s'])
+
+    def test_review_send_failure_preserves_other_text_and_original_error(self):
+        failure = terminal.DraftError('send failed')
+        with patch.object(server, 'stash_quiet_draft', return_value='my draft'), \
+                patch.object(server, 'send_text', side_effect=failure), \
+                patch.object(server, 'clear_unsent', side_effect=OSError('cleanup failed')), \
+                patch.object(server, 'prompt_draft', return_value=['someone typed']), \
+                patch.object(server.subprocess, 'run') as run:
+            with self.assertRaises(terminal.DraftError) as caught:
+                server.review_send(self.entry, self.message)
+        self.assertIs(caught.exception, failure)
+        run.assert_not_called()
+
+    def test_review_send_success_checks_automatic_restore_without_a_second_key(self):
+        self.draft.return_value = ['my draft']
+        def restore(entry, text):
+            terminal.restore_check(entry, text, self.run, Mock())
+        with patch.object(server, 'stash_quiet_draft', return_value='my draft'), \
+                patch.object(server, 'send_text', return_value='queued') as send, \
+                patch.object(server, 'restore_check', side_effect=restore):
+            self.assertEqual(server.review_send(self.entry, self.message, 'Working'), 'queued')
+        send.assert_called_once_with(dict(self.entry, _review=True), self.message, 'Working')
+        self.run.assert_not_called()
+
+    def test_every_review_send_marks_config_without_mutating_the_caller(self):
+        for agent in ('claude', 'codex'):
+            with self.subTest(agent=agent), \
+                    patch.object(server, 'stash_quiet_draft', return_value=None), \
+                    patch.object(server, 'send_text') as send:
+                entry = dict(self.entry, agent=agent)
+                server.review_send(entry, self.message)
+                send.assert_called_once_with(dict(entry, _review=True), self.message, None)
+                self.assertNotIn('_review', entry)
+
+    def test_failed_submit_clears_our_placeholder_or_folder_note_directly(self):
+        for contents in (['[Pasted text #1'], ['Folder note', self.message]):
+            with self.subTest(contents=contents), \
+                    patch.object(server, 'stash_quiet_draft', return_value=None), \
+                    patch.object(server, 'send_text', side_effect=terminal.DraftError(
+                        'The message reached the agent input but was not submitted.')), \
+                    patch.object(server, 'prompt_draft', return_value=contents), \
+                    patch.object(server, 'terminal_clear_draft') as clear, \
+                    patch.object(server, 'clear_unsent') as clear_unsent:
+                with self.assertRaises(terminal.DraftError):
+                    server.review_send(self.entry, self.message)
+                clear.assert_called_once_with(dict(self.entry, _review=True))
+                clear_unsent.assert_not_called()
+
+    def test_other_delivery_error_keeps_prefix_cleanup(self):
+        with patch.object(server, 'stash_quiet_draft', return_value=None), \
+                patch.object(server, 'send_text', side_effect=RuntimeError('failed before submit')), \
+                patch.object(server, 'terminal_clear_draft') as clear, \
+                patch.object(server, 'clear_unsent') as clear_unsent:
+            with self.assertRaises(RuntimeError):
+                server.review_send(self.entry, self.message)
+            clear.assert_not_called()
+            clear_unsent.assert_called_once_with(dict(self.entry, _review=True), self.message)
+
+    def test_multiline_submit_preserves_preexisting_stash_only_for_review(self):
+        for review, expected_enters in ((True, 1), (False, 2)):
+            with self.subTest(review=review):
+                self.draft.side_effect = [[], [], ['a person stashed this earlier'], []]
+                self.run.reset_mock()
+                with patch.object(terminal, 'leave_scrollback'), \
+                        patch.object(terminal, 'capture', return_value=''), \
+                        patch.object(terminal, 'confirm_delivery'):
+                    terminal.submit(dict(self.entry, **({'_review': True} if review else {})),
+                                    self.message, self.run)
+                enters = [call for call in self.run.call_args_list if call.args[0][-1] == 'Enter']
+                self.assertEqual(len(enters), expected_enters)
+
+    def test_review_send_codex_uses_existing_draft_guard(self):
+        with patch.object(server, 'stash_quiet_draft') as stash, \
+                patch.object(server, 'send_text', side_effect=terminal.DraftError('draft')), \
+                patch.object(server, 'clear_unsent'), patch.object(server, 'restore_check') as restore:
+            with self.assertRaises(terminal.DraftError):
+                server.review_send(dict(self.entry, agent='codex'), self.message)
+        stash.assert_not_called()
+        restore.assert_not_called()
+
+    def test_ordinary_sends_still_reject_drafts_without_keys(self):
+        for agent in ('claude', 'codex', 'antigravity'):
+            with self.subTest(agent=agent), patch.object(terminal, 'leave_scrollback'):
+                with self.assertRaises(terminal.DraftError):
+                    terminal.submit(dict(self.entry, agent=agent), self.message, self.run)
+        self.assertFalse(any(call.args[0][1] == 'send-keys' for call in self.run.call_args_list))
+
+    def test_review_send_subprocess_failure_is_retryable(self):
+        with patch.object(server, 'stash_quiet_draft', return_value=None), \
+                patch.object(server, 'send_text', side_effect=subprocess.TimeoutExpired('tmux', 5)), \
+                patch.object(server, 'clear_unsent'):
+            with self.assertRaises(RuntimeError):
+                server.review_send(self.entry, self.message)
+
+    def test_multiline_review_submit_does_not_submit_the_restored_draft(self):
+        self.quiet()
+        enters = []
+        def run(argv, **kwargs):
+            if argv[-1] == 'C-s':
+                self.draft.return_value = []
+            elif argv[1] == 'paste-buffer':
+                self.draft.return_value = self.message.splitlines()
+            elif argv[-1] == 'Enter':
+                enters.append(self.draft.return_value)
+                self.draft.return_value = ['my draft'] if len(enters) == 1 else []
+            return subprocess.CompletedProcess(argv, 0, stdout='')
+        self.run.side_effect = run
+        with patch.object(server, 'stash_quiet_draft', side_effect=lambda entry: self.stash()), \
+                patch.object(server, 'send_text', side_effect=lambda entry, text, state: terminal.submit(entry, text, self.run)), \
+                patch.object(server, 'restore_check', side_effect=lambda entry, text: terminal.restore_check(entry, text, self.run, Mock())), \
+                patch.object(terminal, 'leave_scrollback'):
+            server.review_send(self.entry, self.message, 'Working')
+        self.assertEqual(len(enters), 1, 'The second Enter would submit the person\'s restored draft.')
+        self.assertEqual(self.draft.return_value, ['my draft'])
 
 
 class SessionControlTests(unittest.TestCase):
@@ -181,10 +418,14 @@ class SessionControlTests(unittest.TestCase):
             folder = Path(folder)
             socket = str(folder / 'tmux.sock')
             (folder / 'child').mkdir()
-            subprocess.run(['tmux', '-S', socket, 'new-session', '-d', '-s', 'seed', 'bash', '--noprofile', '--norc'], check=True)
+            subprocess.run(['tmux', '-S', socket, '-f', '/dev/null', 'new-session', '-d', '-s', 'seed',
+                            'bash', '--noprofile', '--norc'], check=True)
             def run(argv, **kwargs):
                 return subprocess.run(['tmux', '-S', socket, *argv[1:]], **kwargs)
             try:
+                # create_session uses the server's default command; keep this fixture independent of the user's shell.
+                run([paths.TMUX, 'set-option', '-g', 'default-command',
+                     'env "PS1=test$ " bash --noprofile --norc'], check=True)
                 pane = terminal.create_session('work', str(folder), run=run)
                 pid = int(run([paths.TMUX, 'display-message', '-p', '-t', pane, '#{pane_pid}'], capture_output=True, text=True).stdout)
                 entry = {'id': pane, 'agent': 'shell', 'pane_pid': pid, 'pane_start': terminal.process_start(pid)}
