@@ -38,3 +38,5 @@
 .viewer-loading { position: absolute; width: 20px; height: 20px; border: 2px solid #ffffff24; border-top-color: #fff; border-radius: 50%; animation: viewer-spin .8s linear infinite; }
 @keyframes viewer-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .viewer-track { transition: none !important; } .viewer-loading { animation: none; } }
+
+.viewer-stage:has(> video), .viewer-stage:has(> audio), .viewer-stage:has(> .viewer-error) { display: flex; align-items: center; justify-content: center; }

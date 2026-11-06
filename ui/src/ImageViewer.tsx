@@ -189,6 +189,8 @@ function GalleryImage({ image, size, zoomed, active, onMeasure, onError, onDoubl
   onMeasure: (size: { width: number; height: number }) => void; onError: () => void; onDoubleClick: (event: React.MouseEvent<HTMLImageElement>) => void
 }) {
   const [natural, setNatural] = useState({ width: 0, height: 0 })
+  const [failed, setFailed] = useState(false)
+  useLayoutEffect(() => { if (active && failed) onError() }, [active, failed, onError])
   const fit = natural.width ? Math.min(size.width / natural.width, size.height / natural.height, 1) * (zoomed ? 2.5 : 1) : 0
   useLayoutEffect(() => { if (active && natural.width) onMeasure(natural) }, [active, natural, onMeasure])
   return <>
@@ -196,6 +198,6 @@ function GalleryImage({ image, size, zoomed, active, onMeasure, onError, onDoubl
     <img src={image.url} alt={active ? image.name : ''} draggable={false} decoding="async"
       style={{ width: natural.width * fit, height: natural.height * fit, visibility: natural.width ? 'visible' : 'hidden' }}
       onLoad={event => setNatural({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
-      onError={onError} onDoubleClick={onDoubleClick} />
+      onError={() => setFailed(true)} onDoubleClick={onDoubleClick} />
   </>
 }
