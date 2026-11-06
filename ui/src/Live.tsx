@@ -676,9 +676,9 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
       <div role="menu" aria-label="Send voice commands to">{picker}</div>
       <p className="live-note">{agentOn ? 'Just talk. Friday sends your requests to the chats, answers questions, and tells you when a chat finishes or needs you.' : 'Just talk: each pause sends what you said. Say “switch to” and a chat name to change it, or “what\'s running” for a briefing.'}</p>
     </aside>
-    <section className="live-stage" inert={mode === 'bubble'}>
+    <section className="live-stage" inert={mode === 'bubble'} {...(mode === 'window' ? { onPointerDown: move.onPointerDown, onPointerMove: move.onPointerMove, onPointerUp: move.onPointerUp, onPointerCancel: move.onPointerCancel } : {})}>
       <div className="live-aurora" aria-hidden="true" />
-      <header className="live-top" onPointerDown={mode === 'window' ? move.onPointerDown : undefined} onPointerMove={move.onPointerMove} onPointerUp={move.onPointerUp} onPointerCancel={move.onPointerCancel}>
+      <header className="live-top">
         {mode === 'window' && <button type="button" className="live-icon live-grip" data-float-grip aria-label="Move Friday window. Use the arrow keys." title="Drag to move" onKeyDown={move.onKeyDown}><GripHorizontal size={16} aria-hidden="true" /></button>}
         <span className="live-target-wrap">
           <button type="button" className="live-target" aria-haspopup="menu" aria-expanded={menu} aria-label={target ? `Choose chat: ${name(target)}` : 'Choose chat'} onClick={() => setMenu(open => !open)}>
@@ -701,14 +701,14 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
           <canvas ref={canvas} aria-hidden="true" onClick={talk} />
         </div>
         <div className="live-status" aria-live="polite" title={`${awake ? 'Screen on' : 'Screen may sleep'}${agentOn ? ` · ${voiceInfo}` : ''}`}>{status}{working ? <span> · {working} working</span> : null}</div>
-        <div ref={words} className="live-words" aria-live="polite">
+        <div ref={words} className="live-words" data-no-drag aria-live="polite">
           {said && <p className="live-said" data-small={!!reply.text}>{said}</p>}
           {reply.text && <p className="live-reply" data-long={reply.text.length > 110}>{reply.who !== ASSISTANT && <span className="live-who">{reply.who}</span>}{reply.text}</p>}
           {problem && <p className="live-problem" role="alert">{problem}</p>}
         </div>
       </div>
 
-      {approval && approvalPane && <div className="live-approval" role="group" aria-label={`${paneTitle(approvalPane)} needs your OK`}>
+      {approval && approvalPane && <div className="live-approval" data-no-drag role="group" aria-label={`${paneTitle(approvalPane)} needs your OK`}>
         <h4>Needs your OK <span>{name(approvalPane)}</span></h4>
         <p>{shortText(approval.text, 220)}</p>
         <small>Say approve or deny, or tap.</small>

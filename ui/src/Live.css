@@ -139,7 +139,9 @@
   transition: --live-vc .42s ease, box-shadow .2s cubic-bezier(.23, 1, .32, 1); }
 /* Picked up: the shadow drops further, as if the window lifts. No scale, so edges stay under the pointer. */
 .live-window.moving { box-shadow: 0 4px 10px rgb(0 0 0 / .14), 0 34px 64px -20px rgb(0 0 0 / .65); }
-.live-window .live-top { cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
+.live-window .live-stage { cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
+/* Words scroll and can be selected, so a drag that starts on them does not move the window. */
+.live-window [data-no-drag] { cursor: auto; touch-action: pan-y; user-select: text; -webkit-user-select: text; }
 .live-window.moving, .live-window.moving * { cursor: grabbing; user-select: none; -webkit-user-select: none; }
 .live-window .live-stage { padding: 14px 12px 12px; border-radius: inherit; }
 /* The move handle is a grabber pill at the top, as on an iOS sheet. It stays a real, focusable button. */
@@ -172,6 +174,8 @@
 @media (hover: hover) { .live-edge-n:hover::after, .live-edge-s:hover::after, .live-edge-e:hover::after, .live-edge-w:hover::after { opacity: .7; } }
 .live-edge-n, .live-edge-s { left: 14px; right: 14px; height: 8px; cursor: ns-resize; }
 .live-edge-n { top: -4px; } .live-edge-s { bottom: -4px; }
+/* A gap above the move pill: on touch this strip is 16 px and would take the pill's drags. */
+.live-edge-n { clip-path: polygon(0 0, calc(50% - 44px) 0, calc(50% - 44px) 100%, calc(50% + 44px) 100%, calc(50% + 44px) 0, 100% 0, 100% 100%, 0 100%); }
 .live-edge-e, .live-edge-w { top: 14px; bottom: 14px; width: 8px; cursor: ew-resize; }
 .live-edge-e { right: -4px; } .live-edge-w { left: -4px; }
 .live-edge-ne, .live-edge-nw, .live-edge-se, .live-edge-sw { width: 18px; height: 18px; }

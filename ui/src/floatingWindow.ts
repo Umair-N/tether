@@ -138,10 +138,11 @@ export function useFloatingWindow(storageKey: string, options: Options): {
     if (event.button !== 0 || drag.current) return
     if (kind === 'move' && event.target instanceof Element) {
       const target = event.target
-      if (target.closest('button, a, input, select, textarea, [role="menu"]') && !target.closest('[data-float-grip]')) return
+      if (target.closest('button, a, input, select, textarea, [role="menu"], [data-no-drag]') && !target.closest('[data-float-grip]')) return
     }
     if (kind === 'resize') { event.preventDefault(); event.stopPropagation() }
-    try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* pointer already gone */ }
+    // A move captures only once it is a real drag: an earlier capture would take the click from whatever sits under the pointer.
+    if (kind !== 'move') try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* pointer already gone */ }
     if (kind === 'bubble') dragged.current = false
     const p = current.current
     drag.current = { id: event.pointerId, target: event.currentTarget, kind, edge, x: event.clientX, y: event.clientY, rect: p.rect, bubble: p.bubble, moved: kind === 'resize' }
@@ -153,6 +154,7 @@ export function useFloatingWindow(storageKey: string, options: Options): {
     const dx = event.clientX - d.x
     const dy = event.clientY - d.y
     if (!d.moved && Math.hypot(dx, dy) < 6) return
+    if (!d.moved && d.kind === 'move') try { d.target.setPointerCapture(d.id) } catch { /* pointer already gone */ }
     d.moved = true
     setMoving(true)
     const p = current.current
