@@ -83,6 +83,8 @@ class ProjectTests(unittest.TestCase):
         self.assertIn('@chat_icon', text)  # agents learn to set their tab icon
         self.assertLess(len(text), 1500)
         self.assertLess(text.index('## Tab icon'), text.index('## New tabs and reviewers'))
+        self.assertLess(text.index('## Tab icon'), text.index('## Naming tabs'))
+        self.assertLess(text.index('## Naming tabs'), text.index('## New tabs and reviewers'))
         self.assertLess(text.index('## New tabs and reviewers'), text.index('## Notes'))
         self.assertIn(str(Path(projects.__file__).with_name('agent_tab_cli.py')), text)
         for option in ('--review-it', '--reviews-me', '--agent claude|codex', '--name NAME',

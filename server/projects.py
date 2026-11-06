@@ -349,6 +349,7 @@ def render(pid, agent='claude', home=None):
         parts.append(f'\n## Pinned files\nRead a file when the task needs it.\n{lines}\n')
     parts.append('\n## Tab icon\nOnce the task is clear, run `tmux set-option -p -t "$TMUX_PANE" @chat_icon NAME`. NAME: a lucide.dev '
                  f'icon name, or svg-X after you write a 24x24 stroke SVG to {paths.TETHER}/icons/X.svg. Skip it if @chat_icon_by is "user".\n')
+    parts.append('\n## Naming tabs\nIn replies, call a tab by its visible name, or say what it does. Write a pane id like %71 only if the user must type it.\n')
     cli = Path(__file__).resolve().with_name('agent_tab_cli.py')
     parts.append(f'\n## New tabs and reviewers\nTo start a new tab or session, or a reviewer, run `{sys.executable} {cli} start ...`, not raw tmux. '
                  'It opens a tab Tether can track. Options: `--review-it` (this tab reviews the new tab; Tether sends you a review request '
