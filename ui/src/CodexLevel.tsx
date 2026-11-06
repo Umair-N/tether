@@ -46,7 +46,7 @@ function Stepper({ name, legend, levels, value, disabled, onChange }: { name: st
 function Runs({ runs, panes }: { runs: CodexRuns; panes?: string[] }) {
   const shown = panes ? runs.panes.filter(item => panes.includes(item.pane)) : runs.panes
   const here = shown.reduce((sum, item) => sum + item.running, 0)
-  return <div className="switch-row codex-runs" role="status">
+  return <div className="switch-row codex-runs-summary" role="status">
     <span><strong>Codex runs</strong><small>
       {panes ? `${here} running in this session · ${runs.running} running in all · ${runs.today} today` : `${runs.running} running now · ${runs.today} today`}
       {!panes && shown.length > 0 && <> · {shown.map(item => `${item.label}: ${item.running}`).join(', ')}</>}
@@ -65,7 +65,7 @@ function RunOptions({ run, models, disabled, onChange }: { run: CodexRun; models
     if (allowed && merged.effort !== 'auto' && !allowed.includes(merged.effort)) merged.effort = 'auto'
     onChange(merged)
   }
-  return <fieldset className="choice codex-run" disabled={disabled}>
+  return <fieldset className="choice codex-run-options" disabled={disabled}>
     <legend>How Claude runs Codex</legend>
     <div className="project-size-row">
       <label htmlFor="codex-run-model">Model</label>

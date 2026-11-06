@@ -971,12 +971,12 @@ button.live-chip:active { background: var(--line); }
 .settings-group { margin: 0 0 10px; padding: 10px 12px 4px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); min-width: 0; }
 .settings-group h3 { margin: 0 0 8px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
 .settings-group .choice { margin-bottom: 10px; }
-.settings-group .choice:not(.schemes):not(.codex-run) legend { float: left; width: 80px; margin: 8px 0; font-size: 13px; }
+.settings-group .choice:not(.schemes):not(.codex-run-options) legend { float: left; width: 80px; margin: 8px 0; font-size: 13px; }
 .settings-group .choice:not(.schemes) .segmented { margin-left: 84px; }
-.codex-run { margin-top: 18px; }
-.codex-run legend { font-size: 13px; margin-bottom: 4px; }
-.codex-run .project-size-row { margin: 8px 0; }
-.codex-run .project-size-row label { width: 80px; font-size: 13px; }
+.codex-run-options { margin-top: 18px; }
+.codex-run-options legend { font-size: 13px; margin-bottom: 4px; }
+.codex-run-options .project-size-row { margin: 8px 0; }
+.codex-run-options .project-size-row label { width: 80px; font-size: 13px; }
 .model-tabs { margin: 0 0 12px; }
 .model-sheet .settings-group { border: 0; padding: 0; background: none; }
 .settings-group .scheme-grid { grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 4px; }
@@ -1248,7 +1248,7 @@ button.live-chip:active { background: var(--line); }
 .inbox-head h2 { font-size: 14px; font-weight: 600; }
 .inbox-count { font-size: 12px; color: var(--muted); }
 .inbox-head .icon-button { color: var(--muted); }
-.inbox-next { display: flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 8px; border-radius: var(--radius-sm); font-size: 12px; color: var(--muted); }
+.inbox-next { display: flex; align-items: center; gap: 6px; min-width: 0; min-height: 28px; padding: 0 8px; overflow: hidden; white-space: nowrap; border-radius: var(--radius-sm); font-size: 12px; color: var(--muted); }
 .inbox-next kbd, .inbox-actions kbd { font: 11px ui-monospace, SFMono-Regular, monospace; border: 1px solid var(--line); border-radius: var(--radius-xs); padding: 0 4px; color: inherit; }
 .inbox-list { list-style: none; flex: 1; min-height: 0; margin: 0; padding: 0 10px 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; overscroll-behavior: contain; scrollbar-width: thin; }
 .inbox-row { border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line); }
@@ -1555,7 +1555,7 @@ button.live-chip:active { background: var(--line); }
 .settings-group .codex-level-note { clear: both; margin: 8px 0 0; }
 .settings-group .codex-level-note strong { color: var(--text); font-weight: 600; }
 .settings-group .codex-level:disabled .segmented, .settings-group .codex-level:disabled .codex-level-note { opacity: .55; }
-.settings-group .codex-runs { border-top: 1px solid var(--line); cursor: default; }
+.settings-group .codex-runs-summary { border-top: 1px solid var(--line); cursor: default; }
 
 .notification-levels { margin: 0 4px 4px 20px; border-left: 1px solid var(--line); padding-left: 4px; }
 .notification-levels button > span { flex: 1; }
