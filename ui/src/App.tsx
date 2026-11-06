@@ -50,6 +50,7 @@ import { AgentsPage } from './AgentsView'
 import { choosePhoneScreen, toggleButton } from './phoneScreen'
 import { WordsContext, wordsFor } from './words'
 import './App.css'
+import './TitleBar.css'
 
 // One tap turns notifications for this pane off or on. Hidden until this browser has notifications on.
 

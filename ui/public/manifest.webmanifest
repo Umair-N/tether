@@ -5,6 +5,7 @@
   "description": "Chat with your tmux sessions: Claude, Codex, and terminals.",
   "start_url": "/chat/",
   "scope": "/chat/",
+  "display_override": ["window-controls-overlay"],
   "display": "standalone",
   "background_color": "#262624",
   "theme_color": "#262624",

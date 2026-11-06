@@ -1,0 +1,29 @@
+/* Installed desktop app with the title bar hidden: the window controls float over the top row.
+   Chrome reports their free area through titlebar-area-*. Other display modes ignore this file. */
+@media (display-mode: window-controls-overlay) {
+  :root {
+    --titlebar-left: env(titlebar-area-x, 0px);
+    --titlebar-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
+    --titlebar-height: env(titlebar-area-height, 0px);
+    --rail-width: 60px;
+  }
+
+  /* Keep content clear of the left controls (macOS) and the right controls and menu. */
+  :root .app-rail { padding-top: max(12px, var(--titlebar-height)); }
+  :root .sidebar-top { min-height: var(--titlebar-height); padding-left: max(16px, calc(var(--titlebar-left) - var(--rail-width) + 8px)); }
+  :root .workspace-bar { min-height: max(40px, var(--titlebar-height)); padding-right: calc(var(--titlebar-right) + 8px); }
+  :root .no-sidebar .workspace-bar { padding-left: max(8px, calc(var(--titlebar-left) - var(--rail-width) + 8px)); }
+  :root .fx-tabs { padding-right: calc(var(--titlebar-right) + 10px); }
+  :root .sh-head { padding-right: calc(var(--titlebar-right) + 16px); }
+  :root .preferences-header { padding-right: calc(var(--titlebar-right) + 28px); }
+  :root .viewer-head, :root .text-viewer-head { padding-right: calc(var(--titlebar-right) + 12px); }
+  :root .chat-header:not(.workspace .chat-header) { padding-left: max(10px, var(--titlebar-left)); padding-right: calc(var(--titlebar-right) + 16px); }
+
+  /* The empty parts of the top row move the window. */
+  .app-rail, .sidebar-top, .workspace-bar, .fx-tabs, .sh-head, .preferences-header, .viewer-head, .text-viewer-head, .chat-header:not(.workspace .chat-header) {
+    -webkit-app-region: drag; app-region: drag;
+  }
+  button, a, input, select, textarea, label, summary, [role="tab"], [role="button"], .fx-tab, .sidebar-brand, dialog, [popover], .popover, .sheet, .drawer, .update-banner {
+    -webkit-app-region: no-drag; app-region: no-drag;
+  }
+}
