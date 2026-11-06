@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { AudioLines, Check, ChevronDown, GripHorizontal, Maximize2, Mic, MicOff, Minimize2, Minus, X } from 'lucide-react'
+import { ArrowUp, AudioLines, Check, ChevronDown, GripHorizontal, Maximize2, Mic, MicOff, Minimize2, Minus, PhoneOff, Square } from 'lucide-react'
 import { errorText, SESSION_NAME, type Api, type Approval, type ChatData, type Choice, type Pane, type SessionsData } from './api'
 import type { Command } from './CommandMenu'
 import { agentNames, paneTitle } from './Sidebar'
@@ -30,7 +30,7 @@ const approvalOf = (pane: Pane) => {
   return approval?.id && approval.options?.length ? approval : null
 }
 // The floating window opens at the bottom right on a wide screen, and across the bottom on a phone, above the tab bar.
-const BUBBLE = 64
+const BUBBLE = { w: 92, h: 56 }
 const EDGES: Edge[] = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw']
 const firstRect = (): Rect => {
   const vw = window.innerWidth, vh = window.innerHeight
@@ -108,9 +108,10 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
   const [agentOn, setAgentOn] = useState(false)
   const [voiceKind, setVoiceKind] = useState<'kokoro' | 'system' | null>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
+  const lit = useRef<HTMLElement>(null)  // the light in the Interrupt pill, or in the bubble
   const words = useRef<HTMLDivElement>(null)
   // Keep the newest words in view when a long reply scrolls.
-  useEffect(() => { const box = words.current; if (box) box.scrollTop = box.scrollHeight }, [said, reply.text, problem])
+  useEffect(() => { const box = words.current; if (box) box.scrollTop = box.scrollHeight }, [said, reply.text, problem, approval?.id])
   const talkButton = useRef<HTMLButtonElement>(null)
   const phaseNow = useRef<Phase>('starting')
   const talking = useRef(false)  // the person is mid-phrase: hold announcements until they pause
@@ -169,6 +170,7 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
         const text = (data.text ?? '').trim()
         if (!text) { flow.current.rest(); return }
         setSaid(text)
+        setReply(old => ({ ...old, text: '' }))
         setProblem('')
         await flow.current.act(text)
       } catch (failure) {
@@ -373,7 +375,7 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
           if (turn === 'listening') flow.current.listen()
           else go(turn)
         },
-        onUserText: (text, final) => { if (final) { setSaid(text); setProblem('') } },
+        onUserText: (text, final) => { if (final) { setSaid(text); setReply(old => ({ ...old, text: '' })); setProblem('') } },
         onBotText: text => setReply({ who: ASSISTANT, text }),
         onMetrics: metrics => console.debug('Friday turn', metrics),
         onVoice: kind => { if (!gone) setVoiceKind(kind) },
@@ -466,7 +468,7 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
     return () => window.clearInterval(timer)
   }, [api, watching])
 
-  // The orb: soft blobs that swell with the voice level. Colors follow the Settings scheme.
+  // The voice shape, the window's glow and the lit pill all follow the voice level. Colors follow the Settings scheme.
   useEffect(() => {
     const element = canvas.current
     const context = element?.getContext('2d')
@@ -502,6 +504,8 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
       color.you = rgb('--accent', '#c96442'); color.agent = opposite(color.you); color.ask = rgb('--attention', '#e8a33d')
       element.closest<HTMLElement>('.live')?.style.setProperty('--live-agent', `rgb(${color.agent.join(',')})`)
       const [r, g, b] = rgb('--bg', '#ffffff'); color.light = (r * 0.299 + g * 0.587 + b * 0.114) > 140
+      const shell = element.closest<HTMLElement>('.live')
+      if (shell) shell.dataset.tone = color.light ? 'light' : 'dark'
     }
     read()
     const scheme = new MutationObserver(read)
@@ -535,11 +539,19 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
       smooth += (wanted - smooth) * (reduced ? 1 : 0.18)
       // Set the light's own transform: a CSS variable on an ancestor would restyle the whole Live screen each frame.
       aurora ??= element.closest('.live')?.querySelector<HTMLElement>('.live-aurora') ?? null
+      // A slow breath keeps the light alive in silence. It stays still for reduced motion.
+      const glow = reduced ? 0.25 : Math.min(0.6, smooth) + 0.025 * Math.sin(t * 1.6)
+      const dim = state === 'paused' || state === 'idle' || state === 'starting'
       if (aurora) {
-        const glow = reduced ? 0.4 : smooth
-        aurora.style.transform = `scaleY(${(0.45 + glow * 0.9).toFixed(3)})`
-        aurora.style.opacity = state === 'paused' ? '0.15' : (0.3 + glow * 0.6).toFixed(3)
+        aurora.style.transform = `scaleY(${(0.76 + glow * 0.8).toFixed(3)})`
+        aurora.style.opacity = dim ? '0.35' : Math.min(1, 0.72 + glow * 0.6).toFixed(3)
       }
+      if (lit.current) {
+        lit.current.style.transform = `scaleY(${(0.9 + glow * 0.4).toFixed(3)})`
+        lit.current.style.opacity = dim ? '0.4' : '1'
+      }
+      // The bubble hides the canvas. With no size there is nothing to draw, and a negative radius would throw.
+      if (!width || !height) { frame = requestAnimationFrame(draw); return }
       const [first, next] = state === 'speaking' ? [color.agent, color.you] : live.current.approval ? [color.ask, color.you] : [color.you, color.agent]
       for (let i = 0; i < 3; i++) { current[i] += (first[i] - current[i]) * 0.06; second[i] += (next[i] - second[i]) * 0.06 }
       context.clearRect(0, 0, width, height)
@@ -557,8 +569,9 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
       context.fillStyle = halo
       context.beginPath(); context.arc(cx, cy, Math.min(r * 2, half), 0, Math.PI * 2); context.fill()
       blob(cx, cy, r * 1.05, tt, amp * 1.2, 0, one, 0.55)
-      blob(cx, cy, r * 0.95, tt * 1.15, amp, 2.1, two, 0.45)
-      blob(cx, cy, r * 0.8, tt * 0.9, amp * 0.8, 4.2, color.light ? two : [255, 244, 232], 0.3)
+      // On a light surface the two opposite hues would mix to gray, so the shape keeps one hue.
+      blob(cx, cy, r * 0.95, tt * 1.15, amp, 2.1, color.light ? one : two, 0.45)
+      blob(cx, cy, r * 0.8, tt * 0.9, amp * 0.8, 4.2, color.light ? one : [255, 244, 232], 0.3)
       if (color.light) blob(cx - r * 0.12, cy - r * 0.15, r * 0.45, tt * 1.3, amp * 0.6, 5.3, [255, 255, 255], 0.55)
       if ((state === 'converting' || state === 'thinking' || state === 'sending') && !reduced) {
         context.lineWidth = Math.max(2, width / 260)
@@ -633,10 +646,12 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
   </button>)
 
   const asks = !!(approval && approvalPane)
+  const interruptable = phase === 'speaking' || phase === 'thinking'
+  const voiceInfo = voiceKind === 'kokoro' ? 'Voice: this device' : voiceKind === 'system' ? 'Voice: device basic' : 'Voice: server'
   const bubbleLabel = `Open ${ASSISTANT}: ${status}${asks ? ', a chat needs your OK' : ''}`
   return <div ref={root} className={`live live-${mode}${moving ? ' moving' : ''}`} style={mode === 'window' ? windowStyle : mode === 'bubble' ? bubbleStyle : undefined}
     tabIndex={-1} role="dialog" aria-modal={mode === 'full'} aria-label={`${ASSISTANT} Live mode`} data-phase={phase} data-asking={asks}>
-    {mode === 'bubble' && <button ref={bubbleButton} type="button" className="live-bubble-hit" aria-label={bubbleLabel} title={bubbleLabel} {...bubbleHandlers} />}
+    {mode === 'bubble' && <button ref={bubbleButton} type="button" className="live-bubble-hit" aria-label={bubbleLabel} title={bubbleLabel} {...bubbleHandlers}><i ref={lit} className="live-lit" aria-hidden="true" /></button>}
     {mode === 'window' && EDGES.map(edge => <span key={edge} className={`live-edge live-edge-${edge}`} aria-hidden="true" {...resize(edge)} />)}
     {mode === 'window' && <button type="button" className="live-grip-resize" aria-label="Resize Friday window. Use the arrow keys." title="Drag to resize" {...resize('se')} />}
     <aside className="live-rail" aria-label="Commands go to">
@@ -648,15 +663,14 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
       <div className="live-aurora" aria-hidden="true" />
       <header className="live-top" onPointerDown={mode === 'window' ? move.onPointerDown : undefined} onPointerMove={move.onPointerMove} onPointerUp={move.onPointerUp} onPointerCancel={move.onPointerCancel}>
         {mode === 'window' && <button type="button" className="live-icon live-grip" data-float-grip aria-label="Move Friday window. Use the arrow keys." title="Drag to move" onKeyDown={move.onKeyDown}><GripHorizontal size={16} aria-hidden="true" /></button>}
-        <span className="live-tag" title={`${awake ? 'Screen on' : 'Screen may sleep'}${agentOn ? ` · ${voiceKind === 'kokoro' ? 'Voice: this device' : voiceKind === 'system' ? 'Voice: device basic' : 'Voice: server'}` : ''}`}><i aria-hidden="true" />{ASSISTANT}</span>
-        <span className="live-chip live-info" title={awake ? 'The screen stays on while Live mode runs.' : 'This browser can turn the screen off.'}><span className="live-wake" data-on={awake} aria-hidden="true" />{awake ? 'Screen on' : 'Screen may sleep'}</span>
-        {agentOn && <span className="live-chip live-info" title={voiceKind ? 'This device speaks Friday’s replies, so a busy server cannot break the voice.' : 'The server speaks Friday’s replies.'}>{voiceKind === 'kokoro' ? 'Voice: this device' : voiceKind === 'system' ? 'Voice: device basic' : 'Voice: server'}</span>}
         <span className="live-target-wrap">
-          <button type="button" className="live-chip live-target" aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(open => !open)}>
-            {target ? <>{paneTitle(target)}<span className="live-k">{agentNames[target.agent]}</span></> : 'No chat'}<ChevronDown size={14} aria-hidden="true" />
+          <button type="button" className="live-target" aria-haspopup="menu" aria-expanded={menu} aria-label={target ? `Choose chat: ${name(target)}` : 'Choose chat'} onClick={() => setMenu(open => !open)}>
+            {target ? <><b>{paneTitle(target)}</b><span>{agentNames[target.agent]}</span></> : <b>No chat</b>}<ChevronDown size={15} aria-hidden="true" />
           </button>
           {menu && <div className="live-popover" role="menu" aria-label="Send voice commands to"><h3>Commands go to</h3>{picker.length ? picker : <p className="live-note">No agent chats are open.</p>}</div>}
         </span>
+        <span className="live-info" title={awake ? 'The screen stays on while Live mode runs.' : 'This browser can turn the screen off.'}>{awake ? 'Screen on' : 'Screen may sleep'}</span>
+        {agentOn && <span className="live-info" title={voiceKind ? 'This device speaks Friday’s replies, so a busy server cannot break the voice.' : 'The server speaks Friday’s replies.'}>{voiceInfo}</span>}
         <span className="live-window-buttons">
           <button type="button" className="live-icon" aria-label="Shrink Friday to a bubble" title="Shrink to a bubble (Esc). The call stays on." onClick={() => shrink()}><Minus size={18} aria-hidden="true" /></button>
           {mode === 'full'
@@ -669,25 +683,28 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
         <div className="live-orb">
           <canvas ref={canvas} aria-hidden="true" onClick={talk} />
         </div>
-        <div className="live-status" aria-live="polite">{status}{working ? <span> · {working} working</span> : null}</div>
-      </div>
-
-      <div ref={words} className="live-words" aria-live="polite">
-        {said && <p className="live-said">“{said}”</p>}
-        {reply.text && <p className="live-reply"><span className="live-who">{reply.who}</span>{reply.text}</p>}
-        {problem && <p className="live-problem" role="alert">{problem}</p>}
+        <div className="live-status" aria-live="polite" title={`${awake ? 'Screen on' : 'Screen may sleep'}${agentOn ? ` · ${voiceInfo}` : ''}`}>{status}{working ? <span> · {working} working</span> : null}</div>
+        <div ref={words} className="live-words" aria-live="polite">
+          {said && <p className="live-said" data-small={!!reply.text}>{said}</p>}
+          {reply.text && <p className="live-reply" data-long={reply.text.length > 110}>{reply.who !== ASSISTANT && <span className="live-who">{reply.who}</span>}{reply.text}</p>}
+          {problem && <p className="live-problem" role="alert">{problem}</p>}
+        </div>
       </div>
 
       {approval && approvalPane && <div className="live-approval" role="group" aria-label={`${paneTitle(approvalPane)} needs your OK`}>
-        <p><b>{name(approvalPane)}</b> {shortText(approval.text, 220)}</p>
-        <p className="live-say">Say “approve” or “deny”, or tap.</p>
+        <h4>Needs your OK <span>{name(approvalPane)}</span></h4>
+        <p>{shortText(approval.text, 220)}</p>
+        <small>Say approve or deny, or tap.</small>
         <div className="live-row"><button type="button" className="live-deny" onClick={() => tapApproval(false)}>Deny</button><button type="button" className="live-approve" onClick={() => tapApproval(true)}>Approve</button></div>
       </div>}
 
       <div className="live-controls">
-        <div className="live-ctl"><button type="button" className="live-round" aria-pressed={muted} aria-label={agentOn ? 'Mute microphone' : muted ? 'Resume listening' : 'Pause listening'} onClick={togglePause} disabled={phase === 'starting'}>{muted ? <MicOff size={22} /> : <Mic size={22} />}</button><span>{agentOn ? (muted ? 'Unmute' : 'Mute') : muted ? 'Paused' : 'Pause'}</span></div>
-        <div className="live-ctl live-talk" data-on={!agentOn && phase === 'listening'}><button ref={talkButton} type="button" className="live-round" aria-label={talkLabel} onClick={talk} disabled={agentOn ? phase !== 'speaking' && phase !== 'thinking' : phase === 'starting'}><AudioLines size={28} /></button><span>{talkLabel} <kbd>Space</kbd></span></div>
-        <div className="live-ctl live-end"><button type="button" className="live-round" aria-label="End Live mode" onClick={onClose}><X size={22} /></button><span>End</span></div>
+        <div className="live-ctl"><button type="button" className="live-round" aria-pressed={muted} aria-label={agentOn ? 'Mute microphone' : muted ? 'Resume listening' : 'Pause listening'} onClick={togglePause} disabled={phase === 'starting'}>{muted ? <MicOff size={22} aria-hidden="true" /> : <Mic size={22} aria-hidden="true" />}</button><span>{agentOn ? (muted ? 'Unmute' : 'Mute') : muted ? 'Paused' : 'Pause'}</span></div>
+        <div className="live-ctl live-talk"><button ref={talkButton} type="button" className="live-pill" aria-label={talkLabel} onClick={talk} disabled={agentOn ? !interruptable : phase === 'starting'}>
+          {mode !== 'bubble' && <i ref={lit} className="live-lit" aria-hidden="true" />}
+          {phase === 'speaking' || (agentOn && interruptable) ? <Square size={20} fill="currentColor" aria-hidden="true" /> : agentOn ? null : phase === 'listening' ? <ArrowUp size={24} aria-hidden="true" /> : phase === 'paused' ? <Mic size={22} aria-hidden="true" /> : <AudioLines size={24} aria-hidden="true" />}
+        </button><span>{talkLabel} <kbd>Space</kbd></span></div>
+        <div className="live-ctl live-end"><button type="button" className="live-round" aria-label="End Live mode" onClick={onClose}><PhoneOff size={22} aria-hidden="true" /></button><span>End</span></div>
       </div>
     </section>
   </div>

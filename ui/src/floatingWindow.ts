@@ -5,7 +5,8 @@ export type Rect = { x: number; y: number; w: number; h: number }
 export type Edge = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
 type Handlers = Pick<React.HTMLAttributes<HTMLElement>, 'onPointerDown' | 'onPointerMove' | 'onPointerUp' | 'onPointerCancel' | 'onKeyDown'>
 export type Point = { x: number; y: number }
-type Options = { minW: number; minH: number; bubble: number; initial: () => Rect; initialMode?: FloatMode }
+export type Size = { w: number; h: number }
+type Options = { minW: number; minH: number; bubble: Size; initial: () => Rect; initialMode?: FloatMode }
 type Place = { mode: FloatMode; rect: Rect; bubble: Point }
 type Drag = { id: number; target: HTMLElement; kind: 'move' | 'resize' | 'bubble'; edge?: Edge; x: number; y: number; rect: Rect; bubble: Point; moved: boolean }
 
@@ -18,9 +19,9 @@ const fitRect = (rect: Rect, minW: number, minH: number): Rect => {
   const h = clamp(rect.h, minH, b.h - 2 * MARGIN)
   return { x: clamp(rect.x, MARGIN, b.w - MARGIN - w), y: clamp(rect.y, MARGIN, b.h - MARGIN - h), w, h }
 }
-const fitBubble = (point: Point, size: number): Point => {
+const fitBubble = (point: Point, size: Size): Point => {
   const b = bounds()
-  return { x: clamp(point.x, MARGIN, b.w - MARGIN - size), y: clamp(point.y, MARGIN, b.h - MARGIN - size) }
+  return { x: clamp(point.x, MARGIN, b.w - MARGIN - size.w), y: clamp(point.y, MARGIN, b.h - MARGIN - size.h) }
 }
 const isPoint = (value: unknown): value is Point => {
   if (!value || typeof value !== 'object') return false
@@ -36,7 +37,7 @@ const isMode = (value: unknown): value is FloatMode => value === 'window' || val
 const loadPlace = (storageKey: string, options: Options): Place => {
   const b = bounds()
   let rect = options.initial()
-  let bubble = { x: b.w - MARGIN - options.bubble, y: b.h - 88 - options.bubble }
+  let bubble = { x: b.w - MARGIN - options.bubble.w, y: b.h - 88 - options.bubble.h }
   let mode = options.initialMode ?? 'window'
   try {
     const saved: unknown = JSON.parse(localStorage.getItem(storageKey) ?? 'null')
@@ -170,7 +171,7 @@ export function useFloatingWindow(storageKey: string, options: Options): {
     if (d.kind === 'bubble' && d.moved) {
       dragged.current = true
       const b = bounds()
-      const right = Math.max(MARGIN, b.w - MARGIN - size)
+      const right = Math.max(MARGIN, b.w - MARGIN - size.w)
       const x = next.bubble.x - MARGIN < right - next.bubble.x ? MARGIN : right
       next = { ...next, bubble: fitBubble({ ...next.bubble, x }, size) }
     }
@@ -197,7 +198,7 @@ export function useFloatingWindow(storageKey: string, options: Options): {
   return {
     mode, setMode, rect, bubble, moving,
     windowStyle: mode === 'full' ? {} : { transform: `translate3d(${rect.x}px, ${rect.y}px, 0)`, width: rect.w, height: rect.h },
-    bubbleStyle: { transform: `translate3d(${bubble.x}px, ${bubble.y}px, 0)`, width: size, height: size },
+    bubbleStyle: { transform: `translate3d(${bubble.x}px, ${bubble.y}px, 0)`, width: size.w, height: size.h },
     move: handlers('move'),
     resize: edge => handlers('resize', edge),
     bubbleHandlers: {
