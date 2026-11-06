@@ -1,3 +1,4 @@
+import { shellCommand } from './shellCommand'
 import { copyText } from './clipboard'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Blocks, Clock3, Layers, Check, Copy, Share2, ChevronRight, MessageSquare, Info, ShieldAlert, Square, Volume2, Eye } from 'lucide-react'
@@ -103,6 +104,12 @@ export function Message({ id, role, kind, title, text, count, time, tools, api, 
     return <ToolGroup id={id} text={text} count={count} tools={tools} api={api} session={session} />
   }
   if (kind === 'terminal') return <div data-msg-id={id}><TerminalSnapshot text={text} shell={id.startsWith('shell:')} /></div>
+  const shell = role === 'user' && !kind ? shellCommand(text) : null
+  if (shell) return <div className="terminal-block shell-run" data-msg-id={id} role="group" aria-label="Shell command result">
+    <div className="shell-run-head"><code className="shell-run-prompt"><span className="shell-sigil" aria-hidden="true">$</span> {shell.command}</code><span className={`exit-chip ${shell.exit ? 'failed' : 'ok'}`}>Exit {shell.exit}</span></div>
+    {shell.output && <pre className="terminal-snapshot" tabIndex={0} aria-label="Command output"><code>{shell.output}</code></pre>}
+    <CopyButton text={shell.output || shell.command} label="Copy command output" className="copy-chip" />
+  </div>
   // A "!" line the person sent: the agent ran it in its terminal. Show it as the prompt line of the output below it.
   const command = role === 'user' && !kind ? /^!\s*(\S[\s\S]*)$/.exec(text) : null
   if (command) return <div className="shell-command" data-msg-id={id} role="group" aria-label="Shell command"><span className="shell-sigil" aria-hidden="true">$</span><code>{command[1]}</code></div>

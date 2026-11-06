@@ -217,15 +217,16 @@ export const creditsLabel = (credits?: Footer['credits']) => credits?.unlimited 
 export interface Footer { observed?: boolean; suggestion?: string; notices?: string[]; effort?: string; mode?: string; status?: string; agents?: FooterAgent[]; update?: string
   model?: string; context?: { percent: number; tokens?: number | null; limit?: number | null }; windows?: UsageWindow[]
   credits?: { balance?: string | number | null; unlimited?: boolean; has_credits?: boolean }
-  goal?: string; tasks?: string[]; task_details?: FooterTask[]; ide?: string
+  goal?: string; goal_status?: string; tasks?: string[]; task_details?: FooterTask[]; ide?: string
   spinner?: { verb: string; detail: string } | null
   running?: { title: string; elapsed: string; command: string } | null
   denied?: { text: string; reason: string } | null
   // The last auto mode block of this turn, from the PermissionDenied hook.
   blocked?: { tool: string; description: string; command: string; reason: string; at: number } | null
   heads_up?: { text: string; state?: 'offer' | 'explained' | 'making' | 'ready' | 'failed'; detail?: string[]; url?: string | null; more?: number; full?: string; note?: string; options: { key: string; label: string }[] } | null }
-// The /goal and the background shells and monitors of the pane's Claude conversation, from its transcript.
-export interface LiveGoal { condition: string; met: boolean; reason?: string; set_at?: number | null; checked_at?: number | null }
+// Goals for Claude and Codex, plus Claude's background shells and monitors.
+export const goalStatusLabel = (status: string) => ({ active: 'Active', paused: 'Paused', blocked: 'Blocked', usage_limited: 'Usage limit reached', budget_limited: 'Budget limit reached', complete: 'Complete' })[status] ?? status
+export interface LiveGoal { condition: string; met: boolean; status?: string; token_budget?: number | null; tokens_used?: number; time_used_seconds?: number; reason?: string; set_at?: number | null; checked_at?: number | null }
 export interface LiveTask { id: string; kind: 'shell' | 'monitor'; title: string; command: string; started: number | null; output: string | null; state: 'running' | 'ended' }
 export interface LiveState { goal: LiveGoal | null; tasks: LiveTask[] }
 export interface ModelOptions { agent: string; models: { id: string; label: string; current: boolean; effort?: boolean }[]; efforts: string[]; current_effort: string | null }

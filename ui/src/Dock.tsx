@@ -2,7 +2,7 @@ import { PermissionsPanel } from './Permissions'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Search, Clock3, Check, Terminal, X, RefreshCw, Gauge, SquareTerminal, Layers } from 'lucide-react'
 import { TextMessagePartProvider } from '@assistant-ui/react'
-import { errorText } from './api'
+import { errorText, goalStatusLabel } from './api'
 import type { Api, Approval, AskBridge, Attention, ChatData, Choice, Footer, FooterTask, LiveState, Pane, PromptAction } from './api'
 import { useModal, usePolling } from './hooks'
 import { agentNames } from './Sidebar'
@@ -205,8 +205,10 @@ export function LiveSheet({ api, pane, show, taskDetails, onClose, onTerminal }:
     {state && show === 'goal' && (goal ? <div className="live-goal">
       <p className="live-label">Condition</p>
       <p className="live-condition">{goal.condition}</p>
-      <p className={goal.met ? 'live-status met' : 'live-status'}>{goal.met ? <Check size={15} /> : <Clock3 size={15} />}{goal.met ? 'Met' : 'Not met yet'}{goal.checked_at ? ` · checked ${since(goal.checked_at)}` : ''}</p>
+      <p className={goal.met ? 'live-status met' : 'live-status'}>{goal.met ? <Check size={15} /> : <Clock3 size={15} />}{goal.status ? goalStatusLabel(goal.status) : goal.met ? 'Met' : 'Not met yet'}{goal.checked_at ? ` · checked ${since(goal.checked_at)}` : ''}</p>
       {goal.reason && <><p className="live-label">Last check</p><p className="live-reason">{goal.reason}</p></>}
+      {goal.tokens_used != null && <p className="live-meta">Tokens: {goal.tokens_used.toLocaleString()}{goal.token_budget != null ? ` / ${goal.token_budget.toLocaleString()}` : ' · no token budget'}</p>}
+      {goal.time_used_seconds != null && <p className="live-meta">Time used: {Math.floor(goal.time_used_seconds / 60)} min {goal.time_used_seconds % 60} sec</p>}
       {goal.set_at && <p className="live-meta">Set {since(goal.set_at)}</p>}
     </div> : <p className="live-empty">No goal found in this conversation.</p>)}
     {hookTasks && (taskDetails.length ? <ul className="live-tasks hook-tasks">{taskDetails.map(task => <li key={task.id}>
