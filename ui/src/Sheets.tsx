@@ -1,22 +1,16 @@
-import { playChime, prepareChime } from './sound'
 import { useWords, count } from './words'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Archive, ArchiveRestore, ArrowDown, BookMarked, ArrowUp, Bell, Check, Columns2, GitFork, History, LayoutDashboard, Merge, ArrowRightLeft, Plus, PanelBottom, PanelRight, Pencil, Pin, PinOff, Shapes, Sparkles, RotateCw, Rows2, Square, Trash2, X } from 'lucide-react'
 import { SESSION_NAME, SESSION_NAME_HELP, canFork, creditsLabel, errorText, usageLabel } from './api'
 import type { Api, Catalog, Footer, ModelOptions, Pane, PastChat, SessionsData } from './api'
 import { loadCatalog } from './Suggest'
-import type { Prefs } from './prefs'
-import { useModal, usePopover, usePolling } from './hooks'
+import { useModal, usePopover } from './hooks'
 import type { Anchor } from './hooks'
 import { AgentIcon, PANE_ICONS, agentNames, paneTitle, shownIndex } from './Sidebar'
 import type { Session } from './Sidebar'
-import { canSpeak } from './speech'
 import { KeepChoice, keepNeeded } from './Project'
 import type { Keep, ProjectMarks } from './Project'
-import { SCHEMES, schemeById } from './schemes'
-import { HostResources } from './HostResources'
 import { GlobalCodexLevel } from './CodexLevel'
-import { AgentBrowserSettings } from './AgentBrowser'
 import { CopyNames } from './CopyNames'
 
 type PaneLevel = 'all' | 'important' | 'urgent' | 'off'
@@ -24,7 +18,6 @@ type Delivery = 'sound' | 'silent' | 'off'
 type Priority = 'urgent' | 'important' | 'low'
 interface PushConfig { supported: boolean; publicKey: string; muted?: string[]; levels?: Record<string, PaneLevel>; delivery?: Record<Priority, Delivery> }
 const PANE_LEVELS: [PaneLevel, string][] = [['all', 'All'], ['important', 'Important and urgent'], ['urgent', 'Urgent only'], ['off', 'Off']]
-const PRIORITIES: [Priority, string][] = [['urgent', 'Urgent — approvals, questions, errors'], ['important', 'Important — tasks you started'], ['low', 'Low — background updates']]
 
 // Pane notification submenu. Hidden when this browser has no push subscription.
 export function MuteItem({ api, pane, disabled = false }: { api: Api; pane: string; disabled?: boolean }) {
@@ -316,210 +309,7 @@ export function ResumeChat({ api, chat, onClose, onOpened }: { api: Api; chat: P
   </dialog>
 }
 
-function Choice<T extends string>({ legend, name, value, options, onChange }: { legend: string; name: string; value: T; options: [T, string][]; onChange: (value: T) => void }) {
-  return <fieldset className="choice"><legend>{legend}</legend><div className="segmented">
-    {options.map(([key, label]) => <label key={key}><input type="radio" name={name} value={key} checked={value === key} onChange={() => onChange(key)} /><span>{label}</span></label>)}
-  </div></fieldset>
-}
-
-// Push subscription is browser-specific; delivery settings apply to all subscribed devices.
-function Notifications({ api }: { api: Api }) {
-  const [notice, onNotice] = useState('')
-  useEffect(() => { if (!notice) return; const timer = setTimeout(() => onNotice(''), 5000); return () => clearTimeout(timer) }, [notice])
-  const supported = 'Notification' in window && 'serviceWorker' in navigator && 'PushManager' in window
-  const [state, setState] = useState(supported ? Notification.permission === 'denied' ? 'blocked' : 'off' : 'unsupported')
-  const [pending, setPending] = useState(true)
-  const [publicKey, setPublicKey] = useState('')
-  const [delivery, setDelivery] = useState<Record<Priority, Delivery>>({ urgent: 'sound', important: 'sound', low: 'off' })
-  useEffect(() => {
-    if (!supported) { setPending(false); return }
-    let live = true
-    Promise.all([api<PushConfig>('push/config'), navigator.serviceWorker.ready.then(registration => registration.pushManager.getSubscription())])
-      .then(([config, subscription]) => {
-        if (!live) return
-        setPublicKey(config.publicKey || '')
-        if (config.delivery) setDelivery(config.delivery)
-        setState(!config.supported ? 'unsupported' : Notification.permission === 'denied' ? 'blocked' : subscription ? 'on' : 'off')
-      }, failure => { if (live) onNotice(errorText(failure)) })
-      .finally(() => { if (live) setPending(false) })
-    return () => { live = false }
-  }, [api, supported, onNotice])
-  async function toggle() {
-    setPending(true)
-    try {
-      // Request permission from the tap, before any network work.
-      if (state !== 'on' && await Notification.requestPermission() !== 'granted') {
-        setState(Notification.permission === 'denied' ? 'blocked' : 'off'); return
-      }
-      const registration = await navigator.serviceWorker.ready
-      const existing = await registration.pushManager.getSubscription()
-      if (state === 'on') {
-        if (existing) {
-          await api('push/unsubscribe', { endpoint: existing.endpoint })
-          if (!await existing.unsubscribe()) throw new Error('Could not turn notifications off. Please try again.')
-        }
-        setState('off')
-      } else {
-        const key = atob(publicKey.replace(/-/g, '+').replace(/_/g, '/'))
-        const subscription = existing ?? await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: Uint8Array.from(key, char => char.charCodeAt(0)) })
-        try { await api('push/subscribe', { subscription: subscription.toJSON() }) }
-        catch (failure) { if (!existing) await subscription.unsubscribe(); throw failure }
-        setState('on')
-      }
-    } catch (failure) { onNotice(errorText(failure)) } finally { setPending(false) }
-  }
-  async function changeDelivery(priority: Priority, value: Delivery) {
-    setPending(true)
-    try {
-      const result = await api<{ delivery: Record<Priority, Delivery> }>('push/settings', { delivery: { [priority]: value } })
-      setDelivery(result.delivery)
-    } catch (failure) { onNotice(errorText(failure)) } finally { setPending(false) }
-  }
-  async function test() {
-    setPending(true)
-    try {
-      const result = await api<{ delivered: number }>('push/test', {})
-      onNotice(result.delivered ? `Test sent to ${result.delivered} subscription${result.delivered === 1 ? '' : 's'}.` : 'No test notifications were delivered.')
-    } catch (failure) { onNotice(errorText(failure)) } finally { setPending(false) }
-  }
-  const label = state === 'unsupported' ? 'Unsupported' : state === 'blocked' ? 'Blocked. Allow notifications for this site in the browser or app settings.' : state === 'on' ? 'On' : 'Off'
-  return <>
-    <label className="switch-row"><span><strong>Push notifications</strong><small>{pending ? 'Please wait…' : label}</small></span><input type="checkbox" role="switch" checked={state === 'on'} disabled={pending || state === 'unsupported' || state === 'blocked' || (!publicKey && state !== 'on')} onChange={() => void toggle()} /></label>
-    {notice && <div className="toast" role="status">{notice}</div>}
-    {state === 'on' && <div className="notification-delivery">
-      <p className="setting-note">Applies to all subscribed devices.</p>
-      {PRIORITIES.map(([priority, label]) => <fieldset key={priority} disabled={pending}>
-        <legend>{label}</legend><div className="segmented">
-          {(['sound', 'silent', 'off'] as const).map(value => <label key={value}><input type="radio" name={`notify-${priority}`} value={value} checked={delivery[priority] === value} onChange={() => void changeDelivery(priority, value)} /><span>{value === 'sound' ? 'Sound' : value === 'silent' ? 'Silent' : 'Off'}</span></label>)}
-        </div>
-      </fieldset>)}
-    </div>}
-    {state === 'on' && <div className="switch-row"><span><strong>Test notifications</strong><small>Send a notification to subscribed devices.</small></span><button type="button" className="secondary" disabled={pending} onClick={() => void test()}>Send test</button></div>}
-  </>
-}
-
-function SessionSettings({ api }: { api: Api }) {
-  const [folder, setFolder] = useState('')
-  const [saved, setSaved] = useState('')
-  const [pending, setPending] = useState(true)
-  const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
-  useEffect(() => {
-    const controller = new AbortController()
-    void api<{ prefs: { sessionFolder?: string } }>('prefs', undefined, controller.signal).then(data => {
-      if (!controller.signal.aborted) { setFolder(data.prefs.sessionFolder || ''); setSaved(data.prefs.sessionFolder || '') }
-    }, failure => { if (!controller.signal.aborted) setError(errorText(failure)) }).finally(() => { if (!controller.signal.aborted) setPending(false) })
-    return () => controller.abort()
-  }, [api])
-  async function save(event: React.FormEvent) {
-    event.preventDefault()
-    if (pending) return
-    setPending(true); setError(''); setNotice('')
-    const value = folder.trim()
-    try {
-      await api('prefs', { changes: { sessionFolder: value } })
-      setFolder(value); setSaved(value); setNotice('Saved. New sessions use this folder.')
-    } catch (failure) { setError(errorText(failure)) } finally { setPending(false) }
-  }
-  return <section className="settings-group" aria-labelledby="settings-sessions"><h3 id="settings-sessions">New sessions</h3>
-    <form className="session-folder-setting" onSubmit={save}>
-      <label htmlFor="default-session-folder">Default folder</label>
-      <p id="session-folder-help" className="setting-note">Use an absolute path or ~/. Leave blank to use your home folder. Applies to new sessions on this server.</p>
-      <input id="default-session-folder" value={folder} maxLength={1024} placeholder="~/projects" autoCapitalize="none" autoCorrect="off" spellCheck={false} autoComplete="off" aria-describedby="session-folder-help" disabled={pending} onChange={event => { setFolder(event.target.value); setNotice('') }} />
-      {error && <p className="error" role="alert">{error}</p>}
-      {notice && <p className="setting-note" role="status">{notice}</p>}
-      <button className="secondary" disabled={pending || folder === saved}>{pending ? 'Please wait…' : 'Save folder'}</button>
-    </form>
-  </section>
-}
-
-const SETTINGS_TABS = ['Look', 'Chat', 'Voice', 'Alerts', 'Sessions', 'Codex', 'System'] as const
-type SettingsTab = typeof SETTINGS_TABS[number]
-interface UpdateStatus { current: string; latest: string | null; available: boolean; checking: boolean; mode: string; checked_at: number | null; url: string }
-function SystemSettings({ api, onReload }: { api: Api; onReload: () => void }) {
-  const [host, setHost] = useState<{ resources: boolean; terminal: boolean } | null>(null)
-  const fetchStatus = useCallback((signal: AbortSignal) => api<UpdateStatus>('update', undefined, signal), [api])
-  const { data: status, error: updateError } = usePolling(fetchStatus, 5000)
-  const [error, setError] = useState('')
-  useEffect(() => {
-    let live = true
-    void api<{ resources: boolean; terminal: boolean }>('host').then(data => { if (live) setHost(data) }, failure => { if (live) setError(errorText(failure)) })
-    return () => { live = false }
-  }, [api])
-  return <>
-    {host?.resources && <HostResources api={api} terminal={host.terminal} />}
-    <section className="settings-group" aria-labelledby="settings-system"><h3 id="settings-system">Tether</h3>
-      {(error || updateError) && <p className="error" role="alert">{error || updateError}</p>}
-      <div className="switch-row"><span><strong>Updates</strong><small>{status ? `Version ${status.current} · ${status.mode === 'off' ? 'Checks off' : status.checking ? 'Checking…' : status.available ? `${status.latest} available` : status.latest ? 'Up to date' : 'No release data'}` : 'Loading…'}</small></span>{status?.available && status.url.startsWith('https://') && <a className="secondary" href={status.url} target="_blank" rel="noreferrer">Release notes</a>}</div>
-      <div className="switch-row"><span><strong>Reload Tether</strong><small>Unsent drafts stay.</small></span><button type="button" className="secondary" onClick={onReload}>Reload</button></div>
-    </section>
-    <AgentBrowserSettings api={api} />
-  </>
-}
-
-export function Settings({ api, prefs, update, onReload, onClose }: { api: Api; prefs: Prefs; update: (change: (current: Prefs) => Partial<Prefs>) => void; onReload: () => void; onClose: () => void }) {
-  const modal = useModal(true, onClose)
-  const [tab, setTab] = useState<SettingsTab>(() => {
-    try { const saved = localStorage.getItem('tether.settings.tab'); return SETTINGS_TABS.find(item => item === saved) ?? 'Look' } catch { return 'Look' }
-  })
-  const tabs = useRef<HTMLDivElement>(null)
-  function choose(next: SettingsTab) {
-    setTab(next)
-    try { localStorage.setItem('tether.settings.tab', next) } catch { /* private mode */ }
-  }
-  const toggle = (title: string, note: string, checked: boolean, onChange: (checked: boolean) => void, disabled = false) =>
-    <label className="switch-row"><span><strong>{title}</strong><small>{note}</small></span><input type="checkbox" role="switch" checked={checked} disabled={disabled} onChange={event => onChange(event.target.checked)} /></label>
-  return <dialog {...modal} className="sheet settings-sheet" aria-labelledby="settings-title">
-    <div className="sheet-heading"><h2 id="settings-title">Settings</h2><button type="button" className="icon-button" aria-label="Close" onClick={onClose}><X /></button></div>
-    <div className="settings-tabs" role="tablist" aria-label="Settings" ref={tabs} onKeyDown={event => {
-      const index = SETTINGS_TABS.indexOf(tab)
-      const next = event.key === 'ArrowRight' ? (index + 1) % SETTINGS_TABS.length : event.key === 'ArrowLeft' ? (index + SETTINGS_TABS.length - 1) % SETTINGS_TABS.length : event.key === 'Home' ? 0 : event.key === 'End' ? SETTINGS_TABS.length - 1 : null
-      if (next == null) return
-      event.preventDefault(); choose(SETTINGS_TABS[next]); tabs.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus()
-    }}>
-      {SETTINGS_TABS.map(item => <button type="button" role="tab" id={`settings-tab-${item}`} key={item} aria-selected={tab === item} aria-controls={`settings-panel-${item}`} tabIndex={tab === item ? 0 : -1} onClick={() => choose(item)}>{item}</button>)}
-    </div>
-    {tab !== 'System' && tab !== 'Alerts' && tab !== 'Codex' && tab !== 'Sessions' && <p className="settings-device-note">Saved on this device</p>}
-    {SETTINGS_TABS.map(item => <div key={item} role="tabpanel" id={`settings-panel-${item}`} aria-labelledby={`settings-tab-${item}`} hidden={tab !== item} tabIndex={0}>
-      {tab === item && <>
-      {item === 'Look' && <>
-    <section className="settings-group" aria-labelledby="settings-look"><h3 id="settings-look">Appearance</h3>
-      <Choice legend="Theme" name="theme" value={prefs.theme} options={[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']]} onChange={theme => update(() => ({ theme }))} />
-      <fieldset className="choice schemes"><legend>Colors</legend><div className="scheme-grid">
-        {SCHEMES.map(scheme => <label key={scheme.id} className="scheme" style={{ '--s-light': scheme.light.bg, '--s-dark': scheme.dark.bg, '--s-accent-light': scheme.light.accent, '--s-accent-dark': scheme.dark.accent, '--s-line': scheme.light.line } as React.CSSProperties}>
-          <input type="radio" name="scheme" value={scheme.id} checked={schemeById(prefs.scheme).id === scheme.id} onChange={() => update(() => ({ scheme: scheme.id }))} />
-          <span className="scheme-swatch" aria-hidden="true"><i /><i /></span><span>{scheme.name}</span>
-        </label>)}
-      </div></fieldset>
-    </section>
-      </>}
-      {item === 'Chat' && <section className="settings-group" aria-labelledby="settings-chat"><h3 id="settings-chat">Chat and sidebar</h3>
-      <Choice legend="Text size" name="text-size" value={prefs.textSize} options={[['small', 'Small'], ['default', 'Default'], ['large', 'Large']]} onChange={textSize => update(() => ({ textSize }))} />
-      <Choice legend="Order" name="sort" value={prefs.sort} options={[['smart', 'Smart'], ['manual', 'Manual']]} onChange={sort => update(() => ({ sort }))} />
-      <p className="setting-note">{prefs.sort === 'smart' ? 'Needs you, then Done, then Working, then the most recent.' : 'Your order. Use Reorder in the sidebar.'}</p>
-      {toggle('Folder paths', 'Folder under each session name.', prefs.showPaths, showPaths => update(() => ({ showPaths })))}
-      {toggle('tmux words', 'Say pane, split and Ctrl-b keys instead of tab.', prefs.tmuxWords, tmuxWords => update(() => ({ tmuxWords })))}
-      {toggle('Live reply preview', 'Show Claude’s reply as it arrives.', prefs.liveReplyPreview, liveReplyPreview => update(() => ({ liveReplyPreview })))}
-      {toggle('Agents bubble', 'Floating button that lists working agents. Drag it anywhere.', prefs.agentBubble, agentBubble => update(() => ({ agentBubble })))}
-    </section>
-      }
-      {item === 'Voice' && <>
-    <section className="settings-group" aria-labelledby="settings-voice"><h3 id="settings-voice">Voice</h3>
-      {toggle('Voice button', 'Use your keyboard mic instead.', !prefs.voiceOff, on => update(() => ({ voiceOff: !on })))}
-      {toggle('Start sound', 'Chime when the mic is ready.', prefs.voiceSound && !prefs.voiceOff, voiceSound => update(() => ({ voiceSound })), prefs.voiceOff)}
-      {canSpeak && toggle('Read replies aloud', 'Read each completed reply.', prefs.readAloud, readAloud => update(() => ({ readAloud })))}
-      {canSpeak && toggle('Hands-free', 'Mic starts after speech. Pause 2 seconds to send.', prefs.readAloud && prefs.handsFree && !prefs.voiceOff, handsFree => update(() => ({ handsFree })), !prefs.readAloud || prefs.voiceOff)}
-      <div className="switch-row"><span><strong>Test the sound</strong><small>Uses the media volume.</small></span><button type="button" className="secondary" onClick={() => { prepareChime(); void playChime() }}>Play</button></div>
-    </section>
-      </>}
-      {item === 'Alerts' && <section className="settings-group" aria-labelledby="settings-notify"><h3 id="settings-notify">Notifications</h3><Notifications api={api} /></section>}
-      {item === 'Sessions' && <SessionSettings api={api} />}
-      {item === 'Codex' && <GlobalCodexLevel api={api} />}
-      {item === 'System' && <SystemSettings api={api} onReload={onReload} />}
-      </>}
-    </div>)}
-  </dialog>
-}
+export { Settings } from './Settings'
 
 // Everything the agent in this pane can use: tap a command or skill to put it in the message box.
 export function Tools({ api, pane, onPick, onClose }: { api: Api; pane: Pane; onPick: (text: string) => void; onClose: () => void }) {

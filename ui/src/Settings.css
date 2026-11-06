@@ -1,0 +1,109 @@
+/* Settings is a searchable index on phones and a two-column workspace on desktop. */
+.preferences.sheet { width: min(960px, calc(100vw - 48px)); max-width: none; height: min(780px, calc(100dvh - 64px)); max-height: none; padding: 0; margin: auto; overflow: hidden; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); color: var(--text); font-family: system-ui, -apple-system, sans-serif; }
+.preferences.sheet :is(h2, h3, h4) { font-family: system-ui, -apple-system, sans-serif; }
+.preferences[open] { display: flex; flex-direction: column; }
+.preferences-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 22px 28px 14px; flex: none; }
+.preferences-eyebrow { display: block; color: var(--muted); font-size: 10px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
+.preferences .preferences-header h2 { margin: 3px 0 0; font: 600 25px/1.2 system-ui, -apple-system, sans-serif; letter-spacing: -.65px; }
+.preferences-header .icon-button { width: 44px; height: 44px; }
+.preferences-search { display: flex; align-items: center; gap: 10px; flex: none; min-height: 44px; margin: 0 28px 20px; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--muted); }
+.preferences-search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.preferences-search input { flex: 1; width: 100%; min-width: 0; min-height: 44px; padding: 8px 0; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 15px; box-shadow: none; border-radius: 0; }
+.preferences-search input:focus-visible { outline: 0; }
+.preferences-search input::-webkit-search-cancel-button { display: none; }
+.preferences-search .icon-button { width: 44px; height: 44px; flex: none; }
+.preferences-search kbd { flex: none; padding: 3px 5px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); font-size: 10px; line-height: 1.2; font-family: inherit; white-space: nowrap; }
+.preferences-layout { display: grid; grid-template-columns: 230px minmax(0, 1fr); flex: 1; min-height: 0; border-top: 1px solid var(--line); }
+.preferences-layout > aside { padding: 18px 12px; overflow-y: auto; border-right: 1px solid var(--line); background: var(--sidebar); }
+.preferences-nav { display: grid; gap: 4px; }
+.preferences-nav button { display: flex; align-items: center; gap: 11px; width: 100%; min-height: 64px; padding: 12px; border: 0; border-radius: 9px; background: transparent; color: var(--muted); text-align: left; }
+.preferences-nav button > svg { flex: none; }
+.preferences-nav button > svg:last-child { width: 12px; margin-left: auto; }
+.preferences-nav button > span { min-width: 0; }
+.preferences-nav strong { display: block; color: var(--text); font-size: 13px; font-weight: 550; line-height: 1.4; }
+.preferences-nav small { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.preferences-nav button:hover { background: var(--hover); color: var(--text); }
+.preferences-nav button[aria-current="page"] { background: var(--bubble); color: var(--accent); }
+.preferences-nav button[aria-current="page"] strong { font-weight: 650; }
+.preferences-layout > aside > p { margin: 24px 12px 0; color: var(--muted); font-size: 11px; line-height: 1.7; }
+.preferences-content { min-width: 0; overflow-y: auto; overscroll-behavior: contain; padding: 26px 30px 36px; scroll-padding-block: 20px; }
+.preferences-content-heading { margin-bottom: 20px; }
+.preferences-content-heading h3, .preferences-overview > h3 { margin: 5px 0 8px; font-size: 22px; font-weight: 600; letter-spacing: -.5px; line-height: 1.3; }
+.preferences-content-heading > p, .preferences-overview > p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.preferences-back { display: none; }
+.preferences-entry { padding: 18px 0; border-top: 1px solid var(--line); min-width: 0; }
+.preferences-entry:first-child { border-top: 0; padding-top: 0; }
+.preferences .choice { margin: 0; padding: 0; min-width: 0; border: 0; }
+.preferences .choice > legend { margin: 0 0 12px; float: none; width: auto; padding: 0; color: var(--text); font-size: 14px; font-weight: 600; }
+.preferences .segmented { margin: 0; width: fit-content; max-width: 100%; }
+.preferences .segmented label { min-width: 0; }
+.preferences .segmented span { min-height: 40px; padding: 8px 15px; display: flex; align-items: center; justify-content: center; font-size: 13px; }
+.preferences-scope { display: block; margin-top: 8px; color: var(--muted); font-size: 10px; line-height: 1.4; }
+.preferences .switch-row { min-height: 50px; gap: 18px; padding: 0; margin: 0; border: 0; }
+.preferences .switch-row > span { min-width: 0; }
+.preferences .switch-row strong { display: block; color: var(--text); font-size: 14px; font-weight: 550; line-height: 1.4; }
+.preferences .switch-row small { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.preferences .switch-row input { flex-shrink: 0; }
+.preferences .switch-row .preferences-scope { margin-top: 5px; }
+.preferences .setting-note { margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.preferences .secondary { flex: none; min-height: 40px; font-size: 12px; padding: 8px 12px; }
+.preferences .settings-group { margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; }
+.preferences .settings-group + .settings-group { margin-top: 22px; padding-top: 22px; border-top: 1px solid var(--line); }
+.preferences .settings-group h3, .preferences-nested > h3 { margin: 0 0 14px; color: var(--text); font-size: 14px; line-height: 1.4; font-weight: 600; letter-spacing: 0; text-transform: none; }
+.preferences .settings-group .choice:not(.schemes):not(.codex-run) legend { float: none; width: auto; margin: 0 0 10px; }
+.preferences .settings-group .choice:not(.schemes) .segmented { margin-left: 0; }
+.preferences .settings-group .switch-row, .preferences-nested > .switch-row { padding-block: 12px; }
+.preferences .settings-group .switch-row + .switch-row, .preferences-nested > .switch-row + .switch-row { border-top: 1px solid var(--line); }
+.preferences .settings-group .setting-note { font-size: 12px; margin-top: 8px; }
+.preferences .session-folder-setting { display: grid; gap: 10px; }
+.preferences .session-folder-setting > label { font-size: 14px; font-weight: 600; }
+.preferences .session-folder-setting input { width: 100%; min-width: 0; min-height: 44px; font: 14px/1.5 var(--shell-mono); }
+.preferences .session-folder-setting .setting-note { margin: 0; }
+.preferences .session-folder-setting > button { justify-self: start; }
+.preferences .session-folder-setting + .preferences-scope { margin-top: 10px; }
+.preferences .session-folder-setting + h3 { display: none; }
+.preferences-colors { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
+.preferences-colors label { position: relative; display: flex; align-items: center; gap: 7px; min-width: 0; min-height: 42px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; font-size: 11px; cursor: pointer; }
+.preferences-colors label:has(input:checked) { border-color: var(--accent); background: var(--hover); }
+.preferences-colors label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.preferences-colors input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.preferences-color { width: 16px; height: 16px; border: 4px solid; border-radius: 50%; flex: none; }
+.preferences-result-group { display: inline-flex; align-items: center; gap: 4px; min-height: 36px; margin-bottom: 12px; padding: 0; color: var(--accent); font-size: 11px; }
+.preferences-empty { margin: 48px 0; color: var(--muted); }
+.preferences-empty h4 { margin: 14px 0 6px; color: var(--text); font-size: 16px; }
+.preferences-empty p { font-size: 13px; line-height: 1.6; margin: 0 0 16px; }
+.preferences-mobile-index { display: none; }
+.preferences-quick { display: grid; gap: 3px; margin-top: 32px; }
+.preferences-quick h4 { margin: 0 0 8px; color: var(--muted); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; }
+.preferences-quick button { display: flex; align-items: center; justify-content: space-between; min-height: 44px; padding: 0; text-align: left; font-size: 13px; border-bottom: 1px solid var(--line); }
+.preferences-quick button:hover { color: var(--accent); }
+.preferences .codex-run { margin-top: 20px; }
+.preferences .notification-delivery { margin-top: 16px; }
+.preferences .notification-delivery fieldset { margin-block: 14px; }
+.preferences .notification-delivery legend { margin-bottom: 8px; font-size: 12px; }
+@media (max-width: 799px) {
+  .preferences.sheet { width: 100%; height: 100dvh; max-height: 100dvh; margin: 0; inset: 0; border: 0; border-radius: 0; }
+  .preferences-header { padding: max(18px, env(safe-area-inset-top)) 20px 14px; }
+  .preferences .preferences-header h2 { font-size: 24px; }
+  .preferences-search { margin: 0 20px 18px; }
+  .preferences-search kbd { display: none; }
+  .preferences-search input { font-size: 16px; }
+  .preferences-layout { display: flex; flex-direction: column; }
+  .preferences-layout > aside { display: none; }
+  .preferences-content { flex: 1; padding: 22px 20px max(24px, env(safe-area-inset-bottom)); }
+  .preferences-overview > .preferences-eyebrow, .preferences-overview > h3, .preferences-overview > p { display: none; }
+  .preferences-mobile-index { display: block; margin-top: -10px; }
+  .preferences-nav { gap: 0; }
+  .preferences-nav button { min-height: 82px; padding: 14px 0; border-radius: 0; border-bottom: 1px solid var(--line); gap: 14px; }
+  .preferences-nav button > svg:first-child { width: 21px; height: 21px; color: var(--muted); }
+  .preferences-nav button > svg:last-child { width: 16px; }
+  .preferences-nav strong { font-size: 15px; }
+  .preferences-nav small { margin-top: 5px; font-size: 12px; }
+  .preferences-quick { margin-top: 28px; }
+  .preferences-content-heading { margin-bottom: 20px; }
+  .preferences-content-heading h3 { font-size: 22px; }
+  .preferences-back { display: inline-flex; gap: 7px; align-items: center; min-height: 40px; padding: 0; margin: -10px 0 12px; color: var(--muted); font-size: 12px; }
+  .preferences-colors { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .preferences-entry { padding-block: 18px; }
+}
+@media (prefers-reduced-motion: reduce) { .preferences *, .preferences *::before, .preferences *::after { animation-duration: 0s !important; transition-duration: 0s !important; scroll-behavior: auto !important; } }
