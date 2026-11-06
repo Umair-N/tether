@@ -52,7 +52,7 @@ class BackendTests(unittest.TestCase):
         with sqlite3.connect(database) as connection:
             connection.execute('CREATE TABLE threads (' + ', '.join(f'{key} {kind}' for key, kind in columns.items()) + ')')
             for row in rows:
-                values = dict(id=CHAT, cwd=str(self.root), updated_at_ms=1000, archived=0, source='cli', has_user_event=1)
+                values = dict(id=CHAT, title='Codex chat', cwd=str(self.root), updated_at_ms=1000, archived=0, source='cli', has_user_event=0)
                 values.update(row)
                 connection.execute('INSERT INTO threads VALUES (' + ','.join('?' for _ in columns) + ')',
                                    [values.get(key) for key in columns])
@@ -421,20 +421,20 @@ class BackendTests(unittest.TestCase):
         self.codex_database([
             {'id': ids[0], 'name': '  My\n name  ', 'title': 'ignored', 'first_user_message': 'search ' * 60},
             {'id': ids[1], 'source': 'vscode', 'name': ' ', 'title': ' A\t title '},
-            {'id': ids[2], 'first_user_message': ' first\n user ' + 'x' * 90},
-            {'id': ids[3]},
+            {'id': ids[2], 'title': None, 'first_user_message': ' first\n user ' + 'x' * 90},
+            {'id': ids[3], 'title': 'Plain title'},
             {'id': ids[4], 'source': 'exec'},
             {'id': ids[5], 'source': 'subagent'},
             {'id': ids[6], 'source': '{"subagent":{"thread_spawn":{}}}'},
             {'id': ids[7], 'archived': 1},
-            {'id': ids[8], 'has_user_event': 0},
+            {'id': ids[8], 'title': None},  # an empty thread has no text at all
             {'id': ids[9], 'source': 'other'},
         ])
         self.transcript([{'type': 'user', 'message': {'content': 'Claude text'}}])
         chats = history.all_chats()
         codex = [chat for chat in chats if chat['agent'] == 'codex']
         self.assertEqual([chat['id'] for chat in codex], ids[:4])
-        self.assertEqual([chat['title'] for chat in codex], ['My name', 'A title', ('first user ' + 'x' * 90)[:80], ids[3]])
+        self.assertEqual([chat['title'] for chat in codex], ['My name', 'A title', ('first user ' + 'x' * 90)[:80], 'Plain title'])
         self.assertEqual(codex[0]['text'], ('search ' * 60)[:300])
         self.assertEqual(codex[0]['time'], '1970-01-01T00:00:01+00:00')
         self.assertEqual(codex[0]['cwd'], str(self.root))

@@ -212,8 +212,6 @@ def _codex_chats():
                 rules.append('archived=0')
             if 'source' in columns:
                 rules.append("source IN ('cli','vscode')")
-            if 'has_user_event' in columns:
-                rules.append('has_user_event=1')
             query = 'SELECT * FROM threads' + (' WHERE ' + ' AND '.join(rules) if rules else '')
             chats = []
             for row in connection.execute(query):
@@ -222,7 +220,12 @@ def _codex_chats():
                 if not isinstance(identifier, str) or not UUID.fullmatch(identifier):
                     continue
                 title = next((' '.join(row[key].split()) for key in ('name', 'title', 'first_user_message')
-                              if isinstance(row.get(key), str) and row[key].strip()), identifier)
+                              if isinstance(row.get(key), str) and row[key].strip()), None)
+                if title is None:
+                    # An empty thread. has_user_event cannot tell: Codex stores 0 on every row.
+                    if columns & {'name', 'title', 'first_user_message'}:
+                        continue
+                    title = identifier
                 text = row.get('first_user_message')
                 try:
                     updated = datetime.fromtimestamp(row['updated_at_ms'] / 1000, timezone.utc).isoformat()
