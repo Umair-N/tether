@@ -1,3 +1,4 @@
+import { terminalText } from './terminalText'
 import { ShellOutput } from './ShellOutput'
 import { ContinueWith } from './ContinueWith'
 import { shellCommand } from './shellCommand'
@@ -17,7 +18,7 @@ import type { Session } from './Sidebar'
 import { ModelSheet, MuteItem, Tools, Usage } from './Sheets'
 import { ImageViewer } from './ImageViewer'
 import type { Media } from './ImageViewer'
-import { FilePane, MediaOpener } from './MediaLink'
+import { MediaOpener } from './MediaLink'
 import type { Kind } from './MediaLink'
 import { TextViewer } from './TextViewer'
 import { speak, stopSpeaking } from './speech'
@@ -528,6 +529,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
   // While Claude asks a question, the message box answers it through its own-answer row (checked on the server).
   const ownAnswer = !data?.approval && data?.attention?.reason === 'menu' ? data.attention.options?.find(option => option.free) : undefined
   async function send(text: string, retryOf?: Pending) {
+    text = terminalText(text)
     // Claude shows these as a terminal panel that a phone sees only a slice of. Show Tether's own sheet instead, as T3 Code does.
     if (!retryOf && activePane.agent === 'claude' && /^\/(usage|cost|stats|status)$/.test(text.trim())) { setPlanSheet(true); return true }
     if (ownAnswer && !retryOf) return write('menu', { session: pane.id, thread: data?.thread ?? null, choice: ownAnswer.id, answer: text })
@@ -740,7 +742,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
   const [hiddenNotices, setHiddenNotices] = useState<string[]>([])
   const visibleNotices = (footer.notices ?? []).filter(note => !hiddenNotices.includes(note))
   const hideNotice = (note: string) => setHiddenNotices(current => [...current.filter(item => (footer.notices ?? []).includes(item)), note])
-  return <AssistantRuntimeProvider runtime={runtime}><MediaOpener.Provider value={openMedia}><FilePane.Provider value={activePane.id}><section ref={panelRef} className={activePane.agent === 'shell' && !term ? 'chat-panel shell-page' : 'chat-panel'} aria-label={`Chat with ${pane.label}`}>
+  return <AssistantRuntimeProvider runtime={runtime}><MediaOpener.Provider value={openMedia}><section ref={panelRef} className={activePane.agent === 'shell' && !term ? 'chat-panel shell-page' : 'chat-panel'} aria-label={`Chat with ${pane.label}`}>
     <header className="chat-header" draggable={!!slot?.onDragStart} onDragStart={slot?.onDragStart} onTouchStart={event => {
       headerTouch.current = sidePin?.pinned && sidePin.total > 1 && event.touches.length === 1 ? { x: event.touches[0].clientX, y: event.touches[0].clientY } : null
     }} onTouchEnd={event => {
@@ -837,5 +839,5 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     </>}
     <ImageViewer image={opened} close={() => setOpened(null)} onShow={showInFiles(opened && !opened.error ? opened.name : null, () => setOpened(null))} />
     <TextViewer file={textFile} close={() => setTextFile(null)} onShow={showInFiles(textFile?.path ?? null, () => setTextFile(null))} />
-  </section></FilePane.Provider></MediaOpener.Provider></AssistantRuntimeProvider>
+  </section></MediaOpener.Provider></AssistantRuntimeProvider>
 }

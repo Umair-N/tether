@@ -1,3 +1,4 @@
+import { terminalText } from './terminalText'
 import { keyLabel } from './keys'
 import { history, loadHistory, remember } from './history'
 import { chatTitle } from './Sidebar'
@@ -347,8 +348,9 @@ export function Composer({ onTerminalEscape, api, pane, thread, disabled, onSend
       else if (shellMode && event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setDraft(draft.slice(1)) }
       else if (shellMode && event.key === 'Backspace' && !draft.slice(1).trim() && event.currentTarget.selectionEnd <= 1) { event.preventDefault(); setDraft(draft.slice(1)) }
       else if (sendsOnEnter(event)) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} onPaste={event => { if (canAttach && event.clipboardData.files.length) { event.preventDefault(); void attach(event.clipboardData.files); return }
-      const pasted = event.clipboardData.getData('text/plain'), box = event.currentTarget
-      if (canAttach && !box.readOnly && longPaste(pasted)) { event.preventDefault(); setPastes(current => [...current, pasteOf(pasted, !draft.slice(0, box.selectionStart).trim())]) } }} ref={textarea} aria-label={pane.agent === 'shell' ? 'Run a command' : shellMode ? 'Shell command' : `Message ${chatTitle(pane)}`} aria-describedby={shellMode ? hintId : undefined} spellCheck={!terminalInput} autoCapitalize={terminalInput ? 'none' : undefined} autoCorrect={terminalInput ? 'off' : undefined} placeholder={hint ?? (pane.agent === 'shell' ? 'Run a command' : `Message ${chatTitle(pane)}`)} rows={1} value={draft} readOnly={listening || transcribing || sending} disabled={disabled} onChange={event => setDraft(event.target.value)} /></div>
+      const raw = event.clipboardData.getData('text/plain'), pasted = terminalText(raw), box = event.currentTarget
+      if (canAttach && !box.readOnly && longPaste(pasted)) { event.preventDefault(); setPastes(current => [...current, pasteOf(pasted, !draft.slice(0, box.selectionStart).trim())]) }
+      else if (!box.readOnly && pasted !== raw) { event.preventDefault(); const start = box.selectionStart, end = box.selectionEnd; setDraft(draft.slice(0, start) + pasted + draft.slice(end)); requestAnimationFrame(() => { box.setSelectionRange(start + pasted.length, start + pasted.length) }) } }} ref={textarea} aria-label={pane.agent === 'shell' ? 'Run a command' : shellMode ? 'Shell command' : `Message ${chatTitle(pane)}`} aria-describedby={shellMode ? hintId : undefined} spellCheck={!terminalInput} autoCapitalize={terminalInput ? 'none' : undefined} autoCorrect={terminalInput ? 'off' : undefined} placeholder={hint ?? (pane.agent === 'shell' ? 'Run a command' : `Message ${chatTitle(pane)}`)} rows={1} value={draft} readOnly={listening || transcribing || sending} disabled={disabled} onChange={event => setDraft(event.target.value)} /></div>
     <div className="composer-controls"><div>{canAttach && <div className="attach-container" ref={menuRef}>
       <input ref={picker} type="file" multiple accept={FILES_ACCEPT} hidden onChange={event => { const chosen = Array.from(event.target.files ?? []); event.target.value = ''; void attach(chosen) }} />
       <input ref={photos} type="file" multiple accept="image/*,video/*" hidden onChange={event => { const chosen = Array.from(event.target.files ?? []); event.target.value = ''; void attach(chosen) }} />

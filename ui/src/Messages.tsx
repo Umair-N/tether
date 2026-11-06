@@ -1,3 +1,4 @@
+import { terminalText } from './terminalText'
 import { shellCommand } from './shellCommand'
 import { copyText } from './clipboard'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
@@ -72,6 +73,7 @@ function shellParts(text: string) {
 function TerminalSnapshot({ text, shell }: { text: string; shell: boolean }) {
   const ref = useRef<HTMLPreElement>(null)
   useLayoutEffect(() => { if (ref.current) ref.current.scrollTop = ref.current.scrollHeight }, [text])
+  text = terminalText(text)
   const parts = shell ? shellParts(text) : null
   if (parts) return <div className="terminal-block shell-run">
     <div className="shell-run-head"><code className="shell-run-prompt"><span className="shell-folder">{parts.folder}</span> $ {parts.command}</code>
