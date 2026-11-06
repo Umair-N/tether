@@ -495,7 +495,8 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
     }
     let width = 0, height = 0, smooth = 0, frame = 0
     let aurora: HTMLElement | null = null
-    const size = () => { const box = element.getBoundingClientRect(), ratio = Math.min(devicePixelRatio || 1, 2); width = element.width = Math.round(box.width * ratio); height = element.height = Math.round(box.height * ratio) }
+    // Layout size, not getBoundingClientRect: that shrinks with the open animation's scale, and a resize observer does not fire again when it ends.
+    const size = () => { const ratio = Math.min(devicePixelRatio || 1, 3); width = element.width = Math.round(element.clientWidth * ratio); height = element.height = Math.round(element.clientHeight * ratio) }
     const observer = new ResizeObserver(size)
     observer.observe(element)
     size()
