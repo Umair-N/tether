@@ -17,8 +17,10 @@ REVIEW_WAIT = 450
 MAX_ROUNDS = 3
 GRACE = 30
 START_WAIT = 300
+SEND_GAP = 6
 UUID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
 _lock = threading.Lock()
+_last_sent = {}
 
 
 def _read():
@@ -81,7 +83,7 @@ def _digest(text):
     return hashlib.sha256((text or '').encode()).hexdigest()
 
 
-def _step(link, entries, status, send, last_reply):
+def _step(link, entries, status, send, last_reply, awaiting, clear):
     worker = entries.get(link['worker'])
     reviewer = entries.get(link['reviewer'])
     if link['reviewer_thread'] is None:
@@ -115,7 +117,7 @@ def _step(link, entries, status, send, last_reply):
             reply = last_reply(reviewer).strip()
             if reply.upper().startswith('APPROVED') or link.get('rounds', 0) >= MAX_ROUNDS:
                 link['awaiting'] = False
-            elif state != 'Idle':
+            elif state != 'Idle' or not clear(link['worker']):
                 link['wait_ticks'] = link.get('wait_ticks', 0) + 1
                 if link['wait_ticks'] >= REVIEW_WAIT:
                     link['awaiting'] = False
@@ -125,6 +127,7 @@ def _step(link, entries, status, send, last_reply):
                         f'{reply[:3000]}\n\nFix what it raises, then stop and wait.')
                 try:
                     send(worker, text, state)
+                    _last_sent[link['worker']] = time.monotonic()
                     link['rounds'] = link.get('rounds', 0) + 1
                     link['awaiting'] = False
                 except (DraftError, RuntimeError):
@@ -136,12 +139,13 @@ def _step(link, entries, status, send, last_reply):
                 link.pop(key, None)
         return link
     if state == 'Working':
-        link['seen_working'] = True
+        if link['worker'] not in awaiting:
+            link['seen_working'] = True
         link.pop('retries', None)
         link.pop('wait_ticks', None)
     elif link['seen_working'] and state == 'Idle':
         reviewer_state = status(reviewer)['state']
-        if reviewer_state != 'Idle':
+        if reviewer_state != 'Idle' or not clear(link['reviewer']):
             link['wait_ticks'] = link.get('wait_ticks', 0) + 1
             if link['wait_ticks'] >= REVIEW_WAIT:
                 link['seen_working'] = False
@@ -161,6 +165,7 @@ def _step(link, entries, status, send, last_reply):
             before = _digest(last_reply(reviewer))
             try:
                 send(reviewer, text, reviewer_state)
+                _last_sent[link['reviewer']] = time.monotonic()
                 delivered = True
             except (DraftError, RuntimeError):
                 pass
@@ -184,10 +189,16 @@ def observe(entries, status, send, last_reply):
         with _lock:
             original = _read()
         by_pane = {entry['id']: entry for entry in entries}
+        awaiting = {link['reviewer'] for link in original
+                    if isinstance(link, dict) and link.get('awaiting')
+                    and isinstance(link.get('reviewer'), str)}
+        def clear(pane):
+            return (pane not in awaiting
+                    and time.monotonic() - _last_sent.get(pane, float('-inf')) >= SEND_GAP)
         changes = []
         for link in original:
             try:
-                updated = _step(dict(link), by_pane, status, send, last_reply)
+                updated = _step(dict(link), by_pane, status, send, last_reply, awaiting, clear)
             except Exception:  # a malformed link or one bad pane must not stop other reviews
                 continue
             if updated != link:

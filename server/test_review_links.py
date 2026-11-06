@@ -19,6 +19,8 @@ class ReviewLinksTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.file = Path(temporary.name) / 'cache' / 'review-links.json'
         self.enterContext(patch.object(review_links, 'FILE', self.file))
+        self.enterContext(patch.object(review_links, '_last_sent', {}))
+        self.clock = self.enterContext(patch.object(review_links.time, 'monotonic', return_value=1000))
         self.worker = dict(id='%13', agent='codex', thread=WORKER_THREAD, transcript='/project/worker.jsonl')
         self.reviewer = dict(id='%12', agent='claude', thread=THREAD, writable=True)
         self.states = {'%13': 'Idle', '%12': 'Idle'}
@@ -33,9 +35,141 @@ class ReviewLinksTests(unittest.TestCase):
     def links(self):
         return json.loads(self.file.read_text())
 
-    def observe(self, **states):
+    def observe(self, *, entries=None, elapsed=6, **states):
+        self.clock.return_value += elapsed
         self.states.update(states)
-        review_links.observe([self.worker, self.reviewer], self.status, self.send, self.reply)
+        review_links.observe(entries if entries is not None else [self.worker, self.reviewer],
+                             self.status, self.send, self.reply)
+
+    def test_feedback_waits_for_workers_review_reply_before_reaching_worker(self):
+        for review_reply in ('APPROVED', 'Needs a worker test.'):
+            with self.subTest(review_reply=review_reply):
+                self.add()
+                self.send.reset_mock()
+                worker = dict(self.worker, id='%20')
+                self.worker['writable'] = True
+                entries = [self.worker, self.reviewer, worker]
+                self.states.update({'%13': 'Idle', '%12': 'Idle', '%20': 'Idle'})
+                replies = {'%13': 'Work done.', '%12': 'Old review.', '%20': 'Other work done.'}
+                self.reply.side_effect = lambda entry: replies[entry['id']]
+                self.request_review()
+                review_links.add(worker='%20', reviewer='%13', reviewer_thread=WORKER_THREAD,
+                                 name='Other task', agent='codex', seen_working=True)
+                self.observe(entries=entries)
+                self.assertEqual([call.args[0]['id'] for call in self.send.call_args_list], ['%12', '%13'])
+                replies['%12'] = 'Fix the original task.'
+                self.observe(entries=entries, **{'%13': 'Working'})
+                self.assertEqual(self.send.call_count, 2)
+                self.assertTrue(self.links()[0]['awaiting'])
+                self.assertEqual(self.links()[0]['wait_ticks'], 1)
+
+                replies['%13'] = review_reply
+                self.observe(entries=entries, **{'%13': 'Idle'})
+                self.assertTrue(self.links()[0]['awaiting'])
+                self.assertFalse(self.links()[1]['awaiting'])
+                if review_reply == 'APPROVED':
+                    self.assertEqual(self.send.call_count, 2)
+                else:
+                    self.assertEqual(self.send.call_count, 3)
+                    self.assertEqual(self.send.call_args.args[0], worker)
+                    self.assertIn(review_reply, self.send.call_args.args[1])
+
+                def send(entry, text, state):
+                    if entry['id'] == '%13':
+                        replies['%13'] = 'READY'
+                self.send.side_effect = send
+                self.observe(entries=entries)
+                self.assertEqual(self.send.call_args.args[0], self.worker)
+                self.assertIn('Fix the original task.', self.send.call_args.args[1])
+                self.assertFalse(self.links()[0]['awaiting'])
+                self.assertFalse(self.links()[1]['awaiting'])
+                self.send.side_effect = None
+                review_links.remove('%20')
+
+    def test_shared_reviewer_gets_one_request_until_first_reply_is_read(self):
+        self.add(seen_working=True)
+        worker = dict(self.worker, id='%20')
+        self.states['%20'] = 'Idle'
+        entries = [self.worker, self.reviewer, worker]
+        self.add(worker='%20', seen_working=True)
+        self.observe(entries=entries)
+        self.send.assert_called_once()
+        first, second = self.links()
+        self.assertTrue(first['awaiting'])
+        self.assertTrue(second['seen_working'])
+        self.assertEqual(second['wait_ticks'], 1)
+        self.assertNotIn('retries', second)
+        self.observe(entries=entries)
+        self.assertEqual(self.send.call_count, 1)
+        self.reply.return_value = 'APPROVED'
+        self.observe(entries=entries)
+        self.assertFalse(self.links()[0]['awaiting'])
+        self.assertTrue(self.links()[1]['seen_working'])
+        self.assertEqual(self.send.call_count, 1)
+        self.observe(entries=entries, elapsed=0)
+        self.assertEqual(self.send.call_count, 2)
+        self.assertIn('(%20) finished a turn.', self.send.call_args.args[1])
+
+    def test_review_turn_does_not_request_review_of_reviewers_work(self):
+        worker = dict(self.worker, id='%20')
+        self.worker['writable'] = True
+        self.states['%20'] = 'Idle'
+        entries = [self.worker, self.reviewer, worker]
+        review_links.add(worker='%20', reviewer='%13', reviewer_thread=WORKER_THREAD,
+                         name='Other task', agent='codex', seen_working=True)
+        self.observe(entries=entries)
+        self.send.assert_called_once()
+        self.assertEqual(self.send.call_args.args[0], self.worker)
+        self.observe(entries=entries, **{'%13': 'Working'})
+        self.assertFalse(self.links()[0]['seen_working'])
+        self.assertTrue(self.links()[1]['reviewer_seen_working'])
+        self.reply.return_value = 'APPROVED'
+        self.observe(entries=entries, **{'%13': 'Idle'})
+        self.observe(entries=entries)
+        self.assertEqual(self.send.call_count, 1)
+        self.assertFalse(self.links()[0]['seen_working'])
+
+    def test_send_gap_blocks_request_and_feedback_until_six_seconds(self):
+        self.assertEqual(review_links.SEND_GAP, 6)
+        for feedback in (False, True):
+            with self.subTest(feedback=feedback):
+                self.add(seen_working=True)
+                self.send.reset_mock()
+                link, = self.links()
+                if feedback:
+                    link.update(awaiting=True, reviewer_seen_working=True)
+                    self.file.write_text(json.dumps([link]))
+                pane = '%13' if feedback else '%12'
+                review_links._last_sent[pane] = self.clock.return_value
+                self.observe(elapsed=5)
+                self.send.assert_not_called()
+                self.assertEqual(self.links()[0]['wait_ticks'], 1)
+                self.assertNotIn('retries', self.links()[0])
+                self.observe(elapsed=1)
+                self.send.assert_called_once()
+                self.assertEqual(self.send.call_args.args[0]['id'], pane)
+                self.assertEqual(review_links._last_sent[pane], self.clock.return_value)
+                self.assertNotIn('wait_ticks', self.links()[0])
+
+    def test_guard_wait_gives_up_after_review_wait(self):
+        for feedback in (False, True):
+            with self.subTest(feedback=feedback):
+                self.add(seen_working=True)
+                link, = self.links()
+                if feedback:
+                    link.update(awaiting=True, reviewer_seen_working=True)
+                    self.file.write_text(json.dumps([link]))
+                pane = '%13' if feedback else '%12'
+                review_links._last_sent[pane] = self.clock.return_value
+                for _ in range(review_links.REVIEW_WAIT - 1):
+                    self.observe(elapsed=0)
+                self.assertTrue(self.links()[0]['awaiting' if feedback else 'seen_working'])
+                self.assertEqual(self.links()[0]['wait_ticks'], review_links.REVIEW_WAIT - 1)
+                self.observe(elapsed=0)
+                self.assertFalse(self.links()[0]['awaiting' if feedback else 'seen_working'])
+                self.assertNotIn('wait_ticks', self.links()[0])
+                self.assertNotIn('retries', self.links()[0])
+                self.send.assert_not_called()
 
     def test_reviewed_by_reads_once_under_lock_and_skips_malformed_rows(self):
         links = [*self.links(), {'worker': '%20', 'reviewer': '%21'}, None, [], {},
@@ -227,7 +361,9 @@ class ReviewLinksTests(unittest.TestCase):
             self.observe(**{'%13': 'Idle'})
             self.assertTrue(self.links()[0]['seen_working'])
             self.assertEqual(self.links()[0]['retries'], count)
+            self.assertNotIn('%12', review_links._last_sent)
         self.observe()
+        self.assertEqual(review_links._last_sent['%12'], self.clock.return_value)
         self.assertFalse(self.links()[0]['seen_working'])
         self.assertNotIn('retries', self.links()[0])
         self.observe()
@@ -374,9 +510,12 @@ class ReviewLinksTests(unittest.TestCase):
         self.finish_review()
         self.assertTrue(self.links()[0]['awaiting'])
         self.assertEqual(self.links()[0].get('rounds', 0), 0)
+        self.assertNotIn('%13', review_links._last_sent)
         self.observe()
         self.assertTrue(self.links()[0]['awaiting'])
+        self.assertNotIn('%13', review_links._last_sent)
         self.observe()
+        self.assertEqual(review_links._last_sent['%13'], self.clock.return_value)
         self.assertEqual(self.send.call_count, 3)
         self.assertFalse(self.links()[0]['awaiting'])
         self.assertEqual(self.links()[0]['rounds'], 1)
