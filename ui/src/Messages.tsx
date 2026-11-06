@@ -1,7 +1,7 @@
 import { shellCommand } from './shellCommand'
 import { copyText } from './clipboard'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Blocks, Clock3, Layers, Check, Copy, Share2, ChevronRight, MessageSquare, Info, ShieldAlert, Square, Volume2, Eye } from 'lucide-react'
+import { Blocks, Clock3, Layers, Check, Copy, Share2, ChevronRight, X, MessageSquare, Info, ShieldAlert, Square, Volume2, Eye } from 'lucide-react'
 import { MessagePrimitive } from '@assistant-ui/react'
 import type { ThreadMessageLike } from '@assistant-ui/react'
 import { MarkdownTextPrimitive } from '@assistant-ui/react-markdown'
@@ -145,26 +145,45 @@ function ReviewCard({ id, review }: { id: string; review: Review }) {
     {review.transcript && <p className="review-meta review-path" title={review.transcript}>{review.transcript}</p>}
   </details>
 }
-// On a touch screen, a long press selects text in place. While a selection is in a message, this offers the whole message.
+// One piece of a message that a long press can copy without any drag of the selection handles.
+const COPY_BLOCK = 'p, li, td, th, pre, h1, h2, h3, h4, h5, h6'
+// On a touch screen, a long press selects text in place. While a selection is in a message, this offers its paragraph and the whole message.
 export function SelectionCopy({ messages }: { messages: { id: string; text: string }[] }) {
   const [id, setId] = useState('')
+  const [block, setBlock] = useState<HTMLElement | null>(null)
   useEffect(() => {
     if (!window.matchMedia('(pointer: coarse)').matches) return
     let timer = 0
+    const elementOf = (node: Node | null | undefined) => node instanceof Element ? node : node?.parentElement
+    const inMessage = (element: Element | null | undefined) => element?.closest('.assistant-message, .user-message, .peer-message')?.closest('[data-msg-id]')
+    const selected = () => { const selection = window.getSelection(); return selection && !selection.isCollapsed ? selection : null }
     const changed = () => {
       clearTimeout(timer)
-      const selection = window.getSelection()
-      const node = selection && !selection.isCollapsed ? selection.anchorNode : null
-      const element = node instanceof Element ? node : node?.parentElement
-      const next = element?.closest('.assistant-message, .user-message, .peer-message')?.closest('[data-msg-id]')?.getAttribute('data-msg-id')
-      // A tap on the button can clear the selection just before its click arrives, so the button stays a moment.
-      if (next) setId(next); else timer = window.setTimeout(() => setId(''), 300)
+      const selection = selected()
+      const anchor = elementOf(selection?.anchorNode)
+      const next = inMessage(anchor)?.getAttribute('data-msg-id')
+      // A tap on a button can clear the selection just before its click arrives, so the buttons stay a moment.
+      if (!next) { timer = window.setTimeout(() => { setId(''); setBlock(null) }, 300); return }
+      const found = anchor?.closest<HTMLElement>(COPY_BLOCK) ?? null
+      setId(next)
+      setBlock(found && elementOf(selection?.focusNode)?.closest(COPY_BLOCK) === found ? found : null)
+    }
+    // A stray tap on the text keeps the selection. Links and buttons still work, and X clears it.
+    const pressed = (event: MouseEvent) => {
+      const target = event.target as Element
+      if (selected() && inMessage(target) && !target.closest('a, button, summary, input, textarea, label')) event.preventDefault()
     }
     document.addEventListener('selectionchange', changed)
-    return () => { clearTimeout(timer); document.removeEventListener('selectionchange', changed) }
+    document.addEventListener('mousedown', pressed, true)
+    return () => { clearTimeout(timer); document.removeEventListener('selectionchange', changed); document.removeEventListener('mousedown', pressed, true) }
   }, [])
   const text = messages.find(message => message.id === id)?.text
-  return text ? <div className="selection-copy" onMouseDown={event => event.preventDefault()}><CopyButton text={text} label="Copy whole message" className="copy-chip" wide /></div> : null
+  if (!text) return null
+  return <div className="selection-copy" role="group" aria-label="Copy selected message" onMouseDown={event => event.preventDefault()}>
+    {block?.isConnected && <CopyButton text={() => visibleText(block)} label="Copy paragraph" className="copy-chip" wide />}
+    <CopyButton text={text} label="Copy message" className="copy-chip" wide />
+    <button type="button" className="icon-button" aria-label="Clear selection" title="Clear selection" onClick={() => window.getSelection()?.removeAllRanges()}><X size={16} /></button>
+  </div>
 }
 // Copy with a short "Copied" confirmation. The Clipboard API needs HTTPS, which Tailscale Serve gives us.
 export function CopyButton({ text, label, className = 'icon-button', wide = false }: { text: string | (() => string); label: string; className?: string; wide?: boolean }) {
@@ -203,10 +222,10 @@ function SpeakButton({ text }: { text: string }) {
 function CodeHeader({ language, code }: { language: string | undefined; code: string }) {
   return <div className="code-header"><span>{language || 'code'}</span><CopyButton text={code} label="Copy code" className="code-copy" /></div>
 }
-// The text as it reads on screen, without the Copy controls of a code block inside. innerText needs the element on the page.
-function quoteText(quote: HTMLElement) {
-  const copy = quote.cloneNode(true) as HTMLElement
-  copy.querySelectorAll('button, .code-header').forEach(item => item.remove())
+// The text as it reads on screen, without Copy controls or the sublists of a list item. innerText needs the element on the page.
+function visibleText(element: HTMLElement) {
+  const copy = element.cloneNode(true) as HTMLElement
+  copy.querySelectorAll(element.matches('li') ? 'button, .code-header, ul, ol' : 'button, .code-header').forEach(item => item.remove())
   copy.style.cssText = 'position:fixed;left:-9999px;top:0;width:600px'
   document.body.append(copy)
   const text = copy.innerText.trim()
@@ -216,7 +235,7 @@ function quoteText(quote: HTMLElement) {
 // Agents put text to paste somewhere else in a quote, so a quote gets its own Copy, like a code block.
 function QuoteBlock(props: React.ComponentProps<'blockquote'>) {
   const quote = useRef<HTMLQuoteElement>(null)
-  return <div className="quote-block"><blockquote ref={quote} {...props} /><CopyButton text={() => quote.current ? quoteText(quote.current) : ''} label="Copy quote" className="copy-chip" /></div>
+  return <div className="quote-block"><blockquote ref={quote} {...props} /><CopyButton text={() => quote.current ? visibleText(quote.current) : ''} label="Copy quote" className="copy-chip" /></div>
 }
 export function Markdown() { return <MarkdownTextPrimitive remarkPlugins={[remarkGfm, remarkPaths]} smooth={false} components={{ CodeHeader, code: InlineCode, a: Link, blockquote: QuoteBlock }} /> }
 export const convertMessage = (message: ChatMessage): ThreadMessageLike => ({

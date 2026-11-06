@@ -365,6 +365,14 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
   const restore = useRef(scrollByPane.get(pane.id) ?? null)
   const sticky = useRef(restore.current?.bottom ?? true)
   const hold = useRef<{ top: number; until: number } | null>(null)
+  // The chat stands still while text in it is selected: a scroll under the finger would move the selection.
+  const frozen = useRef(false)
+  const followBottom = useCallback(() => {
+    if (!sticky.current || anchor.current) return false
+    const selection = window.getSelection()
+    frozen.current = !!selection && !selection.isCollapsed && !!viewport.current?.contains(selection.anchorNode)
+    return !frozen.current
+  }, [])
   const anchor = useRef<{ height: number; top: number } | null>(null)
   const keysRef = useRef<HTMLDivElement>(null)
   // Menus opened from ⋯ hang below it, right-aligned (a popover is 288px wide).
@@ -440,8 +448,8 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     } else if (anchor.current && data?.limit === limit) {
       view.scrollTop = anchor.current.top + view.scrollHeight - anchor.current.height
       anchor.current = null
-    } else if (sticky.current && !anchor.current) view.scrollTop = view.scrollHeight
-  }, [data, limit, term])
+    } else if (followBottom()) view.scrollTop = view.scrollHeight
+  }, [data, followBottom, limit, term])
   // After a search pick: once the message is in the page, center it and flash it.
   useEffect(() => {
     const id = target.current, view = viewport.current
@@ -458,14 +466,20 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     }, 80)
     return () => clearTimeout(timer)
   }, [data])
+  // After a selection clears, the chat catches up with what arrived while it stood still.
+  useEffect(() => {
+    const caughtUp = () => { if (frozen.current && viewport.current && followBottom()) viewport.current.scrollTop = viewport.current.scrollHeight }
+    document.addEventListener('selectionchange', caughtUp)
+    return () => document.removeEventListener('selectionchange', caughtUp)
+  }, [followBottom])
   useEffect(() => {
     const observer = new ResizeObserver(() => {
       if (hold.current && viewport.current && Date.now() < hold.current.until) viewport.current.scrollTop = hold.current.top
-      else if (sticky.current && viewport.current && !anchor.current) viewport.current.scrollTop = viewport.current.scrollHeight
+      else if (viewport.current && followBottom()) viewport.current.scrollTop = viewport.current.scrollHeight
     })
     if (content.current) observer.observe(content.current)
     return () => observer.disconnect()
-  }, [])
+  }, [followBottom])
   const lastFailure = useRef<unknown>(null)
   async function write(path: string, body: object) {
     setSendError(''); setDraftBlocked(false); lastFailure.current = null; cardError.current = false
