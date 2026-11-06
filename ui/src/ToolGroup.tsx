@@ -67,7 +67,7 @@ function ToolImages({ tools, session }: { tools: ToolSummary[]; session: string 
     <ul className="tool-images" aria-label="Images">{shots.map(shot => <li key={shot.url}>
       <button type="button" aria-label={`View ${shot.name}`} onClick={() => setViewing(shot)}><img src={shot.url} alt="" loading="lazy" /><span>{shot.name}</span></button>
     </li>)}</ul>
-    <ImageViewer image={viewing} close={() => setViewing(null)} />
+    <ImageViewer image={viewing} close={() => setViewing(null)} items={shots} onSelect={setViewing} />
   </>
 }
 

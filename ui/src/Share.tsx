@@ -329,7 +329,8 @@ export function Share({ wide, onAddToMessage }: { wide: boolean; onAddToMessage?
   const download = (list: ShareFile[]) => {
     for (const file of list) { const a = document.createElement('a'); a.href = rawUrl(file.id, true); a.download = file.name; a.click() }
   }
-  const openFull = (file: ShareFile) => setViewing({ name: file.name, url: rawUrl(file.id), kind: file.kind === 'video' || file.kind === 'audio' ? file.kind : 'image' })
+  const mediaFor = (file: ShareFile): Media => ({ name: file.name, url: rawUrl(file.id), downloadUrl: rawUrl(file.id, true), thumbnailUrl: file.has_thumb ? thumbUrl(file) : undefined, kind: file.kind === 'video' || file.kind === 'audio' ? file.kind : 'image' })
+  const openFull = (file: ShareFile) => setViewing(mediaFor(file))
 
   const today = startOfToday()
   const groups = useMemo(() => {
@@ -340,7 +341,10 @@ export function Share({ wide, onAddToMessage }: { wide: boolean; onAddToMessage?
   const agentDrops = useMemo(() => drops(agentFiles), [agentFiles])
   // Keep the pane open when the file is in the agents strip but not in the loaded grid page.
   const current = files.find(f => f.id === openId) ?? agentFiles.find(f => f.id === openId) ?? (opened?.id === openId ? opened : null)
-  const open = (file: ShareFile) => { setOpenId(file.id); setOpened(file) }
+  const open = (file: ShareFile) => {
+    if (!wide && !trash && file.kind === 'image') { openFull(file); return }
+    setOpenId(file.id); setOpened(file)
+  }
   const toggle = (id: string) => setPicked(list => list.includes(id) ? list.filter(x => x !== id) : [...list, id])
   const progress = uploads.filter(u => u.state === 'sending' || u.state === 'waiting')
 
@@ -412,6 +416,10 @@ export function Share({ wide, onAddToMessage }: { wide: boolean; onAddToMessage?
     </div>
     {current && <Pane key={current.id} file={current} wide={wide} trash={trash} close={() => setOpenId(null)} send={send} remove={list => void remove(list)} restore={list => void restore(list)} rename={rename} view={openFull} />}
     {dragging && <div className="sh-dropzone" aria-hidden="true"><Upload size={28} />Drop to add to Share</div>}
-    <ImageViewer image={viewing} close={() => setViewing(null)} />
+    <ImageViewer image={viewing} close={() => setViewing(null)} items={(files.some(file => rawUrl(file.id) === viewing?.url) ? files : agentFiles).filter(file => file.kind === 'image').map(mediaFor)} onSelect={setViewing}
+      onDetails={viewing ? () => {
+        const file = [...files, ...agentFiles].find(item => rawUrl(item.id) === viewing.url)
+        if (file) { setOpenId(file.id); setOpened(file); setViewing(null) }
+      } : undefined} />
   </section>
 }

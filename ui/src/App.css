@@ -946,14 +946,6 @@ button.live-chip:active { background: var(--line); }
 .chip .chip-view { display: flex; flex: 0 1 auto; width: auto; height: auto; min-width: 0; }
 .chip > button:last-child { flex: none; }
 .chip-view img { width: 28px; height: 28px; object-fit: cover; border-radius: var(--radius-sm); flex: none; }
-.image-viewer { position: fixed; inset: 0; width: 100vw; height: 100dvh; max-width: none; max-height: none; margin: 0; padding: 16px; border: 0; border-radius: 0; background: #000; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
-.image-viewer[open] { display: flex; }
-.image-viewer::backdrop { background: #000; }
-.image-viewer img { width: 100%; height: calc(100dvh - 80px); object-fit: contain; border-radius: var(--radius-sm); }
-.image-viewer p { margin: 0; color: #fff; font-size: 13px; opacity: 0.8; }
-.image-viewer video { width: 100%; max-height: calc(100dvh - 80px); background: #000; border-radius: var(--radius-sm); }
-.image-viewer audio { width: min(100%, 480px); }
-.image-viewer .viewer-error { max-width: 32ch; font-size: 15px; opacity: 1; text-align: center; line-height: 1.4; }
 /* A media path in a reply: looks like a link, opens in the viewer. */
 .file-link { display: inline; padding: 0; margin: 0; border: 0; background: none; font: inherit; color: var(--accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; text-align: left; }
 .file-link code { color: inherit; }
