@@ -31,9 +31,16 @@ const SLIDE_CURVE = 'cubic-bezier(.2,.8,.2,1)'
 const scrollBySession = new Map<string, number>()  // the strip remounts with each pane: keep its scroll place
 const swipeScroll = new WeakMap<HTMLElement, number>()  // strip scroll when the swipe started
 const scrollTween = new WeakMap<HTMLElement, number>()
+interface TabPosition { left: number; top: number; width: number; height: number }
+interface TabSnapshot { session: string; active: string; scroll: number; tabs: Map<string, TabPosition>; pill?: TabPosition }
+// Chat remounts when its pane changes. Retain geometry so closing the active tab can still animate.
+const closedTabPositions = new Map<string, TabSnapshot>()
+const positionOf = (element: HTMLElement): TabPosition => ({ left: element.offsetLeft, top: element.offsetTop, width: element.offsetWidth, height: element.offsetHeight })
+const tabTransform = (position: TabPosition, dx = 0) => `translate(${position.left + dx}px, ${position.top}px)`
 
 /** Place the pill `progress` (0..1) of the way from the active tab to the tab `toId`. `ms` animates the move. */
 export function movePill(strip: HTMLElement | null, toId: string | null, progress: number, ms = 0) {
+  if (ms && matchMedia('(prefers-reduced-motion: reduce)').matches) ms = 0
   const pill = strip?.querySelector<HTMLElement>('.pane-tab-pill')
   const from = strip?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
   if (!strip || !pill || !from) return
@@ -85,18 +92,67 @@ export const PaneTabs = forwardRef<HTMLDivElement, Props>(function PaneTabs({ se
   useEffect(() => { if (!fresh) return; const timer = window.setTimeout(() => setFresh(null), 1600); return () => window.clearTimeout(timer) }, [fresh])
   const ids = session.panes.map(item => item.id)
   const order = ids.join()
+  const positions = useRef<TabSnapshot | null>(null)
   // Before paint: restore the strip scroll and put the pill on the active tab. Tab sizes change with names and state dots.
   useLayoutEffect(() => {
     const box = strip.current
     if (!box) return
     box.scrollLeft = scrollBySession.get(session.id) ?? 0
-    const save = () => scrollBySession.set(session.id, box.scrollLeft)
+    const tabIds = order.split(',')
+    const before = positions.current ?? [...closedTabPositions.values()].reverse().find(snapshot => snapshot.session === session.id && !tabIds.includes(snapshot.active))
+    const closing = before && [...before.tabs.keys()].some(id => id !== '+' && !tabIds.includes(id))
+    for (const [id, snapshot] of closedTabPositions) {
+      if (snapshot.session === session.id && !tabIds.includes(snapshot.active)) closedTabPositions.delete(id)
+    }
+    if (closing) {
+      // Reveal the neighbor only as far as needed. Preserve the strip's place for inactive closes.
+      const active = box.querySelector<HTMLElement>('[aria-selected="true"]')
+      if (active) box.scrollLeft = Math.max(0, Math.min(box.scrollLeft, active.offsetLeft - 12, Math.max(0, box.scrollWidth - box.clientWidth)))
+      if (active && active.offsetLeft + active.offsetWidth + 12 > box.scrollLeft + box.clientWidth) box.scrollLeft = active.offsetLeft + active.offsetWidth + 12 - box.clientWidth
+    }
+    const capture = () => {
+      const tabs = new Map([...box.querySelectorAll<HTMLElement>('[data-pane]')].map(tab => [tab.dataset.pane!, positionOf(tab)]))
+      const add = box.querySelector<HTMLElement>('.tab-add')
+      if (add) tabs.set('+', positionOf(add))
+      positions.current = { session: session.id, active: pane.id, scroll: box.scrollLeft, tabs, pill: tabs.get(pane.id) }
+    }
+    const save = () => { scrollBySession.set(session.id, box.scrollLeft); capture() }
     const place = () => { if (swipeScroll.get(box) === undefined) movePill(box, null, 0) }
     place()
+    const animations: Animation[] = []
+    if (closing && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      const timing = { duration: 220, easing: SLIDE_CURVE }
+      const dx = box.scrollLeft - before.scroll
+      for (const tab of box.querySelectorAll<HTMLElement>('[data-pane], .tab-add')) {
+        const old = before.tabs.get(tab.dataset.pane ?? '+')
+        if (old) animations.push(tab.animate([{ transform: `translate(${old.left - tab.offsetLeft + dx}px, ${old.top - tab.offsetTop}px)` }, { transform: 'translate(0, 0)' }], timing))
+      }
+      const pill = box.querySelector<HTMLElement>('.pane-tab-pill')
+      const active = box.querySelector<HTMLElement>('[aria-selected="true"]')
+      if (pill && active && before.pill) {
+        const end = positionOf(active)
+        animations.push(pill.animate([
+          { transform: tabTransform(before.pill, dx), width: `${before.pill.width}px`, height: `${before.pill.height}px` },
+          { transform: tabTransform(end), width: `${end.width}px`, height: `${end.height}px` },
+        ], timing))
+      }
+    }
+    capture()
+    if (closing && !tabIds.includes(before.active)) box.querySelector<HTMLElement>('[aria-selected="true"]')?.focus({ preventScroll: true })
+    scrollBySession.set(session.id, box.scrollLeft)
     const observer = new ResizeObserver(place)
     for (const tab of box.querySelectorAll('[role="tab"]')) observer.observe(tab)
     box.addEventListener('scroll', save, { passive: true })
-    return () => { observer.disconnect(); box.removeEventListener('scroll', save) }
+    return () => {
+      observer.disconnect(); box.removeEventListener('scroll', save)
+      animations.forEach(animation => animation.cancel())
+      if (positions.current) {
+        closedTabPositions.delete(pane.id)
+        closedTabPositions.set(pane.id, positions.current)
+        if (closedTabPositions.size > 40) closedTabPositions.delete(closedTabPositions.keys().next().value!)
+      }
+      cancelAnimationFrame(scrollTween.get(box) ?? 0)
+    }
   }, [session.id, pane.id, order])
   const latest = useRef({ ids, onReorder, onPaneActions })
   latest.current = { ids, onReorder, onPaneActions }

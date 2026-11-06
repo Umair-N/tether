@@ -13,6 +13,8 @@ import { PaneActions, ResumeChat, SessionActions, Settings } from './Sheets'
 import type { Place } from './Sheets'
 import { ProjectSheet, useProjectMarks } from './Project'
 import { orderPanes } from './PaneTabs'
+import { selectPane } from './paneSelection'
+import type { SelectionSnapshot } from './paneSelection'
 import { NewSession } from './NewSession'
 import { Chat } from './Chat'
 import type { SlotControls } from './Chat'
@@ -125,7 +127,21 @@ function App() {
   const sessions = useMemo(() => groupSessions(panes).map(item => ({ ...item, panes: orderPanes(item.panes, prefs.paneOrder[item.id]) })), [panes, prefs.paneOrder])
   const livePins = useMemo(() => prefs.sidePins.flatMap(pin => { const pane = panes.find(item => item.id === pin.pane && item.agent !== 'shell'); return pane ? [{ pin, pane }] : [] }), [prefs.sidePins, panes])
   const pinKeys = useRef<(dir: 1 | -1) => boolean>(() => false)
-  const pane = panes.find(pane => pane.id === prefs.selected) ?? panes.find(pane => data?.default_thread != null && pane.thread === data.default_thread) ?? sortByPrefs(sessions, prefs.order)[0]?.panes[0]
+  const previousSelection = useRef<SelectionSnapshot>({ sessions: [] })
+  const orderedSessions = useMemo(() => sortByPrefs(sessions, prefs.order), [sessions, prefs.order])
+  const pane = selectPane(orderedSessions, prefs.selected, previousSelection.current, data?.default_thread, prefs.lastPane)
+  useLayoutEffect(() => {
+    if (!data) return
+    const previous = previousSelection.current
+    previousSelection.current = { sessions: orderedSessions, selected: pane?.id }
+    // Persist a close fallback once. A pending new-tab selection must wait for its refresh.
+    const wanted = prefs.selected ?? previous.selected
+    if (previous.selected !== wanted || !previous.sessions.some(session => session.panes.some(item => item.id === wanted)) || panes.some(item => item.id === wanted)) return
+    update(current => current.selected !== prefs.selected ? {} : {
+      selected: pane?.id ?? null,
+      ...(pane && { lastPane: { ...current.lastPane, [pane.tmux_session]: pane.id } }),
+    })
+  }, [data, orderedSessions, pane, panes, prefs.selected, update])
   // Desktop workspace: on only at desktop width with a mouse or trackpad. The phone keeps one pane.
   const [wide, setWide] = useState(() => typeof matchMedia === 'function' && matchMedia(WORKSPACE_QUERY).matches)
   useEffect(() => {
@@ -248,7 +264,7 @@ function App() {
     if (!view || !pane || view.slots.length < 2) return
     setZoomed(false)
     const out = view.slots[index], rest = view.slots.filter(id => id !== out)
-    const next = index === view.focus ? rest[Math.min(index, rest.length - 1)] : pane.id
+    const next = index === view.focus ? rest[Math.max(0, index - 1)] : pane.id
     update(current => {
       const stored = deskFor(current.layout, deskKey)
       // The closed pane is remembered right after the visible ones, so the next split brings it back.
