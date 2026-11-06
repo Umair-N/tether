@@ -43,6 +43,7 @@ export class FridayAgent {
   private micLevel = 0
   private botLevel = 0
   private bot = ''
+  private botSegments = new Map<number | string, string>()
   private events: AgentEvents
   private voice: DeviceVoice
 
@@ -106,12 +107,15 @@ export class FridayAgent {
         onUserStoppedSpeaking: () => this.setTurn('thinking'),
         // Messages sent before the data channel opens are dropped, so tell the server the voice mode again here.
         onBotReady: () => this.mode(this.voice.kind),
-        onBotStartedSpeaking: () => { if (!this.voice.kind) this.bot = ''; this.setTurn('speaking') },
+        onBotStartedSpeaking: () => { if (!this.voice.kind) { this.bot = ''; this.botSegments.clear() } this.setTurn('speaking') },
         onBotStoppedSpeaking: () => this.setTurn('listening'),
         onUserTranscript: data => this.events.onUserText(data.text, data.final),
         onBotOutput: data => {
           if (this.voice.kind) return  // The device shows each sentence as it gets it (say).
-          this.bot = `${this.bot} ${data.text}`.trim(); this.events.onBotText(this.bot)
+          // Pipecat reports a sentence before and after it speaks it, with one segment_id: keep it once.
+          const progress = data.spoken_progress
+          this.botSegments.set(data.segment_id ?? `text-${this.botSegments.size}`, progress ? `${progress.accumulated_text}${progress.remaining_text}` : data.text)
+          this.bot = [...this.botSegments.values()].join(' ').trim(); this.events.onBotText(this.bot)
         },
         onServerMessage: (message: { t?: string; d?: unknown }) => {
           if (message?.t === 'metrics') this.events.onMetrics?.(message.d as AgentMetrics)

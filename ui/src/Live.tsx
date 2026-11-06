@@ -43,10 +43,23 @@ const lastReply = (data: ChatData) => [...data.messages].reverse().find(item => 
 const shortText = (text: string, limit: number) => { const plain = speakable(text); return plain.length > limit ? `${plain.slice(0, limit).replace(/\s+\S*$/, '')}…` : plain }
 const yesOption = (approval: Approval) => approval.options!.find(option => !option.free && !/^no\b/i.test(option.text)) ?? approval.options![0]
 const noOption = (approval: Approval) => { const options = approval.options!; return options.find(option => /^no\b/i.test(option.text)) ?? options[options.length - 1] }
-/** A chat by its spoken name: exact title first, then a part of it, then the agent name. */
+/** Speech has no hyphens: "weekly reporting" must match "weekly-reporting". */
+const spokenForm = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+const spokenName = (wanted: string) => spokenForm(wanted).replace(/^the /, '').replace(/ (pane|chat|tab|session)$/, '')
+const inSession = (agents: Pane[], name: string) => agents.filter(pane => spokenForm(pane.tmux_session) === name)
+/** A chat by its spoken name: exact title first, then a part of it, then the agent name, then a tmux session with one chat. */
 const findPane = (agents: Pane[], wanted: string) => {
-  const name = wanted.toLowerCase().trim().replace(/^the /, '').replace(/ (pane|chat|tab|session)$/, '')
-  return agents.find(pane => paneTitle(pane).toLowerCase() === name) ?? agents.find(pane => paneTitle(pane).toLowerCase().includes(name) || pane.agent === name)
+  const name = spokenName(wanted)
+  if (!name) return undefined
+  const session = inSession(agents, name)
+  return agents.find(pane => spokenForm(paneTitle(pane)) === name) ?? agents.find(pane => spokenForm(paneTitle(pane)).includes(name) || pane.agent === name)
+    ?? (session.length === 1 ? session[0] : undefined)
+}
+/** A name that means a tmux session with several chats: Friday must ask which one, and must not guess. */
+const sessionChoice = (agents: Pane[], wanted: string) => {
+  const name = spokenName(wanted)
+  const session = name && !findPane(agents, wanted) ? inSession(agents, name) : []
+  return session.length ? { error: `${session[0].tmux_session} is a tmux session with ${session.length} chats: ${session.map(paneTitle).join(', ')}. Ask which one.` } : null
 }
 const chatState = (pane: Pane) => approvalOf(pane) ? 'needs approval' : pane.needs ? `needs ${pane.needs.kind}` : pane.state.toLowerCase()
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
@@ -297,6 +310,8 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
   const tools = useRef<Record<string, ToolHandler>>({
     list_chats: async () => ({ ...chatList() }),
     send_to_chat: async ({ chat, prompt }) => {
+      const choice = sessionChoice(live.current.agents, String(chat ?? ''))
+      if (choice) return choice
       const pane = findPane(live.current.agents, String(chat ?? '')) ?? (chat ? undefined : live.current.target)
       if (!pane) return { error: `No chat called ${chat}.` }
       if (!String(prompt ?? '').trim()) return { error: 'The prompt is empty.' }
@@ -304,6 +319,8 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
       return { ok: true, chat: paneTitle(pane) }
     },
     answer_approval: async ({ chat, decision }) => {
+      const choice = sessionChoice(live.current.agents, String(chat ?? ''))
+      if (choice) return choice
       const pane = findPane(live.current.agents, String(chat ?? '')) ?? live.current.approvalPane
       const approval = pane && approvalOf(pane)
       if (!pane || !approval) return { error: 'No chat is waiting for approval.' }
@@ -311,6 +328,8 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
       return { ok: true, chat: paneTitle(pane), decision: decision === 'approve' ? 'approve' : 'deny' }
     },
     read_last_reply: async ({ chat }) => {
+      const choice = sessionChoice(live.current.agents, String(chat ?? ''))
+      if (choice) return choice
       const pane = findPane(live.current.agents, String(chat ?? '')) ?? live.current.target
       if (!pane) return { error: `No chat called ${chat}.` }
       const data = await live.current.api<ChatData>(`chat?session=${encodeURIComponent(pane.id)}&limit=6`)
@@ -322,6 +341,8 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
       return { ok: true, chat: made }
     },
     switch_chat: async ({ chat }) => {
+      const choice = sessionChoice(live.current.agents, String(chat ?? ''))
+      if (choice) return choice
       const pane = findPane(live.current.agents, String(chat ?? ''))
       if (!pane) return { error: `No chat called ${chat}.` }
       setTargetId(pane.id)
@@ -343,10 +364,10 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
     const busy = agents.filter(pane => !needsOf(pane) && chatState(pane) !== 'idle').map(pane => paneTitle(pane))
     return { target: target ? paneTitle(target) : '', busy, needs, idle: agents.length - busy.length - needs.length }
   }
-  /** Every chat, one short line each: "name, agent, state". */
+  /** Every chat, one short line each: "name, agent, state, tmux session". */
   function chatList(): AgentChatList {
     const { agents, target } = live.current
-    return { target: target ? paneTitle(target) : '', chats: agents.map(pane => `${paneTitle(pane)}, ${agentNames[pane.agent]}, ${needsOf(pane) ? 'needs you' : chatState(pane)}`) }
+    return { target: target ? paneTitle(target) : '', chats: agents.map(pane => `${paneTitle(pane)}, ${agentNames[pane.agent]}, ${needsOf(pane) ? 'needs you' : chatState(pane)}, session ${pane.tmux_session}`) }
   }
 
   // Start: the Friday agent when its worker runs, else the phrase loop. Then a short briefing.
