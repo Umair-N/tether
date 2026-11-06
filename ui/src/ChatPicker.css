@@ -10,10 +10,8 @@
 .cp-sources button { min-height: 26px; padding: 0 9px; border-radius: 7px; font-size: 12.5px; white-space: nowrap; color: var(--muted); transition: background .15s, color .15s; }
 .cp-sources button.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px #0000001f; }
 .cp-sources button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.cp-folder { display: flex; align-items: center; gap: 5px; flex: 1 1 112px; min-width: 0; min-height: 30px; padding: 0 8px; border-radius: 9px; background: var(--hover); color: var(--muted); }
-.cp-folder:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
-.cp-folder svg { flex: none; }
-.cp-folder select { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12.5px; text-overflow: ellipsis; cursor: pointer; }
+.cp-folder { flex: 1 1 112px; min-height: 30px; padding: 0 8px; border-radius: 9px; background: var(--hover); color: var(--muted); font: inherit; font-size: 12.5px; cursor: pointer; }
+.cp-folder:hover { color: var(--text); }
 
 .cp-list { flex: 1; min-height: 0; margin: 0 -14px; padding: 0 8px 4px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; outline: 0; }
 .cp-list section { margin-top: 6px; }
@@ -83,6 +81,6 @@
 @media (prefers-reduced-motion: reduce) { .cp-search, .cp-sources button, .pick-modes button { transition: none; } }
 
 .past-opening { margin: 0 10px 8px; color: var(--muted); font-size: 12.5px; }
-.resume-place { width: 100%; margin: 9px 0 24px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--bg); color: var(--text); font: inherit; }
+.sm-trigger.resume-place { margin: 9px 0 24px; }
 .cp-empty .link-button, .cp-error .link-button, .group-empty .link-button { display: inline; min-height: 0; padding: 0; border: 0; background: none; color: var(--accent); font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .past-list .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }

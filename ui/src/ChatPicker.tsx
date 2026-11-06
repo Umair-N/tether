@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowRightToLine, Folder, LoaderCircle, Search, TerminalSquare } from 'lucide-react'
+import { ArrowRightToLine, LoaderCircle, Search, TerminalSquare } from 'lucide-react'
 import { ApiError, errorText } from './api'
 import type { Api, ChatAgent, HistoryData, Pane, PastChat, SessionsData } from './api'
 import { usePolling } from './hooks'
 import { AgentIcon, agentNames, ago, needsYou, paneTitle } from './Sidebar'
+import { FolderMenu } from './SelectMenu'
 import './ChatPicker.css'
 
 const PAGE = 50
@@ -122,7 +123,7 @@ export function ChatPicker({ api, exclude, here, onChat, onTab, onMove, disabled
     if (source !== 'tabs') for (const item of history.data?.dirs ?? []) counts.set(item.dir, item.count)
     for (const pane of allTabs) if (pane.dir) counts.set(pane.dir, (counts.get(pane.dir) ?? 0) + 1)
     if (dir && !counts.has(dir)) counts.set(dir, 0)
-    return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([path]) => path)
+    return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([path, count]) => ({ dir: path, count }))
   }, [history.data?.dirs, allTabs, source, dir])
   const groups = useMemo(() => {
     const list: { label: string; chats: PastChat[] }[] = []
@@ -164,12 +165,7 @@ export function ChatPicker({ api, exclude, here, onChat, onTab, onMove, disabled
       <div className="cp-sources" role="radiogroup" aria-label="Show">
         {SOURCES.map(item => <button type="button" key={item.id} role="radio" aria-checked={source === item.id} className={source === item.id ? 'on' : ''} onClick={() => setSource(item.id)}>{item.label}</button>)}
       </div>
-      <label className="cp-folder"><Folder size={13} aria-hidden="true" />
-        <select value={dir} aria-label="Folder" onChange={event => setDir(event.target.value)}>
-          <option value="">All folders</option>
-          {folders.map(path => <option key={path} value={path}>{path}</option>)}
-        </select>
-      </label>
+      <FolderMenu value={dir} folders={folders} onChange={setDir} />
     </div>
     {failure && <p className="error cp-error" role="alert">{failure}</p>}
     <div className="cp-list" tabIndex={-1}>

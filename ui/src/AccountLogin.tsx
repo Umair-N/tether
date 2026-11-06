@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { SelectMenu } from './SelectMenu'
 import { errorText } from './api'
 import type { Api, SavedAccount, SavedAccounts, UsageAccount } from './api'
 import { usePolling } from './hooks'
@@ -42,9 +43,7 @@ export function AccountLogin({ agent, api, account, onDone }: { agent: 'claude' 
       <p className="login-warning">Switching signs in every {name} session on {host} to the new account. Running jobs, such as codex exec lanes, can fail when they next refresh their sign-in. Switch when no long job runs.</p>
       {agent === 'claude' && <>
         <label htmlFor={`${agent}-login-method`}>Sign-in method</label>
-        <select id={`${agent}-login-method`} value={method} disabled={pending} onChange={event => setMethod(event.target.value)}>
-          <option value="claudeai">Claude subscription</option><option value="console">Anthropic Console</option><option value="sso">SSO</option>
-        </select>
+        <SelectMenu id={`${agent}-login-method`} value={method} disabled={pending} onChange={setMethod} options={[{ value: 'claudeai', label: 'Claude subscription' }, { value: 'console', label: 'Anthropic Console' }, { value: 'sso', label: 'SSO' }]} />
         <label htmlFor={`${agent}-login-email`}>Email (optional)</label>
         <input id={`${agent}-login-email`} type="email" autoComplete="email" maxLength={320} value={email} disabled={pending} onChange={event => setEmail(event.target.value)} />
       </>}

@@ -2,6 +2,7 @@ import { useWords, count } from './words'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Eye, Archive, ArchiveRestore, ArrowDown, BookMarked, ArrowUp, Bell, Check, Columns2, GitFork, LayoutDashboard, Merge, ArrowRightLeft, Plus, PanelBottom, PanelRight, Pencil, Pin, PinOff, Shapes, Sparkles, RotateCw, Rows2, Square, Trash2, X } from 'lucide-react'
 import { ReviewLinkPicker } from './ReviewLinks'
+import { SelectMenu } from './SelectMenu'
 import { SESSION_NAME, SESSION_NAME_HELP, canFork, creditsLabel, errorText, usageLabel } from './api'
 import type { Api, Catalog, Footer, ModelOptions, Pane, PastChat } from './api'
 import { loadCatalog } from './Suggest'
@@ -299,10 +300,7 @@ export function ResumeChat({ api, chat, sessions, onClose, onOpened }: { api: Ap
       <p className="sheet-sub"><AgentIcon agent={chat.agent} size={14} />{chat.title || 'Untitled chat'}</p>
       <p className="hint">Runs <code>{chat.agent === 'codex' ? 'codex resume' : 'claude --resume'}</code> in {chat.dir ?? 'your home folder'}.</p>
       <label htmlFor="resume-place">Open in</label>
-      <select id="resume-place" className="resume-place" value={place} disabled={pending} onChange={event => setPlace(event.target.value)}>
-        <option value="">New session</option>
-        {sessions.map(session => <option key={session.id} value={session.id}>New tab in {session.name}</option>)}
-      </select>
+      <SelectMenu id="resume-place" className="sm-field resume-place" value={place} disabled={pending} onChange={setPlace} options={[{ value: '', label: 'New session' }, ...sessions.map(session => ({ value: session.id, label: `New tab in ${session.name}` }))]} />
       {!target && <><label htmlFor="resume-name">Session name</label>
       <input id="resume-name" autoFocus value={name} maxLength={64} disabled={pending} autoComplete="off" onChange={event => setName(event.target.value)} /></>}
       {error && <p className="error" role="alert">{error}</p>}

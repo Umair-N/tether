@@ -1,6 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
-import { Folder, Archive, ArchiveRestore, Asterisk, BarChart3, BookMarked, BookOpen, Bug, Cpu, Database, FileText, FlaskConical, GitBranch, Globe, LayoutDashboard, MessageSquare, MessagesSquare, Mic, Palette, Rocket, Server, Shield, Sparkles, Wrench, Zap, ChevronRight, Code2, GripVertical, Layers, Pin, PinOff, Plus, RefreshCw, Search, Settings, Terminal, Trash2, X } from 'lucide-react'
+import { Archive, ArchiveRestore, Asterisk, BarChart3, BookMarked, BookOpen, Bug, Cpu, Database, FileText, FlaskConical, GitBranch, Globe, LayoutDashboard, MessageSquare, MessagesSquare, Mic, Palette, Rocket, Server, Shield, Sparkles, Wrench, Zap, ChevronRight, Code2, GripVertical, Layers, Pin, PinOff, Plus, RefreshCw, Search, Settings, Terminal, Trash2, X } from 'lucide-react'
 import { KeepChoice, keepNeeded } from './Project'
+import { FolderMenu } from './SelectMenu'
 import type { Keep, ProjectMark, ProjectMarks } from './Project'
 import type { Agent, Api, ChatAgent, Pane, PastChat, UsageData, UsageReport, UsageWindow } from './api'
 import { SESSION_NAME, SESSION_NAME_HELP, errorText } from './api'
@@ -522,13 +523,7 @@ function PastChats({ api, search, showPaths, onPick, sessions, drag, onCarry, on
         <div className="cp-sources" role="radiogroup" aria-label="Agent">
           {PAST_SOURCES.map(([id, label]) => <button type="button" key={id} role="radio" aria-checked={agent === id} className={agent === id ? 'on' : ''} title={counts ? `${counts[id]} chats` : undefined} onClick={() => setAgent(id)}>{label}</button>)}
         </div>
-        <label className="cp-folder"><Folder size={13} aria-hidden="true" />
-          <select value={dir} aria-label="Folder" onChange={event => setDir(event.target.value)}>
-            <option value="">All folders</option>
-            {dir && !folders.some(item => item.dir === dir) && <option value={dir}>{dir}</option>}
-            {folders.map(item => <option key={item.dir} value={item.dir}>{item.dir}</option>)}
-          </select>
-        </label>
+        <FolderMenu value={dir} folders={folders} onChange={setDir} />
       </div>
     </div>
     {error ? <div className="sidebar-error" role="alert">{error}<button onClick={() => void refresh()}>Retry</button></div>

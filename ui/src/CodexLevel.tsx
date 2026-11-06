@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react'
+import { SelectMenu } from './SelectMenu'
 import { errorText } from './api'
 import type { Api } from './api'
 import { usePolling } from './hooks'
@@ -68,17 +69,11 @@ function RunOptions({ run, models, disabled, onChange }: { run: CodexRun; models
     <legend>How Claude runs Codex</legend>
     <div className="project-size-row">
       <label htmlFor="codex-run-model">Model</label>
-      <select id="codex-run-model" value={run.model} onChange={event => pick({ model: event.target.value })}>
-        <option value="auto">Auto: Claude chooses</option>
-        {slugs.map(item => <option key={item.slug} value={item.slug}>{item.name}</option>)}
-      </select>
+      <SelectMenu id="codex-run-model" value={run.model} onChange={model => pick({ model })} options={[{ value: 'auto', label: 'Auto: Claude chooses' }, ...slugs.map(item => ({ value: item.slug, label: item.name }))]} />
     </div>
     <div className="project-size-row">
       <label htmlFor="codex-run-effort">Effort</label>
-      <select id="codex-run-effort" value={run.effort} onChange={event => pick({ effort: event.target.value })}>
-        <option value="auto">Auto: Claude chooses</option>
-        {efforts.map(effort => <option key={effort} value={effort}>{effort}</option>)}
-      </select>
+      <SelectMenu id="codex-run-effort" value={run.effort} onChange={effort => pick({ effort })} options={[{ value: 'auto', label: 'Auto: Claude chooses' }, ...efforts.map(effort => ({ value: effort, label: effort }))]} />
     </div>
     <label className="switch-row"><span><strong>Fast mode</strong><small>{run.fast ? 'Faster Codex runs. They use more of your Codex limit.' : 'Codex runs at normal speed.'}</small></span>
       <input type="checkbox" role="switch" checked={run.fast} disabled={model ? !model.fast : false} onChange={event => pick({ fast: event.target.checked })} /></label>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { SelectMenu } from './SelectMenu'
 import { ArrowLeft, Eye, EyeOff, FileText, Link2, Trash2, X } from 'lucide-react'
 import { ApiError, errorText } from './api'
 import type { Api } from './api'
@@ -164,9 +165,7 @@ export function ProjectSheet({ api, session, mark, pin, onChanged, onClose }: { 
         <div className={`meter-bar ${level > .95 ? 'high' : level > .8 ? 'warn' : ''}`} role="meter" aria-label="Project text size" aria-valuenow={project.chars} aria-valuemin={0} aria-valuemax={project.budget}><span style={{ width: `${Math.min(100, level * 100)}%` }} /></div>
         <div className="project-size-row">
           <label htmlFor="project-budget">Limit</label>
-          <select id="project-budget" value={project.budget} disabled={pending} onChange={event => void post('budget', { chars: Number(event.target.value) })}>
-            {[...new Set([...SIZES, project.budget])].sort((a, b) => a - b).map(size => <option key={size} value={size}>{size.toLocaleString()} characters</option>)}
-          </select>
+          <SelectMenu id="project-budget" value={String(project.budget)} disabled={pending} onChange={size => void post('budget', { chars: Number(size) })} options={[...new Set([...SIZES, project.budget])].sort((a, b) => a - b).map(size => ({ value: String(size), label: `${size.toLocaleString()} characters` }))} />
           <button type="button" className="secondary" disabled={!project.preview} aria-expanded={preview} onClick={() => setPreview(!preview)}>{preview ? <EyeOff size={16} /> : <Eye size={16} />}{preview ? 'Hide' : 'Preview'}</button>
         </div>
         <p className="setting-note">Agents get this text when they start, resume, clear or compact. A smaller limit keeps more room for the chat.</p>
