@@ -30,6 +30,7 @@ LOG = logging.getLogger(__name__)
 # 29000-29999 is below Linux (32768+) and macOS (49152+) ephemeral ranges, so outgoing connections never take it.
 PORT_BASE = 29000
 MAX_MESSAGE = 32 * 1024 * 1024
+MAX_QUEUED_BYTES = 2 * MAX_MESSAGE
 MAX_CLIENTS = 8
 TAB_LIMIT = 3
 ENV_NAMES = ('PLAYWRIGHT_MCP_CDP_ENDPOINT', 'TETHER_CDP_URL')
@@ -264,7 +265,8 @@ class Transport:
     def __init__(self, sock):
         self.sock = sock
         self.lock = threading.Lock()
-        self.out = queue.Queue(maxsize=256)
+        self.out = queue.Queue()
+        self.pending_bytes = 0
         self.closed = False
         self.writer = threading.Thread(target=self._write, daemon=True, name='agent-cdp-writer')
         self.writer.start()
@@ -272,10 +274,15 @@ class Transport:
     def send(self, opcode, data=b''):
         if self.closed:
             return
-        try:
-            self.out.put_nowait(frame(opcode, data))
-        except queue.Full:
-            self.abort()
+        data = frame(opcode, data)
+        with self.lock:
+            if self.closed:
+                return
+            if not self.pending_bytes or self.pending_bytes + len(data) <= MAX_QUEUED_BYTES:
+                self.pending_bytes += len(data)
+                self.out.put_nowait(data)
+                return
+        self.abort()
 
     def message(self, message):
         self.send(1, json.dumps(message).encode())
@@ -298,23 +305,24 @@ class Transport:
                     data = self.out.get(timeout=.5)
                 except queue.Empty:
                     continue
+                remaining = memoryview(data)
+                deadline = time.monotonic() + 30
+                while remaining and not self.closed:
+                    left = deadline - time.monotonic()
+                    if left <= 0 or not select.select([], [self.sock], [], left)[1]:
+                        raise TimeoutError('WebSocket write timed out.')
+                    try:
+                        # TLS sockets reject MSG_DONTWAIT. Their existing read/write timeout
+                        # bounds sends; raw loopback sockets retain nonblocking writes.
+                        written = (self.sock.send(remaining) if isinstance(self.sock, ssl.SSLSocket)
+                                   else self.sock.send(remaining, socket.MSG_DONTWAIT))
+                    except BlockingIOError:
+                        continue
+                    if not written:
+                        raise OSError('WebSocket closed.')
+                    remaining = remaining[written:]
                 with self.lock:
-                    remaining = memoryview(data)
-                    deadline = time.monotonic() + 30
-                    while remaining and not self.closed:
-                        left = deadline - time.monotonic()
-                        if left <= 0 or not select.select([], [self.sock], [], left)[1]:
-                            raise TimeoutError('WebSocket write timed out.')
-                        try:
-                            # TLS sockets reject MSG_DONTWAIT. Their existing read/write timeout
-                            # bounds sends; raw loopback sockets retain nonblocking writes.
-                            written = (self.sock.send(remaining) if isinstance(self.sock, ssl.SSLSocket)
-                                       else self.sock.send(remaining, socket.MSG_DONTWAIT))
-                        except BlockingIOError:
-                            continue
-                        if not written:
-                            raise OSError('WebSocket closed.')
-                        remaining = remaining[written:]
+                    self.pending_bytes -= len(data)
                 if data[0] & 0x0f == 8:
                     break
         except OSError:

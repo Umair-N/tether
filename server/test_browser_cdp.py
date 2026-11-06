@@ -4,6 +4,7 @@ import errno
 import json
 from email.message import Message
 from pathlib import Path
+import socket
 import struct
 import tempfile
 import threading
@@ -157,6 +158,64 @@ class FramingTests(unittest.TestCase):
             connection._dispatch(b'{"method":"Runtime.ready","sessionId":"child"}')
             connection.unregister_sink('child')
         callback.assert_called_once_with({'id': 7, 'result': {}})
+
+
+class TransportTests(unittest.TestCase):
+    def setUp(self):
+        self.sock, self.peer = socket.socketpair()
+        self.peer.settimeout(3)
+        self.transport = cdp.Transport(self.sock)
+
+    def tearDown(self):
+        self.transport.abort()
+        self.transport.writer.join(timeout=2)
+        self.sock.close()
+        self.peer.close()
+        self.assertFalse(self.transport.writer.is_alive())
+
+    def receive(self, expected):
+        received = bytearray()
+        while len(received) < len(expected):
+            chunk = self.peer.recv(len(expected) - len(received))
+            self.assertTrue(chunk)
+            received.extend(chunk)
+        self.assertEqual(received, expected)
+
+    def test_small_frame_burst_stays_connected_and_preserves_order(self):
+        payloads = [struct.pack('!I', index) + b'x' * 64 for index in range(5000)]
+        for payload in payloads:
+            self.transport.send(1, payload)
+        self.assertFalse(self.transport.closed)
+        self.receive(b''.join(cdp.frame(1, payload) for payload in payloads))
+        self.assertFalse(self.transport.closed)
+
+    def test_pending_bytes_over_limit_aborts(self):
+        payload = b'x' * (self.sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF) + 1)
+        size = len(cdp.frame(1, payload))
+        with patch.object(cdp, 'MAX_QUEUED_BYTES', 2 * size):
+            self.transport.send(1, payload)
+            self.transport.send(1, payload)
+            self.assertFalse(self.transport.closed)
+            self.transport.send(1, payload)
+            self.assertTrue(self.transport.closed)
+
+    def test_pending_bytes_returns_to_zero_after_frames_drain(self):
+        payload = b'x' * 65536
+        for _ in range(3):
+            self.transport.send(1, payload)
+        self.receive(cdp.frame(1, payload) * 3)
+        deadline = time.monotonic() + 2
+        while self.transport.pending_bytes and time.monotonic() < deadline:
+            time.sleep(.001)
+        self.assertEqual(self.transport.pending_bytes, 0)
+        self.assertFalse(self.transport.closed)
+
+    def test_single_frame_over_limit_is_allowed_when_nothing_is_pending(self):
+        payload = b'x' * 65536
+        with patch.object(cdp, 'MAX_QUEUED_BYTES', 16):
+            self.transport.send(1, payload)
+            self.assertFalse(self.transport.closed)
+            self.receive(cdp.frame(1, payload))
 
 
 class ConfigTests(unittest.TestCase):
