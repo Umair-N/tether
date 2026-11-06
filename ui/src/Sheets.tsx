@@ -398,7 +398,42 @@ function Notifications({ api }: { api: Api }) {
   </>
 }
 
-const SETTINGS_TABS = ['Look', 'Chat', 'Voice', 'Alerts', 'Codex', 'System'] as const
+function SessionSettings({ api }: { api: Api }) {
+  const [folder, setFolder] = useState('')
+  const [saved, setSaved] = useState('')
+  const [pending, setPending] = useState(true)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  useEffect(() => {
+    const controller = new AbortController()
+    void api<{ prefs: { sessionFolder?: string } }>('prefs', undefined, controller.signal).then(data => {
+      if (!controller.signal.aborted) { setFolder(data.prefs.sessionFolder || ''); setSaved(data.prefs.sessionFolder || '') }
+    }, failure => { if (!controller.signal.aborted) setError(errorText(failure)) }).finally(() => { if (!controller.signal.aborted) setPending(false) })
+    return () => controller.abort()
+  }, [api])
+  async function save(event: React.FormEvent) {
+    event.preventDefault()
+    if (pending) return
+    setPending(true); setError(''); setNotice('')
+    const value = folder.trim()
+    try {
+      await api('prefs', { changes: { sessionFolder: value } })
+      setFolder(value); setSaved(value); setNotice('Saved. New sessions use this folder.')
+    } catch (failure) { setError(errorText(failure)) } finally { setPending(false) }
+  }
+  return <section className="settings-group" aria-labelledby="settings-sessions"><h3 id="settings-sessions">New sessions</h3>
+    <form className="session-folder-setting" onSubmit={save}>
+      <label htmlFor="default-session-folder">Default folder</label>
+      <p id="session-folder-help" className="setting-note">Use an absolute path or ~/. Leave blank to use your home folder. Applies to new sessions on this server.</p>
+      <input id="default-session-folder" value={folder} maxLength={1024} placeholder="~/projects" autoCapitalize="none" autoCorrect="off" spellCheck={false} autoComplete="off" aria-describedby="session-folder-help" disabled={pending} onChange={event => { setFolder(event.target.value); setNotice('') }} />
+      {error && <p className="error" role="alert">{error}</p>}
+      {notice && <p className="setting-note" role="status">{notice}</p>}
+      <button className="secondary" disabled={pending || folder === saved}>{pending ? 'Please wait…' : 'Save folder'}</button>
+    </form>
+  </section>
+}
+
+const SETTINGS_TABS = ['Look', 'Chat', 'Voice', 'Alerts', 'Sessions', 'Codex', 'System'] as const
 type SettingsTab = typeof SETTINGS_TABS[number]
 interface UpdateStatus { current: string; latest: string | null; available: boolean; checking: boolean; mode: string; checked_at: number | null; url: string }
 function SystemSettings({ api, onReload }: { api: Api; onReload: () => void }) {
@@ -444,7 +479,7 @@ export function Settings({ api, prefs, update, onReload, onClose }: { api: Api; 
     }}>
       {SETTINGS_TABS.map(item => <button type="button" role="tab" id={`settings-tab-${item}`} key={item} aria-selected={tab === item} aria-controls={`settings-panel-${item}`} tabIndex={tab === item ? 0 : -1} onClick={() => choose(item)}>{item}</button>)}
     </div>
-    {tab !== 'System' && tab !== 'Alerts' && tab !== 'Codex' && <p className="settings-device-note">Saved on this device</p>}
+    {tab !== 'System' && tab !== 'Alerts' && tab !== 'Codex' && tab !== 'Sessions' && <p className="settings-device-note">Saved on this device</p>}
     {SETTINGS_TABS.map(item => <div key={item} role="tabpanel" id={`settings-panel-${item}`} aria-labelledby={`settings-tab-${item}`} hidden={tab !== item} tabIndex={0}>
       {tab === item && <>
       {item === 'Look' && <>
@@ -478,6 +513,7 @@ export function Settings({ api, prefs, update, onReload, onClose }: { api: Api; 
     </section>
       </>}
       {item === 'Alerts' && <section className="settings-group" aria-labelledby="settings-notify"><h3 id="settings-notify">Notifications</h3><Notifications api={api} /></section>}
+      {item === 'Sessions' && <SessionSettings api={api} />}
       {item === 'Codex' && <GlobalCodexLevel api={api} />}
       {item === 'System' && <SystemSettings api={api} onReload={onReload} />}
       </>}

@@ -1,3 +1,4 @@
+import { ShellOutput } from './ShellOutput'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useWords } from './words'
 import { ArrowDown, ArrowLeftRight, Blocks, GitFork, Check, ChevronDown, ChevronRight, Clock3, Columns2, EyeOff, CornerDownRight, Gauge, Info, Layers, Maximize2, Menu, MessageSquare, Minimize2, MoreHorizontal, PanelTop, Pencil, Pin, PinOff, RefreshCw, RotateCcw, Rows2, Search, Settings2, Shield, ShieldAlert, SquareTerminal, Target, Terminal, WifiOff, X } from 'lucide-react'
@@ -718,7 +719,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
   const [hiddenNotices, setHiddenNotices] = useState<string[]>([])
   const visibleNotices = (footer.notices ?? []).filter(note => !hiddenNotices.includes(note))
   const hideNotice = (note: string) => setHiddenNotices(current => [...current.filter(item => (footer.notices ?? []).includes(item)), note])
-  return <AssistantRuntimeProvider runtime={runtime}><MediaOpener.Provider value={openMedia}><section ref={panelRef} className="chat-panel" aria-label={`Chat with ${pane.label}`}>
+  return <AssistantRuntimeProvider runtime={runtime}><MediaOpener.Provider value={openMedia}><section ref={panelRef} className={activePane.agent === 'shell' && !term ? 'chat-panel shell-page' : 'chat-panel'} aria-label={`Chat with ${pane.label}`}>
     <header className="chat-header" draggable={!!slot?.onDragStart} onDragStart={slot?.onDragStart} onTouchStart={event => {
       headerTouch.current = sidePin?.pinned && sidePin.total > 1 && event.touches.length === 1 ? { x: event.touches[0].clientX, y: event.touches[0].clientY } : null
     }} onTouchEnd={event => {
@@ -739,6 +740,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     {term && data?.attention?.askBridge && <AskBar agent={agentNames[activePane.agent]} disabled={!writable || acting} onOpen={() => setTerm(false)} onTerminal={() => askAnswer(data.attention!.askBridge!, null)} />}
     {term ? <LiveTerminal paneId={activePane.id} onChat={() => setTerm(false)} /> : <>
     {(offline || (error && data)) && <div className="reconnect-banner" role="status"><WifiOff size={15} /><span>{offline ? 'You are offline. Tether reconnects when the network is back.' : `Cannot reach ${host}. Reconnecting…`}</span><button type="button" onClick={() => void refresh()}>Retry now</button></div>}
+    {data && activePane.agent === 'shell' && <div className="start-options"><button disabled={!writable || acting} onClick={() => void start('claude')}>Start Claude<ChevronRight size={16} /></button><button disabled={!writable || acting} onClick={() => void start('codex')}><span>Start Codex<FoundryTag api={api} /></span><ChevronRight size={16} /></button></div>}
     <div className="chat-pager"><div className="chat-page" ref={page}>
     <ThreadPrimitive.Root className={opening ? 'thread opening' : 'thread'}><div className="chat-scroll" ref={viewport} onTouchStart={swipeStart} onTouchMove={event => { pullMove(event); swipeMove(event) }} onTouchEnd={swipeEnd} onTouchCancel={swipeCancel} onScroll={() => {
       const view = viewport.current
@@ -749,14 +751,14 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
       {loading && <p className="empty-note" role="status">Loading conversation…</p>}
       {pulled > 0 && <p className="pull-note" style={{ height: pulled }} role="status">{pulled >= 70 ? 'Release to load earlier' : 'Pull to load earlier'}</p>}
       {!!data?.earlier && <button className="load-earlier" disabled={data.limit !== limit} onClick={loadEarlier}>{data.limit !== limit ? 'Loading…' : `Load earlier · ${data.earlier}`}</button>}
-      {data && !messages.length && <div className="chat-empty"><Terminal size={27} strokeWidth={1.4} /><h2>{activePane.agent === 'shell' ? 'Shell' : 'No messages yet'}</h2><p>{activePane.agent === 'shell' ? 'Start an agent, or type a command below.' : `Send a message to ${pane.label} to get started.`}</p>
-        {activePane.agent !== 'shell' && writable && <div className="starter-actions" aria-label="Ways to start">
+      {data && activePane.agent !== 'shell' && !messages.length && <div className="chat-empty"><Terminal size={27} strokeWidth={1.4} /><h2>No messages yet</h2><p>{`Send a message to ${pane.label} to get started.`}</p>
+        {writable && <div className="starter-actions" aria-label="Ways to start">
           <button type="button" onClick={() => startWith('Explain what this project does and how its files are laid out.')}><MessageSquare size={16} />Explain this project</button>
           <button type="button" onClick={() => startWith('!git status --short --branch')}><Terminal size={16} />Check git status</button>
           <button type="button" onClick={() => startWith('/')}><Blocks size={16} />Commands & skills</button>
         </div>}</div>}
-      {data && activePane.agent === 'shell' && <div className="start-options"><button disabled={!writable || acting} onClick={() => void start('claude')}>Start Claude<ChevronRight size={16} /></button><button disabled={!writable || acting} onClick={() => void start('codex')}><span>Start Codex<FoundryTag api={api} /></span><ChevronRight size={16} /></button></div>}
-      <ThreadPrimitive.Messages>{({ message }) => <Message api={api} session={activePane.id} actions={turnEnds.has(message.id)} tools={message.metadata.custom.tools as ToolSummary[] | undefined} id={message.id} role={message.role} kind={message.metadata.custom.kind} title={message.metadata.custom.title ? String(message.metadata.custom.title) : undefined} count={message.metadata.custom.count} text={String(message.metadata.custom.text ?? '')} time={String(message.metadata.custom.time ?? '')} />}</ThreadPrimitive.Messages>
+
+      {activePane.agent === 'shell' ? <ShellOutput key={activePane.id} folder={activePane.dir} text={messages.map(message => message.text).join('\n')} /> : <ThreadPrimitive.Messages>{({ message }) => <Message api={api} session={activePane.id} actions={turnEnds.has(message.id)} tools={message.metadata.custom.tools as ToolSummary[] | undefined} id={message.id} role={message.role} kind={message.metadata.custom.kind} title={message.metadata.custom.title ? String(message.metadata.custom.title) : undefined} count={message.metadata.custom.count} text={String(message.metadata.custom.text ?? '')} time={String(message.metadata.custom.time ?? '')} />}</ThreadPrimitive.Messages>}
       {bang && <><div className="user-message"><span>{bangItem?.text ?? `!${bang.command}`}</span></div>
         <div className="assistant-message bang-run" role="status"><small><Terminal size={12} />Running{bang.seconds != null ? ` · ${bang.seconds}s` : ''}<button type="button" className="bang-stop" aria-label="Stop this command" disabled={!writable || acting} onClick={() => void sendKey('C-c')}><X size={13} />Stop</button></small><pre>{bang.output ? <Linked text={bang.output} /> : 'No output yet'}</pre></div></>}
       {state === 'Working' && preview && <div className="assistant-message reply-preview"><small>typing</small><div>{preview}</div></div>}
@@ -808,7 +810,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
       {creditsLabel(footer.credits) && <button type="button" className="pill" aria-haspopup="dialog" onClick={() => setUsageSheet(true)}>Credits {creditsLabel(footer.credits)}</button>}
     </div>}
     {modelSheet && <ModelSheet api={api} pane={activePane} thread={data?.thread ?? null} currentLabel={model} currentEffort={footer.effort} onClose={() => setModelSheet(false)} onDone={message => { setModelSheet(false); setToast(message); readFooter.current() }} />}
-    <Composer options={activePane.agent === 'shell' ? undefined : <span className="composer-pills">
+    <Composer onTerminalEscape={() => void sendKey('Escape')} options={activePane.agent === 'shell' ? undefined : <span className="composer-pills">
       <button type="button" className="pill" aria-label="Model and effort" disabled={!writable || state === 'Working'} onClick={() => setModelSheet(true)}><span className="pill-text">{model || 'Model'}</span>{footer.effort && <span className="pill-effort">· {footer.effort}</span>}<ChevronDown size={13} /></button>
       {activePane.agent === 'claude' && (footer.observed || footer.status || footer.mode) && <span className="mode-container"><button type="button" className="pill" aria-label={`Mode: ${MODES[currentMode]}. Change mode`} aria-expanded={modeMenu} disabled={!writable || !!modeBusy} onClick={() => setModeMenu(!modeMenu)}><Gauge size={13} />{modeBusy ? `${MODES[modeBusy]}…` : MODES[currentMode]}</button>
         {modeMenu && <div className="attach-menu mode-menu" role="menu">{Object.entries(MODES).map(([key, label]) => <button key={key} role="menuitemradio" aria-checked={key === currentMode} type="button" onClick={() => void chooseMode(key)}>{label}{key === currentMode && <Check size={16} />}</button>)}</div>}</span>}

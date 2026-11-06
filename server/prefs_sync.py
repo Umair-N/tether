@@ -11,13 +11,14 @@ import json
 import os
 import threading
 import time
+from pathlib import Path
 from urllib.parse import urlsplit
 import paths
 
 FILE = paths.CACHE / 'prefs.json'
 KEYS = {'pinned': list, 'sidePins': list, 'order': list, 'paneOrder': dict, 'sort': str, 'seen': dict, 'collapsed': dict,
         'showPaths': bool, 'tmuxWords': bool, 'liveReplyPreview': bool, 'voiceOff': bool, 'voiceSound': bool, 'theme': str, 'scheme': str, 'drafts': dict,
-        'archived': dict, 'layout': dict, 'repos': dict, 'files.pinned': list, 'hosts': list}
+        'archived': dict, 'layout': dict, 'repos': dict, 'files.pinned': list, 'hosts': list, 'sessionFolder': str}
 MAX_SEEN = 500
 MAX_DRAFTS = 200
 MAX_DRAFT_TEXT = 20000
@@ -37,6 +38,26 @@ def load():
             'version': data.get('version', 0) if isinstance(data, dict) and isinstance(data.get('version'), int) else 0}
 
 
+def session_folder(value=None):
+    """Resolve a new session's folder. Recheck at creation if a saved folder moved."""
+    if value is None:
+        value = load()['prefs'].get('sessionFolder', '')
+    if not isinstance(value, str) or len(value) > 1024 or any(ord(c) < 32 or ord(c) == 127 for c in value):
+        raise ValueError('Use an absolute folder path or a path that starts with ~/.')
+    value = value.strip()
+    if not value or value == '~':
+        folder = paths.HOME
+    elif value.startswith('~/'):
+        folder = paths.HOME / value[2:]
+    else:
+        folder = Path(value)
+        if not folder.is_absolute():
+            raise ValueError('Use an absolute folder path or a path that starts with ~/.')
+    if not folder.is_dir() or not os.access(folder, os.R_OK | os.X_OK):
+        raise ValueError('The default session folder is unavailable. Choose an existing, accessible folder in Settings > Sessions.')
+    return str(folder.resolve())
+
+
 def save(changes):
     """Merge changed keys and return the stored copy. Raises ValueError for a bad body."""
     if not isinstance(changes, dict) or not changes:
@@ -44,6 +65,8 @@ def save(changes):
     for key, value in changes.items():
         if key not in KEYS or not isinstance(value, KEYS[key]) or (KEYS[key] is int and isinstance(value, bool)):
             raise ValueError('Invalid preference: %s.' % key)
+        if key == 'sessionFolder':
+            session_folder(value)
         if key == 'files.pinned' and not (len(value) <= MAX_PINNED_FILES and all(isinstance(item, str) and 0 < len(item) <= 1024 for item in value)):
             raise ValueError('Invalid preference: %s.' % key)
         if key == 'sidePins':

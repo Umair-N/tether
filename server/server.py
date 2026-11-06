@@ -1454,14 +1454,20 @@ class Handler(BaseHTTPRequestHandler):
                     moved = tmux_merge.merge(body.get('kind'), body.get('source'), body.get('target'), keep=body.get('keep'))
                 self.respond(200, moved)
                 return
+            if self.path in ('/mobile/api/session', '/mobile/api/tmux-sessions'):
+                try:
+                    session_folder = prefs_sync.session_folder()
+                except ValueError as exc:
+                    self.respond(400, {'error': str(exc)})
+                    return
             if self.path == '/mobile/api/session':
                 with SEND_LOCK:
-                    pane = create_session(body.get('name'), str(paths.HOME))
+                    pane = create_session(body.get('name'), session_folder)
                 self.respond(200, {'session': pane, 'label': body['name']})
                 return
             if self.path == '/mobile/api/tmux-sessions':
                 with SEND_LOCK:
-                    pane = create_session(body.get('name'), str(paths.HOME))
+                    pane = create_session(body.get('name'), session_folder)
                     result = subprocess.run([paths.TMUX, 'display-message', '-p', '-t', pane, '#{session_id}'],
                                             check=True, capture_output=True, text=True, timeout=5)
                 self.respond(201, {'session': result.stdout.strip(), 'name': body['name']})

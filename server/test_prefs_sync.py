@@ -15,6 +15,33 @@ class PrefsSyncTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self.addCleanup(self.folder.cleanup)
 
+    def test_default_session_folder_round_trip_and_resolution(self):
+        home = Path(self.folder.name)
+        project = home / 'project with spaces'
+        project.mkdir()
+        with mock.patch.object(prefs_sync.paths, 'HOME', home):
+            self.assertEqual(prefs_sync.session_folder(), str(home))
+            prefs_sync.save({'sessionFolder': '~/project with spaces'})
+            self.assertEqual(prefs_sync.load()['prefs']['sessionFolder'], '~/project with spaces')
+            self.assertEqual(prefs_sync.session_folder(), str(project))
+            prefs_sync.save({'sessionFolder': str(project)})
+            self.assertEqual(prefs_sync.session_folder(), str(project))
+            project.rmdir()
+            with self.assertRaisesRegex(ValueError, 'unavailable'):
+                prefs_sync.session_folder()
+            prefs_sync.save({'sessionFolder': ''})
+            self.assertEqual(prefs_sync.session_folder(), str(home))
+
+    def test_invalid_default_session_folder_does_not_change_preferences(self):
+        home = Path(self.folder.name)
+        file = home / 'file'
+        file.write_text('text')
+        with mock.patch.object(prefs_sync.paths, 'HOME', home):
+            for value in ('relative/path', '~other/folder', '~/missing', str(file), 'a' * 1025, '~/x\n', None, 42):
+                with self.subTest(value=value), self.assertRaises(ValueError):
+                    prefs_sync.save({'sessionFolder': value})
+        self.assertEqual(prefs_sync.load()['version'], 0)
+
     def test_empty_store_is_version_zero(self):
         self.assertEqual(prefs_sync.load(), {'prefs': {}, 'version': 0})
 

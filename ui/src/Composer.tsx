@@ -57,7 +57,7 @@ async function uploadFile(file: File, session: string, thread: string | null): P
   return { path: data.path, name: name }
 }
 
-interface ComposerProps { api: Api; pane: Pane; thread: string | null; disabled: boolean; onSend: (text: string) => Promise<boolean>; error: string; errorAction?: React.ReactNode; draft: string; setDraft: (text: string) => void; working: boolean; onStop: () => void; micOk: boolean; hint?: string; chime: boolean; options?: React.ReactNode; onTools: () => void; handsFree: boolean; listenRequest: number; sent?: string[] }
+interface ComposerProps { onTerminalEscape?: () => void; api: Api; pane: Pane; thread: string | null; disabled: boolean; onSend: (text: string) => Promise<boolean>; error: string; errorAction?: React.ReactNode; draft: string; setDraft: (text: string) => void; working: boolean; onStop: () => void; micOk: boolean; hint?: string; chime: boolean; options?: React.ReactNode; onTools: () => void; handsFree: boolean; listenRequest: number; sent?: string[] }
 // With no accept list, Chrome on Android opens the system app chooser (Camera, Camcorder, Media picker).
 // showOpenFilePicker (Chrome 132+ on Android) opens the Files app directly, with every file type.
 // Older Android Chrome falls back to a list of document types, which also skips the chooser.
@@ -65,7 +65,7 @@ const ANDROID = typeof navigator !== 'undefined' && /Android/i.test(navigator.us
 const FILES_ACCEPT = ANDROID ? 'application/*,text/*' : undefined
 type OpenPicker = (options: { multiple: boolean }) => Promise<{ getFile(): Promise<File> }[]>
 const openPicker = () => ANDROID ? (window as unknown as { showOpenFilePicker?: OpenPicker }).showOpenFilePicker : undefined
-export function Composer({ api, pane, thread, disabled, onSend, error, errorAction, draft, setDraft, working, onStop, micOk, chime, options, onTools, hint, handsFree, listenRequest, sent = [] }: ComposerProps) {
+export function Composer({ onTerminalEscape, api, pane, thread, disabled, onSend, error, errorAction, draft, setDraft, working, onStop, micOk, chime, options, onTools, hint, handsFree, listenRequest, sent = [] }: ComposerProps) {
   const host = useHost()
   const [menu, setMenu] = useState(false)
   useBackStep(menu, () => setMenu(false))
@@ -131,6 +131,7 @@ export function Composer({ api, pane, thread, disabled, onSend, error, errorActi
   const suggest = useRef<SuggestHandle>(null)
   // A line that starts with "!" runs as a shell command in the agent's terminal on the server. The box shows it as a terminal prompt.
   const shellMode = pane.agent !== 'shell' && draft.startsWith('!')
+  const terminalInput = shellMode || pane.agent === 'shell'
   const canAttach = pane.agent !== 'shell' && pane.writable && !shellMode
   // Long pastes wait as badges above the box. Tap one to read it in place.
   const [pastes, setPastes] = useState<Paste[]>([])
@@ -315,11 +316,31 @@ export function Composer({ api, pane, thread, disabled, onSend, error, errorActi
   function keepFocus(event: React.MouseEvent) {
     if (document.activeElement === textarea.current && event.target !== textarea.current && (event.target as HTMLElement).closest('button')) event.preventDefault()
   }
-  return <div className="composer-area"><Suggestions ref={suggest} api={api} pane={pane} draft={draft} setDraft={setDraft} focus={() => textarea.current?.focus()} /><form className={shellMode ? 'composer shell-mode' : 'composer'} ref={form} onSubmit={submit} onMouseDown={keepFocus}>
+  function terminalKey(key: string) {
+    const box = textarea.current
+    if (!box || disabled || sending || box.readOnly) return
+    box.focus()
+    if (key === 'Escape') { onTerminalEscape?.(); return }
+    if (key === 'C-c') { onStop(); return }
+    if (key === 'ArrowUp' || key === 'ArrowDown') {
+      box.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })); return
+    }
+    const start = box.selectionStart, end = box.selectionEnd
+    if (key === 'Tab') {
+      setDraft(draft.slice(0, start) + '\t' + draft.slice(end))
+      requestAnimationFrame(() => box.setSelectionRange(start + 1, start + 1))
+    } else {
+      const at = key === 'ArrowLeft' ? Math.max(0, start - (start === end ? 1 : 0)) : Math.min(draft.length, end + (start === end ? 1 : 0))
+      box.setSelectionRange(at, at)
+    }
+  }
+  return <div className="composer-area">{pane.agent === 'shell' && <div className="shell-key-strip" role="group" aria-label="Terminal keys" onMouseDown={keepFocus}>
+    {([['Escape', 'esc', 'Send Escape to terminal'], ['Tab', 'tab', 'Insert tab'], ['C-c', 'ctrl+c', 'Stop command'], ['ArrowUp', '↑', 'Previous command'], ['ArrowDown', '↓', 'Next command'], ['ArrowLeft', '←', 'Move cursor left'], ['ArrowRight', '→', 'Move cursor right']] as const).map(([key, label, title]) => <button key={key} type="button" title={title} aria-label={title} disabled={disabled || sending || listening || transcribing} onClick={() => terminalKey(key)}>{label}</button>)}
+  </div>}<Suggestions ref={suggest} api={api} pane={pane} draft={draft} setDraft={setDraft} focus={() => textarea.current?.focus()} /><form className={shellMode ? 'composer shell-mode' : 'composer'} ref={form} onSubmit={submit} onMouseDown={keepFocus}>
     {files.length + pastes.length > 0 && <ul className="attachments" aria-label="Attached files and pasted text">{files.map((file, index) => <li key={file.path} className="chip">{file.url ? <button type="button" className="chip-view" aria-label={`View ${file.name}`} onClick={() => setViewing({ name: file.name, url: file.url! })}><img src={file.url} alt="" /><span>{file.name}</span></button> : <><Paperclip size={13} /><span>{file.name}</span></>}<button type="button" aria-label={`Remove ${file.name}`} onClick={() => setFiles(current => current.filter((_, at) => at !== index))}><X size={14} /></button></li>)}{pastes.map(paste => <PasteChip key={paste.id} paste={paste} open={openPaste === paste.id} onToggle={() => setOpenPaste(openPaste === paste.id ? null : paste.id)} onEdit={() => { setDraft(inlinePaste(draft, paste)); setPastes(current => current.filter(item => item.id !== paste.id)); setOpenPaste(null); textarea.current?.focus() }} onRemove={() => { setPastes(current => current.filter(item => item.id !== paste.id)); textarea.current?.focus() }} />)}</ul>}
     <ImageViewer image={viewing} close={() => setViewing(null)} />
-    <div className="composer-input">{shellMode && <span className="shell-prompt" title={pane.dir ? `Runs in ${pane.dir}` : undefined}><span className="shell-folder">{shortFolder(pane.dir)}</span><span aria-hidden="true">$</span></span>}
-    <textarea className={shellMode ? 'shell-input' : undefined} onKeyDown={event => {
+    <div className="composer-input">{pane.agent === 'shell' && <span className="terminal-sigil" aria-hidden="true">$</span>}{shellMode && <span className="shell-prompt" title={pane.dir ? `Runs in ${pane.dir}` : undefined}><span className="shell-folder">{shortFolder(pane.dir)}</span><span aria-hidden="true">$</span></span>}
+    <textarea className={terminalInput ? 'shell-input' : undefined} onKeyDown={event => {
       if (browse.current && walk(event)) event.preventDefault()
       else if (suggest.current?.key(event)) event.preventDefault()
       else if (walk(event)) event.preventDefault()
@@ -327,7 +348,7 @@ export function Composer({ api, pane, thread, disabled, onSend, error, errorActi
       else if (shellMode && event.key === 'Backspace' && !draft.slice(1).trim() && event.currentTarget.selectionEnd <= 1) { event.preventDefault(); setDraft(draft.slice(1)) }
       else if (sendsOnEnter(event)) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} onPaste={event => { if (canAttach && event.clipboardData.files.length) { event.preventDefault(); void attach(event.clipboardData.files); return }
       const pasted = event.clipboardData.getData('text/plain'), box = event.currentTarget
-      if (canAttach && !box.readOnly && longPaste(pasted)) { event.preventDefault(); setPastes(current => [...current, pasteOf(pasted, !draft.slice(0, box.selectionStart).trim())]) } }} ref={textarea} aria-label={pane.agent === 'shell' ? 'Run a command' : shellMode ? 'Shell command' : `Message ${chatTitle(pane)}`} aria-describedby={shellMode ? hintId : undefined} spellCheck={!shellMode} autoCapitalize={shellMode ? 'off' : undefined} autoCorrect={shellMode ? 'off' : undefined} placeholder={hint ?? (pane.agent === 'shell' ? 'Run a command' : `Message ${chatTitle(pane)}`)} rows={1} value={draft} readOnly={listening || transcribing || sending} disabled={disabled} onChange={event => setDraft(event.target.value)} /></div>
+      if (canAttach && !box.readOnly && longPaste(pasted)) { event.preventDefault(); setPastes(current => [...current, pasteOf(pasted, !draft.slice(0, box.selectionStart).trim())]) } }} ref={textarea} aria-label={pane.agent === 'shell' ? 'Run a command' : shellMode ? 'Shell command' : `Message ${chatTitle(pane)}`} aria-describedby={shellMode ? hintId : undefined} spellCheck={!terminalInput} autoCapitalize={terminalInput ? 'none' : undefined} autoCorrect={terminalInput ? 'off' : undefined} placeholder={hint ?? (pane.agent === 'shell' ? 'Run a command' : `Message ${chatTitle(pane)}`)} rows={1} value={draft} readOnly={listening || transcribing || sending} disabled={disabled} onChange={event => setDraft(event.target.value)} /></div>
     <div className="composer-controls"><div>{canAttach && <div className="attach-container" ref={menuRef}>
       <input ref={picker} type="file" multiple accept={FILES_ACCEPT} hidden onChange={event => { const chosen = Array.from(event.target.files ?? []); event.target.value = ''; void attach(chosen) }} />
       <input ref={photos} type="file" multiple accept="image/*,video/*" hidden onChange={event => { const chosen = Array.from(event.target.files ?? []); event.target.value = ''; void attach(chosen) }} />
@@ -356,7 +377,7 @@ export function Composer({ api, pane, thread, disabled, onSend, error, errorActi
         ? <button type="button" className="primary send-button stop-button" aria-label={pane.agent === 'shell' ? 'Stop command (Ctrl+C)' : 'Stop response (Esc)'} disabled={disabled} onClick={onStop}><Square size={15} fill="currentColor" /></button>
         : shellMode
           ? <button className="primary send-button run-button" aria-label="Run command" disabled={disabled || sending || !!uploading || !draft.slice(1).trim()}><CornerDownLeft size={16} />Run</button>
-          : <button className="primary send-button" aria-label="Send message" disabled={disabled || sending || !!uploading || (!draft.trim() && !files.length && !pastes.length)}><ArrowUp size={21} /></button>}
+          : <button className="primary send-button" aria-label={pane.agent === 'shell' ? 'Run command' : 'Send message'} disabled={disabled || sending || !!uploading || (!draft.trim() && !files.length && !pastes.length)}><ArrowUp size={21} /></button>}
     </div></div>
   </form>{shellMode && <p className="shell-hint" id={hintId}>Runs on {host} · Esc or Backspace on empty leaves shell mode</p>}{(error || speechError) && <p className="composer-error error" role="alert">{error || speechError}{error && errorAction}</p>}</div>
 }
