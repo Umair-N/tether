@@ -80,17 +80,19 @@ export const shownIndex = (pane: Pane) => pane.pane_name || pane.agent_name ? ''
 /** The tmux session name: the label without the window.pane suffix it gets when the session has more than one pane. */
 export const sessionName = (pane: Pane) => pane.label.includes(':') ? pane.label.slice(0, pane.label.lastIndexOf(':')) : pane.label
 
-export function groupSessions(panes: Pane[]): Session[] {
+export function groupSessions(panes: Pane[], hide?: (pane: Pane) => boolean): Session[] {
   const byId = new Map<string, Pane[]>()
   for (const pane of panes) byId.set(pane.tmux_session, [...(byId.get(pane.tmux_session) ?? []), pane])
-  return [...byId.entries()].map(([id, list]) => {
+  return [...byId.entries()].flatMap(([id, list]) => {
     const sorted = [...list].sort((a, b) => paneIndex(a).localeCompare(paneIndex(b), undefined, { numeric: true }))
-    const states = sorted.map(pane => pane.state)
-    return {
-      id, name: sessionName(sorted[0]), panes: sorted, dir: sorted[0].dir,
-      agent: sorted.find(pane => pane.agent !== 'shell')?.agent ?? 'shell',
+    const shown = hide ? sorted.filter(pane => !hide(pane)) : sorted
+    if (!shown.length) return []
+    const states = shown.map(pane => pane.state)
+    return [{
+      id, name: sessionName(sorted[0]), panes: shown, dir: sorted[0].dir,
+      agent: shown.find(pane => pane.agent !== 'shell')?.agent ?? 'shell',
       state: states.find(needsYou) ?? (states.includes('Working') ? 'Working' : states[0]),
-    }
+    }]
   })
 }
 
@@ -181,6 +183,8 @@ interface Props {
   onNew: () => void
   onActions: (session: Session, remove?: boolean, at?: Anchor) => void
   onPaneActions: (pane: Pane, at?: Anchor) => void
+  archivedTabs: Pane[]
+  onRestoreTab: (pane: Pane) => void
   onPastChat: (chat: PastChat) => void
   onSettings: () => void
   onClose?: () => void
@@ -203,7 +207,7 @@ interface Props {
   onAddPane?: (session: Session) => void
 }
 
-export function Sidebar({ api, sessions, selected, prefs, update, loading, error, onRetry, onOpen, onNew, onActions, onPaneActions, onPastChat, onSettings, onClose, slots, drag, onCommandMenu, onMessageAll, marks, onMarks, onOpenShell, onShellsEnded, onAddPane }: Props) {
+export function Sidebar({ api, sessions, selected, prefs, update, loading, error, onRetry, onOpen, onNew, onActions, onPaneActions, onPastChat, onSettings, onClose, slots, drag, onCommandMenu, onMessageAll, marks, onMarks, onOpenShell, onShellsEnded, onAddPane, archivedTabs, onRestoreTab }: Props) {
   const host = useHost()
   const [query, setQuery] = useState('')
   const [reorder, setReorder] = useState<Section | null>(null)
@@ -302,6 +306,7 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
   const smart = prefs.sort === 'smart'
   const visible = (smart ? sortSmart(sessions, prefs.seen, selected) : sortByPrefs(sessions, prefs.order)).filter(session => !search || `${session.name} ${session.dir} ${session.panes.map(pane => agentNames[pane.agent]).join(' ')}`.toLowerCase().includes(search))
   const archived = visible.filter(session => isArchived(session, prefs.archived))
+  const hiddenTabs = archivedTabs.filter(pane => !search || `${paneTitle(pane)} ${sessionName(pane)} ${pane.dir} ${agentNames[pane.agent]}`.toLowerCase().includes(search))
   const live = visible.filter(session => !isArchived(session, prefs.archived))
   const pinned = live.filter(session => prefs.pinned.includes(session.id))
   const rest = live.filter(session => !prefs.pinned.includes(session.id))
@@ -309,7 +314,7 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
     ...(pinned.length ? [{ key: 'pinned' as const, title: 'Pinned', items: pinned }] : []),
     { key: 'agents', title: 'Claude & Codex', items: rest.filter(session => session.agent !== 'shell') },
     ...(rest.some(session => session.agent === 'shell') ? [{ key: 'terminals' as const, title: 'Terminals', items: rest.filter(session => session.agent === 'shell') }] : []),
-    ...(archived.length ? [{ key: 'archived' as const, title: 'Archived', items: archived }] : []),
+    ...(archived.length || hiddenTabs.length ? [{ key: 'archived' as const, title: 'Archived', items: archived }] : []),
   ]
   const closedAtFirst = (key: Section) => key === 'past' || key === 'archived'
   const toggle = (key: Section) => update(current => ({ collapsed: { ...current.collapsed, [key]: !(current.collapsed[key] ?? closedAtFirst(key)) } }))
@@ -344,12 +349,16 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
       {mergeError && <div className="sidebar-error" role="alert">{mergeError}<button onClick={() => setMergeError('')}>Dismiss</button></div>}
       {groups.map(group => <section key={group.key} className="group">
         <div className="group-head">
-          <button className="group-toggle" aria-expanded={isOpen(group.key)} onClick={() => toggle(group.key)}>{group.title}<span className="group-count">· {group.items.length}</span>{group.key === 'archived' && !isOpen('archived') && group.items.some(session => status(session.panes, prefs.seen, selected).kind === 'approval') && <span className="state-dot approval" role="img" aria-label="An archived session needs you" />}<ChevronRight size={14} className="chevron" /></button>
+          <button className="group-toggle" aria-expanded={isOpen(group.key)} onClick={() => toggle(group.key)}>{group.title}<span className="group-count">· {group.items.length + (group.key === 'archived' ? hiddenTabs.length : 0)}</span>{group.key === 'archived' && !isOpen('archived') && [...group.items.map(session => session.panes), ...hiddenTabs.map(pane => [pane])].some(list => status(list, prefs.seen, selected).kind === 'approval') && <span className="state-dot approval" role="img" aria-label="An archived session needs you" />}<ChevronRight size={14} className="chevron" /></button>
           {isOpen(group.key) && group.items.length > 1 && !search && !smart && group.key !== 'archived' && <button className="group-edit" onClick={() => setReorder(reorder === group.key ? null : group.key)}>{reorder === group.key ? 'Done' : 'Reorder'}</button>}
         </div>
-        {isOpen(group.key) && (group.items.length
+        {isOpen(group.key) && group.key === 'archived' && !group.items.length ? null : isOpen(group.key) && (group.items.length
           ? <SessionList items={group.items} reorder={reorder === group.key} selected={selected} prefs={prefs} update={update} onOpen={onOpen} onActions={onActions} onPaneActions={onPaneActions} onMove={ids => moveWithin(group.items, ids)} pinned={group.key === 'pinned'} slots={slots ?? []} canDrag={!!drag} api={api} carry={carry} onCarry={startCarry} onDrop={dropOn} onHold={holdStart} touchOver={touchOver} renaming={renameRow} onRenamed={renamed} marks={marks} onAddPane={onAddPane} />
           : <p className="group-empty">{loading ? 'Finding sessions…' : group.key === 'terminals' ? 'No plain terminals. Create one with New session.' : 'Nothing here yet.'}</p>)}
+        {isOpen(group.key) && group.key === 'archived' && hiddenTabs.length > 0 && <ul className="archived-tabs">{hiddenTabs.map(pane => <li key={pane.id}>
+          <button type="button" className="archived-tab-open" onMouseEnter={clipTitle} onClick={() => onOpen(pane)} onContextMenu={event => { event.preventDefault(); onPaneActions(pane, anchorOf(event)) }}>{dot(status([pane], prefs.seen, selected))}<span className="pane-child-name">{[paneTitle(pane), shownIndex(pane)].filter(Boolean).join(' ')} · {sessionName(pane)}</span></button>
+          <button type="button" className="icon-button archived-tab-restore" aria-label={`Restore ${paneTitle(pane)}`} title="Restore" onClick={() => onRestoreTab(pane)}><ArchiveRestore size={16} /></button>
+        </li>)}</ul>}
       </section>)}
       <ShellList api={api} open={isOpen('shells')} onToggle={() => toggle('shells')} onOpenShell={onOpenShell} onEnded={panes => onShellsEnded?.(panes)} />
       {carry?.pane && <div className={`new-session-drop ${overNew ? 'over' : ''}`} onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setOverNew(true) }} onDragLeave={() => setOverNew(false)} onDrop={event => { event.preventDefault(); merge('break', carry.pane!) }}><Plus size={14} aria-hidden="true" />New session</div>}

@@ -16,6 +16,13 @@ export function orderPanes(panes: Pane[], order: string[] | undefined) {
   return panes.map((pane, at) => ({ pane, at })).sort((a, b) => rank(a.pane) - rank(b.pane) || a.at - b.at).map(item => item.pane)
 }
 
+// Replace only the visible positions. Hidden tabs keep their place for restore.
+export function reorderPanes(panes: Pane[], order: string[] | undefined, ids: string[]): string[] {
+  const shown = new Set(ids)
+  let at = 0
+  return orderPanes(panes, order).map(pane => shown.has(pane.id) ? ids[at++] : pane.id)
+}
+
 interface Props {
   session: Session
   pane: Pane

@@ -95,10 +95,14 @@ class PrefsSyncTests(unittest.TestCase):
 
     def test_archived_sessions_and_desktop_layout_sync(self):
         layout = {'desktop': {'count': 2, 'panes': ['%1', '%4'], 'focus': 0, 'cols': {'2': [0.6]}, 'row': 0.5, 'inbox': True, 'sidebar': True}}
-        stored = prefs_sync.save({'archived': {'$3': 'old-work'}, 'layout': layout})
-        self.assertEqual(stored['prefs'], {'archived': {'$3': 'old-work'}, 'layout': layout})
+        archived_tabs = {'%1': {'thread': 'old-thread', 'dir': '/work'}, '%4': {'thread': None, 'dir': '/shell'}}
+        stored = prefs_sync.save({'archived': {'$3': 'old-work'}, 'archivedTabs': archived_tabs, 'layout': layout})
+        self.assertEqual(stored['prefs'], {'archived': {'$3': 'old-work'}, 'archivedTabs': archived_tabs, 'layout': layout})
+        self.assertEqual(prefs_sync.load(), stored)
         with self.assertRaises(ValueError):
             prefs_sync.save({'archived': ['$3']})
+        with self.assertRaises(ValueError):
+            prefs_sync.save({'archivedTabs': ['%1']})
 
     def test_rejects_unknown_or_badly_typed_keys(self):
         for changes in ({}, {'selected': '%1'}, {'pinned': 'x'}, {'showPaths': 1}, []):

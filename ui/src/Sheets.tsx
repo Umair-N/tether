@@ -102,8 +102,8 @@ function useActionsDialog(at: Anchor | undefined, close: () => void) {
   return { ...modal, ...popover, className: at ? 'sheet popover' : 'sheet' }
 }
 
-export function SessionActions({ api, session, pane, pinned, archived, canMoveUp, canMoveDown, startDelete = false, at, place, targets, marks, onMarks, onPin, onArchive, onMove, onProject, onDone, onClose }: {
-  api: Api; session: Session; pane: string; pinned: boolean; archived: boolean; canMoveUp: boolean; canMoveDown: boolean; startDelete?: boolean; at?: Anchor; place?: Place; targets: Session[]; marks?: ProjectMarks; onMarks?: () => void
+export function SessionActions({ api, session, tabCount, pane, pinned, archived, canMoveUp, canMoveDown, startDelete = false, at, place, targets, marks, onMarks, onPin, onArchive, onMove, onProject, onDone, onClose }: {
+  api: Api; session: Session; tabCount: number; pane: string; pinned: boolean; archived: boolean; canMoveUp: boolean; canMoveDown: boolean; startDelete?: boolean; at?: Anchor; place?: Place; targets: Session[]; marks?: ProjectMarks; onMarks?: () => void
   onPin: () => void; onArchive: () => void; onMove: (step: -1 | 1) => void; onProject: () => void; onDone: (newPane?: string, direction?: 'right' | 'down') => void; onClose: () => void
 }) {
   const words = useWords()
@@ -134,18 +134,18 @@ export function SessionActions({ api, session, pane, pinned, archived, canMoveUp
   const split = (direction: 'right' | 'down') => run(async () => (await api<{ pane: string }>('split', { session: pane, direction })).pane, direction)
   return <dialog {...dialog} aria-labelledby="actions-title">
     <div className="sheet-heading"><h2 id="actions-title">{session.name}</h2>{!at && <button type="button" className="icon-button" aria-label="Close" disabled={pending} onClick={onClose}><X /></button>}</div>
-    <p className="sheet-sub">{count(words, session.panes.length)} · {session.dir}</p>
+    <p className="sheet-sub">{count(words, tabCount)} · {session.dir}</p>
     {merging === 'pick'
       ? <SessionPicker label={`Merge ${session.name} into`} targets={targets.filter(target => target.id !== session.id)} pending={pending} onPick={target => { setKeep(null); setMerging(target) }} onCancel={() => setMerging(null)} />
       : merging
       ? <div className="confirm-box" role="alertdialog" aria-labelledby="merge-session-title">
-          <p id="merge-session-title"><strong>Merge {session.name} into {merging.name}?</strong> {session.panes.length === 1 ? `Its ${words.pane} moves` : `Its ${count(words, session.panes.length)} move`} there, and {session.name} closes.</p>
+          <p id="merge-session-title"><strong>Merge {session.name} into {merging.name}?</strong> {tabCount === 1 ? `Its ${words.pane} moves` : `Its ${count(words, tabCount)} move`} there, and {session.name} closes.</p>
           {keepNeeded(marks, session.id, merging.id) && <KeepChoice source={session} target={merging} value={keep} disabled={pending} onChange={setKeep} />}
           <div className="sheet-buttons"><button type="button" className="secondary" autoFocus disabled={pending} onClick={() => setMerging('pick')}>Cancel</button><button type="button" className="primary" disabled={pending || (keepNeeded(marks, session.id, merging.id) && !keep)} onClick={() => void run(async () => { await api('merge', { kind: 'session', source: session.id, target: merging.id, ...(keep && { keep }) }); return undefined })}>{pending ? 'Merging…' : 'Merge'}</button></div>
         </div>
       : confirming
       ? <div className="confirm-box" role="alertdialog" aria-labelledby="delete-session-title">
-          <p id="delete-session-title"><strong>Delete {session.name}?</strong> This ends {session.panes.length === 1 ? `its ${words.pane}` : `all ${count(words, session.panes.length)}`} and stops anything running in them. You cannot undo this.</p>
+          <p id="delete-session-title"><strong>Delete {session.name}?</strong> This ends {tabCount === 1 ? `its ${words.pane}` : `all ${count(words, tabCount)}`} and stops anything running in them. You cannot undo this.</p>
           <div className="sheet-buttons"><button type="button" className="secondary" disabled={pending} onClick={() => setConfirming(false)}>Cancel</button><button type="button" className="danger" disabled={pending} onClick={() => void run(async () => { await api('tmux-sessions', { session: session.id }, undefined, 'DELETE'); return undefined })}>{pending ? 'Deleting…' : 'Delete session'}</button></div>
         </div>
       : renaming
@@ -175,8 +175,8 @@ export function SessionActions({ api, session, pane, pinned, archived, canMoveUp
   </dialog>
 }
 
-export function PaneActions({ api, session, pane, at, place, targets, onFork, onDone, onClose }: {
-  api: Api; session: Session | undefined; pane: Pane; at?: Anchor; place?: Place; targets: Session[]; onFork?: () => void; onDone: (newPane?: string, direction?: 'right' | 'down') => void; onClose: () => void
+export function PaneActions({ api, session, tabCount, archived, pane, at, place, targets, onArchive, onFork, onDone, onClose }: {
+  api: Api; session: Session | undefined; tabCount: number; archived: boolean; pane: Pane; at?: Anchor; place?: Place; targets: Session[]; onArchive: () => void; onFork?: () => void; onDone: (newPane?: string, direction?: 'right' | 'down') => void; onClose: () => void
 }) {
   const words = useWords()
   const [mode, setMode] = useState<'menu' | 'rename' | 'icon' | 'close' | 'move'>('menu')
@@ -184,7 +184,7 @@ export function PaneActions({ api, session, pane, at, place, targets, onFork, on
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const dialog = useActionsDialog(at, () => { if (!pending) onClose() })
-  const last = (session?.panes.length ?? 1) <= 1
+  const last = tabCount <= 1
   async function run(action: () => Promise<string | undefined>, direction?: 'right' | 'down') {
     setPending(true); setError('')
     try { onDone(await action(), direction) } catch (failure) { setError(errorText(failure)) } finally { setPending(false) }
@@ -229,6 +229,7 @@ export function PaneActions({ api, session, pane, at, place, targets, onFork, on
           <button disabled={pending} onClick={() => void split('down')}><Rows2 size={18} />{words.newBelow}{words.tmux && <kbd>Ctrl-b "</kbd>}</button>
           {onFork && canFork(pane) && <button disabled={pending} onClick={onFork}><GitFork size={18} />New chat from this</button>}
           <hr />
+          <button disabled={pending} onClick={() => { onArchive(); onClose() }}>{archived ? <ArchiveRestore size={18} /> : <Archive size={18} />}{archived ? 'Restore' : 'Archive'} {words.pane}</button>
           <button className="danger-item" disabled={pending} onClick={() => setMode('close')}><Trash2 size={18} />Close {words.pane}{words.tmux && <kbd>Ctrl-b x</kbd>}</button>
         </div>}
     {error && <p className="error" role="alert">{error}</p>}
