@@ -1,12 +1,11 @@
 import { copyText } from './clipboard'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Blocks, Clock3, Layers, Check, Copy, Share2, ChevronRight, X, TextSelect, MessageSquare, Info, ShieldAlert, Square, Volume2, Eye } from 'lucide-react'
+import { Blocks, Clock3, Layers, Check, Copy, Share2, ChevronRight, MessageSquare, Info, ShieldAlert, Square, Volume2, Eye } from 'lucide-react'
 import { MessagePrimitive } from '@assistant-ui/react'
 import type { ThreadMessageLike } from '@assistant-ui/react'
 import { MarkdownTextPrimitive } from '@assistant-ui/react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Api, ChatMessage } from './api'
-import { useModal } from './hooks'
 import { ToolGroup } from './ToolGroup'
 import { InlineCode, Link, remarkPaths } from './MediaLink'
 import { canSpeak, speak, stopSpeaking, useSpeaking } from './speech'
@@ -97,7 +96,7 @@ export function Message({ id, role, kind, title, text, count, time, tools, api, 
     const report = title === 'Subagent report'
     return <details className="peer-message" data-msg-id={id} open={!report}>
       <summary>{report ? <Blocks size={15} /> : <MessageSquare size={15} />}<strong>{title}</strong>{report && <span className="peer-preview">{text.split('\n').find(line => line.trim())?.replace(/^#+\s*/, '')}</span>}<ChevronRight size={15} /></summary>
-      <LongPressMenu text={text}>{press => <MessagePrimitive.Root className="assistant-message" {...press}><MessagePrimitive.Parts components={{ Text: Markdown }} /><MessageActions text={text} time={time} /></MessagePrimitive.Root>}</LongPressMenu>
+      <MessagePrimitive.Root className="assistant-message"><MessagePrimitive.Parts components={{ Text: Markdown }} /><MessageActions text={text} time={time} /></MessagePrimitive.Root>
     </details>
   }
   if (kind === 'actions') {
@@ -109,14 +108,14 @@ export function Message({ id, role, kind, title, text, count, time, tools, api, 
   if (command) return <div className="shell-command" data-msg-id={id} role="group" aria-label="Shell command"><span className="shell-sigil" aria-hidden="true">$</span><code>{command[1]}</code></div>
   // Tether's review loop types these into a tab: a review request to the reviewer, or its feedback to the worker.
   const review = role === 'user' && !kind ? parseReview(text) : null
-  if (review) return <ReviewCard id={id} text={text} review={review} />
+  if (review) return <ReviewCard id={id} review={review} />
   // Claude puts the whole summary in a user message after /compact or an auto-compact. Fold it like a tool row.
   if (role === 'user' && text.startsWith('This session is being continued from a previous conversation')) {
     return <details className="tool-row compact-row" data-msg-id={id}><summary><Layers size={15} />Conversation compacted<ChevronRight size={15} /></summary><pre>{text}</pre></details>
   }
-  return <LongPressMenu text={text}>{press => <MessagePrimitive.Root className={role === 'user' ? 'user-message' : 'assistant-message'} data-msg-id={id} {...press}>
+  return <MessagePrimitive.Root className={role === 'user' ? 'user-message' : 'assistant-message'} data-msg-id={id}>
     {role === 'user' ? <MessagePrimitive.Parts /> : <><MessagePrimitive.Parts components={{ Text: Markdown }} />{actions && <MessageActions text={text} time={time} />}</>}
-  </MessagePrimitive.Root>}</LongPressMenu>
+  </MessagePrimitive.Root>
 }
 type Review = { feedback: boolean; tab: string; agent?: string; name?: string; reply: string; transcript?: string; last?: boolean }
 const REVIEW_REQUEST = /^\[Tether review\] The (\S+) tab “([^”]*)” \((%\d+)\) finished a turn\.[\s\S]*?Its last reply:\s*([\s\S]*?)\s*Transcript: (\S*)( This is the last round: your reply stays here\.)?\s*$/
@@ -128,66 +127,44 @@ function parseReview(text: string): Review | null {
   return feedback ? { feedback: true, tab: feedback[1], reply: feedback[2] } : null
 }
 // A request starts folded: its body is the other tab's reply, which that tab already shows. Feedback starts open: it is what this tab acts on.
-function ReviewCard({ id, text, review }: { id: string; text: string; review: Review }) {
+function ReviewCard({ id, review }: { id: string; review: Review }) {
   const preview = review.reply.split('\n').find(line => line.trim())?.replace(/^#+\s*/, '')
-  return <LongPressMenu text={text}>{press => <details className="peer-message review-message" data-msg-id={id} open={review.feedback} {...press}>
+  return <details className="peer-message review-message" data-msg-id={id} open={review.feedback}>
     <summary><Eye size={15} /><strong>{review.feedback ? `Review from ${review.tab}` : `Review request · ${review.name || review.tab}`}</strong>{review.last && <span className="badge">Last round</span>}<span className="peer-preview">{preview}</span><ChevronRight size={15} /></summary>
     <p className="review-meta">{review.feedback
       ? 'Tether sent the reviewer tab’s reply here. This tab fixes what it raises.'
       : `The ${review.agent} tab ${review.tab} finished a turn. Reply APPROVED, or list what is wrong. Tether sends your reply to that tab.`}</p>
     <div className="review-quote"><Linked text={review.reply} /></div>
     {review.transcript && <p className="review-meta review-path" title={review.transcript}>{review.transcript}</p>}
-  </details>}</LongPressMenu>
+  </details>
 }
-// Long-press a message: Copy, Share or Select text (touch screens select nothing by themselves, so a scroll never starts a selection).
-type PressHandlers = Pick<React.HTMLAttributes<HTMLElement>, 'onTouchStart' | 'onTouchMove' | 'onTouchEnd' | 'onTouchCancel' | 'onContextMenu'>
-function LongPressMenu({ text, children }: { text: string; children: (handlers: PressHandlers) => React.ReactNode }) {
-  const [open, setOpen] = useState<'' | 'menu' | 'select'>('')
-  const timer = useRef(0)
-  const start = useRef<{ x: number; y: number } | null>(null)
-  const touched = useRef(0)
-  const cancel = () => { clearTimeout(timer.current); start.current = null }
-  const handlers: PressHandlers = {
-    onTouchStart: event => {
-      touched.current = Date.now()
-      if (event.touches.length !== 1 || (event.target as HTMLElement).closest('button, a, summary, dialog, pre, code')) return
-      start.current = { x: event.touches[0].clientX, y: event.touches[0].clientY }
-      timer.current = window.setTimeout(() => { start.current = null; navigator.vibrate?.(8); setOpen('menu') }, 480)
-    },
-    onTouchMove: event => { const at = start.current; if (at && Math.hypot(event.touches[0].clientX - at.x, event.touches[0].clientY - at.y) > 10) cancel() },
-    onTouchEnd: cancel, onTouchCancel: cancel,
-    onContextMenu: event => { if (Date.now() - touched.current < 1500) event.preventDefault() },  // keep the right-click menu on a desktop
-  }
-  useEffect(() => () => clearTimeout(timer.current), [])
-  return <>{children(handlers)}{open && <MessageMenu text={text} mode={open} onSelect={() => setOpen('select')} onClose={() => setOpen('')} />}</>
-}
-// Select text shows what the message reads as, not its Markdown marks: no **, backticks or # heading marks.
-const readableText = (text: string) => text
-  .replace(/^```[^\n]*\n?/gm, '')
-  .replace(/^#{1,6}\s+/gm, '')
-  .replace(/\*\*(.+?)\*\*/g, '$1').replace(/__(.+?)__/g, '$1')
-  .replace(/`([^`\n]+)`/g, '$1')
-  .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '$1 ($2)')
-function MessageMenu({ text, mode, onSelect, onClose }: { text: string; mode: 'menu' | 'select'; onSelect: () => void; onClose: () => void }) {
-  const modal = useModal(true, onClose)
-  const [note, setNote] = useState('')
-  return <dialog {...modal} className="sheet message-menu" aria-label={mode === 'select' ? 'Select text' : 'Message options'}>
-    {mode === 'select'
-      ? <><div className="sheet-heading"><h2>Select text</h2><button type="button" className="icon-button" aria-label="Close" onClick={onClose}><X /></button></div><div className="select-text" tabIndex={0}>{readableText(text)}</div></>
-      : <div className="action-list">
-          <button type="button" onClick={() => navigator.clipboard.writeText(text).then(onClose, () => setNote('Could not copy. Use Select text.'))}><Copy size={18} />Copy</button>
-          {typeof navigator.share === 'function' && <button type="button" onClick={() => { navigator.share({ text }).catch(() => {}); onClose() }}><Share2 size={18} />Share</button>}
-          <button type="button" onClick={onSelect}><TextSelect size={18} />Select text</button>
-          {note && <p className="error" role="alert">{note}</p>}
-        </div>}
-  </dialog>
+// On a touch screen, a long press selects text in place. While a selection is in a message, this offers the whole message.
+export function SelectionCopy({ messages }: { messages: { id: string; text: string }[] }) {
+  const [id, setId] = useState('')
+  useEffect(() => {
+    if (!window.matchMedia('(pointer: coarse)').matches) return
+    let timer = 0
+    const changed = () => {
+      clearTimeout(timer)
+      const selection = window.getSelection()
+      const node = selection && !selection.isCollapsed ? selection.anchorNode : null
+      const element = node instanceof Element ? node : node?.parentElement
+      const next = element?.closest('.assistant-message, .user-message, .peer-message')?.closest('[data-msg-id]')?.getAttribute('data-msg-id')
+      // A tap on the button can clear the selection just before its click arrives, so the button stays a moment.
+      if (next) setId(next); else timer = window.setTimeout(() => setId(''), 300)
+    }
+    document.addEventListener('selectionchange', changed)
+    return () => { clearTimeout(timer); document.removeEventListener('selectionchange', changed) }
+  }, [])
+  const text = messages.find(message => message.id === id)?.text
+  return text ? <div className="selection-copy" onMouseDown={event => event.preventDefault()}><CopyButton text={text} label="Copy whole message" className="copy-chip" wide /></div> : null
 }
 // Copy with a short "Copied" confirmation. The Clipboard API needs HTTPS, which Tailscale Serve gives us.
-export function CopyButton({ text, label, className = 'icon-button', wide = false }: { text: string; label: string; className?: string; wide?: boolean }) {
+export function CopyButton({ text, label, className = 'icon-button', wide = false }: { text: string | (() => string); label: string; className?: string; wide?: boolean }) {
   const [done, setDone] = useState<'' | 'ok' | 'fail'>('')
   useEffect(() => { if (!done) return; const timer = setTimeout(() => setDone(''), 1500); return () => clearTimeout(timer) }, [done])
   return <button type="button" className={className} aria-label={done === 'ok' ? 'Copied' : label} title={label}
-    onClick={() => copyText(text).then(() => setDone('ok'), () => setDone('fail'))}>
+    onClick={() => copyText(typeof text === 'string' ? text : text()).then(() => setDone('ok'), () => setDone('fail'))}>
     {done === 'ok' ? <Check size={16} /> : <Copy size={16} />}{className !== 'icon-button' && <span>{done === 'ok' ? 'Copied' : done === 'fail' ? 'Failed' : wide ? label : 'Copy'}</span>}
   </button>
 }
@@ -219,7 +196,22 @@ function SpeakButton({ text }: { text: string }) {
 function CodeHeader({ language, code }: { language: string | undefined; code: string }) {
   return <div className="code-header"><span>{language || 'code'}</span><CopyButton text={code} label="Copy code" className="code-copy" /></div>
 }
-export function Markdown() { return <MarkdownTextPrimitive remarkPlugins={[remarkGfm, remarkPaths]} smooth={false} components={{ CodeHeader, code: InlineCode, a: Link }} /> }
+// The text as it reads on screen, without the Copy controls of a code block inside. innerText needs the element on the page.
+function quoteText(quote: HTMLElement) {
+  const copy = quote.cloneNode(true) as HTMLElement
+  copy.querySelectorAll('button, .code-header').forEach(item => item.remove())
+  copy.style.cssText = 'position:fixed;left:-9999px;top:0;width:600px'
+  document.body.append(copy)
+  const text = copy.innerText.trim()
+  copy.remove()
+  return text
+}
+// Agents put text to paste somewhere else in a quote, so a quote gets its own Copy, like a code block.
+function QuoteBlock(props: React.ComponentProps<'blockquote'>) {
+  const quote = useRef<HTMLQuoteElement>(null)
+  return <div className="quote-block"><blockquote ref={quote} {...props} /><CopyButton text={() => quote.current ? quoteText(quote.current) : ''} label="Copy quote" className="copy-chip" /></div>
+}
+export function Markdown() { return <MarkdownTextPrimitive remarkPlugins={[remarkGfm, remarkPaths]} smooth={false} components={{ CodeHeader, code: InlineCode, a: Link, blockquote: QuoteBlock }} /> }
 export const convertMessage = (message: ChatMessage): ThreadMessageLike => ({
   id: message.id, role: message.role, content: message.text,
   metadata: { custom: { kind: message.kind, title: message.title, count: message.count, tools: message.tools, text: message.text, time: message.time } },

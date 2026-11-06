@@ -393,6 +393,9 @@ kbd { font-size: 12px; color: var(--muted); }
 .assistant-message :not(pre) > code { background: var(--bubble); padding: 2px 4px; border-radius: var(--radius-xs); }
 .assistant-message pre code { font-size: inherit; }
 .assistant-message blockquote { padding-left: 16px; margin: 18px 0; border-left: 2px solid var(--line); color: var(--muted); }
+.quote-block { margin: 18px 0; }
+.assistant-message .quote-block > blockquote { margin: 0; }
+.quote-block > .copy-chip { display: flex; width: fit-content; margin-top: 8px; }
 .assistant-message table { display: block; overflow-x: auto; border-collapse: collapse; max-width: 100%; font-family: inherit; margin: 16px 0; }
 .assistant-message td, .assistant-message th { padding: 8px 12px; border: 1px solid var(--line); text-align: left; }
 .assistant-message hr { border: 0; border-top: 1px solid var(--line); margin: 24px 0; }
@@ -607,10 +610,10 @@ dialog::backdrop { background: #11110e66; }
 .swipe-actions .swipe-delete { background: var(--danger); color: #fff; }
 @media (prefers-reduced-motion: reduce) { .swipe-row > .session-row { transition: none; } }
 
-/* Long-press menu and pull-to-load. On touch screens a press opens the menu, so the message text does not select itself. */
-@media (pointer: coarse) { .assistant-message, .user-message { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; } }
-.message-menu { -webkit-user-select: none; user-select: none; }
-.select-text { max-height: 60dvh; overflow: auto; margin: 0; padding: 14px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; font-size: 15px; line-height: 1.55; color: var(--text); background: var(--sidebar); border: 1px solid var(--line); border-radius: var(--radius); -webkit-user-select: text; user-select: text; }
+/* Whole-message copy, shown while a long press has text selected in a message. */
+.selection-copy { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); -webkit-user-select: none; user-select: none; }
+.selection-copy .copy-chip { white-space: nowrap; background: var(--surface); box-shadow: 0 2px 10px rgb(0 0 0 / .18); }
+.thread:has(.jump-button) .selection-copy { bottom: 66px; }
 .pull-note { display: flex; align-items: flex-end; justify-content: center; margin: 0; padding-bottom: 8px; overflow: hidden; font-size: 13px; color: var(--muted); }
 
 /* Mode menu above the mode pill; session details; reply times; model list refresh. */

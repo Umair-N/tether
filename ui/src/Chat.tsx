@@ -25,7 +25,7 @@ import { PaneTabs, movePill } from './PaneTabs'
 import { Elapsed, NoticeStack, formatElapsed } from './Notices'
 import type { NoticeVariant } from './Notices'
 import { State } from './NewSession'
-import { Linked, Message, convertMessage } from './Messages'
+import { Linked, Message, convertMessage, SelectionCopy } from './Messages'
 import { Composer } from './Composer'
 import { expandPlaceholders } from './pasteText'
 import { autoBlock } from './noticeText'
@@ -314,6 +314,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     if (start.mode === 'wait') {
       if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return
       if (Math.abs(dx) < Math.abs(dy) * 1.5) { swipe.current = null; return }  // a scroll, not a swipe
+      if (window.getSelection()?.toString()) { swipe.current = null; return }  // a long press, then a drag: it extends the selection
       start.mode = 'drag'; pull.current = null; setPulled(0)
       // A next-door pane not seen yet has no footer copy: show this pane's message box as a stand-in.
       for (const peek of [peekNext.current, peekPrevious.current]) {
@@ -759,7 +760,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
       {bang && <><div className="user-message"><span>{bangItem?.text ?? `!${bang.command}`}</span></div>
         <div className="assistant-message bang-run" role="status"><small><Terminal size={12} />Running{bang.seconds != null ? ` · ${bang.seconds}s` : ''}<button type="button" className="bang-stop" aria-label="Stop this command" disabled={!writable || acting} onClick={() => void sendKey('C-c')}><X size={13} />Stop</button></small><pre>{bang.output ? <Linked text={bang.output} /> : 'No output yet'}</pre></div></>}
       {state === 'Working' && preview && <div className="assistant-message reply-preview"><small>typing</small><div>{preview}</div></div>}
-    </div></div>{jump && <button className="jump-button icon-button" aria-label="Jump to latest message" onClick={() => { sticky.current = true; setJump(false); viewport.current?.scrollTo({ top: viewport.current.scrollHeight }) }}><ArrowDown size={20} /></button>}</ThreadPrimitive.Root>
+    </div></div>{jump && <button className="jump-button icon-button" aria-label="Jump to latest message" onClick={() => { sticky.current = true; setJump(false); viewport.current?.scrollTo({ top: viewport.current.scrollHeight }) }}><ArrowDown size={20} /></button>}<SelectionCopy messages={messages} /></ThreadPrimitive.Root>
     {searching && <SearchSheet api={api} pane={activePane} shell={activePane.agent === 'shell'} onClose={() => setSearching(false)} onPick={(match, maxLimit) => {
       setSearching(false); setTerm(false); target.current = match.id; sticky.current = false; anchor.current = null
       const need = Math.min(maxLimit, Math.max(limit, match.from_end + 10))
