@@ -565,7 +565,7 @@ function markCurrent(options: ModelOptions, label?: string, effort?: string): Mo
   const match = name ? options.models.find(item => item.label.toLowerCase() === name) ?? options.models.find(item => item.label.toLowerCase().includes(name)) : undefined
   return { ...options, models: match ? options.models.map(item => ({ ...item, current: item.id === match.id })) : options.models, current_effort: effort ?? options.current_effort }
 }
-export function ModelSheet({ api, pane, thread, currentLabel, currentEffort, onClose, onDone }: { api: Api; pane: Pane; thread: string | null; currentLabel?: string; currentEffort?: string; onClose: () => void; onDone: (message: string) => void }) {
+export function ModelSheet({ api, pane, thread, currentLabel, currentEffort, onClose, onDone, onContinue }: { onContinue?: () => void; api: Api; pane: Pane; thread: string | null; currentLabel?: string; currentEffort?: string; onClose: () => void; onDone: (message: string) => void }) {
   const initial = cachedModels(pane.agent)
   const [data, setData] = useState<ModelOptions | null>(initial && markCurrent(initial, currentLabel, currentEffort))
   const [note, setNote] = useState('')
@@ -601,6 +601,7 @@ export function ModelSheet({ api, pane, thread, currentLabel, currentEffort, onC
   }
   return <dialog {...modal} className="sheet model-sheet" aria-labelledby="model-title">
     <div className="sheet-heading"><h2 id="model-title">Model</h2><button type="button" className="icon-button" aria-label="Close" disabled={busy} onClick={onClose}><X /></button></div>
+    {onContinue && (pane.agent === 'claude' || pane.agent === 'codex') && <button type="button" className="secondary create-button" disabled={busy || loading} onClick={onContinue}><ArrowRightLeft size={16} />Continue with…</button>}
     {pane.agent === 'claude' && <div className="settings-tabs model-tabs" role="tablist" aria-label="Model or Codex">
       {(['model', 'codex'] as const).map(item => <button type="button" role="tab" key={item} id={`model-tab-${item}`} aria-selected={view === item} aria-controls="model-panel" tabIndex={view === item ? 0 : -1} disabled={busy}
         onClick={() => setView(item)} onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); const next = item === 'model' ? 'codex' : 'model'; setView(next); document.getElementById(`model-tab-${next}`)?.focus() } }}>
