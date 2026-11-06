@@ -35,6 +35,7 @@ import live_usage
 import login_flow
 import saved_accounts
 import history
+import chat_hidden
 import live as live_state
 from terminal_input import resume_command, resume_session, rename_agent
 from terminal_input import stash_quiet_draft, restore_check, clear_unsent, prompt_draft
@@ -1249,6 +1250,27 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/mobile/api/usage':
                 # Only the sheet's Refresh starts a Codex check (at most one per 30 s); the 60 s sidebar poll reuses its result.
                 self.respond(200, usage_summary(live_age=30 if parse_qs(urlsplit(self.path).query).get('live') == ['1'] else float('inf')))
+            elif path == '/mobile/api/history/hidden':
+                hidden = chat_hidden.load()
+                index = history.all_chats()
+                by_key = {chat['agent'] + ':' + chat['id']: chat for chat in index}
+                directories = {}
+                for chat in index:
+                    folder = home_path(chat['cwd'])
+                    directories[folder] = directories.get(folder, 0) + 1
+                dirs = [{'dir': folder, 'count': directories.get(folder, 0)} for folder, _ in
+                        sorted(hidden['dirs'].items(), key=lambda item: item[1], reverse=True)]
+                chats = []
+                for key, _ in sorted(hidden['chats'].items(), key=lambda item: item[1], reverse=True):
+                    chat = by_key.get(key)
+                    if chat is not None:
+                        chats.append(dict(id=chat['id'], agent=chat['agent'], title=chat['title'],
+                                          dir=home_path(chat['cwd']) or None, time=chat['time']))
+                    if len(chats) == 200:
+                        break
+                self.respond(200, {'temporary': hidden['temporary'],
+                                   'temporaryCount': sum(chat_hidden.is_temporary(chat['cwd']) for chat in index),
+                                   'dirs': dirs, 'chats': chats})
             elif path == '/mobile/api/history':
                 query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
                 try:
@@ -1272,6 +1294,13 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 live = {entry['thread']: entry['id'] for entry in sessions() if entry.get('thread')}
                 index = history.all_chats()
+                hidden = chat_hidden.load()
+                hidden_count = (sum(chat['agent'] + ':' + chat['id'] in hidden['chats'] for chat in index)
+                                + len(hidden['dirs']) + (hidden['temporary'] == 'hidden'))
+                index = [chat for chat in index if chat['id'] in live or not (
+                    chat['agent'] + ':' + chat['id'] in hidden['chats']
+                    or home_path(chat['cwd']) in hidden['dirs']
+                    or hidden['temporary'] == 'hidden' and chat_hidden.is_temporary(chat['cwd']))]
                 filters = dict(q=query.get('q', [''])[0][:200], state=state, live=live, display_dir=home_path)
                 directory = query.get('dir', [None])[0]
                 matches = history.search_chats(index, agent=agent, dir=directory, **filters)
@@ -1280,11 +1309,14 @@ class Handler(BaseHTTPRequestHandler):
                           'claude': sum(chat['agent'] == 'claude' for chat in count_matches),
                           'codex': sum(chat['agent'] == 'codex' for chat in count_matches)}
                 directories = {}
+                temporary_dirs = set()
                 for chat in history.search_chats(index, agent=agent, **filters):
                     folder = home_path(chat['cwd'])
                     if folder:
                         directories[folder] = directories.get(folder, 0) + 1
-                dirs = [{'dir': folder, 'count': count} for folder, count in
+                        if chat_hidden.is_temporary(chat['cwd']):
+                            temporary_dirs.add(folder)
+                dirs = [{'dir': folder, 'count': count, 'temporary': folder in temporary_dirs} for folder, count in
                         sorted(directories.items(), key=lambda item: (-item[1], item[0]))[:30]]
                 chats = [dict(id=chat['id'], agent=chat['agent'], title=chat['title'],
                               dir=home_path(chat['cwd']) or None, time=chat['time'],
@@ -1292,7 +1324,8 @@ class Handler(BaseHTTPRequestHandler):
                          for chat in matches[offset:offset + limit]]
                 self.respond(200, {'chats': chats, 'total': len(matches),
                                    'next': offset + limit if offset + limit < len(matches) else None,
-                                   'counts': counts, 'dirs': dirs})
+                                   'counts': counts, 'dirs': dirs, 'temporary': hidden['temporary'],
+                                   'hiddenCount': hidden_count})
             elif path == '/mobile/api/push/config':
                 self.respond(200, {'supported': push.available(), 'publicKey': push.vapid_keys()[1] if push.available() else None, 'muted': push.muted(), 'levels': push.pane_levels(), 'delivery': push.delivery_settings()})
             elif path == '/mobile/api/search':
@@ -1413,7 +1446,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.close_connection = True
                     self.respond(403, {'error': 'Reload the page and try again.'})
             return
-        if self.path not in ('/mobile/api/file-check', '/mobile/api/ask-hook', '/mobile/api/ask-answer', '/mobile/api/ask-engage', '/mobile/api/message', '/mobile/api/broadcast', '/mobile/api/approval', '/mobile/api/menu', '/mobile/api/prompt-action', '/mobile/api/start', '/mobile/api/session', '/mobile/api/tmux-sessions', '/mobile/api/key', '/mobile/api/clear-draft', '/mobile/api/unqueue', '/mobile/api/mode', '/mobile/api/type',
+        if self.path not in ('/mobile/api/history/hide', '/mobile/api/file-check', '/mobile/api/ask-hook', '/mobile/api/ask-answer', '/mobile/api/ask-engage', '/mobile/api/message', '/mobile/api/broadcast', '/mobile/api/approval', '/mobile/api/menu', '/mobile/api/prompt-action', '/mobile/api/start', '/mobile/api/session', '/mobile/api/tmux-sessions', '/mobile/api/key', '/mobile/api/clear-draft', '/mobile/api/unqueue', '/mobile/api/mode', '/mobile/api/type',
                          '/mobile/api/push/subscribe', '/mobile/api/push/unsubscribe', '/mobile/api/push/test', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/shortcuts', '/mobile/api/prefs', '/mobile/api/codex-provider', '/mobile/api/model-options', '/mobile/api/model', '/mobile/api/rename', '/mobile/api/merge', '/mobile/api/shell', '/mobile/api/upload', '/mobile/api/transcribe', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/delegate', '/mobile/api/agent-tab', '/mobile/api/continue-preview', '/mobile/api/continue', '/mobile/api/review-stop', '/mobile/api/review-link', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/refresh', '/mobile/api/accounts/switch') and not browser_api.handles(self.path) and not projects_api.handles(self.path) and not codex_level.handles(self.path) and not tts.handles(self.path) and not friday_proxy.handles(self.path) and not live_mode.handles(self.path):
             self.respond(404, {'error': 'Not found'})
             return
@@ -1458,6 +1491,18 @@ class Handler(BaseHTTPRequestHandler):
             message = body.get('message') if isinstance(body, dict) else None
             if not isinstance(body, dict):
                 raise ValueError('Invalid request.')
+            if self.path == '/mobile/api/history/hide':
+                kind = body.get('kind')
+                if kind == 'chat':
+                    chat_hidden.set_chat(body.get('agent'), body.get('id'), body.get('hidden'))
+                elif kind == 'dir':
+                    chat_hidden.set_dir(body.get('dir'), body.get('hidden'))
+                elif kind == 'temporary':
+                    chat_hidden.set_temporary(body.get('mode'))
+                else:
+                    raise ValueError('Choose chat, dir, or temporary for kind.')
+                self.respond(200, {'ok': True})
+                return
             if self.path == agent_tabs.PATH:
                 agent_tabs.serve(self, body, sessions=sessions, folder=agent_folder, snapshot=snapshot,
                                  last_reply=last_reply, run=subprocess.run, lock=SEND_LOCK)
@@ -1770,6 +1815,10 @@ class Handler(BaseHTTPRequestHandler):
                         return
                     result = subprocess.run([paths.TMUX, 'display-message', '-p', '-t', pane, '#{session_id}'],
                                             check=True, capture_output=True, text=True, timeout=5)
+                try:
+                    chat_hidden.set_chat(agent, chat['id'], False)
+                except OSError as exc:  # The chat is open by now, so this must not report a failed resume.
+                    print(f'Could not unhide a resumed chat: {exc}', file=sys.stderr, flush=True)
                 self.respond(201, {'session': result.stdout.strip(), 'pane': pane, 'name': name})
                 return
             if self.path == '/mobile/api/push/mute':
@@ -1898,7 +1947,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.respond(200, {'accepted': True, 'delivery': send_text(config, message)})
         except (ValueError, UnicodeError) as exc:
-            self.respond(400, {'error': str(exc) if self.path in ('/mobile/api/session', '/mobile/api/broadcast', '/mobile/api/merge', '/mobile/api/model', '/mobile/api/shell', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/delegate', '/mobile/api/agent-tab', '/mobile/api/continue-preview', '/mobile/api/continue', '/mobile/api/review-stop', '/mobile/api/review-link', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/mode', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/menu', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/refresh', '/mobile/api/accounts/switch') else 'Invalid message.'})
+            self.respond(400, {'error': str(exc) if self.path in ('/mobile/api/history/hide', '/mobile/api/session', '/mobile/api/broadcast', '/mobile/api/merge', '/mobile/api/model', '/mobile/api/shell', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/delegate', '/mobile/api/agent-tab', '/mobile/api/continue-preview', '/mobile/api/continue', '/mobile/api/review-stop', '/mobile/api/review-link', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/mode', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/menu', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/refresh', '/mobile/api/accounts/switch') else 'Invalid message.'})
         except (OSError, RuntimeError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
             # The journal keeps why a send was refused; the access log shows only "503".
             print(f'{self.path} refused: {type(exc).__name__}: {str(exc)[:200]}', file=sys.stderr, flush=True)

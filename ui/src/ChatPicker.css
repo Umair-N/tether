@@ -84,3 +84,10 @@
 .sm-trigger.resume-place { margin: 9px 0 24px; }
 .cp-empty .link-button, .cp-error .link-button, .group-empty .link-button { display: inline; min-height: 0; padding: 0; border: 0; background: none; color: var(--accent); font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .past-list .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+
+/* Remove a past chat from a list. Always there on touch; on a pointer it shows with the row. */
+.row-remove { display: flex; flex: none; align-items: center; justify-content: center; width: 30px; height: 30px; margin-inline-end: 3px; border-radius: 7px; color: var(--muted); }
+.row-remove:hover { background: var(--line); color: var(--text); }
+.row-remove:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+@media (pointer: fine) { li:not(:hover, :focus-within) > .row-remove, .session-row:not(:hover, :focus-within) > .row-remove { opacity: 0; } }
+.cp-undo { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 8px; margin: 0; padding: 5px 10px; border-radius: 9px; background: var(--hover); color: var(--muted); font-size: 12.5px; }

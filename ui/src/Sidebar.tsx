@@ -12,7 +12,7 @@ import { CodexProviderSwitch } from './CodexProvider'
 import { profileSuffix } from './provider'
 import type { Prefs } from './prefs'
 import { DRAG_CHAT, DRAG_PANE, DRAG_SESSION } from './workspace'
-import { resumeChat, resumeInNewSession, useChatHistory } from './ChatPicker'
+import { resumeChat, resumeInNewSession, useChatHistory, useRemovedChat } from './ChatPicker'
 import type { ResumeTarget } from './ChatPicker'
 import { shareUsage } from './usage'
 import { useHost } from './host'
@@ -501,7 +501,9 @@ function PastChats({ api, search, showPaths, onPick, sessions, drag, onCarry, on
   const [settled, setSettled] = useState('')
   const typed = text.trim()
   useEffect(() => { const timer = setTimeout(() => setSettled(typed), 180); return () => clearTimeout(timer) }, [typed])
-  const { chats, data, error, loading, refresh, next, loadMore, loadingMore } = useChatHistory(api, { agent, q: [search, settled].filter(Boolean).join(' '), dir })
+  const { chats, data, error, loading, refresh, next, loadMore, loadingMore, setChatHidden, foldersChanged } = useChatHistory(api, { agent, q: [search, settled].filter(Boolean).join(' '), dir })
+  const [failure, setFailure] = useState('')
+  const removed = useRemovedChat(setChatHidden, setFailure)
   const carryFor = (chat: PastChat): Carry => {
     const owner = chat.pane ? sessions.find(session => session.panes.some(pane => pane.id === chat.pane)) : undefined
     return owner && chat.pane ? { session: owner.id, pane: chat.pane } : { session: '', chat }
@@ -523,16 +525,18 @@ function PastChats({ api, search, showPaths, onPick, sessions, drag, onCarry, on
         <div className="cp-sources" role="radiogroup" aria-label="Agent">
           {PAST_SOURCES.map(([id, label]) => <button type="button" key={id} role="radio" aria-checked={agent === id} className={agent === id ? 'on' : ''} title={counts ? `${counts[id]} chats` : undefined} onClick={() => setAgent(id)}>{label}</button>)}
         </div>
-        <FolderMenu value={dir} folders={folders} onChange={setDir} />
+        <FolderMenu api={api} value={dir} folders={folders} mode={data?.temporary} hiddenCount={data?.hiddenCount} onChange={setDir} onChanged={foldersChanged} onError={setFailure} onRemoved={removed.noteFolder} />
       </div>
     </div>
+    {failure && <p className="error cp-error" role="alert">{failure}</p>}
+    {removed.bar}
     {error ? <div className="sidebar-error" role="alert">{error}<button onClick={() => void refresh()}>Retry</button></div>
       : loading && !chats.length ? <p className="group-empty">Loading past chats…</p>
       : !chats.length ? <p className="group-empty">{filtered ? 'No past chats match.' : 'No past chats found.'}{filtered && <> <button type="button" className="link-button" onClick={() => { setText(''); setAgent('all'); setDir('') }}>Clear filters</button></>}</p>
       : <ul className="session-list past-list">{chats.map(chat => <li key={chat.agent + chat.id}><div className="session-row"><button className="session-main" {...dragProps(chat)} onClick={() => onPick(chat)} onTouchStart={event => onHold(event, carryFor(chat), chat.title || 'Untitled chat', () => onPick(chat))}>
         <span className="session-icon" title={agentNames[chat.agent]}><AgentIcon agent={chat.agent} size={16} /><span className="visually-hidden">{agentNames[chat.agent]}: </span></span>
         <span className="session-text"><span className="session-title">{chat.title || 'Untitled chat'}</span><span className="past-meta"><span>{chat.live ? 'Open now · ' : ''}{ago(chat.time)}</span>{showPaths && chat.dir && <span className="session-folder"><bdi dir="ltr">{chat.dir}</bdi></span>}</span></span>
-      </button></div></li>)}</ul>}
+      </button>{!chat.live && <button type="button" className="row-remove" aria-label={`Remove ${chat.title || 'this chat'} from the list`} title="Remove from the list" onClick={() => removed.remove(chat)}><X size={14} aria-hidden="true" /></button>}</div></li>)}</ul>}
     {next !== null && !error && <button type="button" className="past-more" disabled={loadingMore} onClick={() => void loadMore().catch(() => undefined)}>{loadingMore ? 'Loading…' : 'Show older chats'}</button>}
   </>
 }

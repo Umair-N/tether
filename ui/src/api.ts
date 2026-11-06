@@ -159,7 +159,10 @@ export interface Attention { id: string; text: string; reason: 'menu' | 'prompt'
   promptId?: string; revision?: string; requiresResponse?: boolean; body?: string; hints?: string[]; actions?: PromptAction[]; title?: string; subtitle?: string; items?: PickerItem[]; more_above?: number; more_below?: number; hint?: string; question?: string; options?: Choice[]; choice?: ChoiceState; ask?: { id: string; questions: AskQuestion[] }; askBridge?: AskBridge; ask_current?: AskCurrent; login?: { url: string; code: boolean; user_code?: string; message?: string } }
 export type ChatAgent = 'claude' | 'codex'
 export interface PastChat { id: string; agent: ChatAgent; title: string; dir: string | null; time: string; live: boolean; pane: string | null }
-export interface HistoryData { chats: PastChat[]; total: number; next: number | null; counts: { all: number; claude: number; codex: number }; dirs: { dir: string; count: number }[] }
+export type TemporaryMode = 'collapsed' | 'open' | 'hidden'
+export interface HistoryDir { dir: string; count: number; temporary?: boolean }
+export interface HiddenData { temporary: TemporaryMode; temporaryCount: number; dirs: { dir: string; count: number }[]; chats: { id: string; agent: ChatAgent; title: string; dir: string | null; time: string }[] }
+export interface HistoryData { chats: PastChat[]; total: number; next: number | null; counts: { all: number; claude: number; codex: number }; dirs: HistoryDir[]; temporary?: TemporaryMode; hiddenCount?: number }
 export interface UsageWindow { label: string; percent: number; resets_at: number | null }
 export interface UsageReport { windows: UsageWindow[]; reported_at: string | number | null; source?: 'live' }
 export interface SavedAccount { number: number; email: string | null; org?: string | null; plan?: string | null; active: boolean; disabled?: boolean; windows: { label: string; percent: number; resets_at: string | null }[] }

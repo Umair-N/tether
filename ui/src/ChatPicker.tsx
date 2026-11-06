@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowRightToLine, LoaderCircle, Search, TerminalSquare } from 'lucide-react'
+import { ArrowRightToLine, LoaderCircle, Search, TerminalSquare, X } from 'lucide-react'
 import { ApiError, errorText } from './api'
 import type { Api, ChatAgent, HistoryData, Pane, PastChat, SessionsData } from './api'
 import { usePolling } from './hooks'
@@ -54,12 +54,16 @@ interface HistoryFilter { agent: 'all' | ChatAgent; q: string; dir: string; stat
 
 /** One page of past chats that stays fresh, plus older pages on request. New filters start over. */
 export function useChatHistory(api: Api, { agent, q, dir, state = 'all', off }: HistoryFilter) {
+  // A folder change alters every page, so it starts the list over.
+  const [version, setVersion] = useState(0)
   const query = useMemo(() => {
     const params = new URLSearchParams({ limit: String(PAGE), agent, state })
     if (q) params.set('q', q)
     if (dir) params.set('dir', dir)
+    if (version) params.set('v', String(version))
     return params.toString()
-  }, [agent, q, dir, state])
+  }, [agent, q, dir, state, version])
+  const [gone, setGone] = useState<ReadonlySet<string>>(new Set())
   const fetcher = useCallback((signal: AbortSignal) => off
     ? Promise.resolve<HistoryData>({ chats: [], total: 0, next: null, counts: { all: 0, claude: 0, codex: 0 }, dirs: [] })
     : api<HistoryData>(`history?${query}`, undefined, signal), [api, query, off])
@@ -69,16 +73,37 @@ export function useChatHistory(api: Api, { agent, q, dir, state = 'all', off }: 
   const extra = more.query === query ? more : { query, chats: [], next: null }
   const next = extra.chats.length ? extra.next : data?.next ?? null
   const seen = new Set<string>()
-  const chats = [...(data?.chats ?? []), ...extra.chats].filter(chat => { const key = chat.agent + chat.id; if (seen.has(key)) return false; seen.add(key); return true })
+  const chats = [...(data?.chats ?? []), ...extra.chats].filter(chat => { const key = chat.agent + chat.id; if (seen.has(key) || gone.has(key)) return false; seen.add(key); return true })
   const loadMore = async () => {
     if (next === null || loadingMore) return
     setLoadingMore(true)
     try {
-      const page = await api<HistoryData>(`history?${query}&offset=${next}`)
+      // The count of shown rows, not `next`: a removed row moves every later chat up by one.
+      const page = await api<HistoryData>(`history?${query}&offset=${chats.length}`)
       setMore({ query, chats: [...extra.chats, ...page.chats], next: page.next })
     } finally { setLoadingMore(false) }
   }
-  return { chats, data, error, loading, refresh, next, loadMore, loadingMore }
+  const setChatHidden = async (chat: Pick<PastChat, 'id' | 'agent'>, hidden: boolean) => {
+    const key = chat.agent + chat.id
+    const mark = (on: boolean) => setGone(current => { const copy = new Set(current); if (on) copy.add(key); else copy.delete(key); return copy })
+    mark(hidden)
+    try { await api('history/hide', { kind: 'chat', agent: chat.agent, id: chat.id, hidden }) } catch (failure) { mark(!hidden); throw failure }
+    void refresh()
+  }
+  return { chats, data, error, loading, refresh, next, loadMore, loadingMore, setChatHidden, foldersChanged: () => setVersion(value => value + 1) }
+}
+
+/** The last removed chat or folder, with Undo. Removal only hides: the transcript stays on disk. */
+export function useRemovedChat(setChatHidden: (chat: PastChat, hidden: boolean) => Promise<void>, onError: (message: string) => void) {
+  const [last, setLast] = useState<{ text: string; undo: () => Promise<unknown> } | null>(null)
+  useEffect(() => { if (!last) return; const timer = setTimeout(() => setLast(null), 10000); return () => clearTimeout(timer) }, [last])
+  const remove = (chat: PastChat) => {
+    setLast({ text: 'Chat removed from the list', undo: () => setChatHidden(chat, false) })
+    setChatHidden(chat, true).catch(failure => { setLast(null); onError(errorText(failure)) })
+  }
+  const noteFolder = (text: string, undo: () => Promise<unknown>) => setLast({ text, undo })
+  const bar = last && <p className="cp-undo" role="status"><span>{last.text}</span><button type="button" className="link-button" onClick={() => { setLast(null); last.undo().catch(failure => onError(errorText(failure))) }}>Undo</button></p>
+  return { remove, noteFolder, bar }
 }
 
 type Source = 'all' | ChatAgent | 'tabs'
@@ -123,8 +148,10 @@ export function ChatPicker({ api, exclude, here, onChat, onTab, onMove, disabled
     if (source !== 'tabs') for (const item of history.data?.dirs ?? []) counts.set(item.dir, item.count)
     for (const pane of allTabs) if (pane.dir) counts.set(pane.dir, (counts.get(pane.dir) ?? 0) + 1)
     if (dir && !counts.has(dir)) counts.set(dir, 0)
-    return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([path, count]) => ({ dir: path, count }))
+    const flags = new Map((history.data?.dirs ?? []).map(item => [item.dir, item.temporary]))
+    return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([path, count]) => ({ dir: path, count, temporary: flags.get(path) }))
   }, [history.data?.dirs, allTabs, source, dir])
+  const removed = useRemovedChat(history.setChatHidden, setFailure)
   const groups = useMemo(() => {
     const list: { label: string; chats: PastChat[] }[] = []
     for (const chat of history.chats) {
@@ -165,9 +192,10 @@ export function ChatPicker({ api, exclude, here, onChat, onTab, onMove, disabled
       <div className="cp-sources" role="radiogroup" aria-label="Show">
         {SOURCES.map(item => <button type="button" key={item.id} role="radio" aria-checked={source === item.id} className={source === item.id ? 'on' : ''} onClick={() => setSource(item.id)}>{item.label}</button>)}
       </div>
-      <FolderMenu value={dir} folders={folders} onChange={setDir} />
+      <FolderMenu api={api} value={dir} folders={folders} mode={history.data?.temporary} hiddenCount={history.data?.hiddenCount} onChange={setDir} onChanged={history.foldersChanged} onError={setFailure} onRemoved={removed.noteFolder} />
     </div>
     {failure && <p className="error cp-error" role="alert">{failure}</p>}
+    {removed.bar}
     <div className="cp-list" tabIndex={-1}>
       {history.error && source !== 'tabs' && <p className="error cp-error" role="alert">{history.error} <button type="button" className="link-button" onClick={() => void history.refresh()}>Retry</button></p>}
       {shownTabs.length > 0 && <section><h3>Open tabs</h3><ul>{shownTabs.map(pane => <li key={pane.id}>
@@ -184,6 +212,7 @@ export function ChatPicker({ api, exclude, here, onChat, onTab, onMove, disabled
           <span className="cp-text"><span className="cp-title">{chat.title || 'Untitled chat'}</span><span className="cp-meta"><span className="cp-agent">{agentNames[chat.agent]}</span>{chat.dir && <bdi dir="ltr">{chat.dir}</bdi>}</span></span>
           <span className="cp-end">{busy === key ? <LoaderCircle size={14} className="task-spin" aria-label="Opening" /> : ago(chat.time)}</span>
         </button>
+        <button type="button" className="row-remove" disabled={!!busy} aria-label={`Remove ${chat.title || 'this chat'} from the list`} title="Remove from the list" onClick={() => removed.remove(chat)}><X size={14} aria-hidden="true" /></button>
       </li> })}</ul></section>)}
       {history.next !== null && source !== 'tabs' && <button type="button" className="cp-more" disabled={history.loadingMore} onClick={() => void history.loadMore().catch(error => setFailure(errorText(error)))}>{history.loadingMore ? 'Loading…' : 'Show older chats'}</button>}
       {(history.loading || tabs.loading) && !shownTabs.length && !history.chats.length && <p className="cp-empty" role="status">Loading…</p>}

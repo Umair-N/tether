@@ -11,6 +11,7 @@ from unittest.mock import patch, Mock
 from urllib.parse import urlencode
 
 import history
+import chat_hidden
 import paths
 import server
 import terminal_input
@@ -24,6 +25,7 @@ class BackendTests(unittest.TestCase):
         self.folder = tempfile.TemporaryDirectory()
         self.addCleanup(self.folder.cleanup)
         self.root = Path(self.folder.name)
+        self.enterContext(patch.object(server.prefs_sync, 'FILE', self.root / 'prefs.json'))
         self.project = self.root / 'projects' / 'project'
         self.project.mkdir(parents=True)
         self.patch = patch.object(paths, 'CLAUDE', self.root)
@@ -508,7 +510,7 @@ class BackendTests(unittest.TestCase):
             body = get(q='api', limit=2)
             self.assertEqual((body['total'], body['next']), (4, 2))
             self.assertEqual(body['counts'], {'all': 4, 'claude': 2, 'codex': 2})
-            self.assertEqual(body['dirs'], [{'dir': '~/a', 'count': 2}, {'dir': '~/b', 'count': 1}])
+            self.assertEqual(body['dirs'], [{'dir': '~/a', 'count': 2, 'temporary': False}, {'dir': '~/b', 'count': 1, 'temporary': False}])
             self.assertEqual(body['chats'][0], dict(id=CHAT, agent='claude', title='API one', dir='~/a',
                                                   time='2026-04-01', live=True, pane='%12'))
             self.assertIsNone(body['chats'][1]['pane'])
@@ -521,10 +523,10 @@ class BackendTests(unittest.TestCase):
             body = get(q='api', agent='codex', dir='~/b')
             self.assertEqual([chat['id'] for chat in body['chats']], ['third'])
             self.assertEqual(body['counts'], {'all': 1, 'claude': 0, 'codex': 1})
-            self.assertEqual(body['dirs'], [{'dir': '~/a', 'count': 1}, {'dir': '~/b', 'count': 1}])
+            self.assertEqual(body['dirs'], [{'dir': '~/a', 'count': 1, 'temporary': False}, {'dir': '~/b', 'count': 1, 'temporary': False}])
             body = get(q='api', agent='codex', dir='~/a', state='closed')
             self.assertEqual(body['counts'], {'all': 1, 'claude': 0, 'codex': 1})
-            self.assertEqual(body['dirs'], [{'dir': '~/a', 'count': 1}, {'dir': '~/b', 'count': 1}])
+            self.assertEqual(body['dirs'], [{'dir': '~/a', 'count': 1, 'temporary': False}, {'dir': '~/b', 'count': 1, 'temporary': False}])
             body = get(q='api', agent='codex', state='open')
             self.assertEqual(body['chats'], [])
             self.assertEqual(body['counts'], {'all': 1, 'claude': 1, 'codex': 0})
@@ -546,8 +548,169 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(body['total'], 35)
         self.assertEqual(len(body['chats']), 30)
         self.assertEqual(len(body['dirs']), 30)
-        self.assertEqual(body['dirs'][0], {'dir': '/app/00', 'count': 1})
+        self.assertEqual(body['dirs'][0], {'dir': '/app/00', 'count': 1, 'temporary': False})
         self.run.assert_not_called()
+
+    def hidden_history(self):
+        status, body = self.request('/mobile/api/history', method='GET')
+        self.assertEqual(status, 200)
+        return body
+
+    def hide(self, **body):
+        self.assertEqual(self.request('/mobile/api/history/hide', body), (200, {'ok': True}))
+
+    def test_hide_chat_updates_all_history_fields_and_preserves_transcript(self):
+        transcript = self.transcript([{'type': 'user', 'cwd': '/Users/test/app',
+                                       'message': {'content': 'Keep these bytes'}}])
+        before = transcript.read_bytes()
+        self.entries.return_value = []
+        initial = self.hidden_history()
+        self.assertEqual(initial['total'], 1)
+        self.hide(kind='chat', agent='claude', id=CHAT, hidden=True)
+        hidden = self.hidden_history()
+        self.assertEqual((hidden['chats'], hidden['total'], hidden['next'], hidden['dirs']), ([], 0, None, []))
+        self.assertEqual(hidden['counts'], {'all': 0, 'claude': 0, 'codex': 0})
+        self.assertEqual(hidden['hiddenCount'], 1)
+        self.assertEqual(transcript.read_bytes(), before)
+        state_file = server.prefs_sync.FILE.with_name('chat-hidden.json')
+        self.assertEqual(state_file.stat().st_mode & 0o777, 0o600)
+        self.hide(kind='chat', agent='claude', id=CHAT, hidden=False)
+        self.assertEqual(self.hidden_history(), initial)
+        self.run.assert_not_called()
+
+    def test_live_chats_remain_visible_for_every_hide_kind(self):
+        chats = [dict(id=CHAT, agent='claude', title='Live', cwd='/tmp/live', time=None)]
+        with patch.object(history, 'all_chats', return_value=chats):
+            self.hide(kind='chat', agent='claude', id=CHAT, hidden=True)
+            self.hide(kind='dir', dir='/tmp/live', hidden=True)
+            self.hide(kind='temporary', mode='hidden')
+            body = self.hidden_history()
+        self.assertEqual(body['total'], 1)
+        self.assertTrue(body['chats'][0]['live'])
+        self.assertEqual(body['hiddenCount'], 3)
+        self.assertEqual(body['dirs'], [{'dir': '/tmp/live', 'count': 1, 'temporary': True}])
+
+    def test_hide_folder_and_temporary_filter_before_search_and_paging(self):
+        chats = [dict(id=CHAT, agent='claude', title='Folder', cwd='/Users/test/app', time=None),
+                 dict(id=OTHER, agent='codex', title='Temporary', cwd='/tmp/work', time=None),
+                 dict(id='third', agent='codex', title='Keep', cwd='/tmpfoo', time=None)]
+        self.entries.return_value = []
+        with patch.object(history, 'all_chats', return_value=chats), \
+                patch.object(server.Path, 'home', return_value=Path('/Users/test')):
+            initial = self.hidden_history()
+            self.assertEqual(initial['temporary'], 'collapsed')
+            self.assertEqual(initial['hiddenCount'], 0)
+            self.assertEqual({item['dir']: item['temporary'] for item in initial['dirs']},
+                             {'~/app': False, '/tmp/work': True, '/tmpfoo': False})
+            self.hide(kind='dir', dir='~/app', hidden=True)
+            body = self.hidden_history()
+            self.assertEqual(body['total'], 2)
+            self.assertEqual(body['counts'], {'all': 2, 'claude': 0, 'codex': 2})
+            self.assertNotIn('~/app', [item['dir'] for item in body['dirs']])
+            self.hide(kind='temporary', mode='hidden')
+            body = self.hidden_history()
+            self.assertEqual([chat['id'] for chat in body['chats']], ['third'])
+            self.assertEqual((body['total'], body['next'], body['hiddenCount']), (1, None, 2))
+            self.assertEqual(body['counts'], {'all': 1, 'claude': 0, 'codex': 1})
+            self.assertEqual(body['dirs'], [{'dir': '/tmpfoo', 'count': 1, 'temporary': False}])
+            _, filtered = self.request('/mobile/api/history?agent=claude&dir=~/app', method='GET')
+            self.assertEqual((filtered['total'], filtered['counts']['all'], filtered['dirs']), (0, 0, []))
+            self.hide(kind='dir', dir='~/app', hidden=False)
+            for mode in ('open', 'collapsed'):
+                self.hide(kind='temporary', mode=mode)
+                restored = self.hidden_history()
+                self.assertEqual(restored['total'], 3)
+                self.assertEqual(restored['temporary'], mode)
+
+    def test_hidden_route_lists_existing_chats_and_folders_newest_first(self):
+        chats = [dict(id=CHAT, agent='claude', title='One', cwd='/Users/test/a', time='2026-01-01'),
+                 dict(id=OTHER, agent='codex', title='Two', cwd='/tmp/work', time=None)]
+        stale = '00000000-0000-0000-0000-000000000000'
+        with patch.object(chat_hidden.time, 'time', side_effect=[1, 2, 3, 4, 5]):
+            chat_hidden.set_chat('claude', CHAT, True)
+            chat_hidden.set_chat('codex', OTHER, True)
+            chat_hidden.set_chat('claude', stale, True)
+            chat_hidden.set_dir('/missing', True)
+            chat_hidden.set_dir('~/a', True)
+        with patch.object(history, 'all_chats', return_value=chats), \
+                patch.object(server.Path, 'home', return_value=Path('/Users/test')):
+            status, body = self.request('/mobile/api/history/hidden', method='GET')
+            self.assertEqual(self.hidden_history()['hiddenCount'], 4)
+        self.assertEqual(status, 200)
+        self.assertEqual(body, {'temporary': 'collapsed', 'temporaryCount': 1,
+                               'dirs': [{'dir': '~/a', 'count': 1}, {'dir': '/missing', 'count': 0}],
+                               'chats': [dict(id=OTHER, agent='codex', title='Two', dir='/tmp/work', time=None),
+                                         dict(id=CHAT, agent='claude', title='One', dir='~/a', time='2026-01-01')]})
+        self.assertIn('claude:' + stale, chat_hidden.load()['chats'])
+
+    def test_hide_rejects_bad_input_and_uses_write_guards(self):
+        invalid = [None, [], {}, {'kind': 'unknown'},
+                   {'kind': 'chat', 'agent': 'exec', 'id': CHAT, 'hidden': True},
+                   {'kind': 'chat', 'agent': [], 'id': CHAT, 'hidden': True},
+                   {'kind': 'chat', 'agent': 'claude', 'id': CHAT + 'x', 'hidden': True},
+                   {'kind': 'chat', 'agent': 'claude', 'id': None, 'hidden': True},
+                   {'kind': 'chat', 'agent': 'codex', 'id': CHAT, 'hidden': 1},
+                   {'kind': 'dir', 'dir': '', 'hidden': True},
+                   {'kind': 'dir', 'dir': ' ' , 'hidden': True},
+                   {'kind': 'dir', 'dir': None, 'hidden': True},
+                   {'kind': 'dir', 'dir': 'x' * 4097, 'hidden': True},
+                   {'kind': 'dir', 'dir': '~/app', 'hidden': 'false'},
+                   {'kind': 'temporary'}, {'kind': 'temporary', 'mode': 'invalid'},
+                   {'kind': 'temporary', 'mode': []}]
+        for body in invalid:
+            with self.subTest(body=body):
+                status, response = self.request('/mobile/api/history/hide', body)
+                self.assertEqual(status, 400)
+                self.assertIsInstance(response['error'], str)
+        valid = dict(kind='chat', agent='claude', id=CHAT, hidden=True)
+        for headers in ({'Origin': ''}, {'Origin': 'http://other.test'}, {'X-Codex-Mobile': ''}):
+            self.assertEqual(self.request('/mobile/api/history/hide', valid, headers=headers)[0], 403)
+        self.assertIsNone(self.request('/mobile/api/history/hide', valid, denied=True))
+        self.assertEqual(chat_hidden.load()['chats'], {})
+        self.assertIsNone(self.request('/mobile/api/history/hidden', method='GET', denied=True))
+
+    def test_resume_clears_only_individual_hidden_chat_after_success(self):
+        self.entries.return_value = []
+        self.codex_database([{}])
+        self.hide(kind='chat', agent='codex', id=CHAT, hidden=True)
+        self.hide(kind='chat', agent='claude', id=CHAT, hidden=True)
+        with patch.object(server.codex_provider, 'launch_profile', return_value=None):
+            self.run.side_effect = subprocess.CalledProcessError(1, 'tmux')
+            self.assertEqual(self.request('/mobile/api/resume', {'id': CHAT, 'agent': 'codex', 'name': 'past'})[0], 503)
+            self.assertIn('codex:' + CHAT, chat_hidden.load()['chats'])
+            self.run.side_effect = None
+            self.assertEqual(self.request('/mobile/api/resume', {'id': CHAT, 'agent': 'codex', 'name': 'past'})[0], 201)
+        self.assertNotIn('codex:' + CHAT, chat_hidden.load()['chats'])
+        self.assertIn('claude:' + CHAT, chat_hidden.load()['chats'])
+
+    def test_hidden_state_defaults_limits_and_temporary_boundaries(self):
+        defaults = {'chats': {}, 'dirs': {}, 'temporary': 'collapsed'}
+        self.assertEqual(chat_hidden.load(), defaults)
+        file = server.prefs_sync.FILE.with_name('chat-hidden.json')
+        for content in ('broken', '[]', 'null', '{"chats": [], "dirs": null, "temporary": "bad"}'):
+            file.write_text(content)
+            self.assertEqual(chat_hidden.load(), defaults)
+        chats = {f'claude:00000000-0000-0000-0000-{number:012x}': number for number in range(5001)}
+        dirs = {f'/Users/test/{number}': number for number in range(501)}
+        file.write_text(json.dumps(dict(chats=chats, dirs=dirs)))
+        state = chat_hidden.load()
+        self.assertEqual((len(state['chats']), len(state['dirs'])), (5000, 500))
+        self.assertNotIn(next(iter(chats)), state['chats'])
+        self.assertNotIn('/Users/test/0', state['dirs'])
+        chat_hidden.set_chat('codex', CHAT, True)
+        chat_hidden.set_dir('/Users/test/new', True)
+        state = chat_hidden.load()
+        self.assertEqual((len(state['chats']), len(state['dirs'])), (5000, 500))
+        self.assertIn('codex:' + CHAT, state['chats'])
+        self.assertIn('/Users/test/new', state['dirs'])
+        self.assertEqual(file.stat().st_mode & 0o777, 0o600)
+        with patch.object(chat_hidden.tempfile, 'gettempdir', return_value='/Users/test/custom-temp'):
+            for root in ('/tmp', '/private/tmp', '/var/folders', '/private/var/folders', '/Users/test/custom-temp'):
+                self.assertTrue(chat_hidden.is_temporary(root))
+                self.assertTrue(chat_hidden.is_temporary(root + '/child'))
+                self.assertFalse(chat_hidden.is_temporary(root + 'foo'))
+            for cwd in (None, '', 'tmp/child', '/Users/test/app', '/tmp/../Users/test'):
+                self.assertFalse(chat_hidden.is_temporary(cwd))
 
     def test_resume_codex_with_and_without_profile(self):
         self.entries.return_value = []

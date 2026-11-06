@@ -15,8 +15,12 @@
 .sm-search input::-webkit-search-cancel-button { display: none; }
 .sm-list { flex: 1; min-height: 0; padding: 4px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; outline: 0; }
 .sm-group { margin: 8px 8px 3px; color: var(--muted); font-size: 11.5px; font-weight: 500; }
-.sm-option { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 5px 8px; border-radius: 8px; cursor: pointer; }
-.sm-option.active { background: var(--hover); }
+.sm-row { display: flex; align-items: center; border-radius: 8px; }
+.sm-row.active { background: var(--hover); }
+.sm-option { display: flex; flex: 1; align-items: center; gap: 8px; min-width: 0; min-height: 34px; padding: 5px 8px; cursor: pointer; }
+.sm-trailing { display: flex; flex: none; align-items: center; justify-content: center; width: 28px; height: 28px; margin-inline-end: 3px; border-radius: 7px; color: var(--muted); }
+.sm-trailing:hover { background: var(--line); color: var(--text); }
+@media (pointer: fine) { .sm-row:not(.active, .pin) .sm-trailing { opacity: 0; } }
 .sm-check { display: flex; flex: none; width: 15px; color: var(--accent); }
 .sm-text { display: grid; flex: 1; min-width: 0; gap: 1px; }
 .sm-label, .sm-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -24,4 +28,4 @@
 .sm-detail { color: var(--muted); font-size: 11.5px; line-height: 1.35; }
 .sm-count { flex: none; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .sm-none { margin: 0; padding: 14px 10px; color: var(--muted); font-size: 13px; text-align: center; }
-@media (pointer: coarse) { .sm-option { min-height: 44px; } }
+@media (pointer: coarse) { .sm-option { min-height: 44px; } .sm-trailing { width: 36px; height: 36px; } }
