@@ -48,7 +48,7 @@ async function prepareFile(file: File): Promise<{ blob: Blob; name: string }> {
     return { blob, name: `${(file.name || 'photo').replace(/\.[^.]*$/, '') || 'photo'}${isPng ? '.png' : '.jpg'}` }
   } catch { return { blob: file, name: file.name || 'file' } }
 }
-async function uploadFile(file: File, session: string, thread: string | null): Promise<{ path: string; name: string }> {
+export async function uploadFile(file: File, session: string, thread: string | null): Promise<{ path: string; name: string }> {
   const { blob, name } = await prepareFile(file)
   const response = await fetch('/mobile/api/upload', { method: 'POST', body: blob, credentials: 'same-origin', headers: {
     'X-Codex-Mobile': '1', 'X-Session': session, 'X-Thread': thread ?? '', 'X-Filename': encodeURIComponent(name), 'Content-Type': blob.type || 'application/octet-stream' } })
