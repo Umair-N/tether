@@ -1,4 +1,5 @@
-import { createContext, useContext } from 'react'
+import { createContext, useCallback, useContext, useSyncExternalStore } from 'react'
+import { fileChecks } from './fileChecks'
 import { useIsMarkdownCodeBlock } from '@assistant-ui/react-markdown'
 
 // Paths an agent names in a reply (`shots/row-menu.png`, [clip](out/demo.mp4), src/App.tsx:42) open on the phone through
@@ -62,25 +63,37 @@ export function remarkPaths() {
 
 export const MediaOpener = createContext<((path: string, kind: Kind, line?: number) => void) | null>(null)
 
+export const FilePane = createContext<string | null>(null)
+
+function useFileState(path: string | undefined) {
+  const pane = useContext(FilePane)
+  const subscribe = useCallback((listener: () => void) => pane && path
+    ? fileChecks.subscribe(pane, path, listener) : () => {}, [pane, path])
+  const snapshot = useCallback(() => pane && path ? fileChecks.stateOf(pane, path) : 'closed', [pane, path])
+  return useSyncExternalStore(subscribe, snapshot, snapshot)
+}
+
 function useOpen(text: string) {
   const open = useContext(MediaOpener)
   const media = mediaPath(text)
-  return open && media ? () => open(media.path, media.kind, media.line) : null
+  const state = useFileState(media?.path)
+  return { media, open: open && media && (state === 'open' || state === 'unknown')
+    ? () => open(media.path, media.kind, media.line) : null }
 }
 
 export function InlineCode(props: React.ComponentProps<'code'>) {
   const block = useIsMarkdownCodeBlock()
   const text = typeof props.children === 'string' ? props.children : ''
-  const open = useOpen(block ? '' : text)
-  if (!open) return <code {...props} />
+  const { media, open } = useOpen(block ? '' : text)
+  if (!open) return <code {...props} className={media ? [props.className, 'file-chip'].filter(Boolean).join(' ') : props.className} />
   return <FileLink open={open} label={`Open ${text}`}><code {...props} /></FileLink>
 }
 
 export function Link({ href = '', children, ...props }: React.ComponentProps<'a'>) {
   const found = (props as Record<string, unknown>)['data-path'] as string | undefined
-  const open = useOpen(found ?? (/^(https?|mailto):/i.test(href) ? '' : safeDecode(href)))
+  const { media, open } = useOpen(found ?? (/^(https?|mailto):/i.test(href) ? '' : safeDecode(href)))
   if (open) return <FileLink open={open}>{children}</FileLink>
-  if (found) return <>{children}</>
+  if (found || media) return <span className="file-chip">{children}</span>
   return <a {...props} href={href} target="_blank" rel="noreferrer">{children}</a>
 }
 

@@ -17,7 +17,7 @@ import type { Session } from './Sidebar'
 import { ModelSheet, MuteItem, Tools, Usage } from './Sheets'
 import { ImageViewer } from './ImageViewer'
 import type { Media } from './ImageViewer'
-import { MediaOpener } from './MediaLink'
+import { FilePane, MediaOpener } from './MediaLink'
 import type { Kind } from './MediaLink'
 import { TextViewer } from './TextViewer'
 import { speak, stopSpeaking } from './speech'
@@ -740,7 +740,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
   const [hiddenNotices, setHiddenNotices] = useState<string[]>([])
   const visibleNotices = (footer.notices ?? []).filter(note => !hiddenNotices.includes(note))
   const hideNotice = (note: string) => setHiddenNotices(current => [...current.filter(item => (footer.notices ?? []).includes(item)), note])
-  return <AssistantRuntimeProvider runtime={runtime}><MediaOpener.Provider value={openMedia}><section ref={panelRef} className={activePane.agent === 'shell' && !term ? 'chat-panel shell-page' : 'chat-panel'} aria-label={`Chat with ${pane.label}`}>
+  return <AssistantRuntimeProvider runtime={runtime}><MediaOpener.Provider value={openMedia}><FilePane.Provider value={activePane.id}><section ref={panelRef} className={activePane.agent === 'shell' && !term ? 'chat-panel shell-page' : 'chat-panel'} aria-label={`Chat with ${pane.label}`}>
     <header className="chat-header" draggable={!!slot?.onDragStart} onDragStart={slot?.onDragStart} onTouchStart={event => {
       headerTouch.current = sidePin?.pinned && sidePin.total > 1 && event.touches.length === 1 ? { x: event.touches[0].clientX, y: event.touches[0].clientY } : null
     }} onTouchEnd={event => {
@@ -837,5 +837,5 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     </>}
     <ImageViewer image={opened} close={() => setOpened(null)} onShow={showInFiles(opened && !opened.error ? opened.name : null, () => setOpened(null))} />
     <TextViewer file={textFile} close={() => setTextFile(null)} onShow={showInFiles(textFile?.path ?? null, () => setTextFile(null))} />
-  </section></MediaOpener.Provider></AssistantRuntimeProvider>
+  </section></FilePane.Provider></MediaOpener.Provider></AssistantRuntimeProvider>
 }

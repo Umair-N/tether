@@ -52,6 +52,20 @@ def resolve(name, folder, home=None):
     return path, kind
 
 
+def openable(names, folder, home=None):
+    """Check file names without reading their contents."""
+    results = {}
+    for name in names:
+        if not isinstance(name, str):
+            continue
+        try:
+            resolve(name, folder, home)
+            results[name] = True
+        except ValueError:
+            results[name] = False
+    return results
+
+
 def byte_range(header, size):
     """(start, end) for a single 'bytes=a-b' Range header, None for the whole file. ValueError when unsatisfiable."""
     if not header or not header.startswith('bytes=') or ',' in header:

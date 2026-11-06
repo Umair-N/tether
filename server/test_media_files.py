@@ -3,6 +3,7 @@ from pathlib import Path
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import media_files as media
 
@@ -48,6 +49,17 @@ class MediaFileTests(unittest.TestCase):
                              ('link.png', 'proj'), ('/etc/hostname', 'proj'), ('../../x.png', 'proj'), ('missing.png', 'proj'), ('', 'proj')):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 self.open(name, folder)
+
+    def test_openable(self):
+        (self.home / 'proj/api-token.txt').write_text('secret')
+        (self.home / 'proj/escape.txt').symlink_to('/etc/hostname')
+        names = ['shot.png', 'missing.png', '../.ssh/key.png', 'api-token.txt',
+                 'link.png', 'escape.txt', 'notes.txt', None, 42, {}, []]
+        with patch.object(Path, 'open', side_effect=AssertionError('Must not read contents')):
+            self.assertEqual(media.openable(names, self.home / 'proj', self.home), {
+                'shot.png': True, 'missing.png': False, '../.ssh/key.png': False,
+                'api-token.txt': False, 'link.png': False, 'escape.txt': False, 'notes.txt': True,
+            })
 
     def test_byte_range(self):
         self.assertIsNone(media.byte_range(None, 100))
