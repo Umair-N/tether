@@ -53,7 +53,7 @@
 .pick-modes button[aria-selected="true"] { background: var(--surface); color: var(--text); font-weight: 500; box-shadow: 0 1px 2px #0000001f; }
 .pick-modes button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .sheet.popover.task-pop.opening { width: 460px; }
-.task-pop .task-open { display: grid; gap: 10px; padding: 14px 14px 6px; }
+.task-pop .task-open { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 14px 14px 6px; }
 .sheet.session-pick { padding-bottom: 12px; }
 .sheet.session-pick .cp-list { margin: 0 -14px; }
 .sheet.session-pick .sheet-heading { margin-bottom: 14px; }
