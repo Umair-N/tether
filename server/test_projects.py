@@ -86,7 +86,8 @@ class ProjectTests(unittest.TestCase):
         self.assertLess(text.index('## New tabs and reviewers'), text.index('## Notes'))
         self.assertIn(str(Path(projects.__file__).with_name('agent_tab_cli.py')), text)
         for option in ('--review-it', '--reviews-me', '--agent claude|codex', '--name NAME',
-                       '--cwd DIR', '--context', 'stop --worker %N [--reviewer %N]', '`list`', 'APPROVED'):
+                       '--cwd DIR', '--context', 'stop --worker %N [--reviewer %N]', '`list`',
+                       '`link --worker %N --reviewer %N` makes one open tab review another.', 'APPROVED'):
             self.assertIn(option, text)
         self.assertFalse(projects.has_context(PID, self.home))
         state = projects.state(PID, self.home)

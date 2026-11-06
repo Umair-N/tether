@@ -34,10 +34,12 @@ class AgentTabsTests(unittest.TestCase):
         self.enterContext(patch.object(server, 'agent_folder', return_value=str(self.root)))
         self.enterContext(patch.object(auth, 'session_value', return_value='test-credential'))
         self.run = self.enterContext(patch.object(server.subprocess, 'run'))
+        self.reply = self.enterContext(patch.object(server, 'last_reply', return_value='Work done.'))
+        self.status = self.enterContext(patch.object(agent_tabs, 'live_status', return_value={'state': 'Idle'}))
 
-    def request(self, payload, headers=None, peer='127.0.0.1', denied=False):
+    def request(self, payload, headers=None, peer='127.0.0.1', denied=False, path=agent_tabs.PATH):
         handler = object.__new__(server.Handler)
-        handler.path, handler.command = agent_tabs.PATH, 'POST'
+        handler.path, handler.command = path, 'POST'
         handler.client_address = (peer, 1234)
         encoded = json.dumps(dict({'session': '%12'}, **payload)).encode()
         handler.rfile = io.BytesIO(encoded)
@@ -50,6 +52,116 @@ class AgentTabsTests(unittest.TestCase):
 
     def link(self, worker='%12', reviewer='%13'):
         review_links.add(worker=worker, reviewer=reviewer, reviewer_thread=THREAD, name='task', agent='codex')
+
+    def test_link_pair_rejects_invalid_or_missing_panes(self):
+        for key in ('worker', 'reviewer'):
+            for value in (None, '', '12', '%12\n', '%12;pwd', 12, [], {}):
+                with self.subTest(key=key, value=value):
+                    body = {'worker': '%12', 'reviewer': '%13'}
+                    body[key] = value
+                    with self.assertRaisesRegex(ValueError, 'Select worker and reviewer tabs.'):
+                        agent_tabs.link_pair(body, self.entries, self.reply)
+            body = {'worker': '%12', 'reviewer': '%13'}
+            del body[key]
+            with self.assertRaisesRegex(ValueError, 'Select worker and reviewer tabs.'):
+                agent_tabs.link_pair(body, self.entries, self.reply)
+            body[key] = '%99'
+            with self.assertRaisesRegex(ValueError, 'That session has ended.'):
+                agent_tabs.link_pair(body, self.entries, self.reply)
+        self.assertEqual(review_links.reviewed_by(), {})
+        self.run.assert_not_called()
+
+    def test_link_pair_rejects_same_pane_and_unsupported_agents(self):
+        with self.assertRaisesRegex(ValueError, 'Choose different worker and reviewer tabs.'):
+            agent_tabs.link_pair({'worker': '%12', 'reviewer': '%12'}, self.entries, self.reply)
+        for index in (0, 1):
+            for agent in ('shell', 'antigravity', None):
+                with self.subTest(index=index, agent=agent):
+                    entries = [dict(entry) for entry in self.entries]
+                    entries[index]['agent'] = agent
+                    with self.assertRaisesRegex(ValueError, 'Review needs Claude or Codex tabs.'):
+                        agent_tabs.link_pair({'worker': '%12', 'reviewer': '%13'}, entries, self.reply)
+        self.assertEqual(review_links.reviewed_by(), {})
+
+    def test_link_pair_rejects_existing_and_reverse_links_without_replacing_them(self):
+        for worker, reviewer, message in (('%12', '%13', 'That review link already exists.'),
+                                          ('%13', '%12', 'Those tabs cannot review each other.')):
+            with self.subTest(worker=worker):
+                self.link(worker, reviewer)
+                before = (self.root / 'links.json').read_text()
+                with self.assertRaisesRegex(ValueError, message):
+                    agent_tabs.link_pair({'worker': '%12', 'reviewer': '%13'}, self.entries, self.reply)
+                self.assertEqual((self.root / 'links.json').read_text(), before)
+                review_links.remove(worker, reviewer)
+
+    def test_link_pair_records_names_threads_and_seen_working(self):
+        for thread in (THREAD, None, 'not-a-uuid', 1):
+            for names, expected in (({'pane_name': 'Pane', 'agent_name': 'Agent', 'label': 'Label'}, 'Pane'),
+                                     ({'agent_name': 'Agent', 'label': 'Label'}, 'Agent'),
+                                     ({'label': 'Label'}, 'Label')):
+                for reply, state, seen in (('Done.', 'Idle', True), ('Done.', 'Working', False),
+                                            ('', 'Idle', False), ('   ', 'Idle', False)):
+                    with self.subTest(thread=thread, names=names, reply=reply, state=state):
+                        entries = [dict(id='%12', agent='codex', **names),
+                                   dict(id='%13', agent='claude', thread=thread)]
+                        self.reply.return_value = reply
+                        self.status.return_value = {'state': state}
+                        self.assertEqual(agent_tabs.link_pair({'worker': '%12', 'reviewer': '%13'},
+                                                              entries, self.reply), {'linked': True})
+                        self.assertEqual(review_links.reviewed_by(), {'%12': ['%13']})
+                        link, = json.loads((self.root / 'links.json').read_text())
+                        self.assertEqual((link['name'], link['agent'], link['reviewer_thread'], link['seen_working']),
+                                         (expected, 'codex', THREAD if thread == THREAD else None, seen))
+                        self.reply.assert_called_with(entries[0])
+                        review_links.remove('%12')
+        self.run.assert_not_called()
+
+    def test_link_pair_uses_store_capacity_behavior(self):
+        with patch.object(review_links, 'MAX_LINKS', 2):
+            self.link(worker='%20', reviewer='%21')
+            self.link(worker='%22', reviewer='%23')
+            self.assertEqual(agent_tabs.link_pair({'worker': '%12', 'reviewer': '%13'},
+                                                  self.entries, self.reply), {'linked': True})
+        self.assertEqual(review_links.reviewed_by(), {'%22': ['%23'], '%12': ['%13']})
+
+    def test_link_action_allows_either_participant_and_rejects_other_tabs(self):
+        for caller in ('%12', '%13'):
+            with self.subTest(caller=caller):
+                self.assertEqual(self.request({'action': 'link', 'session': caller,
+                                               'worker': '%12', 'reviewer': '%13'}), (200, {'linked': True}))
+                self.assertEqual(review_links.reviewed_by(), {'%12': ['%13']})
+                review_links.remove('%12')
+        self.assertEqual(self.request({'action': 'link', 'session': '%14', 'worker': '%12', 'reviewer': '%13'}),
+                         (400, {'error': 'That review link is not on this tab.'}))
+        self.assertEqual(review_links.reviewed_by(), {})
+        self.run.assert_not_called()
+
+    def test_browser_and_agent_link_use_same_function_under_send_lock(self):
+        def link_pair(body, entries, last_reply):
+            self.assertTrue(server.SEND_LOCK.locked())
+            self.assertIs(entries, self.entries)
+            self.assertIs(last_reply, self.reply)
+            return {'linked': True}
+        with patch.object(agent_tabs, 'link_pair', side_effect=link_pair) as link:
+            for path in ('/mobile/api/review-link', agent_tabs.PATH):
+                self.assertEqual(self.request({'action': 'link', 'worker': '%12', 'reviewer': '%13'}, path=path),
+                                 (200, {'linked': True}))
+            self.assertEqual(link.call_count, 2)
+        self.run.assert_not_called()
+
+    def test_browser_link_route_success_errors_auth_and_size(self):
+        path = '/mobile/api/review-link'
+        self.assertIn(path, server.TMUX_WRITES)
+        self.assertEqual(self.request({'worker': '%12', 'reviewer': '%13'}, path=path), (200, {'linked': True}))
+        self.assertEqual(review_links.reviewed_by(), {'%12': ['%13']})
+        self.assertEqual(self.request({'worker': '%12', 'reviewer': '%13'}, path=path),
+                         (400, {'error': 'That review link already exists.'}))
+        for headers in ({'Origin': 'https://evil.test'}, {'X-Codex-Mobile': ''}):
+            self.assertEqual(self.request({'worker': '%12', 'reviewer': '%14'}, headers=headers, path=path)[0], 403)
+        self.assertIsNone(self.request({'worker': '%12', 'reviewer': '%14'}, denied=True, path=path))
+        self.assertEqual(self.request({'worker': '%12', 'reviewer': '%14', 'padding': 'x' * 65536}, path=path)[0], 413)
+        self.assertEqual(review_links.reviewed_by(), {'%12': ['%13']})
+        self.run.assert_not_called()
 
     def test_hook_auth_rejects_missing_wrong_and_nonlocal_credentials(self):
         with patch.object(delegate, 'start') as start:
@@ -206,6 +318,10 @@ class CLITests(unittest.TestCase):
         self.assertEqual(cli.main(['list']), 0)
         self.assertEqual(self.payload(), dict(action='list', session='%12'))
 
+    def test_link_builds_pair_body(self):
+        self.assertEqual(cli.main(['link', '--worker', '%13', '--reviewer', '%12']), 0)
+        self.assertEqual(self.payload(), dict(action='link', session='%12', worker='%13', reviewer='%12'))
+
     def test_missing_tmux_pane_never_opens_connection(self):
         with patch.dict(os.environ, {'TMUX_PANE': ''}):
             self.assertEqual(cli.main(['list']), 1)
@@ -215,7 +331,8 @@ class CLITests(unittest.TestCase):
 
     def test_invalid_arguments_return_one_with_tab_error(self):
         for args in (['start'], ['start', '--review-it'], ['start', '--review-it', '--reviews-me'],
-                     ['start', '--agent', 'shell', 'task'], ['stop'], ['unknown']):
+                     ['start', '--agent', 'shell', 'task'], ['stop'], ['link'],
+                     ['link', '--worker', '%12'], ['link', '--reviewer', '%13'], ['unknown']):
             with self.subTest(args=args):
                 self.stderr.seek(0)
                 self.stderr.truncate()

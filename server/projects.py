@@ -355,6 +355,7 @@ def render(pid, agent='claude', home=None):
                  'after each of its turns and sends your reply back), `--reviews-me` (the new tab reviews this tab), '
                  '`--agent claude|codex`, `--name NAME`, `--cwd DIR`, `--context`. '
                  '`stop --worker %N [--reviewer %N]` ends a review; `list` shows this tab\'s links. '
+                 '`link --worker %N --reviewer %N` makes one open tab review another. '
                  'Start your review reply with APPROVED when nothing is wrong.\n')
     parts.append(f'\n## Notes\nSave a project fact that other agents in this session need as a Markdown file in {folder}/notes/ '
                  '(one topic per file, a "# Title" first line). Keep your own memory as before. The user reviews notes in Tether.\n')

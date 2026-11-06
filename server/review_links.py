@@ -21,6 +21,7 @@ SEND_GAP = 6
 UUID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
 _lock = threading.Lock()
 _last_sent = {}
+_feedback_turns = {}
 
 
 def _read():
@@ -55,10 +56,18 @@ def add(*, worker, reviewer, reviewer_thread, name, agent, seen_working=False):
 
 
 def reviewed_by():
+    return _reviewers()
+
+
+def paused():
+    return _reviewers(paused_only=True)
+
+
+def _reviewers(*, paused_only=False):
     with _lock:
         result = {}
         for link in _read():
-            if isinstance(link, dict) and all(
+            if isinstance(link, dict) and (not paused_only or link.get('paused', False)) and all(
                     isinstance(link.get(key), str) and re.fullmatch(r'%[0-9]+', link[key])
                     for key in ('worker', 'reviewer')):
                 reviewers = result.setdefault(link['worker'], [])
@@ -83,7 +92,7 @@ def _digest(text):
     return hashlib.sha256((text or '').encode()).hexdigest()
 
 
-def _step(link, entries, status, send, last_reply, awaiting, clear):
+def _step(link, entries, status, send, last_reply, awaiting, clear, feedback_sent):
     worker = entries.get(link['worker'])
     reviewer = entries.get(link['reviewer'])
     if link['reviewer_thread'] is None:
@@ -103,6 +112,20 @@ def _step(link, entries, status, send, last_reply, awaiting, clear):
         elif thread != link['worker_thread']:
             return None
     state = status(worker)['state']
+    feedback = _feedback_turns.get(link['worker'])
+    if state == 'Idle' and feedback is not None:
+        feedback['working'].discard(link['reviewer'])
+        if not feedback['pending'] and not feedback['working']:
+            _feedback_turns.pop(link['worker'], None)
+    if state == 'Working' and not link['seen_working'] and link['worker'] not in awaiting:
+        if feedback is not None and link['reviewer'] in feedback['pending'] | feedback['working']:
+            feedback['pending'].discard(link['reviewer'])
+            # An awaiting link leaves seen_working false. Remember consumption
+            # until Idle so later ticks of this same turn cannot reset its count.
+            feedback['working'].add(link['reviewer'])
+        else:
+            link.pop('rounds', None)
+            link.pop('paused', None)
     if link.get('awaiting', False):
         reviewer_state = status(reviewer)['state']
         if reviewer_state == 'Working':
@@ -115,7 +138,12 @@ def _step(link, entries, status, send, last_reply, awaiting, clear):
                 link['awaiting'] = False
         elif reviewer_state == 'Idle':
             reply = last_reply(reviewer).strip()
-            if reply.upper().startswith('APPROVED') or link.get('rounds', 0) >= MAX_ROUNDS:
+            if reply.upper().startswith('APPROVED'):
+                link.pop('rounds', None)
+                link.pop('paused', None)
+                link['awaiting'] = False
+            elif link.get('rounds', 0) >= MAX_ROUNDS:
+                link['paused'] = True
                 link['awaiting'] = False
             elif state != 'Idle' or not clear(link['worker']):
                 link['wait_ticks'] = link.get('wait_ticks', 0) + 1
@@ -128,6 +156,7 @@ def _step(link, entries, status, send, last_reply, awaiting, clear):
                 try:
                     send(worker, text, state)
                     _last_sent[link['worker']] = time.monotonic()
+                    feedback_sent(link['worker'])
                     link['rounds'] = link.get('rounds', 0) + 1
                     link['awaiting'] = False
                 except (DraftError, RuntimeError):
@@ -144,6 +173,9 @@ def _step(link, entries, status, send, last_reply, awaiting, clear):
         link.pop('retries', None)
         link.pop('wait_ticks', None)
     elif link['seen_working'] and state == 'Idle':
+        if link.get('paused', False):
+            link['seen_working'] = False
+            return link
         reviewer_state = status(reviewer)['state']
         if reviewer_state != 'Idle' or not clear(link['reviewer']):
             link['wait_ticks'] = link.get('wait_ticks', 0) + 1
@@ -192,13 +224,21 @@ def observe(entries, status, send, last_reply):
         awaiting = {link['reviewer'] for link in original
                     if isinstance(link, dict) and link.get('awaiting')
                     and isinstance(link.get('reviewer'), str)}
+        def feedback_sent(pane):
+            # Each link consumes the next feedback-caused turn independently.
+            _feedback_turns[pane] = {
+                'pending': {link['reviewer'] for link in original
+                            if isinstance(link, dict) and link.get('worker') == pane
+                            and isinstance(link.get('reviewer'), str)},
+                'working': set(),
+            }
         def clear(pane):
             return (pane not in awaiting
                     and time.monotonic() - _last_sent.get(pane, float('-inf')) >= SEND_GAP)
         changes = []
         for link in original:
             try:
-                updated = _step(dict(link), by_pane, status, send, last_reply, awaiting, clear)
+                updated = _step(dict(link), by_pane, status, send, last_reply, awaiting, clear, feedback_sent)
             except Exception:  # a malformed link or one bad pane must not stop other reviews
                 continue
             if updated != link:

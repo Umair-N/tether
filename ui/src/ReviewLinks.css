@@ -13,6 +13,8 @@
 .review-go { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 8px; border-radius: 8px; font-size: 13.5px; text-align: left; }
 .review-go:hover:not(:disabled) { background: var(--hover); }
 .review-go svg { flex-shrink: 0; }
+.review-text { flex: 1; min-width: 0; display: grid; gap: 1px; padding: 4px 0; }
+.review-text small { color: var(--muted); font-size: 12px; line-height: 1.35; }
 .review-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .review-stop { flex-shrink: 0; display: grid; place-items: center; width: 36px; height: 44px; border-radius: 8px; color: var(--muted); }
 .review-stop:hover:not(:disabled) { background: var(--hover); color: var(--text); }
@@ -23,3 +25,10 @@
 }
 .workspace .review-toggle svg { width: 16px; height: 16px; }
 .workspace .review-count { top: 0; right: -2px; }
+
+.review-picker { display: grid; gap: 8px; }
+.review-picker .task-agents { margin: 0; justify-self: stretch; }
+.review-picker .task-agents button { flex: 1 1 auto; justify-content: center; white-space: nowrap; padding: 0 8px; }
+.review-picker .hint { margin: 0; }
+.review-picker-list { max-height: 40dvh; overflow-y: auto; }
+.review-picker-list small { flex-shrink: 0; max-width: 35%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }

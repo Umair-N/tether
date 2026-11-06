@@ -20,6 +20,7 @@ class ReviewLinksTests(unittest.TestCase):
         self.file = Path(temporary.name) / 'cache' / 'review-links.json'
         self.enterContext(patch.object(review_links, 'FILE', self.file))
         self.enterContext(patch.object(review_links, '_last_sent', {}))
+        self.enterContext(patch.object(review_links, '_feedback_turns', {}))
         self.clock = self.enterContext(patch.object(review_links.time, 'monotonic', return_value=1000))
         self.worker = dict(id='%13', agent='codex', thread=WORKER_THREAD, transcript='/project/worker.jsonl')
         self.reviewer = dict(id='%12', agent='claude', thread=THREAD, writable=True)
@@ -111,6 +112,9 @@ class ReviewLinksTests(unittest.TestCase):
         self.assertIn('(%20) finished a turn.', self.send.call_args.args[1])
 
     def test_review_turn_does_not_request_review_of_reviewers_work(self):
+        link, = self.links()
+        link.update(rounds=2, paused=True)
+        self.file.write_text(json.dumps([link]))
         worker = dict(self.worker, id='%20')
         self.worker['writable'] = True
         self.states['%20'] = 'Idle'
@@ -122,6 +126,8 @@ class ReviewLinksTests(unittest.TestCase):
         self.assertEqual(self.send.call_args.args[0], self.worker)
         self.observe(entries=entries, **{'%13': 'Working'})
         self.assertFalse(self.links()[0]['seen_working'])
+        self.assertEqual(self.links()[0]['rounds'], 2)
+        self.assertTrue(self.links()[0]['paused'])
         self.assertTrue(self.links()[1]['reviewer_seen_working'])
         self.reply.return_value = 'APPROVED'
         self.observe(entries=entries, **{'%13': 'Idle'})
@@ -181,6 +187,20 @@ class ReviewLinksTests(unittest.TestCase):
             return links
         with patch.object(review_links, '_read', side_effect=read) as read_store:
             self.assertEqual(review_links.reviewed_by(), {'%13': ['%12'], '%20': ['%21']})
+        read_store.assert_called_once_with()
+
+    def test_paused_reads_once_under_lock_and_skips_unpaused_or_malformed_rows(self):
+        link, = self.links()
+        paused = dict(link, paused=True)
+        links = [link, paused, dict(paused), {'worker': '%20', 'reviewer': '%21', 'paused': True},
+                 {'worker': '%20', 'reviewer': '%22', 'paused': False}, None, [], {},
+                 {'worker': [], 'reviewer': '%12', 'paused': True},
+                 {'worker': '%30', 'reviewer': '%12\n', 'paused': True}]
+        def read():
+            self.assertTrue(review_links._lock.locked())
+            return links
+        with patch.object(review_links, '_read', side_effect=read) as read_store:
+            self.assertEqual(review_links.paused(), {'%13': ['%12'], '%20': ['%21']})
         read_store.assert_called_once_with()
 
     def test_remove_drops_every_matching_link_and_keeps_other_rows_under_lock(self):
@@ -471,6 +491,141 @@ class ReviewLinksTests(unittest.TestCase):
             self.assertFalse(self.links()[0]['awaiting'])
         self.assertEqual(self.send.call_count, 2 * review_links.MAX_ROUNDS + 1)
         self.assertEqual(self.send.call_args.args[0], self.reviewer)
+        self.assertTrue(self.links()[0]['paused'])
+        self.assertEqual(review_links.paused(), {'%13': ['%12']})
+        self.observe()
+        self.observe()
+        self.assertEqual(self.send.call_count, 2 * review_links.MAX_ROUNDS + 1)
+
+        self.request_review()  # a user turn starts a new exchange
+        self.assertNotIn('rounds', self.links()[0])
+        self.assertNotIn('paused', self.links()[0])
+        self.assertEqual(review_links.paused(), {})
+        self.finish_review()
+        self.assertEqual(self.links()[0]['rounds'], 1)
+        self.assertEqual(self.send.call_args.args[0], self.worker)
+
+    def test_approval_after_three_rounds_allows_feedback_on_new_work(self):
+        for round_number in range(1, review_links.MAX_ROUNDS + 1):
+            self.request_review()
+            self.finish_review()
+            self.assertEqual(self.links()[0]['rounds'], round_number)
+        self.request_review()
+        self.finish_review('APPROVED')
+        self.assertNotIn('rounds', self.links()[0])
+        self.assertNotIn('paused', self.links()[0])
+        self.request_review()
+        self.finish_review()
+        self.assertEqual(self.links()[0]['rounds'], 1)
+        self.assertEqual(self.send.call_args.args[0], self.worker)
+        self.assertEqual(self.send.call_count, 2 * review_links.MAX_ROUNDS + 3)
+
+    def test_approval_removes_existing_pause_and_rounds(self):
+        self.request_review()
+        link, = self.links()
+        link.update(rounds=review_links.MAX_ROUNDS, paused=True)
+        self.file.write_text(json.dumps([link]))
+        self.finish_review('APPROVED')
+        self.assertNotIn('rounds', self.links()[0])
+        self.assertNotIn('paused', self.links()[0])
+
+    def test_feedback_turn_consumes_marker_once_and_does_not_reset_rounds(self):
+        self.request_review()
+        self.finish_review()
+        self.observe(**{'%13': 'Working'})
+        self.observe()
+        self.assertEqual(self.links()[0]['rounds'], 1)
+        self.observe(**{'%13': 'Idle'})
+        self.finish_review('APPROVED')
+        self.assertNotIn('rounds', self.links()[0])
+
+    def test_awaiting_link_consumes_other_reviewers_feedback_turn(self):
+        self.add(reviewer='%21')
+        reviewer = dict(self.reviewer, id='%21')
+        self.states['%21'] = 'Idle'
+        entries = [self.worker, self.reviewer, reviewer]
+        self.observe(entries=entries, **{'%13': 'Working'})
+        self.observe(entries=entries, **{'%13': 'Idle'})
+        first, second = self.links()
+        second['rounds'] = review_links.MAX_ROUNDS
+        self.file.write_text(json.dumps([first, second]))
+        self.observe(entries=entries, **{'%12': 'Working'})
+        self.observe(entries=entries, **{'%12': 'Idle'})  # only the first reviewer sends feedback
+        self.assertEqual(self.links()[0]['rounds'], 1)
+        self.observe(entries=entries, **{'%13': 'Working'})
+        self.observe(entries=entries)
+        self.observe(entries=entries, **{'%13': 'Approval'})
+        self.observe(entries=entries, **{'%13': 'Working'})
+        self.assertEqual([link['rounds'] for link in self.links()], [1, 3])
+        self.assertTrue(self.links()[1]['awaiting'])
+        self.observe(entries=entries, **{'%13': 'Idle', '%21': 'Working'})
+        self.observe(entries=entries, **{'%21': 'Idle'})
+        self.assertTrue(self.links()[1]['paused'])
+        self.observe(entries=entries, **{'%13': 'Working'})  # a new user turn
+        for link in self.links():
+            self.assertNotIn('rounds', link)
+            self.assertNotIn('paused', link)
+
+    def test_new_user_turn_resets_rounds_even_while_awaiting_review(self):
+        self.request_review()
+        link, = self.links()
+        link.update(rounds=3, paused=True)
+        self.file.write_text(json.dumps([link]))
+        self.observe(**{'%13': 'Working'})
+        self.assertNotIn('rounds', self.links()[0])
+        self.assertNotIn('paused', self.links()[0])
+        self.assertTrue(self.links()[0]['awaiting'])
+
+    def test_old_capped_link_resets_on_new_work(self):
+        link, = self.links()
+        link['rounds'] = review_links.MAX_ROUNDS
+        self.file.write_text(json.dumps([link]))
+        self.request_review()
+        self.assertNotIn('rounds', self.links()[0])
+        self.finish_review()
+        self.assertEqual(self.links()[0]['rounds'], 1)
+
+    def test_new_work_resets_all_links_and_not_each_working_tick(self):
+        self.add(reviewer='%21')
+        reviewer = dict(self.reviewer, id='%21')
+        self.states['%21'] = 'Idle'
+        self.file.write_text(json.dumps([dict(link, rounds=3, paused=True) for link in self.links()]))
+        entries = [self.worker, self.reviewer, reviewer]
+        self.observe(entries=entries, **{'%13': 'Working'})
+        for link in self.links():
+            self.assertNotIn('rounds', link)
+            self.assertNotIn('paused', link)
+        self.file.write_text(json.dumps([dict(link, rounds=2) for link in self.links()]))
+        self.observe(entries=entries)
+        self.assertEqual([link['rounds'] for link in self.links()], [2, 2])
+
+    def test_two_reviewers_never_reset_each_others_feedback_rounds(self):
+        self.add(reviewer='%21')
+        reviewer = dict(self.reviewer, id='%21')
+        self.states['%21'] = 'Idle'
+        entries = [self.worker, self.reviewer, reviewer]
+        turns = []
+        def send(entry, text, state):
+            self.states[entry['id']] = 'Working'
+            turns.append(entry['id'])
+        self.send.side_effect = send
+        self.observe(entries=entries, **{'%13': 'Working'})
+        self.observe(entries=entries, **{'%13': 'Idle'})
+        for _ in range(50):
+            if not turns:
+                break
+            pane = turns.pop(0)
+            self.observe(entries=entries)
+            self.observe(entries=entries, **{pane: 'Idle'})
+        self.assertEqual(turns, [], 'automatic review loop did not stop')
+        feedback = [call for call in self.send.call_args_list if call.args[0] == self.worker]
+        self.assertEqual(len(feedback), 2 * review_links.MAX_ROUNDS)
+        self.assertEqual([link['rounds'] for link in self.links()], [3, 3])
+        self.assertTrue(all(link['paused'] for link in self.links()))
+        calls = self.send.call_count
+        self.observe(entries=entries)
+        self.observe(entries=entries)
+        self.assertEqual(self.send.call_count, calls)
 
     def test_feedback_waits_for_worker_idle(self):
         for state in ('Working', 'Approval', 'Input needed', 'Unavailable'):

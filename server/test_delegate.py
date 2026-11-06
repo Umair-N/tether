@@ -331,16 +331,25 @@ class EndpointTests(unittest.TestCase):
         with patch.object(server, 'sessions', return_value=rows), \
                 patch.object(server, 'session_row', side_effect=lambda row: dict(row)), \
                 patch.object(server, 'settings', return_value={'thread': THREAD}), \
-                patch.object(server.review_links, 'reviewed_by', return_value={'%13': ['%12', '%20'], '%12': []}) as reviewed_by:
+                patch.object(server.review_links, 'reviewed_by', return_value={'%13': ['%12', '%20'], '%12': []}) as reviewed_by, \
+                patch.object(server.review_links, 'paused', return_value={'%13': ['%20']}) as paused:
             handler.do_GET()
             reviewed_by.assert_called_once_with()
+            paused.assert_called_once_with()
             handler.respond.assert_called_with(200, {'sessions': [
-                {'id': '%13', 'reviewers': ['%12', '%20']}, {'id': '%12'}, {'id': '%20'}], 'default_thread': THREAD})
+                {'id': '%13', 'reviewers': ['%12', '%20'], 'reviewers_paused': ['%20']},
+                {'id': '%12', 'reviewers_paused': []}, {'id': '%20', 'reviewers_paused': []}], 'default_thread': THREAD})
             reviewed_by.reset_mock()
             reviewed_by.side_effect = OSError('disk')
             handler.do_GET()
             reviewed_by.assert_called_once_with()
-            handler.respond.assert_called_with(200, {'sessions': rows, 'default_thread': THREAD})
+            handler.respond.assert_called_with(200, {'sessions': [dict(row, reviewers_paused=[]) for row in rows],
+                                                      'default_thread': THREAD})
+            reviewed_by.side_effect = None
+            paused.side_effect = OSError('disk')
+            handler.do_GET()
+            handler.respond.assert_called_with(200, {'sessions': [dict(row, reviewers_paused=[]) for row in rows],
+                                                      'default_thread': THREAD})
 
     def test_route_bypasses_default_choose_and_holds_send_lock(self):
         source = entry()

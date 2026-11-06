@@ -32,6 +32,9 @@ def arguments(argv):
     stop = actions.add_parser('stop')
     stop.add_argument('--worker', required=True)
     stop.add_argument('--reviewer')
+    link = actions.add_parser('link')
+    link.add_argument('--worker', required=True)
+    link.add_argument('--reviewer', required=True)
     actions.add_parser('list')
     args = parser.parse_args(argv)
     body = {'action': args.action}
@@ -45,7 +48,7 @@ def arguments(argv):
             value = getattr(args, key)
             if value is not None:
                 body[key] = os.path.abspath(value) if key == 'cwd' else value
-    elif args.action == 'stop':
+    elif args.action in ('stop', 'link'):
         body['worker'] = args.worker
         if args.reviewer is not None:
             body['reviewer'] = args.reviewer

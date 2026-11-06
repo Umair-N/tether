@@ -7,6 +7,7 @@ import auth
 import delegate
 import paths
 import review_links
+from terminal_input import UUID, live_status
 
 PATH = '/mobile/api/agent-tab'
 
@@ -20,7 +21,33 @@ def review_pair(body):
     return worker, reviewer
 
 
-def serve(handler, body, *, sessions, folder, snapshot, run, lock):
+def link_pair(body, entries, last_reply):
+    worker, reviewer = body.get('worker'), body.get('reviewer')
+    for pane in (worker, reviewer):
+        if not isinstance(pane, str) or not re.fullmatch(r'%[0-9]+', pane):
+            raise ValueError('Select worker and reviewer tabs.')
+    by_pane = {entry['id']: entry for entry in entries}
+    if worker not in by_pane or reviewer not in by_pane:
+        raise ValueError('That session has ended. Select another tab.')
+    if worker == reviewer:
+        raise ValueError('Choose different worker and reviewer tabs.')
+    source, target = by_pane[worker], by_pane[reviewer]
+    if any(entry.get('agent') not in ('claude', 'codex') for entry in (source, target)):
+        raise ValueError('Review needs Claude or Codex tabs.')
+    links = review_links.reviewed_by()
+    if reviewer in links.get(worker, []):
+        raise ValueError('That review link already exists.')
+    if worker in links.get(reviewer, []):
+        raise ValueError('Those tabs cannot review each other.')
+    thread = target.get('thread')
+    review_links.add(worker=worker, reviewer=reviewer,
+                     reviewer_thread=thread if isinstance(thread, str) and UUID.fullmatch(thread) else None,
+                     name=delegate.source_title(source), agent=source['agent'],
+                     seen_working=bool(last_reply(source).strip()) and live_status(source)['state'] != 'Working')
+    return {'linked': True}
+
+
+def serve(handler, body, *, sessions, folder, snapshot, last_reply, run, lock):
     credential = handler.headers.get('X-Tether-Hook', '')
     if (not auth.is_loopback(handler.client_address[0]) or not credential
             or not hmac.compare_digest(credential.encode(), auth.session_value().encode())):
@@ -44,6 +71,10 @@ def serve(handler, body, *, sessions, folder, snapshot, run, lock):
                                         run=run, recent=lambda: snapshot(caller).get('messages') or [],
                                         cwd=body.get('cwd'))
             result = 201, {'pane': pane, 'name': name}
+        elif action == 'link':
+            if caller['id'] not in (body.get('worker'), body.get('reviewer')):
+                raise ValueError('That review link is not on this tab.')
+            result = 200, link_pair(body, entries, last_reply)
         elif action == 'stop':
             worker, reviewer = review_pair(body)
             if caller['id'] != worker:

@@ -88,7 +88,8 @@ export interface Pane {
   tasks?: string[]  // background work from Claude's footer: "1 shell", "1 monitor"
   attention?: Attention | null
   needs?: Needs | null  // a one-line summary while the pane waits on you (the desktop "Needs you" list)
-  reviewers?: string[]  // the panes that review each finished turn of this one (server/review_links.py)
+  reviewers?: string[]
+  reviewers_paused?: string[]  // the panes that review each finished turn of this one (server/review_links.py)
 }
 export interface Needs { kind: 'approval' | 'plan' | 'question'; text: string }
 // images: how many images the tool result holds (Claude's Read of a screenshot). GET tool-image serves them.
