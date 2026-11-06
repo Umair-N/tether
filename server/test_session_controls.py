@@ -313,10 +313,11 @@ class ShellPromptTests(unittest.TestCase):
 
 class FakeClaudePane:
     """Stateful stand-in for tmux: tracks the text in Claude's input box."""
-    def __init__(self, text='', swallow_enters=0, ghost=False, card=False):
+    def __init__(self, text='', swallow_enters=0, ghost=False, card=False, placeholder=None):
         # card: True = a card that holds the keyboard; 'unfocused' = a card that needs Ctrl+X Tab first (Claude is working)
         self.ghost, self.card, self.card_keys, self.focused, self.chord = ghost, bool(card), [], card is True, False
         self.text, self.swallow, self.enters, self.pending = text, swallow_enters, 0, None
+        self.placeholder = placeholder
 
     def __call__(self, argv, **kwargs):
         from types import SimpleNamespace
@@ -331,7 +332,7 @@ class FakeClaudePane:
         elif cmd == 'paste-buffer':
             if self.ghost:  # real input replaces the dimmed suggestion
                 self.text, self.ghost = '', False
-            self.text += self.pending
+            self.text += self.placeholder if self.placeholder is not None else self.pending
         elif cmd == 'send-keys':
             for key in argv[4:]:
                 if key == 'Enter':
@@ -414,6 +415,32 @@ class DraftHandlingTests(unittest.TestCase):
         terminal.submit(self.entry, 'hello', run=pane)
         self.assertEqual(pane.enters, 3)
         self.assertEqual(pane.text, '')
+
+    def test_image_placeholder_swallowed_enter_is_retried(self):
+        pane = FakeClaudePane(swallow_enters=1, placeholder='[Image #14]')
+        terminal.submit(self.entry, '/tmp/image.png', run=pane)
+        self.assertEqual(pane.enters, 2)
+        self.assertEqual(pane.text, '')
+
+    def test_image_placeholder_never_submitted_raises_draft_error(self):
+        pane = FakeClaudePane(swallow_enters=99, placeholder='[Image #14]')
+        with self.assertRaises(terminal.DraftError):
+            terminal.submit(self.entry, '/tmp/image.png', run=pane)
+        self.assertEqual(pane.enters, 4)
+        self.assertEqual(pane.text, '[Image #14]')
+
+    def test_pasted_text_placeholder_never_submitted_raises_draft_error(self):
+        pane = FakeClaudePane(swallow_enters=99, placeholder='[Pasted text #1 +20 lines]')
+        with self.assertRaises(terminal.DraftError):
+            terminal.submit(self.entry, 'long pasted text ' * 100, run=pane)
+        self.assertEqual(pane.enters, 4)
+        self.assertEqual(pane.text, '[Pasted text #1 +20 lines]')
+
+    def test_non_placeholder_mismatch_returns_after_one_enter(self):
+        pane = FakeClaudePane(swallow_enters=99, placeholder='1. Default (recommended)')
+        terminal.submit(self.entry, '/model', run=pane)
+        self.assertEqual(pane.enters, 1)
+        self.assertEqual(pane.text, '1. Default (recommended)')
 
     def test_enter_never_registering_raises_draft_error(self):
         pane = FakeClaudePane(swallow_enters=99)

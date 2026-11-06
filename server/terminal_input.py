@@ -1190,6 +1190,9 @@ def leave_scrollback(entry, run=subprocess.run):
         run([paths.TMUX, 'send-keys', '-t', entry['id'], '-X', 'cancel'], check=True, capture_output=True, timeout=5)
 
 
+CLAUDE_PASTE_PLACEHOLDER = re.compile(r'^\[(?:Image #\d+\]|Pasted text #\d+)')
+
+
 def submit(entry, message, run=subprocess.run):
     if any(ord(c) < 32 and c not in '\n\t' or ord(c) == 127 for c in message):
         raise RuntimeError('The message contains terminal control characters.')
@@ -1223,9 +1226,11 @@ def submit(entry, message, run=subprocess.run):
             if not any(draft):
                 confirm_delivery(entry, sent, run)
                 return
-            # Agents mark the highlighted row of a picker (/model ...) like the input line. If the box no longer holds the
-            # text we sent, a menu opened: pressing Enter again would choose an item for the user.
-            if '\n' not in message.strip() and not ''.join(' '.join(draft).split()).startswith(sent[:30]):
+            # Agents mark picker rows (/model ...) like the input line. A mismatch means a menu opened, except for
+            # Claude paste placeholders: the box was empty before our paste, so these still hold our unsent message.
+            draft_text = ' '.join(draft)
+            if ('\n' not in message.strip() and not ''.join(draft_text.split()).startswith(sent[:30])
+                    and not (entry['agent'] == 'claude' and CLAUDE_PASTE_PLACEHOLDER.match(draft_text))):
                 return
         raise DraftError('The message reached the agent input but was not submitted. Clear it, then send again.')
     finally:
