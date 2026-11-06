@@ -497,7 +497,9 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
     let aurora: HTMLElement | null = null
     // Layout size, not getBoundingClientRect: that shrinks with the open animation's scale, and a resize observer does not fire again when it ends.
     const size = () => { const ratio = Math.min(devicePixelRatio || 1, 3); width = element.width = Math.round(element.clientWidth * ratio); height = element.height = Math.round(element.clientHeight * ratio) }
-    const observer = new ResizeObserver(size)
+    // The orb changes size when words appear. Resize in the draw loop: a resize here would blank the canvas until the next frame.
+    let stale = false
+    const observer = new ResizeObserver(() => { stale = true })
     observer.observe(element)
     size()
     const color = { you: [0, 0, 0], agent: [0, 0, 0], ask: [0, 0, 0], light: true }
@@ -512,20 +514,38 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
     const scheme = new MutationObserver(read)
     scheme.observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'data-theme', 'class'] })
     const current = [...color.you], second = [...color.agent]
-    const blob = (cx: number, cy: number, r: number, t: number, amp: number, seed: number, tint: number[], alpha: number) => {
+    const mix = (from: number[], to: number[], k: number) => from.map((v, i) => Math.round(v + (to[i] - v) * k))
+    const rgba = (c: number[], alpha: number) => `rgba(${c.join(',')},${alpha})`
+    const glowSpot = (x: number, y: number, r: number, tint: number[], alpha: number) => {
+      const fill = context.createRadialGradient(x, y, 0, x, y, r)
+      fill.addColorStop(0, rgba(tint, alpha))
+      fill.addColorStop(1, rgba(tint, 0))
+      context.fillStyle = fill
+      context.fillRect(x - r, y - r, r * 2, r * 2)
+    }
+    /** A solid sphere with a clean edge. Inside it, soft lights drift; only gradients, so no layer shows an edge. */
+    const sphere = (cx: number, cy: number, r: number, t: number, amp: number, tint: number[], other: number[]) => {
       context.beginPath()
       for (let i = 0; i <= 120; i++) {
         const a = i / 120 * Math.PI * 2
-        const d = 1 + amp * (Math.sin(a * 3 + t * 1.3 + seed) * 0.5 + Math.sin(a * 5 - t * 1.7 + seed * 2) * 0.3 + Math.sin(a * 2 + t * 0.7 + seed * 3) * 0.4)
+        const d = 1 + amp * (Math.sin(a * 2 + t * 0.9) * 0.6 + Math.sin(a * 3 - t * 1.2 + 1.7) * 0.4)
         const x = cx + Math.cos(a) * r * d, y = cy + Math.sin(a) * r * d
         if (i) context.lineTo(x, y); else context.moveTo(x, y)
       }
-      const fill = context.createRadialGradient(cx - r * 0.25, cy - r * 0.3, r * 0.05, cx, cy, r * 1.25)
-      fill.addColorStop(0, color.light ? `rgba(${tint.join(',')},${alpha})` : `rgba(255,248,240,${alpha})`)
-      fill.addColorStop(0.35, `rgba(${tint.join(',')},${alpha})`)
-      fill.addColorStop(1, `rgba(${tint.join(',')},0)`)
-      context.fillStyle = fill
+      context.closePath()
+      // A dark accent (light themes) would read as a heavy ball, so lift it first.
+      const base = color.light ? mix(tint, [255, 255, 255], 0.22) : tint
+      const body = context.createRadialGradient(cx - r * 0.25, cy - r * 0.35, 0, cx, cy, r * 1.05)
+      body.addColorStop(0, rgba(mix(base, [255, 255, 255], 0.3), 1))
+      body.addColorStop(0.6, rgba(base, 1))
+      body.addColorStop(1, rgba(mix(base, [0, 0, 0], 0.16), 1))
+      context.fillStyle = body
       context.fill()
+      context.save()
+      context.clip()
+      glowSpot(cx + Math.cos(t * 0.6) * r * 0.5, cy + Math.sin(t * 0.8) * r * 0.3 + r * 0.4, r * 0.9, mix(other, base, 0.45), color.light ? 0.3 : 0.5)
+      glowSpot(cx - Math.sin(t * 0.5) * r * 0.5, cy + Math.cos(t * 0.7) * r * 0.2 - r * 0.2, r * 0.85, mix(base, [255, 255, 255], 0.55), 0.3)
+      context.restore()
     }
     const draw = (now: number) => {
       const t = now / 1000
@@ -551,36 +571,32 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
         lit.current.style.transform = `scaleY(${(0.9 + glow * 0.4).toFixed(3)})`
         lit.current.style.opacity = dim ? '0.4' : '1'
       }
+      if (stale) { stale = false; size() }
       // The bubble hides the canvas. With no size there is nothing to draw, and a negative radius would throw.
       if (!width || !height) { frame = requestAnimationFrame(draw); return }
       const [first, next] = state === 'speaking' ? [color.agent, color.you] : live.current.approval ? [color.ask, color.you] : [color.you, color.agent]
       for (let i = 0; i < 3; i++) { current[i] += (first[i] - current[i]) * 0.06; second[i] += (next[i] - second[i]) * 0.06 }
       context.clearRect(0, 0, width, height)
       // Everything must end inside the canvas: a gradient cut by the edge shows as a hard square.
-      // Largest blob reach: 0.22 × 1.35 (level) × 1.05 × 1.39 (wobble) ≈ 0.43 of the canvas.
-      const cx = width / 2, cy = height / 2, half = Math.min(width, height) / 2, base = half * 0.44
+      // Largest reach: 0.5 × 1.25 (level) × 1.08 (wobble) ≈ 0.68 of the half width; the halo stops at the edge.
+      const cx = width / 2, cy = height / 2, half = Math.min(width, height) / 2
       const tt = reduced ? 0 : t * (state === 'converting' ? 2.6 : state === 'paused' ? 0.4 : 1)
-      const r = base * (1 + (reduced ? 0 : smooth * 0.35))
-      const amp = reduced ? 0.02 : 0.05 + smooth * 0.22
+      const r = half * 0.5 * (1 + (reduced ? 0 : Math.min(1, smooth) * 0.25))
+      const amp = reduced ? 0.01 : 0.012 + Math.min(1, smooth) * 0.04
       const one = current.map(Math.round), two = second.map(Math.round)
-      context.globalCompositeOperation = color.light ? 'source-over' : 'lighter'
-      const halo = context.createRadialGradient(cx, cy, r * 0.6, cx, cy, Math.min(r * 2, half))
-      halo.addColorStop(0, `rgba(${one.join(',')},${0.14 + smooth * 0.25})`)
-      halo.addColorStop(1, `rgba(${one.join(',')},0)`)
+      const reach = Math.min(r * 2, half)
+      const halo = context.createRadialGradient(cx, cy, r * 0.8, cx, cy, reach)
+      halo.addColorStop(0, rgba(one, 0.2 + smooth * 0.3))
+      halo.addColorStop(1, rgba(one, 0))
       context.fillStyle = halo
-      context.beginPath(); context.arc(cx, cy, Math.min(r * 2, half), 0, Math.PI * 2); context.fill()
-      blob(cx, cy, r * 1.05, tt, amp * 1.2, 0, one, 0.55)
-      // On a light surface the two opposite hues would mix to gray, so the shape keeps one hue.
-      blob(cx, cy, r * 0.95, tt * 1.15, amp, 2.1, color.light ? one : two, 0.45)
-      blob(cx, cy, r * 0.8, tt * 0.9, amp * 0.8, 4.2, color.light ? one : [255, 244, 232], 0.3)
-      if (color.light) blob(cx - r * 0.12, cy - r * 0.15, r * 0.45, tt * 1.3, amp * 0.6, 5.3, [255, 255, 255], 0.55)
+      context.beginPath(); context.arc(cx, cy, reach, 0, Math.PI * 2); context.fill()
+      sphere(cx, cy, r, tt, amp, one, two)
       if ((state === 'converting' || state === 'thinking' || state === 'sending') && !reduced) {
-        context.lineWidth = Math.max(2, width / 260)
-        context.strokeStyle = `rgba(${one.join(',')},0.8)`
+        context.lineWidth = Math.max(2, width / 180)
+        context.strokeStyle = rgba(one, 0.8)
         context.lineCap = 'round'
-        context.beginPath(); context.arc(cx, cy, Math.min(r * 1.45, half - context.lineWidth), t * 4, t * 4 + 1.1); context.stroke()
+        context.beginPath(); context.arc(cx, cy, Math.min(r * 1.3, half - context.lineWidth), t * 4, t * 4 + 1.1); context.stroke()
       }
-      context.globalCompositeOperation = 'source-over'
       frame = requestAnimationFrame(draw)
     }
     frame = requestAnimationFrame(draw)

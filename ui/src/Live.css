@@ -32,6 +32,8 @@
 
 /* The light from the bottom edge. The voice loop in Live.tsx sets its transform and opacity each frame. */
 .live-aurora { position: absolute; z-index: -1; inset: auto 0 0 0; height: 64%; pointer-events: none; transform-origin: 50% 100%; transform: scaleY(.9);
+  /* The scaled layer shows a hairline at its top edge. The mask fades that edge out. */
+  mask-image: linear-gradient(to top, #000 88%, transparent);
   background: radial-gradient(90% 55% at 50% 100%, color-mix(in oklab, var(--live-vc) 22%, transparent), transparent), linear-gradient(to top, color-mix(in oklab, var(--live-vc) var(--live-glow), transparent), transparent); }
 .live[data-asking="true"] .live-aurora { height: 46%; }
 
@@ -61,7 +63,11 @@
 
 /* Hero: voice shape, status, words. The canvas is larger than the shape it draws, so its soft edge fades out. */
 .live-center { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; min-height: 0; padding: 0 8px; text-align: center; }
-.live-orb { position: relative; flex: none; width: 88px; height: 88px; margin-block: -14px -18px; }
+.live-orb { --orb: min(62cqw, 38cqh, 320px); position: relative; flex: none; width: var(--orb); height: var(--orb); margin-block: calc(var(--orb) * -.1) calc(var(--orb) * -.12); transition: width .32s cubic-bezier(.23, 1, .32, 1), height .32s cubic-bezier(.23, 1, .32, 1); }
+/* The orb makes room as words arrive. */
+.live-center:has(.live-words p) .live-orb { --orb: min(36cqw, 22cqh, 170px); }
+.live-center:has(.live-reply[data-long="true"]) .live-orb { --orb: min(30cqw, 18cqh, 150px); }
+.live[data-asking="true"] .live-center .live-orb { --orb: min(24cqw, 14cqh, 96px); }
 .live-orb canvas { display: block; width: 100%; height: 100%; cursor: pointer; }
 .live .live-status { display: block; flex: none; max-width: 100%; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--muted); }
 .live-words { display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 30em; min-height: 0; margin-top: -4px; padding-top: 8px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--live-hair) transparent; -webkit-mask-image: linear-gradient(to bottom, transparent, black 8px); mask-image: linear-gradient(to bottom, transparent, black 8px); }
@@ -145,7 +151,7 @@
 /* Short window: everything steps down, and Friday's words take what room is left. */
 @container live (max-height: 470px) {
   .live-window .live-stage { gap: 6px; }
-  .live-window .live-orb { width: 60px; height: 60px; margin-block: -10px -12px; }
+  .live-window .live-center .live-orb { --orb: 72px; }
   .live-window .live-center { gap: 4px; }
   .live-window .live-said, .live-window .live-reply { font-size: 18px; font-weight: 400; }
   .live-window .live-said[data-small="true"] { font-size: 13px; }
@@ -200,6 +206,7 @@
 @media (prefers-reduced-transparency: reduce) { .live-window { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--live-bg); } }
 
 @media (prefers-reduced-motion: reduce) {
+  .live-orb { transition: none; }
   .live-reply { animation: none; }
   .live-bubble[data-asking="true"]::after { animation: none; opacity: 0; }
   .live, .live-window, .live-bubble, .live .live-icon { transition: none; }
