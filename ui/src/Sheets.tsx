@@ -1,10 +1,11 @@
 import { useWords, count } from './words'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Eye, Archive, ArchiveRestore, ArrowDown, BookMarked, ArrowUp, Bell, Check, Columns2, GitFork, History, LayoutDashboard, Merge, ArrowRightLeft, Plus, PanelBottom, PanelRight, Pencil, Pin, PinOff, Shapes, Sparkles, RotateCw, Rows2, Square, Trash2, X } from 'lucide-react'
+import { Eye, Archive, ArchiveRestore, ArrowDown, BookMarked, ArrowUp, Bell, Check, Columns2, GitFork, LayoutDashboard, Merge, ArrowRightLeft, Plus, PanelBottom, PanelRight, Pencil, Pin, PinOff, Shapes, Sparkles, RotateCw, Rows2, Square, Trash2, X } from 'lucide-react'
 import { ReviewLinkPicker } from './ReviewLinks'
 import { SESSION_NAME, SESSION_NAME_HELP, canFork, creditsLabel, errorText, usageLabel } from './api'
-import type { Api, Catalog, Footer, ModelOptions, Pane, PastChat, SessionsData } from './api'
+import type { Api, Catalog, Footer, ModelOptions, Pane, PastChat } from './api'
 import { loadCatalog } from './Suggest'
+import { chatSlug, resumeChat } from './ChatPicker'
 import { useModal, usePopover } from './hooks'
 import type { Anchor } from './hooks'
 import { AgentIcon, PANE_ICONS, agentNames, paneTitle, shownIndex } from './Sidebar'
@@ -275,41 +276,37 @@ function IconPicker({ api, pane, pending, run, onBack }: { api: Api; pane: Pane;
   </div>
 }
 
-function slug(title: string) {
-  const words = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').split('-').slice(0, 4).join('-')
-  return (words || 'resume').slice(0, 40)
-}
-
-export function ResumeChat({ api, chat, onClose, onOpened }: { api: Api; chat: PastChat; onClose: () => void; onOpened: (pane: string) => void }) {
-  const [name, setName] = useState(() => slug(chat.title))
+export function ResumeChat({ api, chat, sessions, onClose, onOpened }: { api: Api; chat: PastChat; sessions: { id: string; name: string; panes: Pane[] }[]; onClose: () => void; onOpened: (pane: string) => void }) {
+  const [name, setName] = useState(() => chatSlug(chat.title))
+  const [place, setPlace] = useState('')  // '' is a new tmux session; otherwise the session that gets the new tab
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const modal = useModal(true, () => { if (!pending) onClose() })
+  const target = sessions.find(session => session.id === place)
   async function resume(event: React.FormEvent) {
     event.preventDefault()
     const clean = name.trim()
-    if (!SESSION_NAME.test(clean)) { setError(SESSION_NAME_HELP); return }
+    if (!target && !SESSION_NAME.test(clean)) { setError(SESSION_NAME_HELP); return }
     setPending(true); setError('')
     try {
-      const result = await api<{ pane: string }>('resume', { id: chat.id, name: clean })
-      // The new pane shows up in the session list a moment later.
-      for (let tries = 0; tries < 15; tries++) {
-        const list = await api<SessionsData>('sessions')
-        if (list.sessions.some(pane => pane.id === result.pane)) break
-        await new Promise(resolve => setTimeout(resolve, 300))
-      }
-      onOpened(result.pane)
+      const created = await resumeChat(api, chat, target ? { after: target.panes[target.panes.length - 1].id } : { name: clean })
+      onOpened(created.id)
     } catch (failure) { setError(errorText(failure)) } finally { setPending(false) }
   }
   return <dialog {...modal} className="sheet" aria-labelledby="resume-title">
     <form onSubmit={resume}>
       <div className="sheet-heading"><h2 id="resume-title">Resume chat</h2><button type="button" className="icon-button" aria-label="Close" disabled={pending} onClick={onClose}><X /></button></div>
-      <p className="sheet-sub"><History size={14} aria-hidden="true" />{chat.title || 'Untitled chat'}</p>
-      <p className="hint">Opens a new tmux session in {chat.dir ?? 'your home folder'} and runs <code>claude --resume</code>.</p>
-      <label htmlFor="resume-name">Session name</label>
-      <input id="resume-name" autoFocus value={name} maxLength={64} disabled={pending} autoComplete="off" onChange={event => setName(event.target.value)} />
+      <p className="sheet-sub"><AgentIcon agent={chat.agent} size={14} />{chat.title || 'Untitled chat'}</p>
+      <p className="hint">Runs <code>{chat.agent === 'codex' ? 'codex resume' : 'claude --resume'}</code> in {chat.dir ?? 'your home folder'}.</p>
+      <label htmlFor="resume-place">Open in</label>
+      <select id="resume-place" className="resume-place" value={place} disabled={pending} onChange={event => setPlace(event.target.value)}>
+        <option value="">New session</option>
+        {sessions.map(session => <option key={session.id} value={session.id}>New tab in {session.name}</option>)}
+      </select>
+      {!target && <><label htmlFor="resume-name">Session name</label>
+      <input id="resume-name" autoFocus value={name} maxLength={64} disabled={pending} autoComplete="off" onChange={event => setName(event.target.value)} /></>}
       {error && <p className="error" role="alert">{error}</p>}
-      <button className="primary create-button" disabled={pending}>{pending ? 'Starting…' : 'Resume in new session'}</button>
+      <button className="primary create-button" disabled={pending}>{pending ? 'Starting…' : 'Resume'}</button>
     </form>
   </dialog>
 }

@@ -1,0 +1,88 @@
+/* Find a past chat or an open tab (ChatPicker.tsx). One fixed height, so the box does not jump while the list filters. */
+.cp { display: flex; flex-direction: column; gap: 8px; min-height: 0; height: min(460px, 62dvh); }
+.cp-search { display: flex; align-items: center; gap: 8px; flex: none; min-height: 38px; padding: 0 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--muted); transition: border-color .15s, box-shadow .15s; }
+.cp-search:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
+.cp-search input { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; font-size: 14px; }
+.cp-search input::placeholder { color: var(--muted); }
+
+.cp-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: none; }
+.cp-sources { display: flex; gap: 2px; padding: 2px; border-radius: 9px; background: var(--hover); }
+.cp-sources button { min-height: 26px; padding: 0 9px; border-radius: 7px; font-size: 12.5px; white-space: nowrap; color: var(--muted); transition: background .15s, color .15s; }
+.cp-sources button.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px #0000001f; }
+.cp-sources button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.cp-folder { display: flex; align-items: center; gap: 5px; flex: 1 1 112px; min-width: 0; min-height: 30px; padding: 0 8px; border-radius: 9px; background: var(--hover); color: var(--muted); }
+.cp-folder:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+.cp-folder svg { flex: none; }
+.cp-folder select { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12.5px; text-overflow: ellipsis; cursor: pointer; }
+
+.cp-list { flex: 1; min-height: 0; margin: 0 -14px; padding: 0 8px 4px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; outline: 0; }
+.cp-list section { margin-top: 6px; }
+.cp-list h3 { position: sticky; top: 0; z-index: 1; margin: 0; padding: 5px 6px 3px; background: var(--surface); color: var(--muted); font-size: 11.5px; font-weight: 500; }
+.cp-list ul { margin: 0; padding: 0; list-style: none; }
+.cp-list li { position: relative; display: flex; align-items: center; border-radius: 8px; }
+.cp-list li:hover, .cp-list li:focus-within { background: var(--hover); }
+.cp-main { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0; min-height: 44px; padding: 5px 6px; border-radius: 8px; text-align: start; }
+.cp-main:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.cp-main:disabled { opacity: .6; }
+.cp-icon { display: flex; flex: none; width: 18px; justify-content: center; color: var(--muted); }
+.cp-text { display: grid; flex: 1; min-width: 0; gap: 1px; }
+.cp-title { overflow: hidden; font-size: 13.5px; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
+.cp-meta { display: flex; gap: 6px; min-width: 0; overflow: hidden; color: var(--muted); font-size: 11.5px; line-height: 1.35; white-space: nowrap; }
+.cp-meta > * { flex: none; }
+.cp-meta bdi { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.cp-session { display: inline-flex; align-items: center; gap: 3px; max-width: 45%; overflow: hidden; text-overflow: ellipsis; }
+.cp-session svg { flex: none; }
+.cp-end { flex: none; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.cp-end.working { color: var(--accent); }
+.cp-end.needs { color: var(--error); }
+.cp-move { display: flex; align-items: center; gap: 5px; flex: none; min-height: 28px; margin-inline-end: 6px; padding: 0 8px; border-radius: 7px; background: var(--surface); box-shadow: 0 0 0 1px var(--line); color: var(--text); font-size: 12px; white-space: nowrap; }
+.cp-move:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (hover: hover) {
+  .cp-move { position: absolute; inset-inline-end: 0; opacity: 0; }
+  .cp-list li:hover .cp-move, .cp-move:focus-visible { opacity: 1; }
+}
+@media (hover: none) { .cp-move span { display: none; } .cp-move { min-width: 44px; min-height: 44px; justify-content: center; margin: 0; background: none; box-shadow: none; color: var(--muted); } }
+.cp-more { display: block; width: 100%; min-height: 36px; margin-top: 4px; border-radius: 8px; color: var(--muted); font-size: 12.5px; }
+.cp-more:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.cp-empty { margin: 0; padding: 28px 12px; color: var(--muted); font-size: 13px; text-align: center; }
+.cp-error { margin: 0; font-size: 12.5px; }
+
+/* The two modes at the top of the + popover and New session. */
+.pick-modes { display: flex; gap: 2px; padding: 2px; border-radius: 9px; background: var(--hover); }
+.pick-modes button { min-height: 28px; padding: 0 11px; border-radius: 7px; font-size: 13px; color: var(--muted); white-space: nowrap; transition: background .15s, color .15s; }
+.pick-modes button[aria-selected="true"] { background: var(--surface); color: var(--text); font-weight: 500; box-shadow: 0 1px 2px #0000001f; }
+.pick-modes button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.sheet.popover.task-pop.opening { width: 460px; }
+.task-pop .task-open { display: grid; gap: 10px; padding: 14px 14px 6px; }
+.sheet.session-pick { padding-bottom: 12px; }
+.sheet.session-pick .cp-list { margin: 0 -14px; }
+.sheet.session-pick .sheet-heading { margin-bottom: 14px; }
+.sheet.session-pick .pick-modes { justify-self: start; width: fit-content; margin-bottom: 14px; }
+
+/* Past chats in the sidebar. */
+.past-filters { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin: 0 4px 8px 10px; }
+.past-search { display: flex; align-items: center; gap: 7px; min-height: 30px; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); }
+.past-search:focus-within { border-color: var(--accent); }
+.past-search input { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; font-size: 13px; }
+.past-search input::placeholder { color: var(--muted); }
+.past-filters .cp-filters { min-width: 0; flex-wrap: wrap; }
+.past-list .session-title { display: block; }
+.past-filters .cp-sources button { padding: 0 7px; font-size: 12px; }
+.past-filters .cp-sources button.on { background: var(--sidebar); }
+.past-filters .cp-folder { flex: 1 1 100%; }
+.past-more { display: block; width: calc(100% - 20px); min-height: 30px; margin: 2px 10px 6px; border-radius: 7px; color: var(--muted); font-size: 12.5px; }
+.past-more:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.session-main[draggable="true"] { -webkit-user-drag: element; }
+@media (pointer: coarse) {
+  .past-search { min-height: 40px; }
+  .past-filters .cp-sources button { min-height: 36px; padding: 0 10px; }
+  .cp-sources button { min-height: 36px; }
+}
+
+@media (max-width: 480px) { .sheet.popover.task-pop.opening { width: calc(100vw - 16px); } }
+@media (prefers-reduced-motion: reduce) { .cp-search, .cp-sources button, .pick-modes button { transition: none; } }
+
+.past-opening { margin: 0 10px 8px; color: var(--muted); font-size: 12.5px; }
+.resume-place { width: 100%; margin: 9px 0 24px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--bg); color: var(--text); font: inherit; }
+.cp-empty .link-button, .cp-error .link-button, .group-empty .link-button { display: inline; min-height: 0; padding: 0; border: 0; background: none; color: var(--accent); font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.past-list .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }

@@ -5,6 +5,7 @@ import type { Api, Pane, SessionsData } from './api'
 import { useModal } from './hooks'
 import { AgentIcon, agentNames, needsYou } from './Sidebar'
 import { FoundryTag } from './CodexProvider'
+import { ChatPicker, resumeInNewSession } from './ChatPicker'
 
 
 
@@ -42,6 +43,7 @@ function defaultName() {
 }
 
 export function NewSession({ api, onClose, onCreated }: { api: Api; onClose: () => void; onCreated: (pane: Pane) => void }) {
+  const [opening, setOpening] = useState(false)
   const [name, setName] = useState(defaultName)
   const [agent, setAgent] = useState<'claude' | 'codex' | 'shell'>('claude')
   const [pending, setPending] = useState(false)
@@ -80,9 +82,20 @@ export function NewSession({ api, onClose, onCreated }: { api: Api; onClose: () 
       }
     } finally { if (!abort.signal.aborted) setPending(false) }
   }
-  return <dialog {...modal} className="sheet" aria-labelledby="new-title">
+  const heading = <>
+    <div className="sheet-heading"><h2 id="new-title">{opening ? 'Open a chat' : 'New session'}</h2><button type="button" className="icon-button" aria-label="Close new session" disabled={pending} onClick={onClose}><X /></button></div>
+    <div className="pick-modes" role="tablist" aria-label="New session">
+      <button type="button" role="tab" aria-selected={!opening} disabled={pending} onClick={() => setOpening(false)}>New</button>
+      <button type="button" role="tab" aria-selected={opening} disabled={pending} onClick={() => setOpening(true)}>Open existing</button>
+    </div>
+  </>
+  if (opening) return <dialog {...modal} className="sheet session-pick" aria-labelledby="new-title">
+    {heading}
+    <ChatPicker api={api} onChat={async chat => onCreated(await resumeInNewSession(api, chat))} onTab={onCreated} />
+  </dialog>
+  return <dialog {...modal} className="sheet session-pick" aria-labelledby="new-title">
     <form onSubmit={create}>
-      <div className="sheet-heading"><h2 id="new-title">New session</h2><button type="button" className="icon-button" aria-label="Close new session" disabled={pending} onClick={onClose}><X /></button></div>
+      {heading}
       <p>A fresh terminal, ready for your next task.</p>
       <label htmlFor="session-name">Session name</label>
       <input autoFocus id="session-name" value={name} maxLength={64} onChange={event => setName(event.target.value)} disabled={pending} autoComplete="off" />

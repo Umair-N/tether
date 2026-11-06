@@ -16,7 +16,7 @@
   :root .fx-tabs { padding-right: calc(var(--titlebar-right) + 10px); }
   :root .sh-head { padding-right: calc(var(--titlebar-right) + 16px); }
   :root .preferences-header { padding-right: calc(var(--titlebar-right) + 28px); }
-  :root .viewer-head, :root .text-viewer-head { padding-right: calc(var(--titlebar-right) + 12px); }
+  :root .image-viewer .viewer-head, :root .text-viewer-head { padding-left: max(16px, calc(var(--titlebar-left) + 8px)); padding-right: calc(var(--titlebar-right) + 12px); }
   :root .chat-header:not(.workspace .chat-header) { padding-left: max(10px, var(--titlebar-left)); padding-right: calc(var(--titlebar-right) + 16px); }
 
   /* The empty parts of the top row move the window. */

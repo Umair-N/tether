@@ -1,6 +1,7 @@
-import { useCallback, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ArrowDownToLine, ChevronLeft, ChevronRight, Ellipsis, FolderOpen, X, ZoomIn, ZoomOut } from 'lucide-react'
 import { useModal } from './hooks'
+import { holdThemeColor } from './schemes'
 import './ImageViewer.css'
 
 export type Media = { name: string; url: string; kind?: 'image' | 'video' | 'audio'; error?: string; downloadUrl?: string; thumbnailUrl?: string }
@@ -10,6 +11,9 @@ export function ImageViewer({ image, close, onShow, onDetails, items = [], onSel
   image: Media | null; close: () => void; onShow?: () => void; onDetails?: () => void; items?: Media[]; onSelect?: (image: Media) => void
 }) {
   const modal = useModal(!!image, close)
+  // The installed app draws its window controls in the theme color: match the dark surface while it shows.
+  const showing = !!image
+  useEffect(() => showing ? holdThemeColor('#0b0c0e') : undefined, [showing])
   const index = image ? items.findIndex(item => item.url === image.url) : -1
   const grouped = index >= 0 && items.length > 1 && !!onSelect
   const move = (delta: number) => { const next = items[index + delta]; if (grouped && next) onSelect?.(next) }

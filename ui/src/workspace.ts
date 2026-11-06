@@ -99,7 +99,7 @@ export function addSlot(visible: string[], focus: number, id: string): { panes: 
 }
 
 /** Drag and drop types: a pane or session from the sidebar, or a slot header being moved. */
-export const DRAG_PANE = 'application/x-tether-pane', DRAG_SESSION = 'application/x-tether-session', DRAG_SLOT = 'application/x-tether-slot'
+export const DRAG_PANE = 'application/x-tether-pane', DRAG_SESSION = 'application/x-tether-session', DRAG_SLOT = 'application/x-tether-slot', DRAG_CHAT = 'application/x-tether-chat'
 
 /** Show pane `id` in a new slot right after slot `after`. A pane already on screen moves there. At most 4 slots. */
 export function insertSlot(visible: string[], id: string, after: number): string[] {

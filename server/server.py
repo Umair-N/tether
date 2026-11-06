@@ -36,7 +36,7 @@ import login_flow
 import saved_accounts
 import history
 import live as live_state
-from terminal_input import resume_session, rename_agent
+from terminal_input import resume_command, resume_session, rename_agent
 from terminal_input import stash_quiet_draft, restore_check, clear_unsent, prompt_draft
 import model_picker
 import prompt_actions
@@ -1250,7 +1250,7 @@ class Handler(BaseHTTPRequestHandler):
                 # Only the sheet's Refresh starts a Codex check (at most one per 30 s); the 60 s sidebar poll reuses its result.
                 self.respond(200, usage_summary(live_age=30 if parse_qs(urlsplit(self.path).query).get('live') == ['1'] else float('inf')))
             elif path == '/mobile/api/history':
-                query = parse_qs(urlsplit(self.path).query)
+                query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
                 try:
                     limit = int(query.get('limit', [30])[0])
                     if not 1 <= limit <= 100:
@@ -1258,10 +1258,41 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError:
                     self.respond(400, {'error': 'Use a limit from 1 to 100.'})
                     return
-                live = {entry.get('thread') for entry in sessions()}
-                chats = [dict(id=chat['id'], title=chat['title'], dir=home_path(chat['cwd']) or None,
-                              time=chat['time'], live=chat['id'] in live) for chat in history.recent_chats(limit)]
-                self.respond(200, {'chats': chats})
+                try:
+                    offset = int(query.get('offset', [0])[0])
+                    if offset < 0:
+                        raise ValueError('Invalid offset.')
+                except ValueError:
+                    self.respond(400, {'error': 'Use an offset of 0 or more.'})
+                    return
+                agent = query.get('agent', ['all'])[0]
+                state = query.get('state', ['all'])[0]
+                if agent not in ('all', 'claude', 'codex') or state not in ('all', 'open', 'closed'):
+                    self.respond(400, {'error': 'Use agent all, claude, or codex and state all, open, or closed.'})
+                    return
+                live = {entry['thread']: entry['id'] for entry in sessions() if entry.get('thread')}
+                index = history.all_chats()
+                filters = dict(q=query.get('q', [''])[0][:200], state=state, live=live, display_dir=home_path)
+                directory = query.get('dir', [None])[0]
+                matches = history.search_chats(index, agent=agent, dir=directory, **filters)
+                count_matches = history.search_chats(index, dir=directory, **filters)
+                counts = {'all': len(count_matches),
+                          'claude': sum(chat['agent'] == 'claude' for chat in count_matches),
+                          'codex': sum(chat['agent'] == 'codex' for chat in count_matches)}
+                directories = {}
+                for chat in history.search_chats(index, agent=agent, **filters):
+                    folder = home_path(chat['cwd'])
+                    if folder:
+                        directories[folder] = directories.get(folder, 0) + 1
+                dirs = [{'dir': folder, 'count': count} for folder, count in
+                        sorted(directories.items(), key=lambda item: (-item[1], item[0]))[:30]]
+                chats = [dict(id=chat['id'], agent=chat['agent'], title=chat['title'],
+                              dir=home_path(chat['cwd']) or None, time=chat['time'],
+                              live=chat['id'] in live, pane=live.get(chat['id']))
+                         for chat in matches[offset:offset + limit]]
+                self.respond(200, {'chats': chats, 'total': len(matches),
+                                   'next': offset + limit if offset + limit < len(matches) else None,
+                                   'counts': counts, 'dirs': dirs})
             elif path == '/mobile/api/push/config':
                 self.respond(200, {'supported': push.available(), 'publicKey': push.vapid_keys()[1] if push.available() else None, 'muted': push.muted(), 'levels': push.pane_levels(), 'delivery': push.delivery_settings()})
             elif path == '/mobile/api/search':
@@ -1696,14 +1727,42 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(201, {'pane': new_pane, 'name': name})
                 return
             if self.path == '/mobile/api/resume':
-                chat = history.find_chat(body.get('id'))
+                agent = body.get('agent', 'claude')
+                if agent not in ('claude', 'codex'):
+                    raise ValueError('Choose Claude or Codex.')
+                if ('name' in body) == ('after' in body):
+                    raise ValueError('Choose exactly one target: name or after.')
+                if 'name' in body and not valid_name(body['name']):
+                    raise ValueError(NAME_HELP)
+                chat = history.find_chat(body.get('id'), agent=agent)
                 if chat is None:
                     self.respond(404, {'error': 'Chat not found.'})
                     return
                 cwd = chat['cwd'] if chat['cwd'] and os.path.isdir(chat['cwd']) else str(paths.HOME)
                 with SEND_LOCK:
+                    entries = sessions()
+                    live = next((entry for entry in entries if entry.get('thread') == chat['id']), None)
+                    if live is not None:
+                        self.respond(409, {'error': 'That chat is already open.', 'pane': live['id']})
+                        return
+                    if 'after' in body and not any(entry['id'] == body['after'] for entry in entries):
+                        raise ValueError('Choose a pane from the live session list to open the chat after.')
+                    profile = codex_provider.launch_profile() if agent == 'codex' else None
+                    command = resume_command(chat['id'], agent=agent, profile=profile)
                     try:
-                        pane = resume_session(body.get('name'), cwd, body['id'], run=subprocess.run)
+                        if 'name' in body:
+                            name = body['name']
+                            pane = resume_session(name, cwd, chat['id'], run=subprocess.run, agent=agent, profile=profile)
+                        else:
+                            name = chat['title'][:60]
+                            pane = new_window_after(body['after'], subprocess.run, cwd=cwd)
+                            subprocess.run([paths.TMUX, 'set-option', '-p', '-t', pane, '@chat_name', name, ';',
+                                            'set-option', '-p', '-t', pane, '@chat_name_at', str(int(time.time() * 1000))],
+                                           check=True, capture_output=True, timeout=5)
+                            subprocess.run([paths.TMUX, 'send-keys', '-t', pane, '-l', command],
+                                           check=True, capture_output=True, timeout=5)
+                            subprocess.run([paths.TMUX, 'send-keys', '-t', pane, 'Enter'],
+                                           check=True, capture_output=True, timeout=5)
                     except RuntimeError as exc:
                         if 'already exists' not in str(exc):
                             raise
@@ -1711,7 +1770,7 @@ class Handler(BaseHTTPRequestHandler):
                         return
                     result = subprocess.run([paths.TMUX, 'display-message', '-p', '-t', pane, '#{session_id}'],
                                             check=True, capture_output=True, text=True, timeout=5)
-                self.respond(201, {'session': result.stdout.strip(), 'pane': pane, 'name': body['name']})
+                self.respond(201, {'session': result.stdout.strip(), 'pane': pane, 'name': name})
                 return
             if self.path == '/mobile/api/push/mute':
                 self.respond(200, {'muted': push.set_muted(body.get('session'), body.get('muted'))})

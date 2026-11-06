@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowUp, LoaderCircle, Paperclip, X } from 'lucide-react'
 import { errorText } from './api'
 import type { Api, Pane } from './api'
 import { useModal, usePopover } from './hooks'
 import type { Anchor } from './hooks'
 import { uploadFile } from './Composer'
+import { ChatPicker, resumeChat } from './ChatPicker'
 import { AgentIcon, agentNames } from './Sidebar'
 import './NewTask.css'
 
@@ -18,9 +19,12 @@ const lastWorker = () => { try { return localStorage.getItem('tether.newTask.age
 
 // The + on the tab strip: a task for a new tab. The server opens the tab beside this one, starts the agent with the
 // task, and the user stays here (server/delegate.py). Either tab can review the other, and this tab can lend its chat as context.
-export function NewTask({ api, pane, at, onClose, onEmpty, onCreated }: { api: Api; pane: Pane; at: Anchor; onClose: () => void; onEmpty: () => void; onCreated: (pane: string) => void }) {
+export function NewTask({ api, pane, at, onClose, onEmpty, onCreated, onOpen, onMoved }: { api: Api; pane: Pane; at: Anchor; onClose: () => void; onEmpty: () => void; onCreated: (pane: string) => void; onOpen: (pane: Pane) => void; onMoved: (pane: Pane) => void }) {
   const modal = useModal(true, () => { if (!pending) onClose() })
-  const popover = usePopover(modal.ref, at, onClose)
+  const [opening, setOpening] = useState(false)
+  // Open existing is 100 px wider, and the box keeps its right edge under the +.
+  const place = useMemo(() => opening ? { ...at, x: at.x - 100 } : at, [at, opening])
+  const popover = usePopover(modal.ref, place, onClose)
   const [text, setText] = useState('')
   const [agent, setAgent] = useState<Worker>(lastWorker)
   const [review, setReview] = useState<Review>('off')
@@ -75,10 +79,21 @@ export function NewTask({ api, pane, at, onClose, onEmpty, onCreated }: { api: A
       if (!abort.signal.aborted) { setError(errorText(error)); setPending(false) }
     }
   }
-  return <dialog {...modal} {...popover} className={pending ? 'sheet popover task-pop working' : 'sheet popover task-pop'} aria-labelledby="task-title"
+  const modes = <div className="pick-modes" role="tablist" aria-label="New tab">
+    <button type="button" role="tab" aria-selected={!opening} disabled={pending} onClick={() => setOpening(false)}>New task</button>
+    <button type="button" role="tab" aria-selected={opening} disabled={pending} onClick={() => setOpening(true)}>Open existing</button>
+  </div>
+  const emptyTab = <button type="button" className="task-empty" disabled={pending} onClick={onEmpty}>Empty tab</button>
+  return <dialog {...modal} {...popover} className={['sheet popover task-pop', pending && 'working', opening && 'opening'].filter(Boolean).join(' ')} aria-label="New tab"
     onCancel={event => { event.stopPropagation(); if (!pending) modal.onCancel(event); else event.preventDefault() }}>
-    <form onSubmit={create}>
-      <div className="task-head"><h2 id="task-title">New tab with a task</h2><button type="button" className="task-empty" disabled={pending} onClick={onEmpty}>Empty tab</button></div>
+    {opening && <div className="task-open">
+      <div className="task-head">{modes}{emptyTab}</div>
+      <ChatPicker api={api} exclude={pane.id} here={pane.tmux_session}
+        onChat={async chat => onOpen(await resumeChat(api, chat, { after: pane.id }))} onTab={onOpen}
+        onMove={async other => { await api('merge', { kind: 'pane', source: other.id, target: pane.tmux_session }); onMoved(other) }} />
+    </div>}
+    {!opening && <form onSubmit={create}>
+      <div className="task-head">{modes}{emptyTab}</div>
       <div className="task-field">
         <textarea ref={field} value={text} rows={3} maxLength={20000} disabled={pending} aria-label="Task" placeholder={review === 'new' ? 'What should it check? Optional.' : 'What should it work on?'}
           onChange={event => { setText(event.target.value); if (error) setError('') }}
@@ -115,6 +130,6 @@ export function NewTask({ api, pane, at, onClose, onEmpty, onCreated }: { api: A
       <button className="primary task-create" disabled={pending || uploading > 0}>
         <span>{pending ? `Starting ${agentNames[agent]}…` : 'Create'}</span>{pending ? <LoaderCircle size={16} className="task-spin" /> : <ArrowUp size={16} />}
       </button>
-    </form>
+    </form>}
   </dialog>
 }

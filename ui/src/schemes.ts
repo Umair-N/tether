@@ -47,3 +47,11 @@ export function applyScheme(id: string | undefined) {
     meta.content = meta.media.includes('dark') ? scheme.dark.bg : scheme.light.bg
   })
 }
+
+/** Use one browser theme color until the returned function runs. For surfaces that fill the window, such as the media viewer. */
+export function holdThemeColor(color: string) {
+  const metas = [...document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')]
+  const before = metas.map(meta => meta.content)
+  metas.forEach(meta => { meta.content = color })
+  return () => metas.forEach((meta, at) => { meta.content = before[at] })
+}

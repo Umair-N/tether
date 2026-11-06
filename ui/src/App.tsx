@@ -17,6 +17,8 @@ import { isTabArchived, tabNeighbor, withTabArchived, withoutTab } from './tabAr
 import { selectPane } from './paneSelection'
 import type { SelectionSnapshot } from './paneSelection'
 import { NewSession } from './NewSession'
+import { resumeChat } from './ChatPicker'
+import type { ChatAgent } from './api'
 import { Chat } from './Chat'
 import type { SlotControls } from './Chat'
 import { SlotPicker, Workspace } from './Workspace'
@@ -305,6 +307,20 @@ function App() {
     setZoomed(false)
     update(current => { const stored = deskFor(current.layout, deskKey); return { selected: id, layout: withDesk(current.layout, deskKey, { ...stored, ...shape, focus: shape.panes.indexOf(id), guests: guestsWith(stored, id) }) } })
   }
+  // A past chat dropped on a slot: it opens as a tab of the slot's session, then shows there once the list has it.
+  const pendingDrop = useRef<{ id: string; index: number; side: Side | null } | null>(null)
+  useEffect(() => {
+    const waiting = pendingDrop.current
+    if (waiting && live.has(waiting.id)) { pendingDrop.current = null; dropPane(waiting.id, waiting.index, waiting.side) }
+  })
+  const dropChat = (data: string, index: number, side: Side | null) => {
+    let chat: { id: string; agent: ChatAgent }
+    try { chat = JSON.parse(data) } catch { return }
+    const beside = view?.slots[index] ?? pane?.id
+    if (!beside) return
+    setNotice('Opening the chat…')
+    resumeChat(api, chat, { after: beside }).then(opened => { pendingDrop.current = { id: opened.id, index, side }; setNotice(''); void refresh() }, failure => setNotice(errorText(failure)))
+  }
   // The "Show in this window" items of the actions menu: each one only when it fits the layout.
   const placeFor = (id: string, all?: Session): Place | undefined => {
     if (!view) return undefined
@@ -571,8 +587,8 @@ function App() {
     return { order }
   })
   const pickPastChat = (chat: PastChat) => {
-    const live = chat.live ? panes.find(item => item.thread === chat.id) : undefined
-    if (live) openPane(live)
+    const open = chat.live ? panes.find(item => item.id === chat.pane) ?? panes.find(item => item.thread === chat.id) : undefined
+    if (open) openPane(open)
     else { setDrawer(false); setResume(chat) }
   }
   const canMessage = sessions.some(item => item.panes.some(p => p.agent !== 'shell' && p.writable))
@@ -607,7 +623,7 @@ function App() {
   return <WordsContext.Provider value={words}><main className={['app-shell', view && !desk.sidebar && 'no-sidebar', wide && 'with-rail', files && 'screen-files', wide && share && 'screen-share', !wide && 'phone-tabs', phoneFiles && 'phone-files', !wide && share && 'phone-share'].filter(Boolean).join(' ')}>{wide && <Rail screen={screen} onScreen={chooseScreen} onLive={openLive} />}<aside className="sidebar"><Sidebar {...sidebarProps} /></aside><dialog {...drawerModal} className="drawer" aria-label="Sessions" onClick={event => { const box = event.currentTarget.getBoundingClientRect(); if (event.target === event.currentTarget && (event.clientX > box.right || event.clientX < box.left || event.clientY < box.top || event.clientY > box.bottom)) setDrawer(false) }} onTouchStart={event => { drawerTouch.current = (event.target as Element).closest('.swipe-row') ? null : { x: event.touches[0].clientX, y: event.touches[0].clientY } }} onTouchEnd={event => { const start = drawerTouch.current; drawerTouch.current = null; if (!start) return; const dx = event.changedTouches[0].clientX - start.x, dy = event.changedTouches[0].clientY - start.y; if (dx < -60 && Math.abs(dy) < Math.abs(dx) * 0.6) setDrawer(false) }}>{drawer && <Sidebar {...sidebarProps} onClose={() => setDrawer(false)} />}</dialog>
     {pane ? (view ? <Workspace layout={desk} slots={slotPanes} focus={view.focus} zoomed={zoomed && multi} onCount={setCount} onFocus={focusSlot} onLayout={setDesk}
       renderSlot={(target, index, shown) => chatFor(target, shown > 1 || zoomed ? { index, zoomed, onZoom: toggleZoom, onClose: zoomed ? undefined : () => closeSlot(index), onPick: () => setPicking(index), onDragStart: event => { event.dataTransfer.setData(DRAG_SLOT, String(index)); event.dataTransfer.effectAllowed = 'move' } } : undefined)}
-      onDropPane={dropPane} onDropSession={dropSession} onSwap={swap}
+      onDropPane={dropPane} onDropSession={dropSession} onDropChat={dropChat} onSwap={swap}
       tools={<>
         {owner && owner.panes.length > 1 && <button type="button" className="icon-button" aria-label={`Show all panes of ${owner.name}`} title={`Show all panes of ${owner.name}`} onClick={() => showSession(owner)}><LayoutDashboard size={17} /></button>}
         <button type="button" className="icon-button" aria-label={words.newRight} title={words.tmux ? 'New pane right (tmux split, opens in a new slot)' : 'New tab, opens in a new slot'} onClick={() => void split('right')}><SquareSplitHorizontal size={17} /></button>
@@ -650,7 +666,7 @@ function App() {
       onArchive={() => update(toggleArchive(actionSession))}
       onMove={step => move(actionSession.id, step)} onProject={() => { setActions(null); setProject({ session: actionSession.id }) }} onClose={() => setActions(null)} onDone={(newPane, direction) => { setActions(null); if (newPane) void openNewPane(newPane, direction); else void refresh() }} />}
     {paneActions && panes.find(item => item.id === paneActions) && (() => { const target = panes.find(item => item.id === paneActions)!; const shown = sessions.find(item => item.id === target.tmux_session); const archived = isTabArchived(target, prefs.archivedTabs) || (!!shown && shown.panes.length <= 1 && isArchived(shown, prefs.archived)); return <PaneActions api={api} panes={panes} tabCount={panes.filter(item => item.tmux_session === target.tmux_session).length} archived={archived} onArchive={() => archived ? restoreTab(target) : archiveTab(target)} pane={target} at={menuAt} place={placeFor(target.id)} session={sessions.find(item => item.id === target.tmux_session)} targets={moveTargets} onClose={() => setPaneActions(null)} onFork={() => { setPaneActions(null); void fork(target) }} onDone={(newPane, direction) => { setPaneActions(null); if (newPane) void openNewPane(newPane, direction); else void refresh() }} /> })()}
-    {resume && <ResumeChat api={api} chat={resume} onClose={() => setResume(null)} onOpened={id => { setResume(null); openById(id) }} />}
+    {resume && <ResumeChat api={api} chat={resume} sessions={sessions} onClose={() => setResume(null)} onOpened={id => { setResume(null); openById(id) }} />}
     {notice && <div className="toast app-toast" role="status">{notice}</div>}
     {planSheet && <PlanUsage api={api} onClose={() => setPlanSheet(false)} />}
     {view && menu === 'commands' && <CommandMenu sessions={sortByPrefs(sessions, prefs.order).filter(item => !isArchived(item, prefs.archived))} seen={prefs.seen} selected={pane?.id} slots={multi ? view.slots : []} commands={commands} onPane={openPane} onSession={showSession} onClose={() => setMenu(null)} />}

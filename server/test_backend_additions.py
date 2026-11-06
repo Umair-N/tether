@@ -3,14 +3,17 @@ import io
 import json
 import os
 from pathlib import Path
+import sqlite3
 import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch, Mock
+from urllib.parse import urlencode
 
 import history
 import paths
 import server
+import terminal_input
 
 CHAT = '12345678-1234-1234-1234-123456789abc'
 OTHER = '87654321-1234-1234-1234-123456789abc'
@@ -26,6 +29,8 @@ class BackendTests(unittest.TestCase):
         self.patch = patch.object(paths, 'CLAUDE', self.root)
         self.patch.start()
         self.addCleanup(self.patch.stop)
+        self.enterContext(patch.object(paths, 'CODEX', self.root / 'codex'))
+        self.enterContext(patch.object(paths, 'HOME', self.root))
         history._previews.clear()
         self.addCleanup(history._previews.clear)
         self.run = self.enterContext(patch.object(server.subprocess, 'run'))
@@ -37,6 +42,21 @@ class BackendTests(unittest.TestCase):
         path = self.project / (identifier + '.jsonl')
         path.write_text('\n'.join(json.dumps(record) for record in records) + '\n')
         return path
+
+    def codex_database(self, rows, columns=None, version=5):
+        paths.CODEX.mkdir(exist_ok=True)
+        database = paths.CODEX / f'state_{version}.sqlite'
+        columns = columns or {'id': 'TEXT', 'name': 'TEXT', 'title': 'TEXT', 'first_user_message': 'TEXT',
+                              'cwd': 'TEXT', 'updated_at_ms': 'INT', 'archived': 'INT',
+                              'source': 'TEXT', 'has_user_event': 'INT'}
+        with sqlite3.connect(database) as connection:
+            connection.execute('CREATE TABLE threads (' + ', '.join(f'{key} {kind}' for key, kind in columns.items()) + ')')
+            for row in rows:
+                values = dict(id=CHAT, cwd=str(self.root), updated_at_ms=1000, archived=0, source='cli', has_user_event=1)
+                values.update(row)
+                connection.execute('INSERT INTO threads VALUES (' + ','.join('?' for _ in columns) + ')',
+                                   [values.get(key) for key in columns])
+        return database
 
     def request(self, route, body=None, method='POST', headers=None, denied=False):
         handler = object.__new__(server.Handler)
@@ -366,6 +386,7 @@ class BackendTests(unittest.TestCase):
         self.assertIsNone(history.find_chat(CHAT))
 
     def test_resume_uses_transcript_cwd_literal_text_enter_and_session_id(self):
+        self.entries.return_value = []
         self.transcript([{'cwd': str(self.root)}])
         self.run.side_effect = [subprocess.CompletedProcess([], 0, stdout='%13\n', stderr=''),
                                 subprocess.CompletedProcess([], 0), subprocess.CompletedProcess([], 0),
@@ -377,9 +398,10 @@ class BackendTests(unittest.TestCase):
                                     [paths.TMUX, 'send-keys', '-t', '%13', '-l', 'claude --resume ' + CHAT],
                                     [paths.TMUX, 'send-keys', '-t', '%13', 'Enter'],
                                     [paths.TMUX, 'display-message', '-p', '-t', '%13', '#{session_id}']])
-        self.entries.assert_not_called()
+        self.entries.assert_called_once()
 
     def test_resume_validation_fallback_duplicate_and_failures(self):
+        self.entries.return_value = []
         for identifier in ('../bad', '', None, 123):
             self.assertEqual(self.request('/mobile/api/resume', {'id': identifier, 'name': 'ok'})[0], 400)
         self.assertEqual(self.request('/mobile/api/resume', {'id': CHAT, 'name': 'ok'})[0], 404)
@@ -393,6 +415,212 @@ class BackendTests(unittest.TestCase):
             self.assertEqual(self.run.call_args.args[0][6], str(paths.HOME))
         self.run.side_effect = subprocess.TimeoutExpired('tmux', 5)
         self.assertEqual(self.request('/mobile/api/resume', {'id': CHAT, 'name': 'ok'})[0], 503)
+
+    def test_codex_history_interactive_rows_titles_and_search_text(self):
+        ids = [f'00000000-0000-0000-0000-{number:012x}' for number in range(10)]
+        self.codex_database([
+            {'id': ids[0], 'name': '  My\n name  ', 'title': 'ignored', 'first_user_message': 'search ' * 60},
+            {'id': ids[1], 'source': 'vscode', 'name': ' ', 'title': ' A\t title '},
+            {'id': ids[2], 'first_user_message': ' first\n user ' + 'x' * 90},
+            {'id': ids[3]},
+            {'id': ids[4], 'source': 'exec'},
+            {'id': ids[5], 'source': 'subagent'},
+            {'id': ids[6], 'source': '{"subagent":{"thread_spawn":{}}}'},
+            {'id': ids[7], 'archived': 1},
+            {'id': ids[8], 'has_user_event': 0},
+            {'id': ids[9], 'source': 'other'},
+        ])
+        self.transcript([{'type': 'user', 'message': {'content': 'Claude text'}}])
+        chats = history.all_chats()
+        codex = [chat for chat in chats if chat['agent'] == 'codex']
+        self.assertEqual([chat['id'] for chat in codex], ids[:4])
+        self.assertEqual([chat['title'] for chat in codex], ['My name', 'A title', ('first user ' + 'x' * 90)[:80], ids[3]])
+        self.assertEqual(codex[0]['text'], ('search ' * 60)[:300])
+        self.assertEqual(codex[0]['time'], '1970-01-01T00:00:01+00:00')
+        self.assertEqual(codex[0]['cwd'], str(self.root))
+        self.assertEqual(history.find_chat(ids[0], agent='codex'), codex[0])
+        for identifier in ids[4:]:
+            self.assertIsNone(history.find_chat(identifier, agent='codex'))
+        self.assertEqual(chats[0]['agent'], 'claude')
+        self.assertEqual(chats[0]['text'], 'Claude text')
+        self.run.assert_not_called()
+
+    def test_codex_history_missing_unreadable_and_older_schemas(self):
+        self.assertEqual(history.all_chats(), [])
+        self.assertIsNone(history.find_chat(CHAT, agent='codex'))
+        columns = {'id': 'TEXT', 'cwd': 'TEXT', 'title': 'TEXT', 'updated_at_ms': 'INT',
+                   'archived': 'INT', 'source': 'TEXT'}
+        self.codex_database([{'title': 'Old title'}, {'id': OTHER, 'source': 'exec'}], columns, version=9)
+        self.assertEqual([chat['title'] for chat in history.all_chats()], ['Old title'])
+        # Choose the newest schema number, as agents.codex_database does.
+        self.codex_database([{'name': 'New title'}], version=10)
+        self.assertEqual(history.find_chat(CHAT, agent='codex')['title'], 'New title')
+        self.codex_database([{}], {'id': 'TEXT', 'cwd': 'TEXT'}, version=11)
+        chat = history.find_chat(CHAT, agent='codex')
+        self.assertEqual((chat['title'], chat['text'], chat['time']), (CHAT, '', None))
+        self.codex_database([{}], {'cwd': 'TEXT'}, version=12)
+        self.assertEqual(history.all_chats(), [])
+        (paths.CODEX / 'state_13.sqlite').write_bytes(b'not a database')
+        self.assertEqual(history.all_chats(), [])
+        self.assertIsNone(history.find_chat(CHAT, agent='codex'))
+        with patch.object(history.sqlite3, 'connect', side_effect=sqlite3.OperationalError('unreadable')):
+            self.assertEqual(history.all_chats(), [])
+
+    def test_all_claude_chats_and_long_first_user_text(self):
+        for number in range(35):
+            identifier = f'00000000-0000-0000-0000-{number:012x}'
+            self.transcript([{'type': 'user', 'isSidechain': True, 'message': {'content': 'skip'}},
+                             {'type': 'user', 'message': {'content': 'a' * 90 + ' hidden ' + 'b' * 240}}], identifier)
+        self.assertEqual(len(history.all_chats()), 35)
+        self.assertEqual(len(history.recent_chats()), 30)
+        chat = history.all_chats()[0]
+        self.assertEqual(chat['title'], 'a' * 80)
+        self.assertEqual(len(chat['text']), 300)
+        self.assertIn('hidden', chat['text'])
+        self.assertEqual(len(history.search_chats(history.all_chats(), q='hidden')), 35)
+
+    def test_search_chats_terms_agent_state_and_displayed_directory(self):
+        chats = [dict(id=CHAT, agent='claude', title='Build API', text='Hidden NEEDLE', cwd='/Users/test/app', time='2026-01-01'),
+                 dict(id=OTHER, agent='codex', title='Build tests', text='needle', cwd='/Users/test/other', time='2026-02-01'),
+                 dict(id='third', agent='codex', title='API', text='', cwd=None, time=None)]
+        self.assertEqual(history.search_chats(chats), [chats[1], chats[0], chats[2]])
+        self.assertEqual(history.search_chats(chats, q='  BUILD\tneedle APP '), [chats[0]])
+        self.assertEqual(history.search_chats(chats, q='build absent'), [])
+        self.assertEqual(history.search_chats(chats, agent='codex'), [chats[1], chats[2]])
+        self.assertEqual(history.search_chats(chats, state='open', live={OTHER}), [chats[1]])
+        self.assertEqual(history.search_chats(chats, state='closed', live={OTHER}), [chats[0], chats[2]])
+        self.assertEqual(history.search_chats(chats, dir='~/app', display_dir=lambda cwd: server.home_path(cwd)), [])
+        with patch.object(server.Path, 'home', return_value=Path('/Users/test')):
+            self.assertEqual(history.search_chats(chats, dir='~/app', display_dir=server.home_path), [chats[0]])
+
+    def test_history_route_paging_counts_and_directory_filters(self):
+        chats = [dict(id=CHAT, agent='claude', title='API one', text='secret', cwd='/Users/test/a', time='2026-04-01'),
+                 dict(id=OTHER, agent='codex', title='API two', text='secret', cwd='/Users/test/a', time='2026-03-01'),
+                 dict(id='third', agent='codex', title='API three', text='secret', cwd='/Users/test/b', time='2026-02-01'),
+                 dict(id='fourth', agent='claude', title='API four', text='secret', cwd=None, time='2026-01-01'),
+                 dict(id='fifth', agent='claude', title='Unrelated', text='', cwd='/Users/test/z', time='2026-05-01')]
+        with patch.object(history, 'all_chats', return_value=chats), \
+                patch.object(server.Path, 'home', return_value=Path('/Users/test')):
+            def get(**query):
+                status, body = self.request('/mobile/api/history?' + urlencode(query), method='GET')
+                self.assertEqual(status, 200)
+                return body
+            body = get(q='api', limit=2)
+            self.assertEqual((body['total'], body['next']), (4, 2))
+            self.assertEqual(body['counts'], {'all': 4, 'claude': 2, 'codex': 2})
+            self.assertEqual(body['dirs'], [{'dir': '~/a', 'count': 2}, {'dir': '~/b', 'count': 1}])
+            self.assertEqual(body['chats'][0], dict(id=CHAT, agent='claude', title='API one', dir='~/a',
+                                                  time='2026-04-01', live=True, pane='%12'))
+            self.assertIsNone(body['chats'][1]['pane'])
+            self.assertFalse(body['chats'][1]['live'])
+            self.assertTrue(all(set(chat) == {'id', 'agent', 'title', 'dir', 'time', 'live', 'pane'} for chat in body['chats']))
+            page = get(q='api', limit=2, offset=body['next'])
+            self.assertEqual((page['total'], page['next']), (4, None))
+            self.assertEqual([chat['id'] for chat in page['chats']], ['third', 'fourth'])
+            self.assertEqual(get(offset=99)['chats'], [])
+            body = get(q='api', agent='codex', dir='~/b')
+            self.assertEqual([chat['id'] for chat in body['chats']], ['third'])
+            self.assertEqual(body['counts'], {'all': 1, 'claude': 0, 'codex': 1})
+            self.assertEqual(body['dirs'], [{'dir': '~/a', 'count': 1}, {'dir': '~/b', 'count': 1}])
+            body = get(q='api', agent='codex', dir='~/a', state='closed')
+            self.assertEqual(body['counts'], {'all': 1, 'claude': 0, 'codex': 1})
+            self.assertEqual(body['dirs'], [{'dir': '~/a', 'count': 1}, {'dir': '~/b', 'count': 1}])
+            body = get(q='api', agent='codex', state='open')
+            self.assertEqual(body['chats'], [])
+            self.assertEqual(body['counts'], {'all': 1, 'claude': 1, 'codex': 0})
+            self.assertEqual(body['dirs'], [])
+            self.assertEqual(get(q='secret')['total'], 4)
+        self.run.assert_not_called()
+
+    def test_history_route_bad_parameters_query_cap_and_directory_cap(self):
+        for query in ('limit=', 'limit=0', 'limit=101', 'limit=x', 'offset=-1', 'offset=1.2',
+                      'offset=', 'offset=x', 'agent=', 'agent=exec', 'state=', 'state=live'):
+            with self.subTest(query=query):
+                status, body = self.request('/mobile/api/history?' + query, method='GET')
+                self.assertEqual(status, 400)
+                self.assertIn('error', body)
+        chats = [dict(id=str(number), agent='claude', title='x' * 200, text='', cwd=f'/app/{number:02}', time='')
+                 for number in range(35)]
+        with patch.object(history, 'all_chats', return_value=chats):
+            _, body = self.request('/mobile/api/history?' + urlencode({'q': 'x' * 200 + 'missing'}), method='GET')
+        self.assertEqual(body['total'], 35)
+        self.assertEqual(len(body['chats']), 30)
+        self.assertEqual(len(body['dirs']), 30)
+        self.assertEqual(body['dirs'][0], {'dir': '/app/00', 'count': 1})
+        self.run.assert_not_called()
+
+    def test_resume_codex_with_and_without_profile(self):
+        self.entries.return_value = []
+        self.codex_database([{}])
+        for profile in (None, 'foundry'):
+            with self.subTest(profile=profile), patch.object(server.codex_provider, 'launch_profile', return_value=profile) as launch:
+                self.run.reset_mock()
+                self.run.side_effect = [subprocess.CompletedProcess([], 0, stdout='%13\n', stderr=''),
+                                        subprocess.CompletedProcess([], 0), subprocess.CompletedProcess([], 0),
+                                        subprocess.CompletedProcess([], 0, stdout='$7\n')]
+                self.assertEqual(self.request('/mobile/api/resume', {'id': CHAT, 'agent': 'codex', 'name': 'past-chat'}),
+                                 (201, {'session': '$7', 'pane': '%13', 'name': 'past-chat'}))
+                command = 'codex' + (' -p foundry' if profile else '') + ' resume ' + CHAT
+                self.assertEqual(self.run.call_args_list[1].args[0], [paths.TMUX, 'send-keys', '-t', '%13', '-l', command])
+                launch.assert_called_once_with()
+
+    def test_resume_after_opens_next_window_names_and_launches_under_lock(self):
+        self.entries.return_value = [{'id': '%12', 'thread': OTHER}]
+        title = 'A chat title ' * 8
+        self.codex_database([{'name': title}])
+        commands = []
+        outputs = ['@7\t/old\n', 'manual\t120\t40\n', '%13\n', '', '', '', '', '$7\n']
+        def run(command, **kwargs):
+            self.assertTrue(server.SEND_LOCK.locked())
+            commands.append(command)
+            return subprocess.CompletedProcess([], 0, stdout=outputs[len(commands) - 1], stderr='')
+        self.run.side_effect = run
+        with patch.object(server.codex_provider, 'launch_profile', return_value='foundry'):
+            self.assertEqual(self.request('/mobile/api/resume', {'id': CHAT, 'agent': 'codex', 'after': '%12'}),
+                             (201, {'session': '$7', 'pane': '%13', 'name': title[:60]}))
+        self.assertEqual(commands[:4], [
+            [paths.TMUX, 'display-message', '-p', '-t', '%12', '#{window_id}\t#{pane_current_path}'],
+            [paths.TMUX, 'display-message', '-p', '-t', '@7', '#{window-size}\t#{window_width}\t#{window_height}'],
+            [paths.TMUX, 'new-window', '-a', '-t', '@7', '-c', str(self.root), '-P', '-F', '#{pane_id}'],
+            [paths.TMUX, 'resize-window', '-t', '%13', '-x', '120', '-y', '40']])
+        self.assertEqual(commands[4][:13], [paths.TMUX, 'set-option', '-p', '-t', '%13', '@chat_name', title[:60], ';',
+                                            'set-option', '-p', '-t', '%13', '@chat_name_at'])
+        self.assertTrue(commands[4][13].isdigit())
+        self.assertEqual(commands[5:], [
+            [paths.TMUX, 'send-keys', '-t', '%13', '-l', 'codex -p foundry resume ' + CHAT],
+            [paths.TMUX, 'send-keys', '-t', '%13', 'Enter'],
+            [paths.TMUX, 'display-message', '-p', '-t', '%13', '#{session_id}']])
+
+    def test_resume_targets_agent_unknown_pane_and_live_conflicts(self):
+        self.transcript([{'type': 'user', 'message': {'content': 'Title'}}])
+        for body in ({'id': CHAT}, {'id': CHAT, 'name': 'new', 'after': '%12'},
+                     {'id': CHAT, 'agent': 'exec', 'name': 'new'}, {'id': CHAT, 'agent': None, 'name': 'new'}):
+            self.assertEqual(self.request('/mobile/api/resume', body)[0], 400)
+        for agent in ('claude', 'codex'):
+            if agent == 'codex':
+                self.codex_database([{}])
+            for target in ({'name': 'new'}, {'after': '%12'}):
+                self.assertEqual(self.request('/mobile/api/resume', {'id': CHAT, 'agent': agent, **target}),
+                                 (409, {'error': 'That chat is already open.', 'pane': '%12'}))
+        self.entries.return_value = [{'id': '%12', 'thread': OTHER}]
+        for pane in ('%99', '$1', None, 12, ['%12']):
+            status, body = self.request('/mobile/api/resume', {'id': CHAT, 'after': pane})
+            self.assertEqual(status, 400)
+            self.assertIn('live session list', body['error'])
+        self.run.assert_not_called()
+
+    def test_resume_rejects_bad_command_values_before_creating_a_target(self):
+        for identifier, agent, profile in ((CHAT + ';echo', 'claude', None), (None, 'codex', None),
+                                            (CHAT, 'exec', None), (CHAT, 'codex', 'bad;profile'),
+                                            (CHAT, 'codex', ''), (CHAT, 'codex', 123)):
+            with self.assertRaises(ValueError):
+                terminal_input.resume_session('new', str(self.root), identifier, self.run, agent=agent, profile=profile)
+        self.codex_database([{}])
+        self.entries.return_value = [{'id': '%12', 'thread': OTHER}]
+        with patch.object(server.codex_provider, 'launch_profile', return_value='bad;profile'):
+            for target in ({'name': 'new'}, {'after': '%12'}):
+                self.assertEqual(self.request('/mobile/api/resume', {'id': CHAT, 'agent': 'codex', **target})[0], 400)
+        self.run.assert_not_called()
 
 
 if __name__ == '__main__':

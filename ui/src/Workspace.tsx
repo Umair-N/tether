@@ -7,7 +7,7 @@ import { useModal } from './hooks'
 import { agentNames, paneTitle, shownIndex } from './Sidebar'
 import { profileSuffix } from './provider'
 import type { Session } from './Sidebar'
-import { DRAG_PANE, DRAG_SESSION, DRAG_SLOT, clampRow, columnBounds, equalBounds, moveBound, splitSlot, tracks } from './workspace'
+import { DRAG_CHAT, DRAG_PANE, DRAG_SESSION, DRAG_SLOT, clampRow, columnBounds, equalBounds, moveBound, splitSlot, tracks } from './workspace'
 import type { Side } from './workspace'
 
 const LAYOUTS = [
@@ -36,6 +36,8 @@ interface WorkspaceProps {
   /** Drops from the sidebar (a pane or a whole session) and from another slot's header. A side means "next to this slot". */
   onDropPane: (id: string, index: number, side: Side | null) => void
   onDropSession: (id: string) => void
+  /** A past chat from the sidebar: it opens as a new tab, then shows here. */
+  onDropChat: (data: string, index: number, side: Side | null) => void
   onSwap: (from: number, to: number) => void
 }
 
@@ -44,7 +46,7 @@ type Drop = { index: number; mode: 'replace' | 'swap' | 'session' | Side }
 const EDGE = 0.28
 
 /** Desktop workspace: a toolbar and a grid of slots with dividers you can drag, or move with the arrow keys. */
-export function Workspace({ layout, slots, focus, zoomed, onCount, onFocus, onLayout, renderSlot, tools, panelTools, panels, onDropPane, onDropSession, onSwap }: WorkspaceProps) {
+export function Workspace({ layout, slots, focus, zoomed, onCount, onFocus, onLayout, renderSlot, tools, panelTools, panels, onDropPane, onDropSession, onDropChat, onSwap }: WorkspaceProps) {
   const shown = zoomed ? slots.slice(focus, focus + 1) : slots
   const count = shown.length
   const stacked = count === 2 && !!layout.stack
@@ -63,7 +65,7 @@ export function Workspace({ layout, slots, focus, zoomed, onCount, onFocus, onLa
     const types = event.dataTransfer.types
     if (types.includes(DRAG_SLOT)) return { index, mode: 'swap' }
     if (types.includes(DRAG_SESSION)) return { index, mode: 'session' }
-    if (!types.includes(DRAG_PANE)) return null
+    if (!types.includes(DRAG_PANE) && !types.includes(DRAG_CHAT)) return null
     if (zoomed) return { index, mode: 'replace' }
     // The pane being dragged is unknown until the drop, so test each edge with a new pane. Nearest allowed edge wins.
     const box = event.currentTarget.getBoundingClientRect()
@@ -91,6 +93,7 @@ export function Workspace({ layout, slots, focus, zoomed, onCount, onFocus, onLa
       const data = event.dataTransfer
       if (next.mode === 'swap') { const from = Number(data.getData(DRAG_SLOT)); if (Number.isInteger(from) && from !== index) onSwap(from, index) }
       else if (next.mode === 'session') onDropSession(data.getData(DRAG_SESSION))
+      else if (data.types.includes(DRAG_CHAT)) onDropChat(data.getData(DRAG_CHAT), index, next.mode === 'replace' ? null : next.mode)
       else onDropPane(data.getData(DRAG_PANE), index, next.mode === 'replace' ? null : next.mode)
     },
   })

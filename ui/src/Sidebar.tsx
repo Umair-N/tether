@@ -1,8 +1,8 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
-import { Archive, ArchiveRestore, Asterisk, BarChart3, BookMarked, BookOpen, Bug, Cpu, Database, FileText, FlaskConical, GitBranch, Globe, LayoutDashboard, MessageSquare, MessagesSquare, Mic, Palette, Rocket, Server, Shield, Sparkles, Wrench, Zap, ChevronRight, Code2, GripVertical, Layers, History, Pin, PinOff, Plus, RefreshCw, Search, Settings, Terminal, Trash2, X } from 'lucide-react'
+import { Folder, Archive, ArchiveRestore, Asterisk, BarChart3, BookMarked, BookOpen, Bug, Cpu, Database, FileText, FlaskConical, GitBranch, Globe, LayoutDashboard, MessageSquare, MessagesSquare, Mic, Palette, Rocket, Server, Shield, Sparkles, Wrench, Zap, ChevronRight, Code2, GripVertical, Layers, Pin, PinOff, Plus, RefreshCw, Search, Settings, Terminal, Trash2, X } from 'lucide-react'
 import { KeepChoice, keepNeeded } from './Project'
 import type { Keep, ProjectMark, ProjectMarks } from './Project'
-import type { Agent, Api, HistoryData, Pane, PastChat, UsageData, UsageReport, UsageWindow } from './api'
+import type { Agent, Api, ChatAgent, Pane, PastChat, UsageData, UsageReport, UsageWindow } from './api'
 import { SESSION_NAME, SESSION_NAME_HELP, errorText } from './api'
 import { anchorOf, clipTitle, useModal, usePolling } from './hooks'
 import type { Anchor } from './hooks'
@@ -10,7 +10,9 @@ import { AccountLogin } from './AccountLogin'
 import { CodexProviderSwitch } from './CodexProvider'
 import { profileSuffix } from './provider'
 import type { Prefs } from './prefs'
-import { DRAG_PANE, DRAG_SESSION } from './workspace'
+import { DRAG_CHAT, DRAG_PANE, DRAG_SESSION } from './workspace'
+import { resumeChat, resumeInNewSession, useChatHistory } from './ChatPicker'
+import type { ResumeTarget } from './ChatPicker'
 import { shareUsage } from './usage'
 import { useHost } from './host'
 import { HostMenu } from './HostMenu'
@@ -109,7 +111,7 @@ export function sortByPrefs(sessions: Session[], order: string[]) {
   return [...sessions].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name, undefined, { numeric: true }))
 }
 
-function ago(time: string) {
+export function ago(time: string) {
   const minutes = Math.round((Date.now() - Date.parse(time)) / 60000)
   if (!Number.isFinite(minutes)) return ''
   if (minutes < 60) return `${Math.max(1, minutes)}m ago`
@@ -167,7 +169,7 @@ function RunningNow({ sessions, selected, onOpen }: { sessions: Session[]; selec
 
 type Section = 'pinned' | 'agents' | 'terminals' | 'shells' | 'archived' | 'past'
 // What a sidebar drag carries: a whole session, or one pane of a session with several panes.
-type Carry = { session: string; pane?: string }
+type Carry = { session: string; pane?: string; chat?: PastChat }
 // The server's answer to a merge: the session that now holds the moved panes, for the rename prompt.
 type Moved = { session: string; name: string; pane: string }
 interface Props {
@@ -229,7 +231,15 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
       onRetry()
     }, failure => { setMergeError(errorText(failure)); onMarks?.() })
   }
+  // A closed past chat opens as a new tab of the session it lands on, or as a new session.
+  const [openingChat, setOpeningChat] = useState('')
+  const openChat = (chat: PastChat, target: ResumeTarget | null) => {
+    setCarry(null); setOverNew(false); setMergeError(''); setOpeningChat(chat.title || 'Untitled chat')
+    const opened = target ? resumeChat(api, chat, target) : resumeInNewSession(api, chat)
+    opened.then(pane => { onRetry(); onOpen(pane) }, failure => setMergeError(errorText(failure))).finally(() => setOpeningChat(''))
+  }
   const dropOn = (target: Session) => {
+    if (carry?.chat) { openChat(carry.chat, { after: target.panes[target.panes.length - 1].id }); return }
     const source = carry && !carry.pane ? sessions.find(session => session.id === carry.session) : undefined
     if (carry?.pane) merge('pane', carry.pane, target.id)
     else if (source) { setCarry(null); setConfirming({ source, target }) }
@@ -241,8 +251,8 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
   const hold = useRef<{ timer: number; x: number; y: number; carried: Carry; label: string; menu: () => void; active: boolean; moved: boolean } | null>(null)
   const [ghost, setGhost] = useState<{ x: number; y: number; label: string } | null>(null)
   const [touchOver, setTouchOver] = useState<string | null>(null)
-  const latest = useRef({ dropOn, merge, sessions })
-  useEffect(() => { latest.current = { dropOn, merge, sessions } })
+  const latest = useRef({ dropOn, merge, openChat, sessions })
+  useEffect(() => { latest.current = { dropOn, merge, openChat, sessions } })
   const holdStart = (event: React.TouchEvent, carried: Carry, label: string, menu: () => void) => {
     if (drag || reorder || event.touches.length !== 1) return
     const { clientX: x, clientY: y } = event.touches[0]
@@ -270,7 +280,7 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
       held.moved ||= far
       setGhost({ x: touch.clientX, y: touch.clientY, label: held.label })
       const spot = spotAt(touch.clientX, touch.clientY)
-      setOverNew(!!held.carried.pane && !!spot?.classList.contains('new-session-drop'))
+      setOverNew(!!(held.carried.pane || held.carried.chat) && !!spot?.classList.contains('new-session-drop'))
       const id = spot?.dataset.id
       setTouchOver(id && id !== held.carried.session ? id : null)
       // Near the top or bottom edge of the list, the list scrolls so far rows can be reached.
@@ -284,9 +294,10 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
       event.preventDefault()  // no click after a hold
       const touch = event.changedTouches[0]
       const spot = touch ? spotAt(touch.clientX, touch.clientY) : null
-      const { dropOn, merge, sessions } = latest.current
+      const { dropOn, merge, openChat, sessions } = latest.current
       end()
       if (!held.moved) { setCarry(null); held.menu(); return }
+      if (spot?.classList.contains('new-session-drop') && held.carried.chat) { openChat(held.carried.chat, null); return }
       if (spot?.classList.contains('new-session-drop') && held.carried.pane) { merge('break', held.carried.pane); return }
       const target = sessions.find(session => session.id === spot?.dataset.id)
       if (target && target.id !== held.carried.session) dropOn(target)
@@ -346,6 +357,7 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
       : <kbd className="search-key" aria-hidden="true">{shortcutLabel}</kbd>}</label>
     <nav className="session-groups" aria-label="Sessions">
       {error && <div className="sidebar-error" role="alert">{error}<button onClick={onRetry}>Retry</button></div>}
+      {openingChat && <div className="past-opening" role="status">Opening {openingChat}…</div>}
       {mergeError && <div className="sidebar-error" role="alert">{mergeError}<button onClick={() => setMergeError('')}>Dismiss</button></div>}
       {groups.map(group => <section key={group.key} className="group">
         <div className="group-head">
@@ -361,13 +373,13 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
         </li>)}</ul>}
       </section>)}
       <ShellList api={api} open={isOpen('shells')} onToggle={() => toggle('shells')} onOpenShell={onOpenShell} onEnded={panes => onShellsEnded?.(panes)} />
-      {carry?.pane && <div className={`new-session-drop ${overNew ? 'over' : ''}`} onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setOverNew(true) }} onDragLeave={() => setOverNew(false)} onDrop={event => { event.preventDefault(); merge('break', carry.pane!) }}><Plus size={14} aria-hidden="true" />New session</div>}
+      {(carry?.pane || carry?.chat) && <div className={`new-session-drop ${overNew ? 'over' : ''}`} onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setOverNew(true) }} onDragLeave={() => setOverNew(false)} onDrop={event => { event.preventDefault(); if (carry.chat) openChat(carry.chat, null); else merge('break', carry.pane!) }}><Plus size={14} aria-hidden="true" />New session</div>}
       <section className="group">
         <div className="group-head"><button className="group-toggle" aria-expanded={isOpen('past')} onClick={() => toggle('past')}>Past chats<ChevronRight size={14} className="chevron" /></button></div>
-        {isOpen('past') && <PastChats api={api} search={search} showPaths={prefs.showPaths} onPick={onPastChat} />}
+        {isOpen('past') && <PastChats api={api} search={search} showPaths={prefs.showPaths} onPick={onPastChat} sessions={sessions} drag={!!drag && !reorder} onCarry={startCarry} onHold={holdStart} />}
       </section>
     </nav>
-    {ghost && <div className="touch-ghost" aria-hidden="true" style={{ transform: `translate3d(${ghost.x}px, ${ghost.y}px, 0)` }}><span>{ghost.label}</span></div>}
+    {ghost && <div className="touch-ghost" aria-hidden="true" style={{ transform: `translate3d(${Math.max(118, Math.min(window.innerWidth - 118, ghost.x))}px, ${ghost.y}px, 0)` }}><span>{ghost.label}</span></div>}
     {confirming && <MergeConfirm {...confirming} marks={marks} onMerge={keep => merge('session', confirming.source.id, confirming.target.id, keep)} onCancel={() => setConfirming(null)} />}
     <footer className="sidebar-footer">
       <RunningNow sessions={sessions} selected={selected} onOpen={onOpen} />
@@ -449,7 +461,7 @@ function SessionList({ items, reorder, selected, prefs, update, onOpen, onAction
             {multi && !open && state.kind !== 'idle' && dot(state)}
           </button>}
           {onAddPane && !reorder && !dropping && renaming?.session !== session.id && <button type="button" className="session-add" aria-label={`${words.newRight} in ${session.name}`} title={words.newRight} onClick={() => onAddPane(session)}><Plus size={15} aria-hidden="true" /></button>}
-          {dropping && <span className="merge-hint" aria-hidden="true">{carry.pane ? 'Move here' : 'Merge here'}</span>}
+          {dropping && <span className="merge-hint" aria-hidden="true">{carry.pane ? 'Move here' : carry.chat ? 'Open here' : 'Merge here'}</span>}
           {reorder && <span className="grip" aria-label={`Drag to move ${session.name}`} onPointerDown={event => { dragging.current = session.id; event.currentTarget.setPointerCapture(event.pointerId) }} onPointerMove={drag} onPointerUp={() => { dragging.current = null }} onPointerCancel={() => { dragging.current = null }}><GripVertical size={18} /></span>}
         </div>
         </div>
@@ -479,17 +491,55 @@ function RenameRow({ api, moved, onDone }: { api: Api; moved: Moved; onDone: () 
   </form>
 }
 
-function PastChats({ api, search, showPaths, onPick }: { api: Api; search: string; showPaths: boolean; onPick: (chat: PastChat) => void }) {
-  const fetcher = useCallback((signal: AbortSignal) => api<HistoryData>('history?limit=40', undefined, signal), [api])
-  const { data, error, loading, refresh } = usePolling(fetcher, 30000)
-  const chats = (data?.chats ?? []).filter(chat => !search || `${chat.title} ${chat.dir ?? ''}`.toLowerCase().includes(search))
-  if (error) return <div className="sidebar-error" role="alert">{error}<button onClick={() => void refresh()}>Retry</button></div>
-  if (loading) return <p className="group-empty">Loading past chats…</p>
-  if (!chats.length) return <p className="group-empty">No past chats found.</p>
-  return <ul className="session-list">{chats.map(chat => <li key={chat.id}><div className="session-row"><button className="session-main" onClick={() => onPick(chat)}>
-    <span className="session-icon"><History size={16} aria-hidden="true" /></span>
-    <span className="session-text"><span className="session-title">{chat.title || 'Untitled chat'}</span><span className="past-meta"><span>{chat.live ? 'Open now · ' : ''}{ago(chat.time)}</span>{showPaths && chat.dir && <span className="session-folder"><bdi dir="ltr">{chat.dir}</bdi></span>}</span></span>
-  </button></div></li>)}</ul>
+const PAST_SOURCES = [['all', 'All'], ['claude', 'Claude'], ['codex', 'Codex']] as const
+// Claude and Codex chats, newest first. A row drags into a workspace slot or onto a session; a chat that is open now moves as its pane.
+function PastChats({ api, search, showPaths, onPick, sessions, drag, onCarry, onHold }: { api: Api; search: string; showPaths: boolean; onPick: (chat: PastChat) => void; sessions: Session[]; drag: boolean; onCarry: (carried: Carry | null) => void; onHold: (event: React.TouchEvent, carried: Carry, label: string, menu: () => void) => void }) {
+  const [text, setText] = useState('')
+  const [agent, setAgent] = useState<'all' | ChatAgent>('all')
+  const [dir, setDir] = useState('')
+  const [settled, setSettled] = useState('')
+  const typed = text.trim()
+  useEffect(() => { const timer = setTimeout(() => setSettled(typed), 180); return () => clearTimeout(timer) }, [typed])
+  const { chats, data, error, loading, refresh, next, loadMore, loadingMore } = useChatHistory(api, { agent, q: [search, settled].filter(Boolean).join(' '), dir })
+  const carryFor = (chat: PastChat): Carry => {
+    const owner = chat.pane ? sessions.find(session => session.panes.some(pane => pane.id === chat.pane)) : undefined
+    return owner && chat.pane ? { session: owner.id, pane: chat.pane } : { session: '', chat }
+  }
+  const dragProps = (chat: PastChat) => drag ? { draggable: true, onDragStart: (event: React.DragEvent) => {
+    const carried = carryFor(chat)
+    if (carried.pane) event.dataTransfer.setData(DRAG_PANE, carried.pane)
+    else event.dataTransfer.setData(DRAG_CHAT, JSON.stringify({ id: chat.id, agent: chat.agent }))
+    event.dataTransfer.effectAllowed = 'copyMove'
+    onCarry(carried)
+  }, onDragEnd: () => onCarry(null) } : {}
+  const counts = data?.counts
+  const folders = data?.dirs ?? []
+  const filtered = !!(typed || search || dir || agent !== 'all')
+  return <>
+    <div className="past-filters">
+      <label className="past-search"><Search size={13} aria-hidden="true" /><input type="search" value={text} placeholder="Search past chats" aria-label="Search past chats" autoComplete="off" onChange={event => setText(event.target.value)} /></label>
+      <div className="cp-filters">
+        <div className="cp-sources" role="radiogroup" aria-label="Agent">
+          {PAST_SOURCES.map(([id, label]) => <button type="button" key={id} role="radio" aria-checked={agent === id} className={agent === id ? 'on' : ''} title={counts ? `${counts[id]} chats` : undefined} onClick={() => setAgent(id)}>{label}</button>)}
+        </div>
+        <label className="cp-folder"><Folder size={13} aria-hidden="true" />
+          <select value={dir} aria-label="Folder" onChange={event => setDir(event.target.value)}>
+            <option value="">All folders</option>
+            {dir && !folders.some(item => item.dir === dir) && <option value={dir}>{dir}</option>}
+            {folders.map(item => <option key={item.dir} value={item.dir}>{item.dir}</option>)}
+          </select>
+        </label>
+      </div>
+    </div>
+    {error ? <div className="sidebar-error" role="alert">{error}<button onClick={() => void refresh()}>Retry</button></div>
+      : loading && !chats.length ? <p className="group-empty">Loading past chats…</p>
+      : !chats.length ? <p className="group-empty">{filtered ? 'No past chats match.' : 'No past chats found.'}{filtered && <> <button type="button" className="link-button" onClick={() => { setText(''); setAgent('all'); setDir('') }}>Clear filters</button></>}</p>
+      : <ul className="session-list past-list">{chats.map(chat => <li key={chat.agent + chat.id}><div className="session-row"><button className="session-main" {...dragProps(chat)} onClick={() => onPick(chat)} onTouchStart={event => onHold(event, carryFor(chat), chat.title || 'Untitled chat', () => onPick(chat))}>
+        <span className="session-icon" title={agentNames[chat.agent]}><AgentIcon agent={chat.agent} size={16} /><span className="visually-hidden">{agentNames[chat.agent]}: </span></span>
+        <span className="session-text"><span className="session-title">{chat.title || 'Untitled chat'}</span><span className="past-meta"><span>{chat.live ? 'Open now · ' : ''}{ago(chat.time)}</span>{showPaths && chat.dir && <span className="session-folder"><bdi dir="ltr">{chat.dir}</bdi></span>}</span></span>
+      </button></div></li>)}</ul>}
+    {next !== null && !error && <button type="button" className="past-more" disabled={loadingMore} onClick={() => void loadMore().catch(() => undefined)}>{loadingMore ? 'Loading…' : 'Show older chats'}</button>}
+  </>
 }
 
 // Hours or days until a window resets: "3h", "2d".

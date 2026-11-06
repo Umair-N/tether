@@ -272,6 +272,8 @@ export const PaneTabs = forwardRef<HTMLDivElement, Props>(function PaneTabs({ se
     <button className="tab-add" aria-label={`${words.newRight} with a task`} title={`${words.newRight} with a task`} aria-haspopup="dialog" aria-expanded={!!taskAt}
       onClick={event => { const box = event.currentTarget.getBoundingClientRect(); setTaskAt({ x: box.right - 360, y: box.bottom + 6 }) }}><Plus size={16} /></button>
     {taskAt && createPortal(<NewTask api={api} pane={pane} at={taskAt} onClose={() => setTaskAt(null)} onEmpty={() => { setTaskAt(null); onSplit('right') }}
-      onCreated={id => { setTaskAt(null); setFresh(id); onUpdate() }} />, document.body)}
+      onCreated={id => { setTaskAt(null); setFresh(id); onUpdate() }}
+      onOpen={item => { setTaskAt(null); setFresh(item.id); onUpdate(); onOpenPane(item) }}
+      onMoved={item => { setTaskAt(null); setFresh(item.id); onUpdate(); onOpenPane(item) }} />, document.body)}
   </div>
 })

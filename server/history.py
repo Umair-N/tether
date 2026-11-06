@@ -9,6 +9,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 import re
+import sqlite3
 
 import paths
 
@@ -130,7 +131,7 @@ def transcript_files(identifier=None):
         return
 
 
-def user_title(entry):
+def user_title(entry, limit=80):
     if entry.get('type') != 'user' or entry.get('isMeta') or entry.get('isSidechain'):
         return ''
     message = entry.get('message')
@@ -141,7 +142,7 @@ def user_title(entry):
     if not isinstance(content, str):
         return ''
     text = ' '.join(line for line in content.splitlines() if not line.lstrip().startswith('<'))
-    return ' '.join(text.split())[:80]
+    return ' '.join(text.split())[:limit]
 
 
 def preview(path, info):
@@ -175,8 +176,8 @@ def preview(path, info):
             if isinstance(value, str) and value.strip():
                 title = ' '.join(value.split())
             if not first_user:
-                first_user = user_title(entry)
-        result = {'id': path.stem, 'title': title or first_user or path.stem, 'cwd': cwd,
+                first_user = user_title(entry, limit=300)
+        result = {'id': path.stem, 'title': title or first_user[:80] or path.stem, 'text': first_user, 'cwd': cwd,
                   'time': datetime.fromtimestamp(info.st_mtime, timezone.utc).isoformat()}
         _previews[path] = (signature, result)
         return dict(result)
@@ -193,12 +194,88 @@ def recent_chats(limit=30):
     return chats
 
 
-def find_chat(identifier):
+def _codex_chats():
+    """Read the newest Codex index without importing agents (which imports history)."""
+    try:
+        databases = sorted(paths.CODEX.glob('state_*.sqlite'),
+                           key=lambda path: [int(n) for n in re.findall(r'\d+', path.name)])
+        if not databases:
+            return []
+        connection = sqlite3.connect(databases[-1].resolve().as_uri() + '?mode=ro', uri=True)
+        try:
+            connection.row_factory = sqlite3.Row
+            columns = {row[1] for row in connection.execute('PRAGMA table_info(threads)')}
+            if 'id' not in columns:
+                return []
+            rules = []
+            if 'archived' in columns:
+                rules.append('archived=0')
+            if 'source' in columns:
+                rules.append("source IN ('cli','vscode')")
+            if 'has_user_event' in columns:
+                rules.append('has_user_event=1')
+            query = 'SELECT * FROM threads' + (' WHERE ' + ' AND '.join(rules) if rules else '')
+            chats = []
+            for row in connection.execute(query):
+                row = dict(row)
+                identifier = row['id']
+                if not isinstance(identifier, str) or not UUID.fullmatch(identifier):
+                    continue
+                title = next((' '.join(row[key].split()) for key in ('name', 'title', 'first_user_message')
+                              if isinstance(row.get(key), str) and row[key].strip()), identifier)
+                text = row.get('first_user_message')
+                try:
+                    updated = datetime.fromtimestamp(row['updated_at_ms'] / 1000, timezone.utc).isoformat()
+                except (KeyError, TypeError, ValueError, OverflowError, OSError):
+                    updated = None
+                chats.append({'id': identifier, 'agent': 'codex', 'title': title[:80],
+                              'text': text[:300] if isinstance(text, str) else '',
+                              'cwd': row.get('cwd'), 'time': updated})
+            return chats
+        finally:
+            connection.close()
+    except (OSError, sqlite3.Error):
+        return []
+
+
+def all_chats():
+    chats = []
+    for path, info in transcript_files():
+        try:
+            chats.append(dict(preview(path, info), agent='claude'))
+        except OSError:
+            continue
+    return chats + _codex_chats()
+
+
+def search_chats(chats, *, agent='all', q='', dir=None, state='all', live=frozenset(),
+                 display_dir=lambda cwd: cwd):
+    """Filter an index snapshot; displayed directories belong to the caller."""
+    terms = q.casefold().split()
+    matches = []
+    for chat in chats:
+        if agent != 'all' and chat['agent'] != agent:
+            continue
+        if state != 'all' and (chat['id'] in live) != (state == 'open'):
+            continue
+        if dir is not None and display_dir(chat['cwd']) != dir:
+            continue
+        searchable = ' '.join(chat.get(key) or '' for key in ('title', 'text', 'cwd')).casefold()
+        if all(term in searchable for term in terms):
+            matches.append(chat)
+    return sorted(matches, key=lambda chat: chat['time'] or '', reverse=True)
+
+
+def find_chat(identifier, agent='claude'):
     if not isinstance(identifier, str) or not UUID.fullmatch(identifier):
         raise ValueError('Choose a valid chat id.')
+    if agent not in ('claude', 'codex'):
+        raise ValueError('Choose Claude or Codex.')
+    if agent == 'codex':
+        return next((chat for chat in _codex_chats() if chat['id'] == identifier), None)
     for path, info in transcript_files(identifier):
         try:
-            return preview(path, info)
+            return dict(preview(path, info), agent='claude')
         except OSError:
             continue
     return None

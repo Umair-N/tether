@@ -51,10 +51,24 @@ def create_session(name, cwd, run=subprocess.run):
     return pane
 
 
-def resume_session(name, cwd, identifier, run=subprocess.run):
+def resume_command(identifier, *, agent='claude', profile=None):
+    """Build a resume command only from a validated agent, UUID, and profile."""
+    if not isinstance(identifier, str) or not UUID.fullmatch(identifier.lower()):
+        raise ValueError('Choose a valid chat id.')
+    if agent not in ('claude', 'codex'):
+        raise ValueError('Choose Claude or Codex.')
+    if profile is not None and (not isinstance(profile, str) or not PROFILE_NAME.fullmatch(profile)):
+        raise ValueError('Choose a supported Codex provider.')
+    if agent == 'claude':
+        return 'claude --resume ' + identifier
+    return 'codex' + (f' -p {shlex.quote(profile)}' if profile is not None else '') + ' resume ' + identifier
+
+
+def resume_session(name, cwd, identifier, run=subprocess.run, *, agent='claude', profile=None):
+    command = resume_command(identifier, agent=agent, profile=profile)
     pane = create_session(name, cwd, run=run)
     # The pty buffers input even while the new shell starts.
-    run([paths.TMUX, 'send-keys', '-t', pane, '-l', 'claude --resume ' + identifier],
+    run([paths.TMUX, 'send-keys', '-t', pane, '-l', command],
         check=True, capture_output=True, timeout=5)
     run([paths.TMUX, 'send-keys', '-t', pane, 'Enter'],
         check=True, capture_output=True, timeout=5)

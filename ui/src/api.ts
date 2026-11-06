@@ -157,8 +157,9 @@ export interface ChoiceState {
 export interface PermissionsDialog { tabs: string[]; tab: string | null; lines: string[]; selected: number | null; hint: string; empty: boolean }
 export interface Attention { id: string; text: string; reason: 'menu' | 'prompt' | 'no-input-box' | 'panel' | 'picker' | 'info' | 'permissions'; permissions?: PermissionsDialog;
   promptId?: string; revision?: string; requiresResponse?: boolean; body?: string; hints?: string[]; actions?: PromptAction[]; title?: string; subtitle?: string; items?: PickerItem[]; more_above?: number; more_below?: number; hint?: string; question?: string; options?: Choice[]; choice?: ChoiceState; ask?: { id: string; questions: AskQuestion[] }; askBridge?: AskBridge; ask_current?: AskCurrent; login?: { url: string; code: boolean; user_code?: string; message?: string } }
-export interface PastChat { id: string; title: string; dir: string | null; time: string; live: boolean }
-export interface HistoryData { chats: PastChat[] }
+export type ChatAgent = 'claude' | 'codex'
+export interface PastChat { id: string; agent: ChatAgent; title: string; dir: string | null; time: string; live: boolean; pane: string | null }
+export interface HistoryData { chats: PastChat[]; total: number; next: number | null; counts: { all: number; claude: number; codex: number }; dirs: { dir: string; count: number }[] }
 export interface UsageWindow { label: string; percent: number; resets_at: number | null }
 export interface UsageReport { windows: UsageWindow[]; reported_at: string | number | null; source?: 'live' }
 export interface SavedAccount { number: number; email: string | null; org?: string | null; plan?: string | null; active: boolean; disabled?: boolean; windows: { label: string; percent: number; resets_at: string | null }[] }
