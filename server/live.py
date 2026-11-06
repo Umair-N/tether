@@ -6,12 +6,14 @@ import os
 from pathlib import Path
 import re
 import signal
+import sqlite3
 import stat
 import tempfile
 import threading
 import time
 
 import history
+import paths
 import procinfo
 
 ENDED = re.compile(r'<status>(completed|failed|killed|stopped|error)</status>|Monitor (?:expired|ended|stopped)|\[Monitor (?:expired|ended|stopped)')
@@ -24,6 +26,32 @@ EXITED = re.compile(r'\[exited with code -?\d+\]\s*$')
 _states = {}
 _lock = threading.Lock()
 _TMP = Path('/tmp') if Path('/tmp').is_dir() else Path(tempfile.gettempdir())
+
+
+def codex_goal(config):
+    """Read the selected Codex conversation's durable goal without creating a database."""
+    if config.get('agent') != 'codex' or not config.get('thread') or config.get('ambiguous'):
+        return None
+    try:
+        databases = sorted(paths.CODEX.glob('goals_*.sqlite'), key=lambda p: int(p.stem.split('_')[-1]))
+        if not databases:
+            return None
+        connection = sqlite3.connect(databases[-1].as_uri() + '?mode=ro', uri=True, timeout=.1)
+        try:
+            connection.row_factory = sqlite3.Row
+            row = connection.execute(
+                'SELECT objective,status,token_budget,tokens_used,time_used_seconds,created_at_ms,updated_at_ms '
+                'FROM thread_goals WHERE thread_id=?', (config['thread'],)).fetchone()
+        finally:
+            connection.close()
+        if row:
+            return {'condition': row['objective'], 'status': row['status'], 'met': row['status'] == 'complete',
+                    'token_budget': row['token_budget'], 'tokens_used': row['tokens_used'],
+                    'time_used_seconds': row['time_used_seconds'], 'set_at': row['created_at_ms'] / 1000,
+                    'updated_at': row['updated_at_ms'] / 1000}
+    except (OSError, ValueError, sqlite3.Error):
+        pass  # Optional data: older Codex versions have no goal store.
+    return None
 
 
 def _iso(stamp):

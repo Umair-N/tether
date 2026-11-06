@@ -16,6 +16,8 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from agents import claude_consume, claude_snapshot, discover, usage
 from agents import records
 import agents
+import codex_messages
+import continuations
 import pane_icons
 from antigravity import snapshot as antigravity_snapshot, transcript_message as antigravity_message, window_active
 from terminal_input import NAME_HELP, valid_name, fork_chat, new_window_after, DraftError, card_key, menu_choose, unqueue, clear_draft as terminal_clear_draft, type_text, live_status, capture, capture_screen, submit as terminal_submit, respond_approval, plan_menu, start_agent, create_session, shell_snapshot, shell_submit, verify
@@ -126,6 +128,7 @@ def monitor_notices():
 
 
 def display_text(text):
+    text = continuations.unwrap(text)
     def fence(value, language=''):
         delimiter = '`' * max(3, max((len(part) + 1 for part in re.findall(r'`+', value)), default=3))
         return delimiter + language + '\n' + value + '\n' + delimiter
@@ -227,7 +230,7 @@ def sessions():
 
 # Writes that add, remove or rename tmux panes or sessions. After one succeeds, the next list must come from tmux,
 # so a page that refreshes right away sees the new pane (or no longer sees the closed one).
-TMUX_WRITES = {'/mobile/api/split', '/mobile/api/fork', '/mobile/api/delegate', '/mobile/api/resume', '/mobile/api/shell', '/mobile/api/session',
+TMUX_WRITES = {'/mobile/api/split', '/mobile/api/fork', '/mobile/api/delegate', '/mobile/api/continue', '/mobile/api/resume', '/mobile/api/shell', '/mobile/api/session',
                '/mobile/api/tmux-sessions', '/mobile/api/rename', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/side-shell',
                '/mobile/api/side-shell/end', '/mobile/api/start', '/mobile/api/merge'}
 
@@ -383,18 +386,24 @@ def codex_consume(state, index, entry):
     if entry.get('type') == 'response_item' and kind in ('function_call_output', 'custom_tool_call_output'):
         tool_details.mark_result(messages, payload.get('call_id'), payload)
         return
+    if entry.get('type') == 'response_item' and kind == 'agent_message':
+        peer = dict(payload, role='assistant')
+        for at, part in enumerate(codex_messages.parts(peer)):
+            messages.append({'id': f'{index}.peer.{at}', 'role': 'assistant', 'kind': 'peer',
+                             'title': 'Agent message', 'text': part['text'], 'time': entry.get('timestamp')})
+        return
     if entry.get('type') != 'response_item' or kind != 'message':
         return
     role = payload.get('role')
     if role not in ('user', 'assistant'):
         return
-    text = '\n'.join(item.get('text', '') for item in payload.get('content', [])
-                     if item.get('type') in ('input_text', 'output_text', 'text'))
-    text = display_text(text)
-    if not text.strip() or text.startswith('# AGENTS.md instructions'):
-        return
-    messages.append({'id': str(index), 'role': role, 'text': text,
-                     'time': entry.get('timestamp'), 'phase': payload.get('phase')})
+    for at, part in enumerate(codex_messages.parts(payload)):
+        explicit_user = part.pop('_user', False)
+        text = continuations.unwrap(part['text']) if explicit_user else display_text(part['text'])
+        if not text.strip() or (not explicit_user and text.startswith('# AGENTS.md instructions')):
+            continue
+        messages.append(dict(part, id=str(index) if at == 0 else f'{index}.{at}', text=text,
+                             time=entry.get('timestamp'), phase=payload.get('phase')))
 
 
 def claude_cwd(entry):
@@ -703,6 +712,14 @@ def notification_reply(entry, records=None):
         return ''
 
 
+def codex_footer(config, metrics):
+    result = footer.codex(metrics)
+    goal = live_state.codex_goal(config)
+    if goal:
+        result.update(goal=goal['status'], goal_status=goal['status'])
+    return result
+
+
 def snapshot(config=None):
     config = config or settings()
     if config.get('agent') == 'claude':
@@ -729,7 +746,7 @@ def snapshot(config=None):
     metrics = usage()
     if not path.is_file():
         metrics = codex_metrics(config, None)
-        return {'messages': terminal_replies.merge(config, merge_quota_notices(dict(config, agent='codex'), [])), 'busy': False, 'thread': config['thread'], 'usage': metrics, 'footer': footer.codex(metrics),
+        return {'messages': terminal_replies.merge(config, merge_quota_notices(dict(config, agent='codex'), [])), 'busy': False, 'thread': config['thread'], 'usage': metrics, 'footer': codex_footer(config, metrics),
                 'agent': 'codex', 'writable': config.get('writable', True), 'session': config.get('id')}
     state = history.read(path, codex_state, codex_consume)
     messages, busy = state['messages'], state['busy']
@@ -741,7 +758,7 @@ def snapshot(config=None):
         messages, busy = [], False
     metrics = codex_metrics(config, state['usage'], state.get('model', ''), state.get('effort', ''), state.get('credits'))
     return {'messages': terminal_replies.merge(config, merge_quota_notices(dict(config, agent='codex'), activity.group_actions(activity.merge(list(messages))))), 'dropped': state['dropped'], 'busy': busy, 'thread': config['thread'], 'usage': metrics,
-            'agent': 'codex', 'writable': config.get('writable', True), 'session': config.get('id'), 'footer': footer.codex(metrics)}
+            'agent': 'codex', 'writable': config.get('writable', True), 'session': config.get('id'), 'footer': codex_footer(config, metrics)}
 
 
 def last_reply(entry):
@@ -761,7 +778,12 @@ def submit(message, config=None):
     if not config.get('writable', True):
         raise RuntimeError('Messaging is unavailable for this session. Use Termius.')
     with SEND_LOCK:
-        terminal_submit(config, message)
+        wrapped, marker = continuations.prepare(config, message)
+        if marker:
+            continuations.stage(config, wrapped, marker)
+        terminal_submit(config, wrapped)
+        if marker:
+            continuations.sent(config, marker)
 
 
 def send_text(config, message, state=None):
@@ -771,7 +793,7 @@ def send_text(config, message, state=None):
     if config['agent'] == 'codex' and re.match(r'/ls(\s|$)', message.strip()):
         message = '!' + message.strip()[1:]   # Codex has no /ls; "!ls" runs it in the shell
     wants_reply = (config['agent'] == 'codex' and state != 'Working'  # while it works, new lines are its answer, not the command's
-                   and message.strip().startswith('/') and message.strip() != '/model')
+                   and re.match(r'^/[a-z][a-z0-9_-]*(?:\s|$)', message.strip(), re.I) and message.strip() != '/model')
     before = capture(config) if wants_reply else ''
     note = '' if message.strip().startswith(('/', '!')) else shell_log.folder_note(config['id'], agent_folder(config))
     submit(note + message.strip(), config)
@@ -813,6 +835,7 @@ def chat_payload(config, shell_mode=False, limit=DEFAULT_WINDOW, preview=False):
     if ask and state.get('attention') and not state['attention'].get('options'):
         # The screen shows only the bottom of a tall question: show the whole question from the transcript.
         state = dict(state, attention=dict(state['attention'], ask=ask))
+    data = continuations.decorate(config, data)
     messages = data.get('messages')
     earlier = max(0, len(messages) - limit) if isinstance(messages, list) else 0
     dropped = data.pop('dropped', 0) if isinstance(data, dict) else 0
@@ -1156,7 +1179,7 @@ class Handler(BaseHTTPRequestHandler):
                 result = claude_hooks.overlay(config, result, screen_read_at=screen_read_at)
                 if config['agent'] == 'codex' and not config.get('ambiguous'):
                     state = history.read(config['transcript'], codex_state, codex_consume)
-                    result = footer.codex(codex_metrics(config, state['usage'], state['model'], state.get('effort', ''), state.get('credits')))
+                    result = codex_footer(config, codex_metrics(config, state['usage'], state['model'], state.get('effort', ''), state.get('credits')))
                     live = claude_hooks.codex_live(config)
                     if live is not None:
                         result.update(spinner=None, running=None)
@@ -1180,7 +1203,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.respond(400, {'error': str(exc)})
             elif path == '/mobile/api/live':
                 config = choose(parse_qs(urlsplit(self.path).query).get('session', [None])[0])
-                self.respond(200, live_state.for_thread(config.get('thread')) if config['agent'] == 'claude' else {'goal': None, 'tasks': []})
+                self.respond(200, live_state.for_thread(config.get('thread')) if config['agent'] == 'claude' else {'goal': live_state.codex_goal(config), 'tasks': []})
             elif path == '/mobile/api/accounts':
                 try:
                     self.respond(200, saved_accounts.snapshot())
@@ -1325,7 +1348,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.respond(403, {'error': 'Reload the page and try again.'})
             return
         if self.path not in ('/mobile/api/ask-hook', '/mobile/api/ask-answer', '/mobile/api/ask-engage', '/mobile/api/message', '/mobile/api/broadcast', '/mobile/api/approval', '/mobile/api/menu', '/mobile/api/prompt-action', '/mobile/api/start', '/mobile/api/session', '/mobile/api/tmux-sessions', '/mobile/api/key', '/mobile/api/clear-draft', '/mobile/api/unqueue', '/mobile/api/mode', '/mobile/api/type',
-                         '/mobile/api/push/subscribe', '/mobile/api/push/unsubscribe', '/mobile/api/push/test', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/shortcuts', '/mobile/api/prefs', '/mobile/api/codex-provider', '/mobile/api/model-options', '/mobile/api/model', '/mobile/api/rename', '/mobile/api/merge', '/mobile/api/shell', '/mobile/api/upload', '/mobile/api/transcribe', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/delegate', '/mobile/api/review-stop', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/refresh', '/mobile/api/accounts/switch') and not browser_api.handles(self.path) and not projects_api.handles(self.path) and not codex_level.handles(self.path) and not tts.handles(self.path) and not friday_proxy.handles(self.path) and not live_mode.handles(self.path):
+                         '/mobile/api/push/subscribe', '/mobile/api/push/unsubscribe', '/mobile/api/push/test', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/shortcuts', '/mobile/api/prefs', '/mobile/api/codex-provider', '/mobile/api/model-options', '/mobile/api/model', '/mobile/api/rename', '/mobile/api/merge', '/mobile/api/shell', '/mobile/api/upload', '/mobile/api/transcribe', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/delegate', '/mobile/api/continue-preview', '/mobile/api/continue', '/mobile/api/review-stop', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/refresh', '/mobile/api/accounts/switch') and not browser_api.handles(self.path) and not projects_api.handles(self.path) and not codex_level.handles(self.path) and not tts.handles(self.path) and not friday_proxy.handles(self.path) and not live_mode.handles(self.path):
             self.respond(404, {'error': 'Not found'})
             return
         # Reject unauthenticated and cross-origin submissions.
@@ -1561,6 +1584,47 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError('Select a tab to stop reviewing.')
                 self.respond(200, {'stopped': review_links.remove(worker)})
                 return
+            if self.path in ('/mobile/api/continue-preview', '/mobile/api/continue'):
+                identifier = body.get('session')
+                if not isinstance(identifier, str) or not re.fullmatch(r'%[0-9]+', identifier):
+                    raise ValueError('Select a chat to continue.')
+                with SEND_LOCK:
+                    entries = sessions()
+                    entry = next((item for item in entries if item['id'] == identifier), None)
+                    if entry is None:
+                        raise ValueError('That session has ended.')
+                    if body.get('thread') != entry.get('thread'):
+                        raise ValueError('The conversation changed. Reload before continuing.')
+                    if self.path == '/mobile/api/continue':
+                        existing = continuations.receipt(entry, body, entries)
+                        if existing:
+                            self.respond(200, {'pane': existing})
+                            return
+                    state = live_status(entry)['state']
+                    data = continuations.decorate(entry, snapshot(entry))
+                    if data.get('busy'):
+                        state = 'Working'
+                    continuations.validate(entry, body, state)
+                    goal = live_state.codex_goal(entry) if entry['agent'] == 'codex' else live_state.for_thread(entry.get('thread')).get('goal')
+                    preview = continuations.preview(entry, body['target'], data.get('messages') or [], goal)
+                    if self.path.endswith('preview'):
+                        self.respond(200, preview)
+                        return
+                    if body.get('version') != preview['version']:
+                        raise ValueError('The chat changed after the preview. Preview the handoff again.')
+                    # Repeat process identity and live state immediately before opening the destination.
+                    verify(entry)
+                    if live_status(entry)['state'] != 'Idle':
+                        raise ValueError('The chat started work. Wait until it is idle.')
+                    fresh = choose(identifier)
+                    if (fresh.get('owner_pid'), fresh.get('process_start'), fresh.get('thread')) != (entry.get('owner_pid'), entry.get('process_start'), entry.get('thread')):
+                        raise ValueError('The agent changed. Reload before continuing.')
+                    continuations.check_goal(live_state.codex_goal(entry) if entry['agent'] == 'codex' else live_state.for_thread(entry.get('thread')).get('goal'))
+                    folder = agent_folder(entry)
+                    new_pane = continuations.begin(entry, body, folder if folder and os.path.isdir(folder) else str(paths.HOME),
+                        data.get('messages') or [], preview['brief'], subprocess.run)
+                self.respond(201, {'pane': new_pane})
+                return
             if self.path == '/mobile/api/delegate':
                 entries = sessions()
                 entry = delegate.validate(body, entries)
@@ -1727,7 +1791,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.respond(200, {'accepted': True, 'delivery': send_text(config, message)})
         except (ValueError, UnicodeError) as exc:
-            self.respond(400, {'error': str(exc) if self.path in ('/mobile/api/session', '/mobile/api/broadcast', '/mobile/api/merge', '/mobile/api/model', '/mobile/api/shell', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/delegate', '/mobile/api/review-stop', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/mode', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/menu', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/refresh', '/mobile/api/accounts/switch') else 'Invalid message.'})
+            self.respond(400, {'error': str(exc) if self.path in ('/mobile/api/session', '/mobile/api/broadcast', '/mobile/api/merge', '/mobile/api/model', '/mobile/api/shell', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/delegate', '/mobile/api/continue-preview', '/mobile/api/continue', '/mobile/api/review-stop', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/mode', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/menu', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/refresh', '/mobile/api/accounts/switch') else 'Invalid message.'})
         except (OSError, RuntimeError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
             # The journal keeps why a send was refused; the access log shows only "503".
             print(f'{self.path} refused: {type(exc).__name__}: {str(exc)[:200]}', file=sys.stderr, flush=True)

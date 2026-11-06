@@ -69,8 +69,23 @@ def started_ms(ticks):
 
 
 def codex_thread(connection, pid, ticks, cwd):
-    """The conversation this Codex process is running: the one named by `codex resume <id>`, else the newest one in
-    its directory that was created or touched since the process started. None while it has not begun a conversation."""
+    """Prefer the process's open rollout, then explicit resume arguments, then the directory/time fallback."""
+    # The open rollout identifies the process even when several panes share a folder.
+    # Subagent rollouts can be open in the same process; only interactive threads qualify.
+    try:
+        candidates = set()
+        for _, target in procinfo.fd_targets(pid):
+            if not Path(target).name.startswith('rollout-') or not target.endswith('.jsonl'):
+                continue
+            row = connection.execute(
+                "SELECT id,rollout_path FROM threads WHERE rollout_path=? AND archived=0 AND source IN ('cli','vscode')",
+                (target,)).fetchone()
+            if row:
+                candidates.add(tuple(row))
+        if len(candidates) == 1:
+            return candidates.pop()
+    except OSError:
+        pass
     try:
         arguments = [arg.decode('utf-8', 'ignore') for arg in procinfo.argv(pid)]
     except OSError:

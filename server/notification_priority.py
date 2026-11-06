@@ -1,5 +1,6 @@
 """Pure notification classification from a bounded transcript and final reply."""
 import re
+import codex_messages
 
 from agents import task_notice
 
@@ -74,10 +75,12 @@ def turn_source(agent, records):
                 if payload.get('role') == 'assistant':
                     assistant_seen = True
                 elif assistant_seen and payload.get('role') == 'user':
+                    if any(part.get('_user') for part in codex_messages.parts(payload)):
+                        return 'user'
                     # AGENTS instructions are injected context, not a fresh prompt.
                     if text_content(payload.get('content')).lstrip().startswith('# AGENTS.md instructions'):
                         continue
-                    return 'user'
+                    return 'background' if codex_messages.background(payload) else 'user'
             elif assistant_seen and kind == 'event_msg' and payload.get('type') == 'user_message':
                 return 'user'
         elif agent == 'antigravity':

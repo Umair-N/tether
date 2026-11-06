@@ -16,6 +16,7 @@ CACHE = paths.CACHE / 'replies'
 LOCK = threading.Lock()
 KEEP = 50
 MAX_TEXT = 2000
+SPINNER = re.compile(r'\besc to interrupt\b', re.I)
 BOX = re.compile(r'^[\s─━│┃┌┐└┘├┤┬┴┼╭╮╰╯═║\-_|+]*$')
 
 
@@ -48,9 +49,25 @@ def unwrap(lines):
     return '\n'.join(result).strip()
 
 
+def output_lines(screen):
+    """Exclude the input and its wrapped continuations before diffing terminal-only replies."""
+    prompt = False
+    lines = []
+    for line in screen.splitlines():
+        text = line.strip()
+        if text.startswith('›'):
+            prompt = True
+            continue
+        if not text or re.match(r'^[•◦*]\s', text) or is_noise(line):
+            prompt = False
+        if not prompt and not SPINNER.search(text):
+            lines.append(line.rstrip())
+    return lines
+
+
 def added_lines(before, after):
     """Lines the terminal gained between two screen captures, minus the prompt box and footer."""
-    old, new = [line.rstrip() for line in before.splitlines()], [line.rstrip() for line in after.splitlines()]
+    old, new = output_lines(before), output_lines(after)
     result = []
     for tag, _, _, start, end in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
         if tag in ('insert', 'replace'):
@@ -182,7 +199,7 @@ def record(entry, before, read, sleep=time.sleep, polls=8):
         if after == previous and poll >= 1:
             break
         previous = after
-    if PICKER.search(after):  # a menu waiting for a choice is not an answer; it is gone once chosen
+    if PICKER.search(after) or SPINNER.search(after):  # menus and active turns are not terminal-only replies
         return None
     lines = added_lines(before, after)
     text = unwrap(lines)
@@ -192,6 +209,9 @@ def record(entry, before, read, sleep=time.sleep, polls=8):
 def merge(entry, messages):
     """Put saved terminal replies among the chat messages by the time they were captured."""
     notices = saved(entry)
+    if entry.get('agent') == 'codex':
+        # Older captures mixed a wrapped input and the live spinner into slash replies.
+        notices = [notice for notice in notices if notice.get('id') == 'terminal:banner' or not SPINNER.search(notice.get('text', ''))]
     if not notices:
         return messages
     # saved before banners had their own, quieter style
