@@ -11,6 +11,9 @@ const VOICE = 'af_heart'  // Same voice as the server Kokoro worker.
 const PROBE = 'Hello, I am Friday. I am ready when you are.'
 const FAST = 0.5          // Seconds of work per second of speech; above this a device is too slow.
 const STORE = 'tether.fridayVoice.v1'
+// A bad result can be one slow moment, so it does not last for good. A retry of the built-in voice can lose one reply; a Kokoro probe loads 326 MB.
+const RETRY_SYSTEM = 24 * 60 * 60 * 1000
+const RETRY_KOKORO = 7 * 24 * 60 * 60 * 1000
 
 export type VoiceKind = 'kokoro' | 'system'
 
@@ -127,7 +130,7 @@ class SystemEngine implements Engine<string> {
       let started = false
       const silent = () => {
         this.speaking = false
-        save({ system: 'silent' })  // Skip it on the next call: its first reply would be lost.
+        save({ system: 'silent', systemAt: Date.now() })  // Skip it on the next calls: its first reply would be lost.
         reject(new Error('The device voice did not start.'))
       }
       const watchdog = setTimeout(() => {
@@ -136,7 +139,10 @@ class SystemEngine implements Engine<string> {
         speechSynthesis.cancel()
         silent()
       }, 2000)
-      utterance.onstart = () => { started = true }
+      utterance.onstart = () => {
+        started = true
+        if (saved()?.system) save({ system: undefined, systemAt: undefined })  // It works again.
+      }
       utterance.onend = () => {
         clearTimeout(watchdog)
         this.speaking = false
@@ -170,7 +176,9 @@ async function voicesReady() {
   })
 }
 
-interface Saved { kokoro?: 'fast' | 'slow'; rtf?: number; system?: 'silent' }
+interface Saved { kokoro?: 'fast' | 'slow'; kokoroAt?: number; rtf?: number; system?: 'silent'; systemAt?: number }
+/** True while a saved bad result still counts. A note with no time is old: retry it. */
+const recent = (at: number | undefined, wait: number) => at !== undefined && Date.now() - at < wait
 function saved(): Saved | null {
   try { return JSON.parse(localStorage.getItem(STORE) ?? 'null') as Saved | null } catch { return null }
 }
@@ -181,7 +189,7 @@ function save(value: Saved) { try { localStorage.setItem(STORE, JSON.stringify({
 let model: Promise<KokoroTTS | null> | null = null
 
 async function loadModel(): Promise<KokoroTTS | null> {
-  if (saved()?.kokoro === 'slow') return null
+  if (saved()?.kokoro === 'slow' && recent(saved()?.kokoroAt, RETRY_KOKORO)) return null
   const gpu = (navigator as Navigator & { gpu?: { requestAdapter(): Promise<unknown> } }).gpu
   if (!gpu || !(await gpu.requestAdapter().catch(() => null))) return null
   const { KokoroTTS } = await import('kokoro-js')
@@ -190,7 +198,7 @@ async function loadModel(): Promise<KokoroTTS | null> {
   const start = performance.now()
   const probe = await tts.generate(PROBE, { voice: VOICE })
   const rtf = (performance.now() - start) / 1000 / (probe.audio.length / probe.sampling_rate)
-  save({ kokoro: rtf <= FAST ? 'fast' : 'slow', rtf: Math.round(rtf * 100) / 100 })
+  save({ kokoro: rtf <= FAST ? 'fast' : 'slow', kokoroAt: Date.now(), rtf: Math.round(rtf * 100) / 100 })
   console.info('Friday Kokoro probe', { rtf })
   return rtf <= FAST ? tts : null
 }
@@ -232,7 +240,8 @@ export class DeviceVoice {
   async open() {
     await voicesReady()
     // Use the built-in voice even when no voice is listed yet: the device default still speaks.
-    if (typeof speechSynthesis !== 'undefined' && saved()?.system !== 'silent') this.use(new SystemEngine(systemVoice()))
+    const silent = saved()?.system === 'silent' && recent(saved()?.systemAt, RETRY_SYSTEM)
+    if (typeof speechSynthesis !== 'undefined' && !silent) this.use(new SystemEngine(systemVoice()))
     loadKokoro().then(engine => {
       if (!engine) return
       if (this.closed) { engine.close(); return }
