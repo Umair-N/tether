@@ -173,7 +173,8 @@ def _step(link, entries, status, send, last_reply, awaiting, clear, feedback_sen
         link.pop('retries', None)
         link.pop('wait_ticks', None)
     elif link['seen_working'] and state == 'Idle':
-        if link.get('paused', False):
+        if link.get('paused', False) or link.get('rounds', 0) >= MAX_ROUNDS:
+            link['paused'] = True
             link['seen_working'] = False
             return link
         reviewer_state = status(reviewer)['state']
@@ -192,8 +193,6 @@ def _step(link, entries, status, send, last_reply, awaiting, clear, feedback_sen
                     'Review its work: check the changes and the claims, then list what is wrong or missing. '
                     'Start your reply with APPROVED if nothing is. Tether sends your reply to that tab. '
                     f"Its last reply:\n\n{last_reply(worker)[:1500]}\n\nTranscript: {worker.get('transcript', '')}")
-            if link.get('rounds', 0) == MAX_ROUNDS:
-                text += ' This is the last round: your reply stays here.'
             before = _digest(last_reply(reviewer))
             try:
                 send(reviewer, text, reviewer_state)

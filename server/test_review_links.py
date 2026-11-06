@@ -476,37 +476,39 @@ class ReviewLinksTests(unittest.TestCase):
                 self.assertFalse(self.links()[0]['awaiting'])
                 self.assertEqual(self.links()[0].get('rounds', 0), 0)
 
-    def test_feedback_stops_after_max_rounds_and_last_request_warns_reviewer(self):
+    def test_third_fix_pauses_without_a_fourth_review(self):
         self.assertEqual(review_links.MAX_ROUNDS, 3)
-        for round_number in range(review_links.MAX_ROUNDS + 1):
+        for round_number in range(review_links.MAX_ROUNDS):
             self.request_review()
-            request = self.send.call_args.args[1]
-            last_round = ' This is the last round: your reply stays here.'
-            if round_number == review_links.MAX_ROUNDS:
-                self.assertTrue(request.endswith(last_round))
-            else:
-                self.assertNotIn(last_round, request)
             self.finish_review()
-            self.assertEqual(self.links()[0].get('rounds'), min(round_number + 1, review_links.MAX_ROUNDS))
+            self.assertEqual(self.links()[0]['rounds'], round_number + 1)
             self.assertFalse(self.links()[0]['awaiting'])
-        self.assertEqual(self.send.call_count, 2 * review_links.MAX_ROUNDS + 1)
-        self.assertEqual(self.send.call_args.args[0], self.reviewer)
+        self.request_review()  # the third feedback fix finishes
+        reviews = [call for call in self.send.call_args_list if call.args[0] == self.reviewer]
+        feedback = [call for call in self.send.call_args_list if call.args[0] == self.worker]
+        self.assertEqual(len(reviews), 3)
+        self.assertEqual(len(feedback), 3)
+        self.assertEqual(self.links()[0]['rounds'], review_links.MAX_ROUNDS)
+        self.assertFalse(self.links()[0]['seen_working'])
         self.assertTrue(self.links()[0]['paused'])
         self.assertEqual(review_links.paused(), {'%13': ['%12']})
         self.observe()
         self.observe()
-        self.assertEqual(self.send.call_count, 2 * review_links.MAX_ROUNDS + 1)
+        self.assertEqual(self.send.call_count, 2 * review_links.MAX_ROUNDS)
 
         self.request_review()  # a user turn starts a new exchange
         self.assertNotIn('rounds', self.links()[0])
         self.assertNotIn('paused', self.links()[0])
         self.assertEqual(review_links.paused(), {})
+        self.assertEqual(self.send.call_count, 2 * review_links.MAX_ROUNDS + 1)
+        self.assertEqual(self.send.call_args.args[0], self.reviewer)
+        self.assertTrue(self.links()[0]['awaiting'])
         self.finish_review()
         self.assertEqual(self.links()[0]['rounds'], 1)
         self.assertEqual(self.send.call_args.args[0], self.worker)
 
-    def test_approval_after_three_rounds_allows_feedback_on_new_work(self):
-        for round_number in range(1, review_links.MAX_ROUNDS + 1):
+    def test_approval_before_limit_allows_feedback_on_new_work(self):
+        for round_number in range(1, review_links.MAX_ROUNDS):
             self.request_review()
             self.finish_review()
             self.assertEqual(self.links()[0]['rounds'], round_number)
@@ -518,7 +520,22 @@ class ReviewLinksTests(unittest.TestCase):
         self.finish_review()
         self.assertEqual(self.links()[0]['rounds'], 1)
         self.assertEqual(self.send.call_args.args[0], self.worker)
-        self.assertEqual(self.send.call_count, 2 * review_links.MAX_ROUNDS + 3)
+        self.assertEqual(self.send.call_count, 2 * review_links.MAX_ROUNDS + 1)
+
+    def test_stored_awaiting_link_at_limit_pauses_without_feedback(self):
+        self.request_review()
+        link, = self.links()
+        link['rounds'] = review_links.MAX_ROUNDS
+        self.file.write_text(json.dumps([link]))
+        self.send.reset_mock()
+        self.finish_review()
+        self.send.assert_not_called()
+        link, = self.links()
+        self.assertTrue(link['paused'])
+        self.assertFalse(link['awaiting'])
+        self.assertEqual(link['rounds'], review_links.MAX_ROUNDS)
+        for key in ('wait_ticks', 'idle_ticks', 'reviewer_before', 'reviewer_seen_working', 'retries'):
+            self.assertNotIn(key, link)
 
     def test_approval_removes_existing_pause_and_rounds(self):
         self.request_review()
