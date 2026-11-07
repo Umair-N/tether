@@ -1,4 +1,4 @@
-/* Home (Home.tsx). Only Needs you cards get a box: Working and Done stay quiet rows, so the eye goes to what waits.
+/* Home (Home.tsx). Height means urgency: Needs you stands highest, Working sits on the lane, Done lies flat in it.
    The layout follows the page's own width, because the sidebar takes a different share at each window size. */
 .app-shell.screen-home > :is(.workspace, .inbox, .chat) { display: none; }
 .app-shell.phone-home :is(.chat-panel) { visibility: hidden; }
@@ -11,17 +11,18 @@
 .home h1:focus { outline: none; }
 .home .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
-/* Three depths: the header and the cards are surfaces, the lanes sit on the page. Status is a color, and each card and count carries it. */
-.home { --home-done: #2f8a68; --home-lane: color-mix(in srgb, var(--text) 4%, var(--bg)); --home-shadow: 0 1px 2px color-mix(in srgb, var(--text) 8%, transparent); --home-lift: 0 2px 4px color-mix(in srgb, var(--text) 8%, transparent), 0 8px 18px -8px color-mix(in srgb, var(--text) 22%, transparent); }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .home { --home-done: #62c49c; --home-shadow: 0 1px 2px #0003; --home-lift: 0 2px 4px #0004, 0 10px 20px -8px #0008; } }
-:root[data-theme="dark"] .home { --home-done: #62c49c; --home-shadow: 0 1px 2px #0003; --home-lift: 0 2px 4px #0004, 0 10px 20px -8px #0008; }
+/* Depth comes from tone and one light from above. Every shadow falls straight down and stays tight. */
+.home { --home-done: #2f8a68; --home-lane: color-mix(in srgb, var(--text) 4%, var(--bg)); --home-light: inset 0 1px 0 #fff9; --home-rest: 0 1px 1px color-mix(in srgb, var(--text) 7%, transparent); --home-raise: 0 1px 1px color-mix(in srgb, var(--attention) 24%, transparent), 0 3px 6px -2px color-mix(in srgb, var(--attention) 30%, transparent); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .home { --home-done: #62c49c; --home-light: inset 0 1px 0 #ffffff0f; --home-rest: 0 1px 1px #0003; --home-raise: 0 1px 1px #0004, 0 3px 6px -2px #0006; } }
+:root[data-theme="dark"] .home { --home-done: #62c49c; --home-light: inset 0 1px 0 #ffffff0f; --home-rest: 0 1px 1px #0003; --home-raise: 0 1px 1px #0004, 0 3px 6px -2px #0006; }
 .home-group.needs, .home-card.needs { --status: var(--attention); }
 .home-group.working, .home-card.working { --status: var(--accent); }
 .home-group.done, .home-card.done { --status: var(--home-done); }
 .home-group.done .state-dot.done { background: var(--home-done); }
+.home-group.needs:not(:has(.home-card)) .state-dot { background: var(--muted); }
 
 /* Head: the answer first, then the counts that jump to each group. */
-.home-head { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 12px max(16px, env(safe-area-inset-left)); background: var(--surface); border-bottom: 1px solid var(--line); }
+.home-head { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 12px max(16px, env(safe-area-inset-left)); background: var(--surface); }
 .home-head h1 { flex: 1; min-width: 0; font-family: ui-serif, Georgia, serif; font-size: clamp(25px, 4cqi, 32px); font-weight: 400; letter-spacing: -.6px; line-height: 1.2; }
 .home-head .mobile-menu { margin-left: -8px; }
 .home-new { flex: none; }
@@ -40,37 +41,47 @@
 .home-group-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; min-height: 36px; background: var(--bg); }
 .home-group-head h2 { display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 600; }
 .home-group-head .state-dot { flex: none; }
-.home-count { min-width: 20px; padding: 1px 6px; border-radius: 999px; background: color-mix(in srgb, var(--status) 16%, transparent); font-size: 12px; font-weight: 600; line-height: 16px; text-align: center; font-variant-numeric: tabular-nums; }
+.home-count { font-size: 13.5px; font-variant-numeric: tabular-nums; }
 .home-mark-all { margin-left: auto; color: var(--muted); }
 .home-group ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-.home-empty { padding: 18px 12px; border: 1px dashed var(--line); border-radius: var(--radius-lg); font-size: 13px; color: var(--muted); text-align: center; }
+.home-empty { padding-bottom: 12px; font-size: 13px; color: var(--muted); }
 
-/* Card: a raised surface with a status stripe. The same four lines in every group, so the eye learns one shape. */
-.home-card { position: relative; min-width: 0; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: inset 3px 0 0 var(--status), var(--home-shadow); transition: border-color .14s ease-out, box-shadow .14s ease-out, transform .14s ease-out; }
-.home-open { display: flex; flex-direction: column; align-items: stretch; gap: 3px; width: 100%; min-height: 0; padding: 10px 12px 10px 15px; border-radius: inherit; text-align: left; color: inherit; }
+/* Card: the same four lines in every group, so the eye learns one shape. The edge is the surface's own tone, not a drawn line. */
+.home-card { position: relative; min-width: 0; border: 1px solid color-mix(in srgb, var(--text) 8%, var(--surface)); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--home-light), var(--home-rest); transition: background-color .14s ease-out, transform .1s ease-out; }
+.home-open { display: flex; flex-direction: column; align-items: stretch; gap: 3px; width: 100%; min-height: 0; padding: 10px 12px; border-radius: inherit; text-align: left; color: inherit; }
 .home-card-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .home-icon { flex: none; display: grid; place-items: center; color: var(--muted); }
 .home-source { flex: 1; min-width: 0; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .home-time { flex: none; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .home-title { min-width: 0; font-size: 14px; font-weight: 600; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .home-meta, .home-status { min-width: 0; font-size: 12px; line-height: 1.45; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A card answers the pointer with tone, and sinks a little under a press. It does not float up. */
 @media (hover: hover) {
-  .home-card:hover { border-color: var(--status); box-shadow: inset 3px 0 0 var(--status), var(--home-lift); transform: translateY(-1px); }
+  .home-card:hover { background: color-mix(in srgb, var(--text) 4%, var(--surface)); }
 }
+.home-card:has(.home-open:active) { transform: scale(.992); }
 @media (prefers-reduced-motion: reduce) {
   .home-card { transition: none; }
-  .home-card:hover { transform: none; }
+  .home-card:has(.home-open:active) { transform: none; }
 }
 
-/* Needs you: tinted, because each card asks for a decision. Its text may run to three lines, so the decision has what it needs. */
-.home-card.needs { background: color-mix(in srgb, var(--attention) 7%, var(--surface)); border-color: color-mix(in srgb, var(--attention) 45%, var(--line)); }
+/* Needs you: the highest card, because each one asks for a decision. Its text may run to three lines, so the decision has what it needs. */
+.home-card.needs { background: color-mix(in srgb, var(--attention) 7%, var(--surface)); border-color: color-mix(in srgb, var(--attention) 26%, var(--surface)); box-shadow: var(--home-light), var(--home-raise); }
+@media (hover: hover) {
+  .home-card.needs:hover { background: color-mix(in srgb, var(--attention) 13%, var(--surface)); }
+}
 .home-card.needs .home-time { color: var(--attention); font-weight: 600; }
 .home-card.needs .home-status { margin-top: 3px; font-size: 12.5px; color: var(--text); white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow-wrap: anywhere; }
 .home-card.needs .home-status strong { font-weight: 600; color: var(--attention); }
-.home-card .inbox-actions { padding: 0 12px 11px 15px; }
-.home-card .inbox-error { padding: 0 12px 11px 15px; }
+.home-card .inbox-actions { padding: 0 12px 11px; }
+.home-card .inbox-error { padding: 0 12px 11px; }
 
-/* Done: the mark-read button sits at the row's end, under the time. With a pointer it shows on hover or focus only. */
+/* Done: a flat row with no surface, because nothing more happens here. Its text lines up with the group's name. The mark-read button sits at the row's end, under the time. With a pointer it shows on hover or focus only. */
+.home-group.done ul { gap: 2px; }
+.home-card.done { margin-inline: -13px; border-color: transparent; background: none; box-shadow: none; }
+@media (hover: hover) {
+  .home-card.done:hover { background: var(--hover); }
+}
 .home-card.done .home-open { padding-right: 40px; }
 .home-card.done .home-card-top { margin-right: -28px; }
 .home-mark { position: absolute; right: 4px; bottom: 4px; color: var(--muted); }
@@ -106,8 +117,12 @@
   .home-head { padding-inline: 24px; }
   .home-stale { margin-inline: 24px; }
   .home-board { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; padding-inline: 24px; padding-top: 16px; }
-  .home-group { padding: 4px 8px 8px; border-radius: var(--radius-xl); background: var(--home-lane); }
-  .home-group-head { padding-inline: 4px; background: var(--home-lane); }
+  .home-group { --lane: var(--home-lane); padding: 4px 8px 8px; border-radius: var(--radius-xl); background: var(--lane); }
+  .home-group:has(.home-card.needs) { --lane: color-mix(in srgb, var(--text) 8%, var(--bg)); }
+  .home-group-head { padding-inline: 13px; background: var(--lane); }
+  .home-empty { padding-inline: 13px; }
+  .home-card.done { margin-inline: 0; }
+  .home-card.needs { background: var(--surface); }
   .home-group.needs { grid-column: 1 / -1; }
   .home-group.needs ul { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
@@ -124,5 +139,4 @@
   .home-group.needs ul { display: flex; }
   .home-group-head { position: static; flex: none; }
   .home-group ul { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; padding: 2px 2px 12px; margin-inline: -2px; }
-  .home-empty { margin-bottom: 8px; }
 }
