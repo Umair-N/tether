@@ -55,10 +55,13 @@ def main():
         plugin.write_text(content)
         files = ['VERSION', str(plugin.relative_to(worktree))]
         if '-rc' not in args.version:
-            readme = worktree / 'README.md'
-            readme.write_text(re.sub(r'raw\.githubusercontent\.com/incmak/tether/v[^/\s]+/',
-                                    f'raw.githubusercontent.com/incmak/tether/{tag}/', readme.read_text()))
-            files.append('README.md')
+            for name in ('README.md', 'site/index.html', 'site/llms.txt'):
+                path = worktree / name
+                if not path.exists():
+                    continue
+                path.write_text(re.sub(r'raw\.githubusercontent\.com/incmak/tether/v[^/\s]+/',
+                                       f'raw.githubusercontent.com/incmak/tether/{tag}/', path.read_text()))
+                files.append(name)
         env = dict(os.environ, SHELL='/bin/bash', TETHER_REAL_BROWSER_TEST='1')
         run(['python3', '-m', 'unittest', 'discover', '-q'], worktree / 'server',
             env=env, timeout=1200)

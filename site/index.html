@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tether setup</title>
+<meta name="description" content="Set up Tether: a self-hosted chat UI for your coding agents in tmux. Guides for install, phone access, web app, and more hosts.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="alternate" type="text/plain" href="llms.txt" title="Setup instructions for AI agents">
+<style>
+:root {
+  --bg: #f7f5f0; --sunk: #eeece5; --code: #eae7de; --text: #302f2b; --muted: #65635b;
+  --line: #d9d6cd; --accent: #c96442; --link: #a34a2a; --button: #ad4f2e; --button-hover: #974325; --button-text: #fffaf5;
+  --warn: #7a5c18;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #262624; --sunk: #20201e; --code: #33332f; --text: #e9e6df; --muted: #b1ada3;
+    --line: #48473f; --link: #e8957a; --button: #ad4f2e; --button-hover: #974325; --warn: #d9b761;
+  }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 24px; -webkit-text-size-adjust: 100%; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 17px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-synthesis: none; -webkit-font-smoothing: antialiased;
+}
+a { color: var(--link); text-underline-offset: 2px; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+code, pre { font: 0.88em/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+:not(pre) > code { background: var(--code); padding: 0.1em 0.35em; border-radius: 5px; overflow-wrap: anywhere; }
+.page { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+@media (max-width: 640px) { .page { padding: 0 16px; } }
+
+.top { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 0; }
+.brand { display: flex; align-items: center; gap: 10px; color: inherit; text-decoration: none; font-weight: 650; font-size: 18px; }
+.brand img { width: 28px; height: 28px; display: block; }
+.top nav a { color: var(--muted); }
+
+.intro { padding: 40px 0 28px; max-width: 780px; }
+h1 { font-size: clamp(2.1rem, 5.4vw, 3.3rem); line-height: 1.12; letter-spacing: -0.02em; margin: 0 0 16px; font-weight: 680; text-wrap: balance; }
+.lede { font-size: 1.16em; color: var(--muted); margin: 0; max-width: 62ch; }
+
+.start { background: var(--sunk); border-radius: 14px; padding: 22px; margin: 0 0 40px; }
+.start h2 { margin: 0 0 4px; font-size: 1.15rem; font-weight: 650; }
+.start p { margin: 0 0 14px; color: var(--muted); }
+.start pre { background: var(--bg); white-space: pre-wrap; overflow-wrap: anywhere; margin: 0 0 14px; }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
+.actions .note { color: var(--muted); font-size: 0.92em; }
+
+button { font: inherit; cursor: pointer; border: 0; border-radius: 8px; min-height: 44px; padding: 8px 16px; }
+.primary { background: var(--button); color: var(--button-text); font-weight: 600; transition: background-color .15s; }
+.primary:hover { background: var(--button-hover); }
+.quiet { background: var(--code); color: var(--text); font-size: 0.92em; transition: background-color .15s; }
+.quiet:hover { background: var(--line); }
+.js-only[hidden] { display: none; }
+
+.demo { margin: 0 0 56px; }
+.demo img { display: block; width: 100%; height: auto; border-radius: 12px; background: var(--sunk); }
+.demo figcaption { color: var(--muted); font-size: 0.92em; margin-top: 10px; }
+
+.layout { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 56px; align-items: start; }
+.toc { position: sticky; top: 24px; font-size: 0.95em; }
+.toc ol { list-style: none; margin: 0; padding: 0; }
+.toc li { margin: 0; }
+.toc a { display: block; padding: 6px 0; color: var(--muted); text-decoration: none; }
+.toc a:hover { color: var(--text); }
+.toc a[aria-current="true"] { color: var(--text); font-weight: 600; }
+@media (max-width: 860px) {
+  .layout { display: block; }
+  .toc { position: static; margin-bottom: 40px; }
+  .toc a { padding: 10px 0; }
+}
+
+article { max-width: 72ch; }
+section { margin: 0 0 64px; }
+.head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin-bottom: 8px; }
+h2 { font-size: 1.7rem; line-height: 1.25; letter-spacing: -0.01em; margin: 0; font-weight: 660; }
+h3 { font-size: 1.12rem; margin: 32px 0 6px; font-weight: 650; }
+p { margin: 0 0 14px; }
+ol, ul { margin: 0 0 14px; padding-left: 1.4em; }
+li { margin-bottom: 6px; }
+pre { background: var(--code); border-radius: 8px; padding: 12px 14px; margin: 0 0 14px; overflow-x: auto; }
+.command { position: relative; margin: 0 0 14px; }
+.command pre { margin: 0; padding-right: 84px; }
+.command button { position: absolute; top: 4px; right: 4px; min-height: 36px; padding: 4px 12px; background: var(--code); color: var(--muted); font-size: 0.85em; transition: color .15s; }
+.command button:hover { color: var(--text); }
+.warn { color: var(--warn); }
+.table { overflow-x: auto; margin: 0 0 14px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.95em; }
+th, td { text-align: left; vertical-align: top; padding: 8px 12px 8px 0; border-bottom: 1px solid var(--line); }
+th { font-weight: 600; }
+dt { font-weight: 600; margin-top: 16px; }
+dd { margin: 2px 0 0; }
+footer { color: var(--muted); padding: 24px 0 48px; font-size: 0.92em; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="top">
+    <a class="brand" href="./"><img src="icon.svg" alt="" width="28" height="28">Tether</a>
+    <nav aria-label="Project"><a href="https://github.com/incmak/tether">GitHub</a></nav>
+  </header>
+
+  <main>
+    <div class="intro">
+      <h1>Answer your coding agents from your phone.</h1>
+      <p class="lede">Tether is a chat UI for Claude Code, Codex, and Antigravity in tmux. It runs on your computer, and your agents stay there. There is no Tether account and no cloud.</p>
+    </div>
+
+    <div class="start">
+      <h2>Let your agent set it up</h2>
+      <p>Paste this into Claude Code or Codex on the machine that will host Tether. About 5 minutes.</p>
+      <pre id="prompt">Set up Tether on this machine. Read https://incmak.github.io/tether/llms.txt and follow it. Show me the installer plan and wait for my yes before you apply anything. Never print my access token.</pre>
+      <div class="actions">
+        <button class="primary js-only" type="button" data-copy="prompt" hidden>Copy prompt</button>
+        <button class="quiet js-only" type="button" data-copy-url="llms.txt" hidden>Copy full guide for an LLM</button>
+        <span class="note">Read it first: <a href="llms.txt">llms.txt</a></span>
+      </div>
+    </div>
+
+    <figure class="demo">
+      <img src="tether-demo.gif" alt="Tether in use: an agent reply in chat, split view, the built-in browser, and Live mode." width="1000" height="625" loading="lazy">
+      <figcaption>Real chat from the agent's transcript, with its approvals and questions.</figcaption>
+    </figure>
+
+    <div class="layout">
+      <nav class="toc" aria-label="Guides">
+        <ol>
+          <li><a href="#install">1. Install</a></li>
+          <li><a href="#reach">2. Reach it from your phone</a></li>
+          <li><a href="#first-chat">3. Start a chat</a></li>
+          <li><a href="#web-app">4. Install the web app</a></li>
+          <li><a href="#hosts">5. Add more hosts</a></li>
+          <li><a href="#update">Update or remove</a></li>
+          <li><a href="#trouble">If something fails</a></li>
+          <li><a href="#safety">Security</a></li>
+        </ol>
+      </nav>
+
+      <article>
+        <section id="install">
+          <div class="head"><h2>1. Install</h2><button class="quiet js-only" type="button" data-copy-section hidden>Copy for LLM</button></div>
+          <p>Use one way below. They all install the same verified release. Each way shows you a plan before it changes anything.</p>
+
+          <div class="table"><table>
+            <thead><tr><th scope="col">Machine</th><th scope="col">Status</th></tr></thead>
+            <tbody>
+              <tr><td>Linux</td><td>Supported. Needs a systemd user session.</td></tr>
+              <tr><td>macOS</td><td>Works. Tested with Claude Code on one Mac. Codex and Antigravity are not confirmed.</td></tr>
+              <tr><td>Android (Termux)</td><td>Installer is ready. Not yet tested on a real phone.</td></tr>
+              <tr><td>iPhone, iPad</td><td>Cannot host. Use them as the browser.</td></tr>
+            </tbody>
+          </table></div>
+          <p>You need Python 3.11 or newer, <code>tmux</code>, and at least one agent. You do not need root or Node. The macOS system Python is too old, so use <code>brew install python tmux</code>.</p>
+
+          <h3>Claude Code plugin</h3>
+          <ol>
+            <li>In Claude Code, run <code>/plugin marketplace add incmak/tether</code>.</li>
+            <li>Run <code>/plugin install tether@tether</code> and install the plugin.</li>
+            <li>Type <code>set up tether</code> and follow the guided setup.</li>
+          </ol>
+
+          <h3>Codex CLI</h3>
+          <p>Use the prompt at the top of this page. It works in Codex with no skill to install.</p>
+
+          <h3>Terminal</h3>
+          <ol>
+            <li>Download and check the release:
+<pre><code>curl -fL https://raw.githubusercontent.com/incmak/tether/v0.1.7/integrations/claude/tether/skills/setup/bootstrap.py -o tether-bootstrap.py
+python3 tether-bootstrap.py</code></pre></li>
+            <li>Read the plan. It writes nothing. Fix each failed check.
+<pre><code>python3 ~/.local/share/tether/current/install.py --plan --no-build-ui</code></pre></li>
+            <li>Apply the plan. This starts the services.
+<pre><code>python3 ~/.local/share/tether/current/install.py --apply --no-build-ui</code></pre></li>
+          </ol>
+          <p>The result prints your address and the path of your token file.</p>
+
+          <h3>Android</h3>
+          <ol>
+            <li>Install Termux from <a href="https://github.com/termux/termux-app#installation">F-Droid or GitHub</a>, not Google Play.</li>
+            <li>Install the packages, then close and reopen Termux:
+<pre><code>pkg install python tmux nodejs git ttyd termux-services</code></pre></li>
+            <li>Run the installer:
+<pre><code>git clone https://github.com/incmak/tether.git
+cd tether
+python install.py --plan --no-voice
+python install.py --apply --no-voice</code></pre></li>
+            <li>Run <code>termux-wake-lock</code> so Android does not stop Termux.</li>
+          </ol>
+        </section>
+
+        <section id="reach">
+          <div class="head"><h2>2. Reach it from your phone</h2><button class="quiet js-only" type="button" data-copy-section hidden>Copy for LLM</button></div>
+          <p>Tether listens only on your computer by default. To use it from another device, pick one way. We recommend Tailscale.</p>
+
+          <h3>Tailscale</h3>
+          <ol>
+            <li>Install <a href="https://tailscale.com/download">Tailscale</a> on the computer and the phone. Sign in to the same account on both.</li>
+            <li>In the <a href="https://login.tailscale.com/admin/dns">Tailscale admin console, DNS page</a>, turn on MagicDNS and HTTPS Certificates.</li>
+            <li>On the computer, run this. Use your Tether port if it is not 7683.
+<pre><code>tailscale serve --bg --https=443 http://127.0.0.1:7683</code></pre></li>
+            <li>On the phone, open the HTTPS address that the command prints. Add <code>/chat/</code> to the end.</li>
+          </ol>
+          <p>HTTPS Certificates publish your machine names and tailnet name on a public certificate ledger.</p>
+
+          <h3>HTTPS reverse proxy</h3>
+          <p>Install with <code>--auth proxy</code>. The proxy must require its own sign-in. See the <a href="https://github.com/incmak/tether/blob/main/server/deploy/examples/nginx-auth-proxy.conf">nginx example</a>.</p>
+
+          <h3>Same Wi-Fi</h3>
+          <p>Install with <code>--host 0.0.0.0</code>, then open <code>http://your-computer-ip:7683/chat/</code>.</p>
+          <p class="warn">Plain HTTP sends your token and chat without encryption. Use this only on a network you trust. Push notifications and the web app do not work without HTTPS.</p>
+        </section>
+
+        <section id="first-chat">
+          <div class="head"><h2>3. Start a chat</h2><button class="quiet js-only" type="button" data-copy-section hidden>Copy for LLM</button></div>
+          <ol>
+            <li>On the computer, start tmux and an agent:
+<pre><code>tmux new -s work
+claude</code></pre></li>
+            <li>Open your Tether address. It ends in <code>/chat/</code>.</li>
+            <li>Get your sign-in token. Run this on the computer, and paste the result into Tether:
+<pre><code>cat ~/.config/mobile-tmux/token</code></pre></li>
+            <li>Select the session in the sidebar. Send a message.</li>
+          </ol>
+          <p>Treat the token like an SSH key. Anyone with it can run commands as you.</p>
+        </section>
+
+        <section id="web-app">
+          <div class="head"><h2>4. Install the web app</h2><button class="quiet js-only" type="button" data-copy-section hidden>Copy for LLM</button></div>
+          <p>Open Tether at <strong>your own host's HTTPS address</strong>, not this site. The app belongs to that host, and it needs HTTPS.</p>
+          <ul>
+            <li><strong>Android, Chrome:</strong> tap More, then Install and create shortcut, then Install.</li>
+            <li><strong>iPhone or iPad, Safari:</strong> tap Share, then Add to Home Screen.</li>
+            <li><strong>Computer, Chrome:</strong> open More, then Cast, save, and share, then Install page as app.</li>
+          </ul>
+          <p>Notifications need the push feature. Install with <code>--push</code>, or run <code>set up tether</code> again to turn it on. Then allow notifications when your browser asks.</p>
+        </section>
+
+        <section id="hosts">
+          <div class="head"><h2>5. Add more hosts</h2><button class="quiet js-only" type="button" data-copy-section hidden>Copy for LLM</button></div>
+          <p>Tether on one machine can list your Tether on other machines.</p>
+          <ol>
+            <li>Install Tether on the other machine. Use the steps above.</li>
+            <li>In Tether, select the host name at the bottom of the sidebar.</li>
+            <li>Select <strong>Add a host</strong>.</li>
+            <li>Type the HTTPS address that <code>tailscale serve status</code> prints on that machine. The name is optional.</li>
+            <li>Select <strong>Add host</strong>.</li>
+          </ol>
+          <p>The list shows if each host is online. A host opens at its own address, with its own sign-in, web app, and notifications.</p>
+        </section>
+
+        <section id="update">
+          <div class="head"><h2>Update or remove</h2><button class="quiet js-only" type="button" data-copy-section hidden>Copy for LLM</button></div>
+          <p>When a new version is out, the sidebar shows a notice. Select <strong>Update now</strong>. Your chats reconnect after the restart. A failed update goes back to the old version.</p>
+          <p>The button arrived in v0.1.7. On an older version, update once from the terminal:</p>
+          <pre><code>tether update --yes</code></pre>
+          <p>To go back one version:</p>
+          <pre><code>tether rollback</code></pre>
+          <p>To remove the services, read the plan, then apply it. This keeps your token and chat data.</p>
+          <pre><code>python3 ~/.local/share/tether/current/install.py --plan --uninstall
+python3 ~/.local/share/tether/current/install.py --apply --uninstall</code></pre>
+        </section>
+
+        <section id="trouble">
+          <div class="head"><h2>If something fails</h2><button class="quiet js-only" type="button" data-copy-section hidden>Copy for LLM</button></div>
+          <dl>
+            <dt>tether: command not found</dt>
+            <dd>Add <code>export PATH="$HOME/.local/bin:$PATH"</code> to your shell profile.</dd>
+            <dt>The plan has a failed check</dt>
+            <dd>Each failed check has a fix. Do the fix, then run the plan again.</dd>
+            <dt>My agent is not in the sidebar</dt>
+            <dd>Start the agent inside tmux. Tether does not see agents outside tmux.</dd>
+            <dt>Tether stops when I log out of Linux</dt>
+            <dd>Run <code>loginctl enable-linger $USER</code>. It can need admin permission.</dd>
+            <dt>Claude says "Not logged in" on a Mac</dt>
+            <dd>Start the Tether service from your Mac desktop session, not from SSH. An SSH session cannot read the login keychain.</dd>
+            <dt>The phone cannot open the address</dt>
+            <dd>Check that Tailscale is on, on both devices. Check that the address ends in <code>/chat/</code>.</dd>
+            <dt>I do not see Update now</dt>
+            <dd>The button appears only on release installs. A git checkout updates with <code>git pull</code>, or moves to releases with <code>tether migrate</code>.</dd>
+            <dt>I lost control of my token</dt>
+            <dd>Remove <code>~/.config/mobile-tmux/token</code>, then restart the Tether service. Tether makes a new token.</dd>
+          </dl>
+          <p>Still stuck? <a href="https://github.com/incmak/tether/issues">Open an issue</a> with your agent version. Remove private data first.</p>
+        </section>
+
+        <section id="safety">
+          <div class="head"><h2>Security</h2><button class="quiet js-only" type="button" data-copy-section hidden>Copy for LLM</button></div>
+          <ul>
+            <li>Anyone with access to Tether can control your agents and run commands as you.</li>
+            <li>Do not expose Tether directly to the internet. Use Tailscale, or a proxy with its own sign-in.</li>
+            <li>The installer checks each release against SHA-256 before it installs.</li>
+            <li>This site is static. It has no connection to your hosts, and it does not ask for your token.</li>
+            <li>Agent providers and optional push services keep their own data policies.</li>
+          </ul>
+          <p>Report security problems privately. See <a href="https://github.com/incmak/tether/blob/main/SECURITY.md">SECURITY.md</a>.</p>
+        </section>
+      </article>
+    </div>
+  </main>
+
+  <footer>
+    <a href="https://github.com/incmak/tether">Tether</a> is open source under the MIT License. <a href="https://github.com/incmak/tether#readme">Full reference</a>.
+  </footer>
+</div>
+
+<script>
+(function () {
+  function inline(node) {
+    var out = '';
+    node.childNodes.forEach(function (child) {
+      if (child.nodeType === 3) { out += child.textContent.replace(/\s+/g, ' '); return; }
+      if (child.nodeType !== 1 || child.tagName === 'PRE' || child.tagName === 'BUTTON') return;
+      var text = inline(child);
+      if (child.tagName === 'CODE') out += '`' + child.textContent + '`';
+      else if (child.tagName === 'STRONG') out += '**' + text + '**';
+      else if (child.tagName === 'A') out += '[' + text + '](' + child.href + ')';
+      else out += text;
+    });
+    return out;
+  }
+  function block(node, indent) {
+    var out = '';
+    Array.prototype.forEach.call(node.children, function (el) {
+      var tag = el.tagName;
+      if (tag === 'H2') out += '## ' + el.textContent.trim() + '\n\n';
+      else if (tag === 'H3') out += '### ' + el.textContent.trim() + '\n\n';
+      else if (tag === 'P') out += inline(el).trim() + '\n\n';
+      else if (tag === 'DT') out += '**' + el.textContent.trim() + '**\n';
+      else if (tag === 'DD') out += inline(el).trim() + '\n\n';
+      else if (tag === 'PRE') out += '```\n' + el.textContent.trim() + '\n```\n\n';
+      else if (tag === 'OL' || tag === 'UL') {
+        Array.prototype.forEach.call(el.children, function (li, i) {
+          out += (tag === 'OL' ? (i + 1) + '. ' : '- ') + inline(li).trim() + '\n';
+          Array.prototype.forEach.call(li.querySelectorAll('pre'), function (pre) {
+            out += '\n```\n' + pre.textContent.trim() + '\n```\n\n';
+          });
+        });
+        out += '\n';
+      } else if (tag === 'TABLE') {
+        Array.prototype.forEach.call(el.rows, function (row, r) {
+          var cells = Array.prototype.map.call(row.cells, function (c) { return inline(c).trim(); });
+          out += '| ' + cells.join(' | ') + ' |\n';
+          if (r === 0) out += '|' + cells.map(function () { return ' --- |'; }).join('') + '\n';
+        });
+        out += '\n';
+      } else if (tag !== 'BUTTON') out += block(el, indent);
+    });
+    return out;
+  }
+  function write(text) {
+    if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+    return new Promise(function (resolve, reject) {
+      var area = document.createElement('textarea');
+      area.value = text; area.style.position = 'fixed'; area.style.opacity = '0';
+      document.body.appendChild(area); area.select();
+      var done = document.execCommand('copy');
+      area.remove();
+      if (done) resolve(); else reject(new Error('copy failed'));
+    });
+  }
+  // Fetch before the click: browsers can refuse a clipboard write that waits on the network.
+  var guide = fetch('llms.txt').then(function (r) { if (!r.ok) throw new Error('fetch failed'); return r.text(); });
+  guide.catch(function () {});
+  document.querySelectorAll('article pre').forEach(function (pre) {
+    var wrap = document.createElement('div');
+    wrap.className = 'command';
+    pre.parentNode.insertBefore(wrap, pre);
+    wrap.appendChild(pre);
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'js-only';
+    button.textContent = 'Copy';
+    button.setAttribute('aria-label', 'Copy command: ' + pre.textContent.trim().split('\n')[0].slice(0, 60));
+    button.dataset.copyPre = '';
+    wrap.appendChild(button);
+  });
+  document.querySelectorAll('.js-only').forEach(function (button) {
+    button.hidden = false;
+    var label = button.textContent;
+    button.addEventListener('click', function () {
+      var text;
+      if (button.dataset.copy) text = Promise.resolve(document.getElementById(button.dataset.copy).textContent.trim());
+      else if (button.dataset.copyUrl) text = guide;
+      else if ('copyPre' in button.dataset) text = Promise.resolve(button.parentNode.querySelector('pre').textContent.trim());
+      else {
+        var section = button.closest('section');
+        text = Promise.resolve('These are setup steps for Tether (' + location.origin + location.pathname + '#' + section.id + '). Help me follow them, one step at a time. Never ask to see my access token.\n\n' + block(section, '').trim() + '\n');
+      }
+      text.then(write).then(function () { button.textContent = 'Copied'; }, function () { button.textContent = 'Copy failed'; })
+        .then(function () { setTimeout(function () { button.textContent = label; }, 1800); });
+    });
+  });
+  var links = Array.prototype.slice.call(document.querySelectorAll('.toc a'));
+  if ('IntersectionObserver' in window && links.length) {
+    var observer = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (!entry.isIntersecting) return;
+        links.forEach(function (link) { link.setAttribute('aria-current', link.hash === '#' + entry.target.id ? 'true' : 'false'); });
+      });
+    }, { rootMargin: '-20% 0px -70% 0px' });
+    document.querySelectorAll('article section').forEach(function (s) { observer.observe(s); });
+  }
+})();
+</script>
+</body>
+</html>

@@ -27,7 +27,7 @@ jobs:
           git archive "$GITHUB_REF_NAME" | tar -x -C package
           mkdir -p package/ui/dist
           cp -a ui/dist/. package/ui/dist/
-          tar -czf "artifacts/tether-$version.tar.gz" -C package .
+          tar --exclude='./site' -czf "artifacts/tether-$version.tar.gz" -C package .
           (cd artifacts && sha256sum "tether-$version.tar.gz" > SHA256SUMS)
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

@@ -1,0 +1,108 @@
+# Set up Tether
+
+You are an AI agent helping a person install Tether on the computer you run on.
+Tether is a self-hosted chat UI for coding agents in tmux: Claude Code, Codex, and Antigravity. The server runs on the person's machine. There is no Tether account or cloud.
+Source: https://github.com/incmak/tether (MIT). Human guide: https://incmak.github.io/tether/
+
+## Rules
+
+1. Show the installer plan and wait for an explicit yes before you run `--apply`.
+2. Never print, copy, or send the access token. Give only the path of the token file.
+3. Do not expose the server to the internet. Do not bind it to 0.0.0.0 unless the person chooses a trusted LAN after you state the warning below.
+4. Stop if a download or checksum fails. Do not fall back to an unverified archive or a git clone of main.
+5. Do not write service files or agent settings yourself. `install.py` does that.
+6. If you cannot run commands, give the person one step at a time and ask them to paste the output with any secrets removed.
+
+## Shortcut for Claude Code
+
+If you are Claude Code and the plugin is available, tell the person they can run these instead, then stop:
+
+    /plugin marketplace add incmak/tether
+    /plugin install tether@tether
+
+Then they type `set up tether`.
+
+## Step 1: Check requirements
+
+- Linux with a systemd user session, or macOS. Android (Termux) has a separate path: see "Android" below.
+- Python 3.11 or newer. The macOS system Python is too old; use Homebrew Python.
+- tmux, and at least one of `claude`, `codex`, `agy`.
+- No root needed. No Node needed for a release install.
+
+Report what is missing and how to install it. Ask before you install anything.
+
+## Step 2: Download a verified release
+
+    curl -fL https://raw.githubusercontent.com/incmak/tether/v0.1.7/integrations/claude/tether/skills/setup/bootstrap.py -o tether-bootstrap.py
+    python3 tether-bootstrap.py
+
+This downloads the latest stable release and SHA256SUMS, checks SHA-256, and links `~/.local/share/tether/current`. It starts no services.
+If `~/.config/tether/install.json` shows an existing git checkout install, stop and ask. Use `python3 ~/.local/share/tether/current/tether migrate` only after a yes.
+
+## Step 3: Show the baseline plan
+
+    python3 ~/.local/share/tether/current/install.py --plan --json --no-build-ui
+
+A plan writes nothing. Show the URL, host, auth, ports, features, updates, checks, warnings, and `cli_link`. A zero exit code alone does not prove readiness: read every check, and show failed checks with their `fix` text.
+
+## Step 4: Ask once for choices
+
+Features (any): interactive terminal (`--terminal`, needs ttyd), voice-to-text (`--voice`), push notifications (`--push`, needs HTTPS), usage hooks (`--hooks`), host resources (`--resources`). Pass `--no-<feature>` for each one not chosen.
+
+Remote access (one):
+
+| Choice | Flags | Note |
+| --- | --- | --- |
+| Tailscale (recommended for a phone) | `--host 127.0.0.1 --auth token` | Encrypted. HTTPS through Tailscale Serve. |
+| HTTPS reverse proxy | `--host 127.0.0.1 --auth proxy` | The proxy must require sign-in. |
+| Same trusted Wi-Fi | `--host 0.0.0.0 --auth token` | Warning: plain HTTP sends the token and chat without encryption. Push and home-screen install do not work. |
+| This computer only | `--host 127.0.0.1 --auth token` | A phone cannot reach it. |
+
+Updates (one): `--updates notify` (recommended), `--updates auto`, or `--updates off`.
+If the plan lists `legacy_units`, ask keep or replace. Add `--replace-legacy` only for replace.
+
+## Step 5: Review, then apply
+
+1. Run the plan again with the chosen flags and `--no-build-ui`. Keep the baseline port through `--port`.
+2. Show what changes. State that apply can install dependencies, save choices, and start or restart services.
+3. Resolve failed checks. Then ask for an explicit yes.
+4. After the yes, run the same command with `--apply` in place of `--plan`.
+5. Report a failed command as a failure.
+
+## Step 6: Finish
+
+Give the person the `url` and `token_file` from the result. They sign in at `/chat/` with the token in that file.
+
+- Tailscale: both devices must be in the same tailnet, with MagicDNS and HTTPS Certificates on (admin console, DNS page). The person runs `tailscale serve --bg --https=443 http://127.0.0.1:<port>`, then opens the printed HTTPS address with `/chat/` added.
+- Reverse proxy: see https://github.com/incmak/tether/blob/main/server/deploy/examples/nginx-auth-proxy.conf
+- Same Wi-Fi: open `http://<computer-LAN-IP>:<port>/chat/`.
+
+Then tell the person to run `tmux new -s work`, start `claude`, `codex`, or `agy` inside it, and select the session in Tether.
+If `~/.local/bin` is not on PATH, give them: `export PATH="$HOME/.local/bin:$PATH"`.
+On Linux, for services that must survive logout, give them: `loginctl enable-linger $USER`. It can need admin permission; do not run it yourself.
+Installer success does not prove phone access. Ask the person to test it from the phone.
+
+## After setup
+
+- Install as an app, on an HTTPS address only. Android Chrome: More, Install and create shortcut, Install. iPhone Safari: Share, Add to Home Screen. Desktop Chrome: More, Cast, save, and share, Install page as app.
+- Add another machine: install Tether there too. In Tether, select the host name at the bottom of the sidebar, select "Add a host", and type its address. Each host opens at its own address with its own sign-in.
+- Update: **Update now** in the sidebar, or `tether update --yes`. Go back with `tether rollback`.
+- Remove: run `install.py --plan --uninstall`, then `--apply --uninstall`. This keeps tokens and data.
+
+## Android
+
+Termux from F-Droid or GitHub, not Google Play:
+
+    pkg install python tmux nodejs git ttyd termux-services
+    git clone https://github.com/incmak/tether.git
+    cd tether
+    python install.py --plan --no-voice
+    python install.py --apply --no-voice
+    termux-wake-lock
+
+Voice and automatic updates do not work on Termux. Agent CLIs on Termux are not tested.
+
+## More
+
+Full reference: https://github.com/incmak/tether#readme
+Bugs: https://github.com/incmak/tether/issues

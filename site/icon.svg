@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Tether: a chat bubble holding a terminal prompt. Glyph stays inside the maskable safe zone. -->
+  <rect width="512" height="512" rx="112" fill="#C96442"/>
+  <path d="M150 150h212a40 40 0 0 1 40 40v120a40 40 0 0 1-40 40H236l-64 52v-52h-22a40 40 0 0 1-40-40V190a40 40 0 0 1 40-40Z" fill="#FBF7F1"/>
+  <path d="m180 214 40 36-40 36" fill="none" stroke="#C96442" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M248 286h84" stroke="#C96442" stroke-width="22" stroke-linecap="round"/>
+</svg>

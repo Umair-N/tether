@@ -17,6 +17,8 @@ The server runs on your machine. There is no Tether cloud account or relay.
 Agent providers and optional push services retain their own network and data policies.
 Tether is a front end for agent and shell panes, rather than a general tmux client with windows and layouts.
 
+New here? Follow the [setup guide](https://incmak.github.io/tether/).
+
 ## Repository layout
 
 | Directory | Purpose |
@@ -29,11 +31,11 @@ They do not show the current React UI.
 
 ## Requirements
 
-- Linux. The server uses `/proc` and Linux agent file layouts; macOS is not supported.
+- Linux, or macOS with Homebrew Python. On macOS, the installer uses a LaunchAgent. Testing covers Claude Code on one Mac.
 - Python 3.11 or newer.
 - Node.js 22 and npm for development UI builds. Release archives include the built UI.
 - `tmux` and at least one installed agent: Claude Code, Codex CLI, or Antigravity.
-- A systemd user session for the installer. The installer needs no root.
+- On Linux, a systemd user session for the installer. The installer needs no root.
 - Optional: [`ttyd`](https://github.com/tsl0922/ttyd) for the interactive terminal, and `pywebpush` for push notifications.
 
 The core server uses only the Python standard library. Release installs need no Node or npm.
