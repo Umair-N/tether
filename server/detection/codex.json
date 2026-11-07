@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "comment": "Codex terminal replies and report chrome.",
+  "patterns": {
+    "REPLIES_SPINNER": {
+      "regex": "\\besc to interrupt\\b",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "comment": "Find the Codex interrupt hint while work is active."
+    },
+    "REPLIES_PICKER": {
+      "regex": "enter (?:to )?(?:select|confirm|continue)|esc (?:back|to cancel|to go back)|↑/?↓|to navigate|press enter",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "comment": "Find picker hints that exclude a terminal-only reply."
+    },
+    "REPLIES_FOOTER": {
+      "regex": "^\\s*\\S+\\s+(?:minimal|low|medium|high|xhigh|extra high)\\s+·\\s+Context",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "comment": "Find the Codex model and context footer."
+    },
+    "REPLIES_BOX": {
+      "regex": "^[\\s─━│┃┌┐└┘├┤┬┴┼╭╮╰╯═║\\-_|+]*$",
+      "flags": [],
+      "comment": "Find terminal box and rule rows to omit from replies."
+    },
+    "REPLIES_CONTEXT": {
+      "regex": ".*·\\s*Context\\b",
+      "flags": [],
+      "comment": "Find a Codex context footer row to omit from replies."
+    },
+    "REPORT_RULE": {
+      "regex": "^\\s*[─━═-]{3,}\\s*$",
+      "flags": [],
+      "comment": "Find the rule below the Codex report tabs."
+    }
+  }
+}

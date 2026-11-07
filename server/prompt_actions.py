@@ -14,11 +14,12 @@ import threading
 import time
 import uuid
 
+import detection_rules
 import paths
 
 SGR = re.compile(r'\x1b\[[0-9;:]*m')
 OSC = re.compile(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)')
-RULE = re.compile(r'^\s*[─━═-]{3,}\s*$')
+RULE = detection_rules.pattern('codex', 'REPORT_RULE')
 # No keys are obtained from tmux's permissive string-to-key conversion.
 KEYS = {'pgup': ('PPage', 'PgUp'), 'pageup': ('PPage', 'PgUp'),
         'pgdn': ('NPage', 'PgDn'), 'pagedown': ('NPage', 'PgDn'),

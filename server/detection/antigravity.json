@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "comment": "Antigravity panels, model picker, delivery, and startup banner.",
+  "patterns": {
+    "AGY_MODE_HINT": {
+      "regex": "\\bmode\\b.*(?:\\(shift\\+tab to cycle\\)|\\.\\.\\.|…)\\s*$",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "comment": "Find the Antigravity mode hint, including a clipped hint."
+    },
+    "AGY_PANEL": {
+      "regex": "esc Close|↑/↓ Scroll|\\(\\d+–\\d+ of \\d+ lines\\)|general\\s+commands\\s+shortcuts",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "comment": "Find Antigravity panel navigation or line counts."
+    },
+    "AGY_BUSY": {
+      "regex": "esc to cancel|Loading\\.\\.\\.|Working",
+      "flags": [],
+      "comment": "Find busy text that confirms Antigravity accepted a message."
+    },
+    "MODEL_CURRENT": {
+      "regex": "\\(curr",
+      "flags": [],
+      "comment": "Find the current model marker even when it is clipped."
+    },
+    "BANNER_END": {
+      "regex": "^\\s*─{3,}",
+      "flags": [],
+      "comment": "Find the rule that ends the Antigravity startup banner."
+    }
+  }
+}

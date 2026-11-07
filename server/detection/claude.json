@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "comment": "Claude dialogs, model picker details, and startup banner.",
+  "patterns": {
+    "SETTINGS_TABS": {
+      "regex": "^\\s*Settings\\s+Status\\b",
+      "flags": [],
+      "comment": "Find the Settings dialog tab row."
+    },
+    "PANEL_CLOSE": {
+      "regex": "Esc to (?:cancel|close|exit|go back)|esc (?:Close|to close)",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "comment": "Find the close or cancel hint of a Claude panel."
+    },
+    "PLAN_MENU_OPTION": {
+      "regex": "\\bkeep planning\\b|tell Claude what to change",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "comment": "Find a plan chooser option that keeps the plan open."
+    },
+    "MODEL_MORE": {
+      "regex": "…\\s*\\+(\\d+)\\s+models",
+      "flags": [],
+      "comment": "Read the number of hidden Claude model rows."
+    },
+    "MODEL_EFFORT": {
+      "regex": "(?P<level>extra\\s+high|[A-Za-z]+)\\s+effort(?:\\s+\\(default\\))?\\s+←/→",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "comment": "Read the level on the Claude effort slider."
+    },
+    "PERMISSIONS_TAB_ROW": {
+      "regex": "^\\s*Permissions\\s{2,}(Recently blocked|Allow)\\b",
+      "flags": [],
+      "comment": "Read the first tab after the Permissions heading."
+    },
+    "PERMISSIONS_HINT": {
+      "regex": "\\bEsc\\b.*(?:cancel|close|appl(?:y|ies))|←/→.*(?:switch|tabs?)",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "comment": "Find the Permissions dialog footer hint."
+    },
+    "BANNER_START": {
+      "regex": "Claude Code v\\d",
+      "flags": [],
+      "comment": "Find the Claude startup banner version row."
+    },
+    "BANNER_END": {
+      "regex": "^\\s*(?:─{3,}|[❯>!]|⏺|●)",
+      "flags": [],
+      "comment": "Find the first rule, prompt, or response after the Claude banner."
+    }
+  }
+}

@@ -8,6 +8,7 @@ and always closes it again. Nothing is chosen unless apply() is asked to confirm
 import re
 import subprocess
 import time
+import detection_rules
 import paths
 
 TMUX = paths.TMUX
@@ -34,7 +35,7 @@ def press(entry, *keys, run=subprocess.run):
     run([TMUX, 'send-keys', '-t', entry['id'], *keys], check=True, capture_output=True, timeout=5)
 
 
-LEVEL_IN_NAME = re.compile(r'\((?:minimal|low|medium|high|xhigh)\)\s*$', re.I)
+LEVEL_IN_NAME = detection_rules.pattern('common', 'MODEL_LEVEL_IN_NAME')
 HINTS = {'claude': 'Esc to cancel', 'codex': 'esc back', 'antigravity': ('esc Go Back', 'Keyboard:')}  # a narrow pane cuts the end of the hint line
 
 
@@ -54,7 +55,7 @@ def region(text, header):
 
 # ---- parsers: one per agent --------------------------------------------------------------------------------------
 
-NUMBERED = re.compile(r'^\s*(?P<mark>[❯›>↓↑]?)\s*(?P<number>\d+)[.)]\s+(?P<body>\S.*)$')
+NUMBERED = detection_rules.pattern('common', 'MODEL_NUMBERED', names=('mark', 'number', 'body'))
 
 
 def numbered_rows(lines):
@@ -118,12 +119,18 @@ def slider_level(lines):
     return None
 
 
+MODEL_EFFORT = detection_rules.pattern('claude', 'MODEL_EFFORT', names=('level',))
+
+
 def claude_effort(text):
     """The level on Claude's effort line ("Medium effort (default) ←/→ to adjust"); a narrow pane wraps the hint onto the next line."""
     found = None
-    for match in re.finditer(r'(?P<level>extra\s+high|[A-Za-z]+)\s+effort(?:\s+\(default\))?\s+←/→', text, re.I):
+    for match in MODEL_EFFORT.finditer(text):
         found = ' '.join(match['level'].lower().split())
     return found
+
+
+MODEL_CURRENT = detection_rules.pattern('antigravity', 'MODEL_CURRENT')
 
 
 def parse_antigravity(text):
@@ -142,7 +149,7 @@ def parse_antigravity(text):
             continue
         selected = stripped.startswith('>')
         body = stripped[1:].strip() if selected else stripped
-        current = bool(re.search(r'\(curr', body))  # the marker is cut short on a narrow pane
+        current = bool(MODEL_CURRENT.search(body))  # the marker is cut short on a narrow pane
         label = re.sub(r'\s*\(curr\w*\)?\s*$', '', body).strip()
         rows.append({'id': label, 'label': label, 'current': current, 'selected': selected})
     return {'kind': 'models', 'rows': rows, 'effort': slider_level(lines)} if rows else None
@@ -299,7 +306,7 @@ def open_picker(entry, run=subprocess.run, sleep=time.sleep):
 
 # ---- Claude: a list taller than the pane, with wrap-around ---------------------------------------------------------
 
-MORE = re.compile(r'…\s*\+(\d+)\s+models')
+MORE = detection_rules.pattern('claude', 'MODEL_MORE', groups=1)
 
 
 def claude_view(entry, run, sleep):
@@ -458,7 +465,7 @@ def antigravity_apply(entry, model, effort, confirm, run, sleep):
     return {'moved': True, 'selected': next((row['label'] for row in landed['rows'] if row['selected']), None), 'effort': landed.get('effort')}
 
 
-CONFIRMATION = re.compile(r'\b(set model|kept model|model (set|changed)|changed model|model to|effort (set|changed))\b', re.I)
+CONFIRMATION = detection_rules.pattern('common', 'MODEL_CONFIRMATION')
 
 
 APPLY = {'claude': claude_apply, 'codex': codex_apply, 'antigravity': antigravity_apply}

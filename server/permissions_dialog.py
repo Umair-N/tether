@@ -1,10 +1,12 @@
 """Pure parsing of Claude Code's /permissions dialog captures."""
 import re
 
+import detection_rules
+
 
 SGR = re.compile(r'\x1b\[([0-9;]*)m')
-TAB_ROW = re.compile(r'^\s*Permissions\s{2,}(Recently blocked|Allow)\b')
-HINT = re.compile(r'\bEsc\b.*(?:cancel|close|appl(?:y|ies))|←/→.*(?:switch|tabs?)', re.I)
+TAB_ROW = detection_rules.pattern('claude', 'PERMISSIONS_TAB_ROW', groups=1)
+HINT = detection_rules.pattern('claude', 'PERMISSIONS_HINT')
 
 
 def highlighted_text(line, include_inverse=True):

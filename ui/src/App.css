@@ -358,6 +358,7 @@ button.stop-button:not(:disabled):hover { background: var(--muted); }
 .state-background { flex-shrink: 0; color: var(--accent); }
 .setting-note { margin: -4px 0 8px; font-size: 13px; color: var(--muted); }
 .state-dot.unavailable { background: transparent; border: 1px solid var(--muted); }
+.state-dot.unknown { background: var(--muted); border: 0; width: 8px; height: 8px; animation: none; }
 @keyframes breathe { 50% { opacity: .3; } }
 .sidebar-empty, .sidebar-error { padding: 12px 22px; color: var(--muted); font-size: 14px; line-height: 1.6; }
 .sidebar-error button, .inline-error button { text-decoration: underline; padding: 0 12px; }

@@ -9,6 +9,7 @@ import re
 import threading
 import time
 import uuid
+import detection_rules
 import paths
 from activity import insert_by_time
 
@@ -16,22 +17,25 @@ CACHE = paths.CACHE / 'replies'
 LOCK = threading.Lock()
 KEEP = 50
 MAX_TEXT = 2000
-SPINNER = re.compile(r'\besc to interrupt\b', re.I)
-BOX = re.compile(r'^[\s─━│┃┌┐└┘├┤┬┴┼╭╮╰╯═║\-_|+]*$')
+SPINNER = detection_rules.pattern('codex', 'REPLIES_SPINNER')
+BOX = detection_rules.pattern('codex', 'REPLIES_BOX')
 
 
 def key(entry):
     return '%s-%s' % (entry.get('owner_pid'), entry.get('process_start'))
 
 
+CONTEXT_LINE = detection_rules.pattern('codex', 'REPLIES_CONTEXT')
+
+
 def is_noise(line):
     text = line.strip()
     return (not text or BOX.match(text) is not None or text.startswith('›')
-            or ('Context' in text and ('% left' in text or '% used' in text)) or text.startswith('Tip:') or FOOTER.match(text) is not None or re.match(r'.*·\s*Context\b', text) is not None)
+            or ('Context' in text and ('% left' in text or '% used' in text)) or text.startswith('Tip:') or FOOTER.match(text) is not None or CONTEXT_LINE.match(text) is not None)
 
 
-PICKER = re.compile(r'enter (?:to )?(?:select|confirm|continue)|esc (?:back|to cancel|to go back)|↑/?↓|to navigate|press enter', re.I)
-FOOTER = re.compile(r'^\s*\S+\s+(?:minimal|low|medium|high|xhigh|extra high)\s+·\s+Context', re.I)
+PICKER = detection_rules.pattern('codex', 'REPLIES_PICKER')
+FOOTER = detection_rules.pattern('codex', 'REPLIES_FOOTER')
 ITEM = re.compile(r'^\s*(?:[-*•◦]|\d+[.)])\s')
 
 
@@ -79,6 +83,11 @@ LOGO = re.compile(r'[▀▄█▌▐░▒▓]+')
 CLAUDE_LOGO = re.compile(r'[▀▄█▌▐▛▜▝▘▙▟░▒▓]+')
 
 
+CLAUDE_BANNER_START = detection_rules.pattern('claude', 'BANNER_START')
+CLAUDE_BANNER_END = detection_rules.pattern('claude', 'BANNER_END')
+AGY_BANNER_END = detection_rules.pattern('antigravity', 'BANNER_END')
+
+
 def banner_text(agent, screen):
     """What an agent prints when it starts (version, folder, model, tips, notices), as plain text; '' when none is on screen."""
     lines = screen.splitlines()
@@ -97,7 +106,7 @@ def banner_text(agent, screen):
             return ''
         block, previous_boxed = [], False
         for line in lines[begin:]:
-            if re.match(r'^\s*─{3,}', line):
+            if AGY_BANNER_END.match(line):
                 break
             boxed = line.strip().startswith('┃')
             text = re.sub(r'^\s*┃\s?', '', LOGO.sub(' ', line)).strip()
@@ -107,12 +116,12 @@ def banner_text(agent, screen):
             if text and '@' not in text and text != 'esc to dismiss':
                 block.append(text)
     elif agent == 'claude':
-        begin = next((i for i, line in enumerate(lines) if re.search(r'Claude Code v\d', line)), None)
+        begin = next((i for i, line in enumerate(lines) if CLAUDE_BANNER_START.search(line)), None)
         if begin is None:
             return ''
         block = []
         for line in lines[begin:begin + 12]:
-            if re.match(r'^\s*(?:─{3,}|[❯>!]|⏺|●)', line):
+            if CLAUDE_BANNER_END.match(line):
                 break
             block.append(re.sub(r'^\s*▎\s?', '', CLAUDE_LOGO.sub(' ', line)).strip())
     else:

@@ -49,7 +49,7 @@ export const chatTitle = (pane: Pane, session?: { name: string }) => pane.pane_n
 export interface Session { id: string; name: string; panes: Pane[]; agent: Agent; state: string; dir: string }
 
 export { needsYou, isDone } from './paneState'
-type Status = { kind: 'approval' | 'working' | 'done' | 'background' | 'idle' | 'unavailable'; label: string; at: number }
+type Status = { kind: 'approval' | 'working' | 'done' | 'background' | 'unknown' | 'idle' | 'unavailable'; label: string; at: number }
 export function status(panes: Pane[], seen: Record<string, number>, selected?: string): Status {
   // Only the agent's own activity counts. Opening a session is not activity, so it does not move the session up.
   const at = Math.max(0, ...panes.map(pane => Math.max(pane.since ?? 0, pane.finished ?? 0)))
@@ -59,10 +59,11 @@ export function status(panes: Pane[], seen: Record<string, number>, selected?: s
   if (panes.some(pane => pane.state === 'Working')) return { kind: 'working', label: 'Working', at }
   const tasks = panes.flatMap(pane => pane.tasks ?? [])
   if (tasks.length) return { kind: 'background', label: tasks.join(' · '), at }
+  if (panes.some(pane => pane.state === 'Unknown')) return { kind: 'unknown', label: 'Unknown', at }  // the server cannot read this pane: never show it as idle
   if (panes.every(pane => pane.state === 'Unavailable')) return { kind: 'unavailable', label: 'Unavailable', at }
   return { kind: 'idle', label: 'Idle', at }
 }
-const RANK = { approval: 0, done: 1, working: 2, background: 3, idle: 4, unavailable: 5 }
+const RANK = { approval: 0, done: 1, working: 2, background: 3, unknown: 4, idle: 5, unavailable: 6 }
 // Smart order: what needs you first, then the most recent agent activity (a state change or a finished turn).
 export function sortSmart(sessions: Session[], seen: Record<string, number>, selected?: string) {
   const keyed = sessions.map(session => ({ session, status: status(session.panes, seen, selected) }))

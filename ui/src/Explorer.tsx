@@ -438,6 +438,7 @@ export function Explorer({ api, panes, pane, target, onTarget, onAddToMessage, o
     const own = panes.filter(item => item.id === id)
     if (own.some(item => needsYou(item.state))) return { kind: 'approval', label: 'Needs you' }
     if (own.some(item => item.state === 'Working')) return { kind: 'working', label: 'Working' }
+    if (own.some(item => item.state === 'Unknown')) return { kind: 'unknown', label: 'Unknown' }
     return { kind: 'idle', label: own.length ? 'Idle' : 'Ended' }
   }
   const place = (path: string, label: string, icon: ReactNode, extra?: ReactNode) => <li key={`${label}|${path}`}>

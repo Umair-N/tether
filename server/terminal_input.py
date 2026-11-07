@@ -14,6 +14,7 @@ import uuid
 from antigravity import process_start, ROOT as AGY_ROOT, CACHE as AGY_CACHE, capture_notices
 from quota_notices import capture as capture_quota_notices
 from codex_provider import PROFILE_NAME
+import detection_rules
 import login_flow
 import paths
 import procinfo
@@ -162,17 +163,15 @@ def capture_screen(entry, lines=80, run=subprocess.run):
 
 
 COUNTDOWN = re.compile(r'(block\s+this\s+request\s+in\s+)(?:\d+[:hms.]?\s?)+', re.I)
-DIALOG_FRAME = re.compile(r'^\s*(?:[─━═╌╍┄┅\-_]{3,}|Do you want to proceed\?)\s*$')
-APPROVAL_QUESTION = re.compile(
-    r'^(?:Claude has written up a plan.*Would you like to proceed|Ready to code\?|Quick safety check|'
-    r'Run this command\?|Would you like to \w+|Do you want to (?:proceed|allow|approve|make this edit|create)|'
-    r'Do you trust|Trust this (?:folder|directory|project)|Allow access to|Allow this|'
-    r'trust.{0,100}(?:folder|directory|project)|(?:folder|directory|project).{0,100}trust)', re.I)
+DIALOG_FRAME = detection_rules.pattern('common', 'DIALOG_FRAME')
+APPROVAL_QUESTION = detection_rules.pattern('common', 'APPROVAL_QUESTION')
 
 
 def joined_lines(lines):
     """Fold physical rows for phrase detection; keep the original rows for identities and labels."""
     return ' '.join(line.strip() for line in lines)
+
+
 
 
 def approval(screen):
@@ -254,20 +253,23 @@ def approval(screen):
             '_reject': next(i for i, c in enumerate(choices) if re.match(reject, c[2], re.I))}
 
 
+PLAN_MENU_OPTION = detection_rules.pattern('claude', 'PLAN_MENU_OPTION')
+
+
 def plan_menu(pending):
     """Recognize the exit-plan chooser without mistaking a command approval for a plan."""
     options = (pending or {}).get('options') or []
-    return (any(re.search(r'\bkeep planning\b|tell Claude what to change', option['text'], re.I) for option in options)
+    return (any(PLAN_MENU_OPTION.search(option['text']) for option in options)
             and any(re.match(r'Yes\b', option['text'], re.I) for option in options))
 
 
 ATTENTION_DELAY = 3
 ATTENTION_GRACE = 10
 _attention_seen = {}
-NUMBERED_ITEM = re.compile(r'^\s*[>❯›]?\s*\d+[.)]\s+\S')
-CURSOR_ITEM = re.compile(r'^\s*[>❯›]\s*\d+[.)]\s+\S')
+NUMBERED_ITEM = detection_rules.pattern('common', 'NUMBERED_ITEM')
+CURSOR_ITEM = detection_rules.pattern('common', 'CURSOR_ITEM')
 # Chat output that an open menu never has below its cursor row: an agent line (● Checking…), the working spinner, a tool result.
-CHAT_LINE = re.compile(r'^\s*[●⏺✻✶✳✢✽·]\s|^\s*⎿')
+CHAT_LINE = detection_rules.pattern('common', 'CHAT_LINE')
 
 
 def cursor_in_menu(tail, marker):
@@ -288,16 +290,17 @@ def cursor_in_menu(tail, marker):
     return True
 # Claude's /usage, /status, /config and /stats share one Settings dialog. /usage grows past a short pane once its scan ends,
 # and then its "Esc to cancel" footer is off screen: the tab row at its top still shows it.
-SETTINGS_TABS = re.compile(r'^\s*Settings\s+Status\b')
-INPUT_HINT = re.compile(r'esc Close|↑/↓ Scroll|Enter to (?:select|confirm|continue)|↑/?↓ (?:to )?(?:navigate|select)|enter Select|Esc to cancel|press enter|press any key|'
-                        r'\benter\s+\S+\s*[·•]\s*esc\b|'
-                        r'Keyboard:|\(y/n\)|\[y/n\]|\(yes/no\)', re.I)
+SETTINGS_TABS = detection_rules.pattern('claude', 'SETTINGS_TABS')
+INPUT_HINT = detection_rules.pattern('common', 'INPUT_HINT')
 
 
-RULE_LINE = re.compile(r'^[\s─━│┃╭╮╰╯┌┐└┘├┤┬┴┼═║-]*$')
-PICKER_CURSOR = re.compile(r'^\s*[❯›]\s+(\S.*)$')
-PICKER_MORE = re.compile(r'^\s*([↑↓])\s+(\d+)\s+more\s*$')
-PICKER_HINT = re.compile(r'^Enter to .+[·•].*\bEsc to \S', re.I)
+RULE_LINE = detection_rules.pattern('common', 'RULE_LINE')
+PICKER_CURSOR = detection_rules.pattern('common', 'PICKER_CURSOR', groups=1)
+PICKER_MORE = detection_rules.pattern('common', 'PICKER_MORE', groups=2)
+PICKER_HINT = detection_rules.pattern('common', 'PICKER_HINT')
+
+
+PICKER_HINT_START = detection_rules.pattern('common', 'PICKER_HINT_START')
 
 
 def cursor_picker(screen):
@@ -306,7 +309,7 @@ def cursor_picker(screen):
     # A narrow pane can wrap the footer. Stop as soon as both key instructions appear.
     hint = None
     for index in range(len(lines) - 1, -1, -1):
-        if not re.match(r'^\s*Enter\b', lines[index], re.I):
+        if not PICKER_HINT_START.match(lines[index]):
             continue
         for end in range(index + 1, min(index + 6, len(lines)) + 1):
             text = joined_lines(lines[index:end])
@@ -381,6 +384,9 @@ def menu_lines(lines, limit=80):
     return lines[top + 1:] if top is not None else lines[-30:]
 
 
+MENU_HINT_START = detection_rules.pattern('common', 'MENU_HINT_START')
+
+
 def menu_question(lines):
     """Split a numbered terminal menu into its question and options so a phone can show it as a chat card, not a screen dump."""
     first = next((i for i, line in enumerate(lines) if NUMBERED_ITEM.match(line)), None)
@@ -407,7 +413,7 @@ def menu_question(lines):
             if text == 'Type something.':
                 options[-1]['free'] = True
             ruled = False
-        elif options and (INPUT_HINT.search(line) or re.match(r'^\s*enter\b', line, re.I)
+        elif options and (INPUT_HINT.search(line) or MENU_HINT_START.match(line)
                           and INPUT_HINT.search(joined_lines(lines[index:index + 3]))):
             break  # the key hint ends the menu; in a narrow pane it wraps, and a named input border follows
         elif options and clean(line) and RULE_LINE.match(line):
@@ -679,6 +685,8 @@ def waiting_approval(registry, now=None):
 def live_status(entry, run=subprocess.run):
     if not entry.get('owner_pid') or not entry.get('writable'):
         return {'state': 'Unavailable', 'approval': None}
+    if not detection_rules.available(entry['agent']):
+        return {'state': 'Unknown', 'approval': None}
     styled_screen = capture(entry, run, styled=True)
     screen = prompt_actions.plain(styled_screen)
     login_screen = login_capture(entry, screen, run)
@@ -696,7 +704,7 @@ def live_status(entry, run=subprocess.run):
     return status
 
 
-WORKING = re.compile(r'Working \(|esc to interrupt|(?m:^\s*[✻✶✽✢·*●]\s+[A-Z][a-z]+(?:ing|ed)?…)', re.I)
+WORKING = detection_rules.pattern('common', 'WORKING')
 
 
 def _live_status(entry, run, screen, login_screen=None, styled_screen=None):
@@ -765,6 +773,8 @@ def _live_status(entry, run, screen, login_screen=None, styled_screen=None):
 
 
 def verify(entry, run=subprocess.run):
+    if not detection_rules.available(entry['agent']):
+        raise RuntimeError('Tether could not load its prompt rules for this agent. Check the server log.')
     pid = entry['owner_pid']
     proc = Path(procinfo.ROOT)
     valid_comm = {'claude': ('claude',), 'codex': ('codex',), 'antigravity': ('agy', 'exe')}[entry['agent']]
@@ -959,7 +969,7 @@ def prompt_draft(entry, run=subprocess.run, *, _size_retry=True):
 
 
 ANSI_SGR = re.compile(r'\x1b\[[0-9;]*m')
-AGY_MODE_HINT = re.compile(r'\bmode\b.*(?:\(shift\+tab to cycle\)|\.\.\.|…)\s*$', re.I)  # a narrow pane cuts the hint short
+AGY_MODE_HINT = detection_rules.pattern('antigravity', 'AGY_MODE_HINT')  # a narrow pane cuts the hint short
 
 
 def placeholder_text(styled, marker, *, start=None, end=None, colour=None):
@@ -1026,7 +1036,7 @@ def suggestion(entry, run=subprocess.run):
     return '' if text == 'Press up to edit queued messages' or text.startswith('Try ') else text
 
 
-AGY_PANEL = re.compile(r'esc Close|↑/↓ Scroll|\(\d+–\d+ of \d+ lines\)|general\s+commands\s+shortcuts', re.I)
+AGY_PANEL = detection_rules.pattern('antigravity', 'AGY_PANEL')
 
 
 def close_agy_panel(entry, run=subprocess.run):
@@ -1051,7 +1061,10 @@ def close_agy_panel(entry, run=subprocess.run):
         raise RuntimeError('An Antigravity panel is open. Close it in Termius, then send again.')
 
 
-PANEL_CLOSE = re.compile(r'Esc to (?:cancel|close|exit|go back)|esc (?:Close|to close)', re.I)
+PANEL_CLOSE = detection_rules.pattern('claude', 'PANEL_CLOSE')
+
+
+PARTIAL_PICKER_HINT = detection_rules.pattern('common', 'PARTIAL_PICKER_HINT')
 
 
 def close_info_panel(entry, run=subprocess.run):
@@ -1063,7 +1076,7 @@ def close_info_panel(entry, run=subprocess.run):
     lines = screen.rstrip().splitlines()
     footer = joined_lines(lines[-8:])
     panel = PANEL_CLOSE.search(footer) or any(SETTINGS_TABS.match(line) for line in lines)
-    partial_picker = re.search(r'\bEnter\s+to\b', footer, re.I) and any(PICKER_CURSOR.match(line) for line in lines[-30:])
+    partial_picker = PARTIAL_PICKER_HINT.search(footer) and any(PICKER_CURSOR.match(line) for line in lines[-30:])
     if approval(screen) or cursor_picker(screen) or partial_picker or not panel or any(CURSOR_ITEM.match(line) for line in lines[-30:]):
         return False
     run([paths.TMUX, 'send-keys', '-t', entry['id'], 'Escape'], check=True, capture_output=True, timeout=5)
@@ -1243,6 +1256,9 @@ def unqueue(entry, run=subprocess.run, sleep=time.sleep, *, _size_retry=True):
     return text
 
 
+AGY_BUSY = detection_rules.pattern('antigravity', 'AGY_BUSY')
+
+
 def confirm_delivery(entry, sent, run):
     """Antigravity sometimes drops a message right after it starts or refreshes, with an empty box and no error. Its screen
     then never shows the text, so a message missing from the screen after a moment is reported instead of silently lost."""
@@ -1253,7 +1269,7 @@ def confirm_delivery(entry, sent, run):
         screen = capture_screen(entry, 200, run)
         # Taken if the text is on screen (the pane can cut or rewrap it, so only its start is compared), or if the agent is
         # visibly busy: a message sent while it works may be queued out of sight.
-        if sent[:15] in ''.join(screen.split()) or re.search(r'esc to cancel|Loading\.\.\.|Working', joined_lines(screen.splitlines()[-8:])):
+        if sent[:15] in ''.join(screen.split()) or AGY_BUSY.search(joined_lines(screen.splitlines()[-8:])):
             return
     raise RuntimeError('Antigravity did not take the message. Send it again.')
 

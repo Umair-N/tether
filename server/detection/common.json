@@ -1,0 +1,116 @@
+{
+  "version": 1,
+  "comment": "Shared terminal prompts, menus, and model picker rows.",
+  "patterns": {
+    "WORKING": {
+      "regex": "Working \\(|esc to interrupt|(?m:^\\s*[✻✶✽✢·*●]\\s+[A-Z][a-z]+(?:ing|ed)?…)",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "comment": "Find the working indicator or interrupt hint."
+    },
+    "APPROVAL_QUESTION": {
+      "regex": "^(?:Claude has written up a plan.*Would you like to proceed|Ready to code\\?|Quick safety check|Run this command\\?|Would you like to \\w+|Do you want to (?:proceed|allow|approve|make this edit|create)|Do you trust|Trust this (?:folder|directory|project)|Allow access to|Allow this|trust.{0,100}(?:folder|directory|project)|(?:folder|directory|project).{0,100}trust)",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "comment": "Find the question that starts an approval prompt."
+    },
+    "DIALOG_FRAME": {
+      "regex": "^\\s*(?:[─━═╌╍┄┅\\-_]{3,}|Do you want to proceed\\?)\\s*$",
+      "flags": [],
+      "comment": "Find an approval dialog rule or generic question."
+    },
+    "NUMBERED_ITEM": {
+      "regex": "^\\s*[>❯›]?\\s*\\d+[.)]\\s+\\S",
+      "flags": [],
+      "comment": "Find a numbered menu item."
+    },
+    "CURSOR_ITEM": {
+      "regex": "^\\s*[>❯›]\\s*\\d+[.)]\\s+\\S",
+      "flags": [],
+      "comment": "Find the selected numbered menu item."
+    },
+    "CHAT_LINE": {
+      "regex": "^\\s*[●⏺✻✶✳✢✽·]\\s|^\\s*⎿",
+      "flags": [],
+      "comment": "Find chat output that makes an older menu inactive."
+    },
+    "INPUT_HINT": {
+      "regex": "esc Close|↑/↓ Scroll|Enter to (?:select|confirm|continue)|↑/?↓ (?:to )?(?:navigate|select)|enter Select|Esc to cancel|press enter|press any key|\\benter\\s+\\S+\\s*[·•]\\s*esc\\b|Keyboard:|\\(y/n\\)|\\[y/n\\]|\\(yes/no\\)",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "comment": "Find a terminal input or navigation hint."
+    },
+    "RULE_LINE": {
+      "regex": "^[\\s─━│┃╭╮╰╯┌┐└┘├┤┬┴┼═║-]*$",
+      "flags": [],
+      "comment": "Find a row made only of dialog frame characters."
+    },
+    "PICKER_CURSOR": {
+      "regex": "^\\s*[❯›]\\s+(\\S.*)$",
+      "flags": [],
+      "comment": "Read the selected unnumbered picker label."
+    },
+    "PICKER_MORE": {
+      "regex": "^\\s*([↑↓])\\s+(\\d+)\\s+more\\s*$",
+      "flags": [],
+      "comment": "Read the direction and count of hidden picker items."
+    },
+    "PICKER_HINT": {
+      "regex": "^Enter to .+[·•].*\\bEsc to \\S",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "comment": "Find the Enter and Esc footer of a cursor picker."
+    },
+    "PICKER_HINT_START": {
+      "regex": "^\\s*Enter\\b",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "comment": "Find the first row of a wrapped cursor picker footer."
+    },
+    "MENU_HINT_START": {
+      "regex": "^\\s*enter\\b",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "comment": "Find the first row of a wrapped numbered menu footer."
+    },
+    "PARTIAL_PICKER_HINT": {
+      "regex": "\\bEnter\\s+to\\b",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "comment": "Find an incomplete picker footer before closing a panel."
+    },
+    "GENERIC": {
+      "regex": "^(?:Do you want to proceed\\?|Would you like to proceed\\?|Permission rule .*|Requesting permission for:?)$",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "comment": "Find generic permission text to omit from a request summary."
+    },
+    "MODEL_NUMBERED": {
+      "regex": "^\\s*(?P<mark>[❯›>↓↑]?)\\s*(?P<number>\\d+)[.)]\\s+(?P<body>\\S.*)$",
+      "flags": [],
+      "comment": "Read a model row marker, number, and body."
+    },
+    "MODEL_LEVEL_IN_NAME": {
+      "regex": "\\((?:minimal|low|medium|high|xhigh)\\)\\s*$",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "comment": "Find an effort level included in a model name."
+    },
+    "MODEL_CONFIRMATION": {
+      "regex": "\\b(set model|kept model|model (set|changed)|changed model|model to|effort (set|changed))\\b",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "comment": "Find the terminal confirmation of a model or effort change."
+    }
+  }
+}

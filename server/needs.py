@@ -4,12 +4,13 @@ It reads only the status the session list already has (live_status), so it costs
 """
 import re
 
+import detection_rules
 from terminal_input import plan_menu
 
 LIMIT = 160
 # Box and rule characters that Claude and Codex draw around their dialogs.
 FRAME = re.compile(r'^[\s│┃╭╮╰╯┌┐└┘─━═╌╍┄┅|]+|[\s│┃╭╮╰╯┌┐└┘─━═╌╍┄┅|]+$')
-GENERIC = re.compile(r'^(?:Do you want to proceed\?|Would you like to proceed\?|Permission rule .*|Requesting permission for:?)$', re.I)
+GENERIC = detection_rules.pattern('common', 'GENERIC')
 
 
 def _lines(text):
