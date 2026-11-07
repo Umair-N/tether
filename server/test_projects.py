@@ -81,7 +81,10 @@ class ProjectTests(unittest.TestCase):
         self.assertIn(str(projects.bundle(PID) / 'notes'), text)
         self.assertNotIn('## Instructions', text)
         self.assertIn('@chat_icon', text)  # agents learn to set their tab icon
-        self.assertLess(len(text), 1500)
+        self.assertLess(len(text), 2000)
+        self.assertIn('not evidence of absence', text)
+        self.assertLess(text.index('## Naming tabs'), text.index('## Claims of absence'))
+        self.assertLess(text.index('## Claims of absence'), text.index('## New tabs and reviewers'))
         self.assertLess(text.index('## Tab icon'), text.index('## New tabs and reviewers'))
         self.assertLess(text.index('## Tab icon'), text.index('## Naming tabs'))
         self.assertLess(text.index('## Naming tabs'), text.index('## New tabs and reviewers'))
