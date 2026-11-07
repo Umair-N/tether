@@ -409,10 +409,12 @@ def codex_consume(state, index, entry):
         lines = codex_action_lines(payload)
         item = activity.action(f'{index}.0', entry.get('timestamp'), '; '.join(lines))
         item['tool'] = tool_details.summary(payload)
+        if entry.get('timestamp'):
+            item['tool']['started'] = entry['timestamp']
         messages.append(item)
         return
     if entry.get('type') == 'response_item' and kind in ('function_call_output', 'custom_tool_call_output'):
-        tool_details.mark_result(messages, payload.get('call_id'), payload)
+        tool_details.mark_result(messages, payload.get('call_id'), payload, time=entry.get('timestamp'))
         return
     if entry.get('type') == 'response_item' and kind == 'agent_message':
         peer = dict(payload, role='assistant')

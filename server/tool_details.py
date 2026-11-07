@@ -59,16 +59,21 @@ def summary(call):
     title = next((text(data[key]) for key in ('command', 'cmd', 'file_path', 'path', 'pattern', 'query', 'url', 'description') if data.get(key)), '') if isinstance(data, dict) else text(data)
     if name.rsplit('__', 1)[-1].rsplit('.', 1)[-1] == 'apply_patch':
         title = ', '.join(re.findall(r'^\*\*\* (?:Update|Add|Delete) File: (.+)$', text(data), re.M))
-    return {'id': str(call.get('call_id') or call.get('id') or ''), 'name': name[:160],
+    item = {'id': str(call.get('call_id') or call.get('id') or ''), 'name': name[:160],
             'title': ' '.join(title.split())[:240], 'is_error': False, 'status': 'pending'}
+    if isinstance(data, dict) and isinstance(data.get('description'), str) and data['description'].strip():
+        item['description'] = ' '.join(data['description'].split())[:160]
+    return item
 
 
-def mark_result(messages, identifier, result):
+def mark_result(messages, identifier, result, time=None):
     for message in reversed(messages):
         tool = message.get('tool')
         if tool and tool['id'] == identifier:
             tool['is_error'] = failed(result)
             tool['status'] = 'complete'
+            if time:
+                tool['ended'] = time
             if count := len(images(result)):
                 tool['images'] = count
             break

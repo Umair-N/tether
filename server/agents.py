@@ -457,13 +457,15 @@ def claude_consume(messages, index, record, clean):
     if role == 'user' and isinstance(content, list):
         for part in content:
             if part.get('type') == 'tool_result':
-                tool_details.mark_result(messages, part.get('tool_use_id'), part)
+                tool_details.mark_result(messages, part.get('tool_use_id'), part, time=record.get('timestamp'))
     if role == 'assistant' and isinstance(content, list):
         for position, part in enumerate(content):
             if part.get('type') == 'tool_use':
                 item = activity.action(f'{index}.{position}', record.get('timestamp'),
                                        activity.claude_tool_line(part.get('name', 'Tool'), part.get('input')))
                 item['tool'] = tool_details.summary(part)
+                if record.get('timestamp'):
+                    item['tool']['started'] = record['timestamp']
                 messages.append(item)
 
 

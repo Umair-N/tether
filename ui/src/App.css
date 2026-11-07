@@ -827,6 +827,18 @@ button.live-chip:active { background: var(--line); }
 .tool-item .tool-toggle { width: 100%; }
 .tool-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .tool-error { color: var(--error); margin-left: auto; }
+.tool-text { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
+.tool-item .tool-text strong { font-weight: 500; overflow-wrap: anywhere; }
+.tool-headline { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.tool-headline-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-time { flex: none; font-size: 12px; font-variant-numeric: tabular-nums; }
+.tool-slowest { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.tool-earlier { display: block; min-height: var(--control-sm); padding: 0 5px 0 15px; border-radius: var(--radius-sm); color: var(--muted); font-size: 12px; }
+.tool-earlier:hover { color: var(--text); }
+.tool-earlier:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tool-icon.spin { animation: spin 1.2s linear infinite; color: var(--accent); }
+@media (prefers-reduced-motion: reduce) { .tool-icon.spin { animation: none; } }
+.live-chip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .tool-group pre { max-height: 60dvh; overflow-wrap: normal; word-break: normal; color: var(--text); }
 .tool-group pre code { display: block; min-width: max-content; }
 .tool-group pre code > span { min-height: 1.65em; }
@@ -879,7 +891,7 @@ button.live-chip:active { background: var(--line); }
 .status-grip + .status-rail { top: 20px; }
 .status-grip span { width: 40px; height: 4px; border-radius: 2px; background: var(--line); }
 .status-grip:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--radius-sm); }
-.status-rail { position: sticky; top: 0; z-index: 1; background: var(--bg); display: flex; align-items: center; gap: 6px; overflow-x: auto; padding: 2px 0 4px; }
+.status-rail { position: sticky; top: 0; z-index: 1; background: var(--bg); display: flex; align-items: center; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 2px 0 4px; }
 .status-chip { flex: none; min-height: 28px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 10px; border: 0; border-radius: 999px; color: var(--muted); background: transparent; font-size: 12.5px; }
 .status-chip[aria-expanded="true"] { color: var(--text); background: var(--hover); }
 .status-chip.needs-action { color: var(--attention); background: color-mix(in srgb, var(--attention) 12%, transparent); }

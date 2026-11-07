@@ -93,7 +93,7 @@ export interface Pane {
 }
 export interface Needs { kind: 'approval' | 'plan' | 'question'; text: string }
 // images: how many images the tool result holds (Claude's Read of a screenshot). GET tool-image serves them.
-export interface ToolSummary { id: string; name: string; title: string; is_error: boolean; status: 'pending' | 'complete'; images?: number }
+export interface ToolSummary { id: string; name: string; title: string; is_error: boolean; status: 'pending' | 'complete'; images?: number; description?: string; started?: string; ended?: string }
 export interface ToolDetail extends ToolSummary { detail: string; format: 'text' | 'diff'; truncated: boolean }
 export interface ChatMessage {
   id: string

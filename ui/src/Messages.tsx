@@ -88,7 +88,7 @@ function TerminalSnapshot({ text, shell }: { text: string; shell: boolean }) {
     <CopyButton text={text} label="Copy terminal output" className="copy-chip" />
   </div>
 }
-export function Message({ id, role, kind, title, text, count, time, tools, api, session, actions = true, images, imageKey }: { images?: number; imageKey?: string; actions?: boolean; id: string; role: string; kind?: unknown; title?: string; text: string; count?: unknown; time?: string; tools?: ToolSummary[]; api: Api; session: string }) {
+export function Message({ id, role, kind, title, text, count, time, tools, api, session, actions = true, images, imageKey, live, runningShown }: { live?: boolean; runningShown?: boolean; images?: number; imageKey?: string; actions?: boolean; id: string; role: string; kind?: unknown; title?: string; text: string; count?: unknown; time?: string; tools?: ToolSummary[]; api: Api; session: string }) {
   // A line Claude Code prints between turns: a hook that blocked it, a "while you were away" recap, a notice.
   if (kind === 'notice' && title) {
     const icon = title.endsWith('hook blocked') ? <ShieldAlert size={15} /> : title === 'While you were away' ? <Clock3 size={15} /> : <Info size={15} />
@@ -104,7 +104,7 @@ export function Message({ id, role, kind, title, text, count, time, tools, api, 
     </details>
   }
   if (kind === 'actions') {
-    return <ToolGroup id={id} text={text} count={count} tools={tools} api={api} session={session} />
+    return <ToolGroup id={id} text={text} count={count} tools={tools} api={api} session={session} live={live} runningShown={runningShown} />
   }
   if (kind === 'terminal') return <div data-msg-id={id}><TerminalSnapshot text={text} shell={id.startsWith('shell:')} /></div>
   const shell = role === 'user' && !kind ? shellCommand(text) : null

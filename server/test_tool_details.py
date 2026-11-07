@@ -149,6 +149,97 @@ class ToolImageTests(unittest.TestCase):
 
 
 class ToolDetailsTests(unittest.TestCase):
+    def test_summary_description_is_normalized_without_changing_title(self):
+        for key in ('input', 'arguments'):
+            with self.subTest(key=key):
+                data = {'command': 'git status', 'description': '  Check\n the\t worktree  '}
+                call = {'name': 'Bash', key: data if key == 'input' else json.dumps(data)}
+                summary = tools.summary(call)
+                self.assertEqual(summary['description'], 'Check the worktree')
+                self.assertEqual(summary['title'], 'git status')
+        summary = tools.summary({'input': {'description': '  Explain\n the change  '}})
+        self.assertEqual(summary['title'], 'Explain the change')
+        self.assertEqual(summary['description'], 'Explain the change')
+
+    def test_summary_omits_missing_empty_or_non_string_description(self):
+        for data in ({}, {'description': ''}, {'description': ' \n\t '},
+                     {'description': None}, {'description': 42}, {'description': ['text']},
+                     'plain text', ['description']):
+            with self.subTest(data=data):
+                self.assertNotIn('description', tools.summary({'input': data}))
+
+    def test_summary_description_is_cut_after_whitespace_normalization(self):
+        summary = tools.summary({'input': {'description': '  ' + 'word\n\t' * 50}})
+        self.assertEqual(summary['description'], ('word ' * 50).strip()[:160])
+
+    def test_mark_result_with_and_without_time(self):
+        for timestamp in (None, '', '2026-11-07T10:00:02Z'):
+            with self.subTest(timestamp=timestamp):
+                tool = tools.summary({'id': 'call-1'})
+                other = tools.summary({'id': 'other'})
+                messages = [{'tool': tool}, {'tool': other}]
+                tools.mark_result(messages, 'call-1', {'is_error': True}, time=timestamp)
+                self.assertEqual(tool['status'], 'complete')
+                self.assertTrue(tool['is_error'])
+                if timestamp:
+                    self.assertEqual(tool['ended'], timestamp)
+                else:
+                    self.assertNotIn('ended', tool)
+                self.assertEqual(other['status'], 'pending')
+                self.assertNotIn('ended', other)
+        tool = tools.summary({'id': 'call-1'})
+        tools.mark_result([{'tool': tool}], 'call-1', {'content': 'done'})
+        self.assertEqual(tool['status'], 'complete')
+        self.assertFalse(tool['is_error'])
+        self.assertNotIn('ended', tool)
+
+    def test_claude_grouped_tool_has_transcript_timestamps(self):
+        for started, ended in (('2026-11-07T10:00:00Z', '2026-11-07T10:00:02Z'), (None, '')):
+            with self.subTest(started=started, ended=ended):
+                records = [
+                    {'type': 'assistant', 'timestamp': started, 'message': {'role': 'assistant', 'content': [
+                        {'type': 'tool_use', 'id': 'call-1', 'name': 'Bash',
+                         'input': {'command': 'git status', 'description': 'Check the worktree'}}]}},
+                    {'type': 'user', 'timestamp': ended, 'message': {'role': 'user', 'content': [
+                        {'type': 'tool_result', 'tool_use_id': 'call-1', 'content': 'done'}]}}]
+                messages = []
+                for index, record in enumerate(records):
+                    agents.claude_consume(messages, index, record, lambda value: value)
+                tool = activity.group_actions(messages)[0]['tools'][0]
+                self.assertEqual(tool['status'], 'complete')
+                self.assertEqual(tool['description'], 'Check the worktree')
+                if started:
+                    self.assertEqual(tool['started'], started)
+                    self.assertEqual(tool['ended'], ended)
+                else:
+                    self.assertNotIn('started', tool)
+                    self.assertNotIn('ended', tool)
+
+    def test_codex_grouped_tool_has_transcript_timestamps(self):
+        for call_type, output_type in (('function_call', 'function_call_output'),
+                                       ('custom_tool_call', 'custom_tool_call_output')):
+            for started, ended in (('2026-11-07T10:00:00Z', '2026-11-07T10:00:02Z'), (None, '')):
+                with self.subTest(call_type=call_type, started=started, ended=ended):
+                    key = 'arguments' if call_type == 'function_call' else 'input'
+                    entries = [
+                        {'type': 'response_item', 'timestamp': started, 'payload': {
+                            'type': call_type, 'call_id': 'call-1', 'name': 'exec_command',
+                            key: json.dumps({'cmd': 'git status', 'description': 'Check the worktree'})}},
+                        {'type': 'response_item', 'timestamp': ended, 'payload': {
+                            'type': output_type, 'call_id': 'call-1', 'output': 'done'}}]
+                    state = server.codex_state()
+                    for index, entry in enumerate(entries):
+                        server.codex_consume(state, index, entry)
+                    tool = activity.group_actions(state['messages'])[0]['tools'][0]
+                    self.assertEqual(tool['status'], 'complete')
+                    self.assertEqual(tool['description'], 'Check the worktree')
+                    if started:
+                        self.assertEqual(tool['started'], started)
+                        self.assertEqual(tool['ended'], ended)
+                    else:
+                        self.assertNotIn('started', tool)
+                        self.assertNotIn('ended', tool)
+
     def test_claude_fixture_summary_result_pairing_and_diff(self):
         messages = []
         for index, line in enumerate((FIXTURES / 'tools-claude.jsonl').read_text().splitlines()):

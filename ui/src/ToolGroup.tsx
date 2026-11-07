@@ -1,23 +1,26 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
-import { Bot, ChevronRight, CircleAlert, Code2, Eye, Globe, ListTodo, Search, SquarePen, Terminal, Wrench } from 'lucide-react'
+import { Bot, ChevronRight, CircleAlert, Code2, Eye, Globe, ListTodo, LoaderCircle, Search, SquarePen, Terminal, Wrench } from 'lucide-react'
 import { errorText } from './api'
 import type { Api, ToolSummary, ToolDetail } from './api'
 import { ImageViewer } from './ImageViewer'
+import { Elapsed, formatElapsed } from './Notices'
+import { groupSeconds, liveTail, slowestStep, toolHeadline, toolKind, toolSeconds } from './toolSummary'
 
 // Tool icons and the live-edge detail scroller follow T3 Code's TimelineToolActivityIcon and WorkLogDetails
 // (github.com/pingdotgg/t3code, MIT License, Copyright (c) 2026 T3 Tools Inc.).
-function ToolIcon({ name, failed }: { name: string; failed: boolean }) {
-  const key = name.toLowerCase()
-  const Icon = failed ? CircleAlert
-    : /bash|shell|exec|command|run/.test(key) ? Terminal
-    : /edit|write|patch|notebook/.test(key) ? SquarePen
-    : /^read|view|open/.test(key) ? Eye
-    : /grep|glob|search|find|ls\b/.test(key) && !/web/.test(key) ? Search
-    : /web|fetch|browser|url/.test(key) ? Globe
-    : /task|agent/.test(key) && !/todo/.test(key) ? Bot
-    : /todo|plan/.test(key) ? ListTodo
-    : Wrench
+const KIND_ICONS = { command: Terminal, edit: SquarePen, read: Eye, search: Search, web: Globe, agent: Bot, plan: ListTodo, other: Wrench }
+function ToolIcon({ name, failed, running }: { name: string; failed: boolean; running?: boolean }) {
+  if (running) return <LoaderCircle className="tool-icon spin" size={15} aria-hidden="true" />
+  const Icon = failed ? CircleAlert : KIND_ICONS[toolKind(name)]
   return <Icon className={failed ? 'tool-icon failed' : 'tool-icon'} size={15} aria-hidden="true" />
+}
+
+// A step's time: counting up while it runs, fixed once it ends. Under a second says nothing.
+function StepTime({ tool, live }: { tool: ToolSummary; live: boolean }) {
+  const seconds = toolSeconds(tool)
+  const started = tool.started ? Date.parse(tool.started) : NaN
+  if (tool.status === 'pending') return live && !Number.isNaN(started) ? <small className="tool-time"><Elapsed since={started} /></small> : null
+  return seconds !== null && seconds >= 1 ? <small className="tool-time">{formatElapsed(seconds)}</small> : null
 }
 
 // Long output keeps the newest line in view while you stay at the bottom; scroll up to read and it stays put.
@@ -28,7 +31,7 @@ function LiveDetail({ children, label }: { children: React.ReactNode; label: str
   return <pre ref={ref} tabIndex={0} aria-label={label} onScroll={event => { const box = event.currentTarget; atEdge.current = box.scrollHeight - box.scrollTop - box.clientHeight <= 4 }}>{children}</pre>
 }
 
-function ToolRow({ tool, api, session }: { tool: ToolSummary; api: Api; session: string }) {
+function ToolRow({ tool, api, session, live, onOpen }: { tool: ToolSummary; api: Api; session: string; live: boolean; onOpen: () => void }) {
   const [open, setOpen] = useState(false)
   const [detail, setDetail] = useState<ToolDetail | null>(null)
   const [error, setError] = useState('')
@@ -43,9 +46,9 @@ function ToolRow({ tool, api, session }: { tool: ToolSummary; api: Api; session:
     return () => controller.abort()
   }, [open, api, session, tool.id, tool.is_error, tool.status, attempt])
   return <li className="tool-item">
-    <button type="button" className="tool-toggle" aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}>
-      <ToolIcon name={tool.name} failed={!!(tool.is_error || detail?.is_error)} /><span><strong>{tool.name}</strong>{tool.title && <span className="tool-title">{tool.title}</span>}</span>
-      {(tool.is_error || detail?.is_error) && <span className="tool-error">Error</span>}<ChevronRight className="chevron" size={15} aria-hidden="true" />
+    <button type="button" className="tool-toggle" aria-expanded={open} aria-controls={id} onClick={() => { setOpen(!open); onOpen() }}>
+      <ToolIcon name={tool.name} failed={!!(tool.is_error || detail?.is_error)} running={live && tool.status === 'pending'} /><span className="tool-text"><strong>{tool.description || tool.name}</strong>{tool.title && tool.title !== tool.description && <span className="tool-title">{tool.title}</span>}</span>
+      <StepTime tool={tool} live={live} />{(tool.is_error || detail?.is_error) && <span className="tool-error">Error</span>}<ChevronRight className="chevron" size={15} aria-hidden="true" />
     </button>
     {open && <div id={id}>
       {error ? <p role="alert">{error} <button type="button" onClick={() => setAttempt(attempt + 1)}>Retry</button></p> : !detail ? <p role="status">Loading tool detail…</p> : <>
@@ -71,13 +74,35 @@ function ToolImages({ tools, session }: { tools: ToolSummary[]; session: string 
   </>
 }
 
-export function ToolGroup({ id, text, count, tools, api, session }: { id: string; text: string; count?: unknown; tools?: ToolSummary[]; api: Api; session: string }) {
-  const [open, setOpen] = useState(false)
+const LIVE_STEPS = 4
+
+// A folded group says what the agent did and how long it took. The newest group of a running turn stays open with its
+// last steps, so the chat shows the work as it happens, and folds when the turn moves on. A click on the group decides for good.
+export function ToolGroup({ id, text, count, tools, api, session, live = false, runningShown = false }: { id: string; text: string; count?: unknown; tools?: ToolSummary[]; api: Api; session: string; live?: boolean; runningShown?: boolean }) {
+  const [choice, setChoice] = useState<boolean | null>(null)
   const panel = useId()
-  const total = tools?.length || Number(count) || text.split('\n').filter(Boolean).length || 1
+  const all = tools ?? []
+  const total = all.length || Number(count) || text.split('\n').filter(Boolean).length || 1
+  const following = live && choice === null
+  const open = choice ?? live
+  const { steps, offset, earlier } = following ? liveTail(all, runningShown, LIVE_STEPS) : { steps: all, offset: 0, earlier: 0 }
+  // The working line under the chat already names the one running step.
+  if (following && all.length === 1 && !steps.length) return null
+  const seconds = groupSeconds(all)
+  const slowest = slowestStep(all)
+  const failed = all.filter(tool => tool.is_error).length
+  const headline = all.length ? toolHeadline(all) : `Used ${total} ${total === 1 ? 'tool' : 'tools'}`
   return <div className="tool-row tool-group" data-msg-id={id}>
-    <button type="button" className="tool-toggle" aria-expanded={open} aria-controls={panel} onClick={() => setOpen(!open)}><Code2 size={15} aria-hidden="true" />Used {total} {total === 1 ? 'tool' : 'tools'}<ChevronRight className="chevron" size={15} aria-hidden="true" /></button>
-    {open && <div id={panel}>{tools?.length ? <ul className="tool-list">{tools.map((tool, index) => <ToolRow key={`${tool.id}:${index}`} tool={tool} api={api} session={session} />)}</ul> : <pre tabIndex={0}>{text}</pre>}</div>}
+    <button type="button" className="tool-toggle" aria-expanded={open} aria-controls={panel} onClick={() => setChoice(!open)}>
+      <Code2 size={15} aria-hidden="true" />
+      <span className="tool-text"><span className="tool-headline"><span className="tool-headline-text">{headline}</span>{seconds !== null && seconds >= 1 && <small className="tool-time">{formatElapsed(seconds)}</small>}{failed > 0 && <span className="tool-error">{failed} failed</span>}</span>
+        {slowest && <span className="tool-slowest">Longest: {slowest.text} · {formatElapsed(slowest.seconds)}</span>}</span>
+      <ChevronRight className="chevron" size={15} aria-hidden="true" />
+    </button>
+    {open && <div id={panel}>{all.length ? <>
+      {earlier > 0 && <button type="button" className="tool-earlier" onClick={() => setChoice(true)}>{earlier} earlier {earlier === 1 ? 'step' : 'steps'}</button>}
+      {steps.length > 0 && <ul className="tool-list">{steps.map((tool, index) => <ToolRow key={`${tool.id}:${index + offset}`} tool={tool} api={api} session={session} live={live} onOpen={() => setChoice(true)} />)}</ul>}
+    </> : <pre tabIndex={0}>{text}</pre>}</div>}
     {tools && <ToolImages tools={tools} session={session} />}
   </div>
 }
