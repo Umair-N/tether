@@ -17,7 +17,7 @@ export function homeGroups(panes: Pane[], sessions: Session[], seen: Record<stri
   const needs = inboxItems(agents, seen, selected, asks).filter(item => item.kind !== 'done').map(withSession).sort(oldestFirst)
   const waiting = new Set(needs.map(item => item.pane.id))
   const working = visible.filter(pane => pane.state === 'Working' && !waiting.has(pane.id)).map(pane => withSession({
-    pane, kind: 'working', text: `Working${pane.tasks?.length ? ` · ${pane.tasks.join(', ')}` : ''}`, at: pane.since ?? 0,
+    pane, kind: 'working', text: pane.tasks?.join(', ') ?? '', at: pane.since ?? 0,
   })).sort(oldestFirst)
   const done = inboxItems(visible.filter(pane => !needsYou(pane.state) && isDone(pane, seen, selected)), seen, selected)
     .map(withSession).sort((a, b) => b.at - a.at || a.pane.id.localeCompare(b.pane.id))

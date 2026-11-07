@@ -23,6 +23,7 @@ const GROUPS: { key: GroupKey; label: string; dot: string; empty: string }[] = [
 ]
 
 const headline = (count: number) => count ? `${count} agent${count === 1 ? ' needs' : 's need'} you` : 'Nothing needs you'
+const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
 const groupId = (key: GroupKey) => `home-group-${key}`
 const focusRow = (id: string) => document.querySelector<HTMLButtonElement>(`.home [data-pane="${CSS.escape(id)}"] .home-open`)?.focus()
 
@@ -51,19 +52,20 @@ function Card({ api, card, group, waiting, error, onOpen, onAnswer, onFail, onKe
 }) {
   const { pane } = card
   const { title, session } = cardNames(card)
-  const meta = [session, shortFolder(pane.dir)].filter(Boolean).join(' · ')
+  const source = [agentNames[pane.agent], session].filter(Boolean).join(' · ')
+  const folder = shortFolder(pane.dir)
   return <li className={`home-card ${group}`} data-pane={pane.id} onKeyDown={onKey}>
     <button type="button" className="home-open" onClick={() => onOpen(pane)}>
       <span className="home-card-top">
-        <span className="home-icon" title={agentNames[pane.agent]}><AgentIcon agent={pane.agent} icon={pane.pane_icon} size={15} /></span>
-        <span className="visually-hidden">{agentNames[pane.agent]}: </span>
-        <span className="home-title" title={title}>{title}</span>
+        <span className="home-icon"><AgentIcon agent={pane.agent} icon={pane.pane_icon} size={14} /></span>
+        <span className="home-source">{source}</span>
         <Timer kind={card.kind} at={card.at} />
       </span>
-      <span className="home-meta" title={pane.dir}>{meta}</span>
-      <span className="home-status" title={card.text}>
+      <span className="home-title" title={title}>{title}</span>
+      {folder && <span className="home-meta" title={pane.dir}>{folder}</span>}
+      {group !== 'done' && (group === 'needs' || card.text) && <span className="home-status" title={card.text}>
         {group === 'needs' && <strong>{KIND_LABEL[card.kind]}{card.text ? ': ' : ''}</strong>}{card.text}
-      </span>
+      </span>}
     </button>
     <AnswerActions api={api} item={card} label={title} waiting={waiting} onAnswer={onAnswer} onFail={onFail} />
     {group === 'done' && <button type="button" className="icon-button home-mark" aria-label={`Mark ${title} read`} title="Mark read" onClick={onMarkRead}><Check size={16} /></button>}
@@ -84,6 +86,7 @@ export function Home({ api, groups, hasAgents, loaded, loading, error, onRetry, 
 }) {
   const root = useRef<HTMLElement>(null)
   const cards = [...groups.needs, ...groups.working, ...groups.done]
+  const sessionCount = new Set(cards.map(card => card.session?.id ?? card.pane.id)).size
   const rows = () => [...(root.current?.querySelectorAll<HTMLButtonElement>('.home-open') ?? [])]
   const { busy, errors, answer, fail, onAnswerKey } = useAnswers({ api, items: groups.needs, active: true, onUpdate, focusRow })
 
@@ -138,6 +141,7 @@ export function Home({ api, groups, hasAgents, loaded, loading, error, onRetry, 
         <button type="button" className="icon-button mobile-menu" aria-label="Open sessions" onClick={onMenu}><Menu /></button>
         <h1 tabIndex={-1} aria-live="polite">{loaded ? headline(groups.needs.length) : 'Finding your agents…'}</h1>
         {loaded && <button type="button" className="secondary home-new" onClick={onNew} aria-label="New session" title="New session"><Plus size={16} /><span>New session</span></button>}
+        {loaded && cards.length > 0 && <p className="home-scope">{plural(cards.length, 'active agent')} across {plural(sessionCount, 'session')}</p>}
         {loaded && <div className="home-summary" role="group" aria-label="Jump to a group">
           {GROUPS.map(group => <button key={group.key} type="button" onClick={() => document.getElementById(groupId(group.key))?.scrollIntoView({ block: 'start' })}>
             <span className={`state-dot ${group.dot}`} aria-hidden="true" /><b>{groups[group.key].length}</b> {group.label}
