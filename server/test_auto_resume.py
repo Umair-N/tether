@@ -51,8 +51,13 @@ class FakeTmux:
             elif argv[-1] == '#{window-size}\t#{window_width}\t#{window_height}':
                 output = 'latest\t120\t40'
             else:
-                row = self.panes[argv[argv.index('-t') + 1]]
-                output = re.sub(r'#\{([^}]+)\}', lambda match: row.get(match[1], ''), argv[-1])
+                target = argv[argv.index('-t') + 1]
+                row = (next((row for row in self.panes.values() if row['session_id'] == target[:-1]), None)
+                       if target.endswith(':') else self.panes.get(target))
+                if row is None:
+                    code, error = 1, 'no target'
+                else:
+                    output = re.sub(r'#\{([^}]+)\}', lambda match: row.get(match[1], ''), argv[-1])
         elif command == 'list-panes':
             rows = list(self.panes.values())
             if '-s' in argv:
@@ -174,6 +179,68 @@ class AutoResumeTests(unittest.TestCase):
         self.tick()
         self.assertIn(THREAD, self.saved()['tabs'])
 
+    def test_forget_new_session_id_removes_waiting_tabs_with_old_or_empty_ids(self):
+        self.tick()
+        saved = self.saved()
+        for old_id in ('$old', ''):
+            with self.subTest(session_id=old_id):
+                saved['tabs'][THREAD].update(state='pending', pane='', session_id=old_id)
+                self.store(saved)
+                self.tmux.lose('30:300')
+                live = dict(self.entry, id='%99', tmux_session='$99', thread=None)
+                self.tmux.add(live)
+                self.entries = [live]
+                def before(argv):
+                    self.assertIn('$99', auto_resume._tombstones)
+                self.tmux.before = before
+                auto_resume.forget_session('$99', run=self.tmux, now=lambda: self.clock)
+                self.tmux.before = lambda argv: None
+                self.assertEqual(self.saved()['tabs'], {})
+                self.tick()
+                self.assertEqual(self.sends(), [])
+
+    def test_forget_session_removes_waiting_siblings_before_lookup_failure(self):
+        waiting = self.add(2)
+        self.tick()
+        saved = self.saved()
+        saved['tabs'][waiting['thread']].update(state='pending', pane='', session_id='')
+        self.store(saved)
+        auto_resume.forget_session('$1', run=Mock(side_effect=subprocess.TimeoutExpired('tmux', 5)))
+        self.assertEqual(self.saved()['tabs'], {})
+
+    def test_failed_session_name_lookup_does_not_remove_waiting_tabs(self):
+        self.tick()
+        saved = self.saved()
+        saved['tabs'][THREAD].update(state='pending', pane='', session_id='')
+        self.store(saved)
+        run = Mock(return_value=subprocess.CompletedProcess([], 1, 'work', 'no session'))
+        auto_resume.forget_session('$99', run=run, now=lambda: self.clock)
+        self.assertIn(THREAD, self.saved()['tabs'])
+
+    def test_empty_session_name_lookup_keeps_waiting_tab_with_empty_name(self):
+        self.tick()
+        saved = self.saved()
+        saved['tabs'][THREAD].update(state='pending', pane='', session_id='', session='')
+        self.store(saved)
+        run = Mock(return_value=subprocess.CompletedProcess([], 0, '', ''))
+        auto_resume.forget_session('$99', run=run, now=lambda: self.clock)
+        self.assertIn(THREAD, self.saved()['tabs'])
+
+    def test_close_of_reused_session_id_keeps_waiting_tabs_of_another_session(self):
+        self.tick()
+        with patch.object(auto_resume, 'launch', return_value=False):
+            self.restart()
+        self.assertEqual(self.saved()['tabs'][THREAD]['session_id'], '')
+        self.tmux.server = '30:300'
+        other = dict(self.entry, id='%99', label='other', tmux_session='$1', thread=None)
+        self.tmux.add(other)
+        self.entries = [other]
+        auto_resume.forget_session('$1', run=self.tmux, now=lambda: self.clock)
+        self.assertIn(THREAD, self.saved()['tabs'])
+        self.tick()
+        self.assertEqual(len(self.sends()), 2)
+        self.assertEqual(self.saved()['tabs'][THREAD]['state'], 'resuming')
+
     def test_missing_pane_is_closed_after_grace_and_stays_closed_on_loss(self):
         self.tick()
         self.entries = []
@@ -234,6 +301,31 @@ class AutoResumeTests(unittest.TestCase):
         self.prefs = {'archived': {'$1': 'work'}}
         self.tick()
         self.assertEqual(self.saved()['tabs'], {})
+
+    def test_archive_removes_waiting_tabs_only_for_a_matching_live_session(self):
+        other = self.add(2, label='other', tmux_session='$2')
+        self.tick()
+        saved = self.saved()
+        for tab in saved['tabs'].values():
+            tab.update(state='pending', pane='', session_id='')
+        for archived, removed in (({'$99': 'work'}, True), ({'$old': 'work'}, False),
+                                  ({'$99': 'other'}, False)):
+            with self.subTest(archived=archived):
+                self.store(saved)
+                self.tmux.lose('30:300')
+                self.tmux.calls.clear()
+                # An archived session can have only an ineligible shell pane.
+                live = dict(self.entry, id='%99', tmux_session='$99', agent='shell', thread=None, writable=False)
+                self.tmux.add(live)
+                self.entries = [live]
+                self.prefs['archived'] = archived
+                self.tick()
+                tabs = self.saved()['tabs']
+                self.assertEqual(THREAD not in tabs, removed)
+                self.assertEqual(tabs[other['thread']]['state'], 'resuming')
+                self.assertEqual(sum(THREAD in call[-1] for call in self.sends()), 0 if removed else 1)
+                self.tick()
+                self.assertEqual(sum(THREAD in call[-1] for call in self.sends()), 0 if removed else 1)
 
     def test_restart_preserves_order_options_profile_and_only_sends_command_enter(self):
         self.entry.update(label='zeta:3.0', position='3.0')
@@ -366,6 +458,7 @@ class AutoResumeTests(unittest.TestCase):
         self.isdir.side_effect = None
         self.assertEqual(auto_resume.retry(), 1)
         self.assertTrue(auto_resume._wake.is_set())
+        self.clock += auto_resume.VERIFY_SECS
         self.tick()
         self.tick()
         self.assertEqual(len(self.sends()), 4)
@@ -549,24 +642,174 @@ class AutoResumeTests(unittest.TestCase):
         with auto_resume._lock:
             self.assertEqual(set(auto_resume._read()['tabs']), {THREAD})
 
-    def test_limit_twenty_then_retry_five_with_nineteen_gaps(self):
+    def test_limit_twenty_then_automatically_resume_five_with_nineteen_gaps(self):
         for number in range(2, 26):
             self.add(number, label=f'work:{number}.0', position=f'{number}.0')
         self.tick()
         self.restart()
         self.assertEqual(len(self.sends()), 40)
         self.assertEqual(self.sleeps, [auto_resume.GAP] * 19)
-        self.assertEqual(auto_resume.notice()['failed'], 5)
-        for tab in auto_resume.notice()['tabs']:
-            self.assertEqual(tab['state'], 'deferred')
-            self.assertEqual(tab['error'], 'Not started: the limit is 20 tabs at a time.')
+        self.assertEqual(auto_resume.notice(), {'failed': 0, 'tabs': []})
+        waiting = [tab for tab in self.saved()['tabs'].values() if tab['state'] == 'pending']
+        self.assertEqual(len(waiting), 5)
+        self.assertTrue(all(tab['error'] == '' for tab in waiting))
         self.tick()
         self.assertEqual(len(self.sends()), 40)
-        self.assertEqual(auto_resume.retry(), 5)
+        self.clock += auto_resume.VERIFY_SECS
         self.tick()
         self.assertEqual(len(self.sends()), 50)
         self.tick()
         self.assertEqual(len(self.sends()), 50)
+
+    def test_forty_four_tabs_resume_in_three_passes_once_each(self):
+        for number in range(2, 45):
+            self.add(number, label=f'work:{number}.0', position=f'{number}.0',
+                     agent='codex' if number % 2 == 0 else 'claude')
+        originals = {entry['thread']: entry for entry in self.entries}
+        self.tick()
+        self.restart()
+        for total, gaps, waiting in ((20, 19, 24), (40, 38, 4), (44, 41, 0)):
+            self.assertEqual(len(self.sends()), total * 2)
+            self.assertEqual(self.sleeps, [auto_resume.GAP] * gaps)
+            tabs = self.saved()['tabs']
+            pending = [tab for tab in tabs.values() if tab['state'] == 'pending']
+            self.assertEqual(len(pending), waiting)
+            self.assertTrue(all(tab['error'] == '' for tab in pending))
+            self.assertEqual(auto_resume.notice(), {'failed': 0, 'tabs': []})
+            self.clock += auto_resume.VERIFY_SECS - 1
+            self.tick()
+            self.assertEqual(len(self.sends()), total * 2)
+            self.entries = [dict(originals[thread], id=tab['pane'], tmux_session=tab['session_id'])
+                            for thread, tab in tabs.items() if tab['state'] != 'pending']
+            self.tick()
+        self.assertEqual(len(self.sends()), 88)
+        self.assertTrue(all(tab['state'] == 'open' for tab in self.saved()['tabs'].values()))
+        for thread in originals:
+            self.assertEqual(sum(thread in call[-1] for call in self.sends()), 1)
+
+    def test_stuck_resuming_tab_blocks_at_fifty_nine_seconds_but_not_sixty(self):
+        for number in range(2, 22):
+            self.add(number, position=f'{number}.0')
+        originals = {entry['thread']: entry for entry in self.entries}
+        self.tick()
+        self.restart()
+        tabs = self.saved()['tabs']
+        stuck = tabs[THREAD]
+        self.entries = [dict(originals[thread], id=tab['pane'], tmux_session=tab['session_id'])
+                        for thread, tab in tabs.items() if tab['state'] == 'resuming' and thread != THREAD]
+        self.entries.append(dict(self.entry, id=stuck['pane'], thread='pending-123', pending_conversation=True))
+        self.clock += 59
+        self.tick()
+        self.assertEqual(len(self.sends()), 40)
+        self.assertEqual(self.saved()['tabs'][THREAD]['state'], 'resuming')
+        self.clock += 1
+        self.tick()
+        self.assertEqual(len(self.sends()), 42)
+        self.assertEqual(self.saved()['tabs'][THREAD]['state'], 'resuming')
+        self.assertIn(stuck['pane'], self.tmux.panes)
+
+    def test_waiting_tabs_are_not_notices_or_dismissed_and_still_resume(self):
+        self.tick()
+        saved = self.saved()
+        saved['tabs'][THREAD].update(state='pending', pane='', session_id='')
+        self.store(saved)
+        self.entries = []
+        self.assertEqual(auto_resume.notice(), {'failed': 0, 'tabs': []})
+        self.assertEqual(auto_resume.dismiss(), 0)
+        self.assertEqual(auto_resume.retry(), 0)
+        self.assertEqual(self.saved()['tabs'][THREAD]['state'], 'pending')
+        self.tick()
+        self.assertEqual(len(self.sends()), 2)
+
+    def test_notice_and_dismiss_touch_only_failures_among_waiting_tabs(self):
+        failed = self.add(2)
+        self.tick()
+        saved = self.saved()
+        saved['tabs'][THREAD].update(state='pending', pane='', session_id='')
+        saved['tabs'][failed['thread']].update(state='failed', error='failed')
+        self.store(saved)
+        notice = auto_resume.notice()
+        self.assertEqual(notice['failed'], 1)
+        self.assertEqual([tab['thread'] for tab in notice['tabs']], [failed['thread']])
+        self.assertEqual(auto_resume.dismiss(), 1)
+        self.assertEqual(set(self.saved()['tabs']), {THREAD})
+        self.entries = []
+        self.tick()
+        self.assertEqual(len(self.sends()), 2)
+
+    def test_retry_twenty_five_failures_continues_without_another_retry(self):
+        for number in range(2, 26):
+            self.add(number, position=f'{number}.0')
+        originals = {entry['thread']: entry for entry in self.entries}
+        self.tick()
+        saved = self.saved()
+        for tab in saved['tabs'].values():
+            tab.update(state='failed', error='failed', pane='', session_id='')
+        self.store(saved)
+        self.entries = []
+        self.assertEqual(auto_resume.retry(), 25)
+        self.tick()
+        self.assertEqual(len(self.sends()), 40)
+        self.assertEqual(self.sleeps, [auto_resume.GAP] * 19)
+        self.assertEqual(auto_resume.notice(), {'failed': 0, 'tabs': []})
+        self.clock += 59
+        self.tick()
+        self.assertEqual(len(self.sends()), 40)
+        tabs = self.saved()['tabs']
+        self.entries = [dict(originals[thread], id=tab['pane'], tmux_session=tab['session_id'])
+                        for thread, tab in tabs.items() if tab['state'] == 'resuming']
+        self.tick()
+        self.assertEqual(len(self.sends()), 50)
+        self.assertEqual(self.sleeps, [auto_resume.GAP] * 23)
+        self.tick()
+        self.assertEqual(len(self.sends()), 50)
+
+    def test_retry_obeys_the_gate_of_an_existing_batch(self):
+        for number in range(2, 22):
+            self.add(number, position=f'{number}.0')
+        self.tick()
+        self.restart()
+        saved = self.saved()
+        waiting = next(tab for tab in saved['tabs'].values() if not tab['pane'])
+        waiting.update(state='failed', error='failed')
+        self.store(saved)
+        self.assertEqual(auto_resume.retry(), 1)
+        self.clock += 59
+        self.tick()
+        self.assertEqual(len(self.sends()), 40)
+        self.clock += 1
+        self.tick()
+        self.assertEqual(len(self.sends()), 42)
+
+    def test_old_deferred_snapshot_loads_pending_and_resumes_without_retry(self):
+        self.tick()
+        saved = self.saved()
+        saved['tabs'][THREAD].update(state='deferred', error='Old limit message', pane='')
+        self.store(saved)
+        self.assertEqual(auto_resume.notice(), {'failed': 0, 'tabs': []})
+        with auto_resume._lock:
+            tab = auto_resume._read()['tabs'][THREAD]
+        self.assertEqual((tab['state'], tab['error']), ('pending', ''))
+        self.assertEqual(auto_resume.dismiss(), 0)
+        self.assertEqual(auto_resume.retry(), 0)
+        self.restart()
+        self.assertEqual(len(self.sends()), 2)
+
+    def test_preference_off_clears_waiting_tabs_before_the_next_batch(self):
+        for number in range(2, 26):
+            self.add(number)
+        self.tick()
+        self.restart()
+        self.assertEqual(len(self.sends()), 40)
+        self.prefs['autoResume'] = False
+        self.tick()
+        self.assertEqual(self.saved()['tabs'], {})
+        self.clock += auto_resume.VERIFY_SECS
+        self.prefs['autoResume'] = True
+        self.tick()
+        self.assertEqual(len(self.sends()), 40)
+        self.tick()
+        self.assertEqual(len(self.sends()), 40)
 
     def test_unknown_tmux_leaves_snapshot_and_entries_untouched(self):
         self.tick()
@@ -772,8 +1015,8 @@ class AutoResumeTests(unittest.TestCase):
     def test_forget_mid_launch_does_not_reinsert_tab(self):
         self.tick()
         def forget(argv):
-            if argv[1] == 'send-keys':
-                auto_resume.forget_session('$1', run=self.tmux, now=lambda: self.clock)
+            if argv[1] == 'display-message' and argv[-1] == '#{session_id}':
+                auto_resume.forget_pane(argv[argv.index('-t') + 1], run=self.tmux, now=lambda: self.clock)
         self.tmux.before = forget
         self.restart()
         self.assertEqual(self.saved()['tabs'], {})
@@ -807,7 +1050,7 @@ class AutoResumeTests(unittest.TestCase):
         self.assertEqual(tab['state'], 'resuming')
         self.assertIn(tab['pane'], self.tmux.panes)
 
-    def test_failed_and_deferred_wait_for_retry_across_another_loss(self):
+    def test_failed_waits_for_retry_across_another_loss(self):
         self.tick()
         saved = self.saved()
         saved['tabs'][THREAD].update(state='failed', error='failed')
@@ -836,12 +1079,12 @@ class AutoResumeTests(unittest.TestCase):
         self.assertNotEqual(tab['pane'], pane)
         self.assertEqual(len(self.sends()), 4)
 
-    def test_loss_clears_panes_in_all_states_and_forget_keeps_unrelated_tabs(self):
+    def test_loss_clears_panes_and_session_ids_in_all_states_and_forget_keeps_unrelated_tabs(self):
         for number in range(2, 6):
             self.add(number)
         self.tick()
         saved = self.saved()
-        for tab, state in zip(saved['tabs'].values(), ('open', 'pending', 'resuming', 'failed', 'deferred')):
+        for tab, state in zip(saved['tabs'].values(), ('open', 'pending', 'resuming', 'failed', 'pending')):
             tab['state'] = state
         self.store(saved)
         self.tmux.lose()
@@ -849,6 +1092,7 @@ class AutoResumeTests(unittest.TestCase):
         with patch.object(auto_resume, 'launch', return_value=False):
             self.tick()
         self.assertTrue(all(tab['pane'] == '' for tab in self.saved()['tabs'].values()))
+        self.assertTrue(all(tab['session_id'] == '' for tab in self.saved()['tabs'].values()))
         auto_resume.forget_session('$other', run=self.tmux, now=lambda: self.clock)
         auto_resume.forget_pane('', run=self.tmux, now=lambda: self.clock)
         self.assertEqual(len(self.saved()['tabs']), 5)
@@ -911,11 +1155,11 @@ class AutoResumeTests(unittest.TestCase):
         self.assertEqual(auto_resume.notice()['failed'], 0)
 
     def test_loss_off_removes_all_states(self):
-        for number, state in enumerate(('pending', 'resuming', 'deferred', 'failed'), 2):
+        for number in range(2, 6):
             self.add(number)
         self.tick()
         saved = self.saved()
-        for tab, state in zip(list(saved['tabs'].values())[1:], ('pending', 'resuming', 'deferred', 'failed')):
+        for tab, state in zip(list(saved['tabs'].values())[1:], ('pending', 'resuming', 'pending', 'failed')):
             tab['state'] = state
         self.store(saved)
         self.prefs['autoResume'] = False

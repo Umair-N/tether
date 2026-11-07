@@ -76,8 +76,11 @@ def _read():
                 and (saved.get('server') is None or isinstance(saved['server'], str)
                      and re.fullmatch(r'\d+:\d+', saved['server']))):
             return _empty()
-        return dict(version=1, server=saved.get('server'), tabs={
-            thread: tab for thread, tab in saved['tabs'].items() if _valid_tab(thread, tab)})
+        tabs = {thread: tab for thread, tab in saved['tabs'].items() if _valid_tab(thread, tab)}
+        for tab in tabs.values():
+            if tab['state'] == 'deferred':
+                tab.update(state='pending', error='')
+        return dict(version=1, server=saved.get('server'), tabs=tabs)
     except (OSError, ValueError, UnicodeError, RecursionError):
         return _empty()
 
@@ -210,6 +213,7 @@ def tick(*, entries, folder_of, status_of, display_dir, run=subprocess.run,
             else:
                 for thread, tab in list(saved['tabs'].items()):
                     tab['pane'] = ''
+                    tab['session_id'] = ''
                     if (tab['state'] == 'open' and tab['missing_since'] is not None
                             and stamp - tab['missing_since'] > CLOSE_AFTER):
                         del saved['tabs'][thread]
@@ -234,6 +238,8 @@ def tick(*, entries, folder_of, status_of, display_dir, run=subprocess.run,
             return
         rows = _pane_rows(run=run)
         prefs = prefs_sync.load()['prefs']
+        archived_sessions = {_session(entry) for entry in live
+                             if prefs.get('archived', {}).get(entry.get('tmux_session')) == _session(entry)}
         refreshed, archived = {}, set()
         for entry in live:
             if not _eligible(entry):
@@ -288,6 +294,9 @@ def tick(*, entries, folder_of, status_of, display_dir, run=subprocess.run,
                     fresh['working'] = False
                 saved['tabs'][thread] = fresh
             for thread, tab in list(saved['tabs'].items()):
+                if tab['state'] == 'pending' and tab['session'] in archived_sessions:
+                    del saved['tabs'][thread]
+                    continue
                 if thread in refreshed:
                     continue
                 if tab['state'] == 'open':
@@ -321,10 +330,12 @@ def _options(tab, pane, session_id, *, run):
 
 def launch(*, entries, run=subprocess.run, now=time.time, sleep=time.sleep):
     def select(saved):
+        stamp = now()
+        if any(tab['state'] == 'resuming' and 0 <= stamp - tab['started'] < VERIFY_SECS
+               for tab in saved['tabs'].values()):
+            return []
         pending = sorted((tab for tab in saved['tabs'].values() if tab['state'] == 'pending'),
                          key=lambda tab: (tab['session'], tab['order']))
-        for tab in pending[MAX_PASS:]:
-            tab.update(state='deferred', error='Not started: the limit is 20 tabs at a time.')
         return [tab['thread'] for tab in pending[:MAX_PASS]]
     try:
         selected = _edit(select)
@@ -412,12 +423,18 @@ def launch(*, entries, run=subprocess.run, now=time.time, sleep=time.sleep):
     return launched
 
 
-def _forget(*, pane=None, session_id=None, panes=(), now):
+def _forget(*, pane=None, session_id=None, session_name=None, panes=(), now):
     def change(saved):
         _prune(now)
         keys = {key for key in (pane, session_id, *panes) if key}
+        sessions = {tab['session'] for tab in saved['tabs'].values()
+                    if session_id is not None and tab['session_id'] == session_id}
+        if session_name is not None:
+            sessions.add(session_name)
         for thread, tab in list(saved['tabs'].items()):
-            if (pane and tab['pane'] == pane) or session_id is not None and tab['session_id'] == session_id:
+            if ((pane and tab['pane'] == pane)
+                    or session_id is not None and tab['session_id'] == session_id
+                    or tab['state'] == 'pending' and tab['session'] in sessions):
                 keys.update((thread, tab['pane']))
                 del saved['tabs'][thread]
         _tombstones.update({key: now + 30 for key in keys})
@@ -435,8 +452,10 @@ def forget_session(session_id, *, run=subprocess.run, now=time.time):
     # Install the session tombstone before the terminal lookup can race discovery.
     try:
         _forget(session_id=session_id, now=now())
+        result = _tmux(run, 'display-message', '-p', '-t', session_id + ':', '#{session_name}')
+        session_name = (result.stdout.strip() if result.returncode == 0 else '') or None
         panes = _tmux(run, 'list-panes', '-s', '-t', session_id + ':', '-F', '#{pane_id}').stdout.splitlines()
-        _forget(session_id=session_id, panes=panes, now=now())
+        _forget(session_id=session_id, session_name=session_name, panes=panes, now=now())
     except (OSError, subprocess.SubprocessError):
         pass
 
@@ -515,13 +534,13 @@ def overlay(entry, status):
 def notice():
     with _lock:
         tabs = [{key: tab[key] for key in ('thread', 'agent', 'name', 'folder', 'error', 'state')}
-                for tab in _read()['tabs'].values() if tab['state'] in ('failed', 'deferred')]
+                for tab in _read()['tabs'].values() if tab['state'] == 'failed']
     return {'failed': len(tabs), 'tabs': tabs}
 
 
 def retry():
     def change(saved):
-        tabs = [tab for tab in saved['tabs'].values() if tab['state'] in ('failed', 'deferred')]
+        tabs = [tab for tab in saved['tabs'].values() if tab['state'] == 'failed']
         for tab in tabs:
             tab.update(state='pending', error='')
         return len(tabs)
@@ -532,7 +551,7 @@ def retry():
 
 def dismiss():
     def change(saved):
-        threads = [thread for thread, tab in saved['tabs'].items() if tab['state'] in ('failed', 'deferred')]
+        threads = [thread for thread, tab in saved['tabs'].items() if tab['state'] == 'failed']
         for thread in threads:
             del saved['tabs'][thread]
         return len(threads)
