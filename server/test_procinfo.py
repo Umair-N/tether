@@ -1,7 +1,9 @@
 """Process readers against a small fake proc tree."""
 import os
 from pathlib import Path
+import sys
 import tempfile
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -44,6 +46,23 @@ class ProcinfoTests(unittest.TestCase):
             expected = int((2000.5 - 1000.25 + 12345 / 100) * 1000)
             self.assertEqual(procinfo.start_ms('12345', self.proc, now=2000.5), expected)
             self.assertEqual(procinfo.start_ms('12345', self.proc), expected)
+
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux process clock')
+    def test_start_time_ignores_container_uptime(self):
+        fixed = 2_000_000.0
+        boottime = 500_000.0
+        ticks = '12345'
+        expected = int((fixed - boottime + int(ticks) / os.sysconf('SC_CLK_TCK')) * 1000)
+        with patch.object(procinfo, 'uptime', return_value=boottime - 4 * 86400), \
+                patch.object(procinfo.time, 'clock_gettime', return_value=boottime):
+            self.assertEqual(procinfo.start_ms(ticks, now=fixed), expected)
+
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux process clock')
+    def test_current_process_start_time_is_recent_and_in_the_past(self):
+        started = procinfo.start_ms(procinfo.start_ticks(os.getpid())) / 1000
+        now = time.time()
+        self.assertLess(started, now)
+        self.assertGreater(started, now - 86400)
 
     def test_fd_links_and_resolve_semantics(self):
         target = self.proc / 'target'

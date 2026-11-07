@@ -207,7 +207,9 @@ def start_ms(ticks, proc=Path('/proc'), now=None):
     if DARWIN:
         return int(float(ticks) * 1000)
     now = time.time() if now is None else now
-    boot = now - uptime(proc)
+    # lxcfs can replace /proc/uptime, but start ticks use the kernel boot clock.
+    elapsed = time.clock_gettime(time.CLOCK_BOOTTIME) if proc == Path('/proc') else uptime(proc)
+    boot = now - elapsed
     return int((boot + int(ticks) / os.sysconf('SC_CLK_TCK')) * 1000)
 
 
