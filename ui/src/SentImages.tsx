@@ -7,6 +7,12 @@ type Shot = { name: string; url: string }
 // The composer puts an upload's path into the message (server/uploads.py). Only image files become thumbnails; other files stay as text.
 const UPLOAD = /(^|\s)(\S*\/mobile-tmux\/uploads\/[A-Za-z0-9._-]+\.(?:png|jpe?g|gif|webp))(?=\s|$)/gi
 
+export function imagesOnly(text: string): boolean {
+  let found = false
+  const rest = text.replace(UPLOAD, () => { found = true; return '' })
+  return found && !rest.trim()
+}
+
 export function sentContent(text: string, session: string, images = 0, imageKey?: string): { shots: Shot[]; rest: string } {
   const shots: Shot[] = []
   // Claude swaps a message that is only image paths for "[Image #N]" and keeps the pictures in its transcript.

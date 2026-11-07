@@ -17,7 +17,7 @@ import { FoundryTag } from './CodexProvider'
 import type { Session } from './Sidebar'
 import { ModelSheet, MuteItem, Tools, Usage } from './Sheets'
 import { ImageViewer } from './ImageViewer'
-import { SentContent, sentContent } from './SentImages'
+import { SentContent, sentContent, imagesOnly } from './SentImages'
 import type { Media } from './ImageViewer'
 import { MediaOpener } from './MediaLink'
 import type { Kind } from './MediaLink'
@@ -162,10 +162,12 @@ function savePending() {
   try { localStorage.setItem(PENDING_KEY, JSON.stringify(Object.fromEntries([...pendingByPane].filter(([, list]) => list.length)))) } catch { /* storage full or blocked: keep them in memory */ }
 }
 const squash = (text: string) => text.replace(/\s+/g, ' ').trim()
+const slashCommand = (text: string) => /^\/[^\s/]+(?:\s|$)/.test(text.trim())
 // Claude stores a shell command "!ls" as "! ls", and "!! ls" as "! ! ls". Compare with the "!" marks joined, so a run command leaves the queue.
 const sameCommand = (text: string) => text.replace(/^(?:!\s*)+/, '!')
-const matches = (messages: ChatMessage[], key: string) => messages.filter(item => {
+const matches = (messages: ChatMessage[], key: string, images = false) => messages.filter(item => {
   if (item.role !== 'user') return false
+  if (images && (item.images ?? 0) > 0) return true
   const shell = shellCommand(item.text)
   return sameCommand(squash(shell ? `!${shell.command}` : item.text)).includes(sameCommand(key))
 }).length
@@ -423,12 +425,12 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
   useEffect(() => {
     if (!data) return
     // Claude writes no chat record for some slash commands (/usage opens a panel). Once the pane is not working, it ran them.
-    const ran = (item: Pending) => item.text.trim().startsWith('/') && !item.failed && data.state !== 'Working' && Date.now() - item.at > 3000
+    const ran = (item: Pending) => slashCommand(item.text) && !item.failed && data.state !== 'Working' && Date.now() - item.at > 3000
     // /clear (and a new chat) starts a new transcript: the count taken in the old one does not apply there.
     const seen = (item: Pending) => item.thread !== undefined && item.thread !== (data.thread ?? null) ? 0 : item.seen
-    setPending(list => { const left = list.filter(item => matches(data.messages, item.key) <= seen(item) && Date.now() - item.at < 1800000 && !ran(item)); return left.length === list.length ? list : left })
+    setPending(list => { const left = list.filter(item => matches(data.messages, item.key, imagesOnly(item.text)) <= seen(item) && Date.now() - item.at < 1800000 && !ran(item)); return left.length === list.length ? list : left })
     // An idle pane sends no new data, so check a slash command again once its 3 s have passed.
-    const slash = pending.filter(item => item.text.trim().startsWith('/') && !item.failed).map(item => item.at + 3100 - Date.now())
+    const slash = pending.filter(item => slashCommand(item.text) && !item.failed).map(item => item.at + 3100 - Date.now())
     if (!slash.length) return
     const timer = window.setTimeout(() => setRecheck(n => n + 1), Math.max(100, Math.min(...slash)))
     return () => window.clearTimeout(timer)
@@ -540,7 +542,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     if (!retryOf && activePane.agent === 'claude' && /^\/(usage|cost|stats|status)$/.test(text.trim())) { setPlanSheet(true); return true }
     if (ownAnswer && !retryOf) return write('menu', { session: pane.id, thread: data?.thread ?? null, choice: ownAnswer.id, answer: text })
     const key = squash(text).slice(0, 80)
-    const seen = retryOf?.seen ?? matches(messages, key)
+    const seen = retryOf?.seen ?? matches(messages, key, imagesOnly(text))
     const accepted = await write('message', { session: pane.id, thread: data?.thread ?? null, message: text, ...(activePane.agent === 'shell' ? { mode: 'shell' } : {}) })
     const failure = lastFailure.current
     // No answer from the server (offline, timeout, server down): keep the message as a "Not sent" bubble with Retry, and clear the box.
