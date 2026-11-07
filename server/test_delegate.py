@@ -27,6 +27,13 @@ def body(**extra):
 
 
 class ValidationTests(unittest.TestCase):
+    def test_worktree_refuses_new_reviewer_but_accepts_source_reviewer(self):
+        source = entry()
+        with self.assertRaises(ValueError) as raised:
+            delegate.validate(body(worktree='feature/task', review='new'), [source])
+        self.assertEqual(str(raised.exception), "A reviewer tab stays in this tab's folder, so it can see the work. Turn off the new worktree or the new tab review.")
+        self.assertIs(delegate.validate(body(worktree='feature/task', review='source'), [source]), source)
+
     def test_normalize_review_accepts_only_the_documented_types(self):
         for value, expected in ((False, None), (True, 'source'), ('source', 'source'), ('new', 'new')):
             with self.subTest(value=value):
@@ -255,6 +262,21 @@ class LaunchTests(unittest.TestCase):
         self.assertTrue(run.call_args_list[1].args[0][-1].startswith('codex -p foundry "$(cat '))
         add.assert_not_called()
 
+    def test_worktree_sets_pane_option_in_name_call_and_new_window_path(self):
+        def result(argv, **kwargs):
+            output = ('@3\t/source\n' if '#{window_id}\t#{pane_current_path}' in argv
+                      else 'latest\t120\t40\n' if argv[1] == 'display-message' else '%13\n')
+            return subprocess.CompletedProcess(argv, 0, stdout=output, stderr='')
+        run = Mock(side_effect=result)
+        with patch.object(delegate.time, 'time', return_value=123):
+            delegate.start(entry(), body(), '/project', run=run, cwd=str(self.root), worktree='feature/foo')
+        calls = [call.args[0] for call in run.call_args_list]
+        self.assertEqual(calls[2][1:], ['new-window', '-a', '-t', '@3', '-c', str(self.root), '-P', '-F', '#{pane_id}'])
+        self.assertEqual(calls[3][1:], ['set-option', '-p', '-t', '%13', '@chat_name', 'Fix the bug', ';',
+                                     'set-option', '-p', '-t', '%13', '@chat_name_at', '123000', ';',
+                                     'set-option', '-p', '-t', '%13', '@worktree', 'feature/foo'])
+        self.assertEqual(len(calls), 6)
+
     def test_invalid_profile_does_not_open_window_or_write_prompt(self):
         with patch.object(delegate.codex_provider, 'launch_profile', return_value='bad;command'), \
                 patch.object(delegate, 'new_window_after') as window:
@@ -360,11 +382,12 @@ class EndpointTests(unittest.TestCase):
             self.assertEqual(folder, str(paths.HOME))
             self.assertIs(run, server.subprocess.run)
             return '%13', 'Fix the bug'
-        with patch.object(server, 'sessions', return_value=[source]), \
+        with patch.object(server, 'sessions', return_value=[source]) as sessions, \
                 patch.object(server, 'agent_folder', return_value='/missing/project'), \
                 patch.object(server, 'choose') as choose, patch.object(delegate, 'start', side_effect=start):
             self.assertEqual(self.request(body()), (201, {'pane': '%13', 'name': 'Fix the bug'}))
         choose.assert_not_called()
+        sessions.assert_called_once_with()
 
     def test_existing_project_folder_is_used(self):
         with tempfile.TemporaryDirectory() as folder, patch.object(server, 'sessions', return_value=[entry()]), \
@@ -372,6 +395,88 @@ class EndpointTests(unittest.TestCase):
                 patch.object(delegate, 'start', return_value=('%13', 'Fix the bug')) as start:
             self.assertEqual(self.request(body())[0], 201)
             self.assertEqual(start.call_args.args[2], folder)
+
+    def test_worktree_creation_is_outside_lock_and_reply_has_worktree(self):
+        with tempfile.TemporaryDirectory() as folder:
+            made = {'branch': 'feature/foo', 'path': folder}
+            def make(request, base):
+                self.assertFalse(server.SEND_LOCK.locked())
+                self.assertEqual(base, folder)
+                self.assertEqual(request['worktree'], 'feature/foo')
+                return made
+            def start(*args, **kwargs):
+                self.assertTrue(server.SEND_LOCK.locked())
+                self.assertEqual(kwargs['cwd'], folder)
+                self.assertEqual(kwargs['worktree'], made['branch'])
+                return '%13', 'task'
+            with patch.object(server, 'sessions', return_value=[entry()]), \
+                    patch.object(server, 'agent_folder', return_value=folder), \
+                    patch.object(server.worktrees, 'from_body', side_effect=make), \
+                    patch.object(delegate, 'start', side_effect=start):
+                self.assertEqual(self.request(body(worktree='feature/foo')),
+                                 (201, {'pane': '%13', 'name': 'task', 'worktree': made}))
+
+    def test_worktree_thread_change_during_creation_does_not_launch(self):
+        with tempfile.TemporaryDirectory() as folder:
+            made = {'branch': 'feature/foo', 'path': folder}
+            entries = [entry()]
+            def make(request, base):
+                entries[0] = dict(entries[0], thread='changed')
+                return made
+            with patch.object(server, 'sessions', side_effect=lambda: entries), \
+                    patch.object(server, 'agent_folder', return_value=folder), \
+                    patch.object(server.worktrees, 'from_body', side_effect=make) as create, \
+                    patch.object(delegate, 'start') as start:
+                status, reply = self.request(body(worktree=made['branch']))
+            start.assert_not_called()
+            create.assert_called_once()
+            self.assertEqual(status, 503)
+            self.assertIn(folder, reply['error'])
+            self.assertIn('This tab changed conversations', reply['error'])
+
+    def test_worktree_session_ending_during_creation_does_not_launch(self):
+        with tempfile.TemporaryDirectory() as folder:
+            made = {'branch': 'feature/foo', 'path': folder}
+            entries = [entry()]
+            def make(request, base):
+                entries.clear()
+                return made
+            with patch.object(server, 'sessions', side_effect=lambda: entries), \
+                    patch.object(server, 'agent_folder', return_value=folder), \
+                    patch.object(server.worktrees, 'from_body', side_effect=make) as create, \
+                    patch.object(delegate, 'start') as start:
+                status, reply = self.request(body(worktree=made['branch']))
+            start.assert_not_called()
+            create.assert_called_once()
+            self.assertEqual(status, 503)
+            self.assertIn(folder, reply['error'])
+            self.assertIn('That session has ended', reply['error'])
+
+    def test_worktree_validation_and_creation_refusals_do_not_launch(self):
+        with patch.object(server, 'sessions', return_value=[entry()]), \
+                patch.object(server.worktrees, 'from_body', side_effect=ValueError('Invalid branch.')) as make, \
+                patch.object(server.subprocess, 'run') as run:
+            self.assertEqual(self.request(body(worktree='bad', thread=None))[0], 400)
+            make.assert_not_called()
+            with patch.object(server, 'agent_folder', return_value=None):
+                self.assertEqual(self.request(body(worktree='bad')), (400, {'error': 'Invalid branch.'}))
+            self.assertEqual(make.call_args.args[1], str(paths.HOME))
+        run.assert_not_called()
+
+    def test_worktree_survives_failure_through_delegate_start(self):
+        with tempfile.TemporaryDirectory() as folder:
+            made = {'branch': 'feature/foo', 'path': folder}
+            with patch.object(server, 'sessions', return_value=[entry()]), \
+                    patch.object(server, 'agent_folder', return_value=folder), \
+                    patch.object(server.worktrees, 'from_body', return_value=made), \
+                    patch.object(delegate, 'new_window_after', return_value='%13'), \
+                    patch.object(server.subprocess, 'run', side_effect=OSError('launch failed')) as run:
+                status, reply = self.request(body(worktree='feature/foo'))
+            self.assertEqual(status, 503)
+            self.assertIn(folder, reply['error'])
+            self.assertIn('agent did not start: launch failed', reply['error'])
+            self.assertTrue(Path(folder).is_dir())
+            self.assertFalse(any('remove' in call.args[0] for call in run.call_args_list))
 
     def test_browser_ignores_cwd_in_body(self):
         with tempfile.TemporaryDirectory() as folder, patch.object(server, 'sessions', return_value=[entry()]), \

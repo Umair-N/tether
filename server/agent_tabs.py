@@ -8,6 +8,7 @@ import delegate
 import helper_tabs
 import paths
 import review_links
+import worktrees
 from terminal_input import UUID, live_status
 
 PATH = '/mobile/api/agent-tab'
@@ -75,6 +76,28 @@ def serve(handler, body, *, sessions, folder, snapshot, last_reply, run, lock, s
         except helper_tabs.Stale as exc:
             result = 409, {'error': str(exc)}
         handler.respond(*result)
+        return
+    if body.get('action') == 'start' and 'worktree' in body:
+        entries = sessions()
+        caller = next((entry for entry in entries if entry['id'] == body.get('session')), None)
+        if caller is None:
+            raise ValueError('That session has ended. Select another tab.')
+        request = dict(body, thread=caller.get('thread'))
+        request.setdefault('agent', caller['agent'] if caller.get('agent') in ('claude', 'codex') else 'claude')
+        delegate.validate(request, entries)
+        if 'cwd' in body and (not isinstance(body['cwd'], str) or not os.path.isabs(body['cwd'])
+                              or not os.path.isdir(body['cwd'])):
+            raise ValueError('Choose an absolute path to an existing directory.')
+        directory = body['cwd'] if 'cwd' in body else folder(caller)
+        directory = directory if directory and os.path.isdir(directory) else str(paths.HOME)
+        made = worktrees.from_body(body, body.get('cwd', directory))
+        with lock, worktrees.keeping(made):
+            caller = delegate.validate(request, sessions())
+            pane, name = delegate.start(caller, request, directory, run=run,
+                                        recent=lambda: snapshot(caller).get('messages') or [],
+                                        cwd=made['path'], worktree=made['branch'],
+                                        owner=helper_tabs.new_record(caller))
+        handler.respond(201, {'pane': pane, 'name': name, 'worktree': made})
         return
     with lock:
         entries = sessions()

@@ -13,6 +13,7 @@ import { PaneActions, ResumeChat, SessionActions, Settings } from './Sheets'
 import type { Place } from './Sheets'
 import { ProjectSheet, useProjectMarks } from './Project'
 import { orderPanes, reorderPanes } from './PaneTabs'
+import { worktreeNotice } from './Worktree'
 import { isTabArchived, tabNeighbor, withTabArchived, withoutTab } from './tabArchive'
 import { selectPane } from './paneSelection'
 import type { SelectionSnapshot } from './paneSelection'
@@ -695,7 +696,7 @@ function App() {
     {view && picking !== null && picking < view.slots.length && <SlotPicker index={picking} sessions={sortByPrefs(sessions, prefs.order).filter(item => !isArchived(item, prefs.archived))} slots={view.slots} onPane={id => { showInSlot(id, picking); setPicking(null) }} onSession={target => { showSession(target); setPicking(null) }} onClose={() => setPicking(null)} />}
     {project && sessions.some(item => item.id === project.session) && <ProjectSheet key={project.session} api={api} session={sessions.find(item => item.id === project.session)!} mark={marks[project.session]} pin={project.pin} onChanged={loadMarks} onClose={() => setProject(null)} />}
     {settings && <Settings api={api} prefs={prefs} update={update} onReload={reload} onClose={() => setSettings(false)} />}
-    {newSession && <NewSession api={api} onClose={() => setNewSession(false)} onCreated={created => { openPane(created); setNewSession(false); void refresh() }} />}
+    {newSession && <NewSession api={api} onClose={() => setNewSession(false)} onCreated={(created, made) => { openPane(created); setNewSession(false); void refresh(); if (made) setNotice(worktreeNotice(made)) }} />}
     {actionSession && pane && <SessionActions key={`${actionSession.id}-${actionsDelete}`} tabCount={panes.filter(item => item.tmux_session === actionSession.id).length} startDelete={actionsDelete} at={actionsDelete ? undefined : menuAt} place={placeFor(actionSession.panes[0].id, actionSession)} api={api} session={actionSession} pane={actionSession.panes.find(item => item.id === pane.id)?.id ?? actionSession.panes[0].id} pinned={prefs.pinned.includes(actionSession.id)} archived={isArchived(actionSession, prefs.archived)} canMoveUp={ordered.indexOf(actionSession.id) > 0} canMoveDown={ordered.indexOf(actionSession.id) < ordered.length - 1} targets={moveTargets} marks={marks} onMarks={loadMarks}
       onPin={() => update(current => ({ pinned: current.pinned.includes(actionSession.id) ? current.pinned.filter(id => id !== actionSession.id) : [...current.pinned, actionSession.id] }))}
       onArchive={() => update(toggleArchive(actionSession))}

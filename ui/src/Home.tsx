@@ -8,6 +8,7 @@ import { shortFolder } from './paneState'
 import { cardTime } from './homeGroups'
 import type { HomeCard, HomeGroups } from './homeGroups'
 import { KIND_LABEL } from './needs'
+import { WorktreeMark } from './Worktree'
 import { AgentIcon, agentNames, chatTitle, sessionName, shownIndex } from './Sidebar'
 import './Home.css'
 
@@ -62,7 +63,7 @@ function Card({ api, card, group, waiting, error, onOpen, onAnswer, onFail, onKe
         <Timer kind={card.kind} at={card.at} />
       </span>
       <span className="home-title" title={title}>{title}</span>
-      {folder && <span className="home-meta" title={pane.dir}>{folder}</span>}
+      {(folder || pane.worktree) && <span className="home-meta" title={pane.dir}>{pane.worktree && <><WorktreeMark branch={pane.worktree} />{folder && ' · '}</>}{folder}</span>}
       {group !== 'done' && (group === 'needs' || card.text) && <span className="home-status" title={card.text}>
         {group === 'needs' && <strong>{KIND_LABEL[card.kind]}{card.text ? ': ' : ''}</strong>}{card.text}
       </span>}

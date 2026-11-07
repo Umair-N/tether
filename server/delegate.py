@@ -36,6 +36,8 @@ def validate(body, entries):
     if body.get('agent') not in ('claude', 'codex'):
         raise ValueError('Choose Claude or Codex for the new task.')
     review = normalize_review(body.get('review', False))
+    if 'worktree' in body and review == 'new':
+        raise ValueError("A reviewer tab stays in this tab's folder, so it can see the work. Turn off the new worktree or the new tab review.")
     message = body.get('message')
     if not isinstance(message, str) or not (0 if review == 'new' else 1) <= len(message.strip()) <= 20000:
         raise ValueError('Enter a task with 1 to 20000 characters.')
@@ -161,7 +163,7 @@ def launch_command(entry, agent, path, name, *, context=False, profile=None):
     return command + f' "$(cat {shlex.quote(str(path))})"'
 
 
-def start(entry, body, folder, run=subprocess.run, recent=lambda: [], *, cwd=None, owner=None):
+def start(entry, body, folder, run=subprocess.run, recent=lambda: [], *, cwd=None, worktree=None, owner=None):
     """recent: returns source messages when context or a new reviewer needs them."""
     # Call after validate, under the server's send lock. Only the new pane receives input.
     agent = body['agent']
@@ -176,8 +178,11 @@ def start(entry, body, folder, run=subprocess.run, recent=lambda: [], *, cwd=Non
     name = (body['name'].strip() if 'name' in body else
             ('Review: ' + source_title(entry))[:60] if review == 'new' else task_name(body['message']))
     pane = new_window_after(entry['id'], run, cwd=folder)
-    run([paths.TMUX, 'set-option', '-p', '-t', pane, '@chat_name', name, ';',
-         'set-option', '-p', '-t', pane, '@chat_name_at', str(int(time.time() * 1000))],
+    options = [paths.TMUX, 'set-option', '-p', '-t', pane, '@chat_name', name, ';',
+               'set-option', '-p', '-t', pane, '@chat_name_at', str(int(time.time() * 1000))]
+    if worktree is not None:
+        options += [';', 'set-option', '-p', '-t', pane, '@worktree', worktree]
+    run(options,
         check=True, capture_output=True, timeout=5)
     if owner is not None:
         helper_tabs.save(pane, owner, run)

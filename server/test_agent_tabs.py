@@ -33,6 +33,7 @@ class AgentTabsTests(unittest.TestCase):
         self.enterContext(patch.object(server, 'sessions', return_value=self.entries))
         self.enterContext(patch.object(server, 'agent_folder', return_value=str(self.root)))
         self.enterContext(patch.object(auth, 'session_value', return_value='test-credential'))
+        self.real_run = subprocess.run
         self.run = self.enterContext(patch.object(server.subprocess, 'run'))
         self.reply = self.enterContext(patch.object(server, 'last_reply', return_value='Work done.'))
         self.status = self.enterContext(patch.object(agent_tabs, 'live_status', return_value={'state': 'Idle'}))
@@ -230,6 +231,113 @@ class AgentTabsTests(unittest.TestCase):
                                  (400, {'error': 'Choose an absolute path to an existing directory.'}))
         self.run.assert_not_called()
 
+    def test_worktree_reviewer_refusal_creates_no_branch_folder_or_window(self):
+        repo = self.root / 'project'
+        def git(*args):
+            return self.real_run(['git', '-C', str(self.root), *args], check=True,
+                                 capture_output=True, text=True, timeout=10).stdout
+        git('init', '-b', 'main', str(repo))
+        git('-C', str(repo), '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+            'commit', '--allow-empty', '-m', 'First')
+        before = git('-C', str(repo), 'branch', '--list')
+        with patch.object(server, 'agent_folder', return_value=str(repo)):
+            self.assertEqual(self.request({'action': 'start', 'message': '', 'review': 'new',
+                                           'worktree': 'feature/reviewer'}),
+                             (400, {'error': "A reviewer tab stays in this tab's folder, so it can see the work. Turn off the new worktree or the new tab review."}))
+        self.assertEqual(git('-C', str(repo), 'branch', '--list'), before)
+        self.assertFalse((self.root / 'project-wt').exists())
+        self.run.assert_not_called()
+
+    def test_worktree_is_created_outside_lock_and_launched_inside(self):
+        made = {'branch': 'feature/tab', 'path': str(self.root / 'made')}
+        def make(body, folder):
+            self.assertFalse(server.SEND_LOCK.locked())
+            self.assertEqual(folder, str(self.root))
+            self.assertEqual(body['worktree'], made['branch'])
+            return made
+        def start(entry, body, folder, **kwargs):
+            self.assertTrue(server.SEND_LOCK.locked())
+            self.assertEqual(kwargs['cwd'], made['path'])
+            self.assertEqual(kwargs['worktree'], made['branch'])
+            self.assertEqual(kwargs['owner']['owner_pane'], self.entries[0]['id'])
+            return '%15', 'task'
+        with patch.object(agent_tabs.worktrees, 'from_body', side_effect=make), \
+                patch.object(delegate, 'start', side_effect=start):
+            self.assertEqual(self.request({'action': 'start', 'message': 'task', 'worktree': made['branch']}),
+                             (201, {'pane': '%15', 'name': 'task', 'worktree': made}))
+        self.run.assert_not_called()
+
+    def test_worktree_thread_change_during_creation_does_not_launch(self):
+        made = {'branch': 'feature/tab', 'path': str(self.root / 'made')}
+        def make(body, folder):
+            self.entries[0] = dict(self.entries[0], thread='changed')
+            return made
+        with patch.object(agent_tabs.worktrees, 'from_body', side_effect=make) as create, \
+                patch.object(delegate, 'start') as start:
+            status, reply = self.request({'action': 'start', 'message': 'task', 'worktree': made['branch']})
+        start.assert_not_called()
+        create.assert_called_once()
+        self.assertEqual(status, 503)
+        self.assertIn(made['path'], reply['error'])
+        self.assertIn('This tab changed conversations', reply['error'])
+        self.run.assert_not_called()
+
+    def test_worktree_session_ending_during_creation_does_not_launch(self):
+        made = {'branch': 'feature/tab', 'path': str(self.root / 'made')}
+        def make(body, folder):
+            self.entries.pop(0)
+            return made
+        with patch.object(agent_tabs.worktrees, 'from_body', side_effect=make) as create, \
+                patch.object(delegate, 'start') as start:
+            status, reply = self.request({'action': 'start', 'message': 'task', 'worktree': made['branch']})
+        start.assert_not_called()
+        create.assert_called_once()
+        self.assertEqual(status, 503)
+        self.assertIn(made['path'], reply['error'])
+        self.assertIn('That session has ended', reply['error'])
+        self.run.assert_not_called()
+
+    def test_worktree_cwd_override_and_missing_folder_fallback(self):
+        made = {'branch': 'feature/tab', 'path': str(self.root)}
+        with patch.object(agent_tabs.worktrees, 'from_body', return_value=made) as make, \
+                patch.object(delegate, 'start', return_value=('%15', 'task')):
+            with patch.object(server, 'agent_folder', side_effect=AssertionError('cwd overrides caller folder')):
+                self.assertEqual(self.request({'action': 'start', 'message': 'task', 'worktree': 'feature/tab',
+                                               'cwd': str(self.root)})[0], 201)
+            self.assertEqual(make.call_args.args[1], str(self.root))
+            with patch.object(server, 'agent_folder', return_value='/missing/project'):
+                self.assertEqual(self.request({'action': 'start', 'message': 'task', 'worktree': 'feature/tab'})[0], 201)
+            self.assertEqual(make.call_args.args[1], str(server.paths.HOME))
+
+    def test_invalid_worktree_requests_do_not_create_or_launch(self):
+        with patch.object(agent_tabs.worktrees, 'from_body') as make, patch.object(delegate, 'start') as start:
+            for extra in ({'session': '%99'}, {'message': ''}, {'agent': 'shell'},
+                          *({'cwd': value} for value in (None, 1, 'relative', str(self.root / 'missing')))):
+                with self.subTest(extra=extra):
+                    request = dict(action='start', message='task', worktree='feature/tab')
+                    request.update(extra)
+                    self.assertEqual(self.request(request)[0], 400)
+            make.assert_not_called()
+            start.assert_not_called()
+        self.run.assert_not_called()
+
+    def test_worktree_refusal_is_specific_and_launch_failure_keeps_folder(self):
+        request = {'action': 'start', 'agent': 'claude', 'message': 'task', 'worktree': 'feature/tab'}
+        with patch.object(agent_tabs.worktrees, 'from_body', side_effect=ValueError('Branch already exists.')):
+            self.assertEqual(self.request(request), (400, {'error': 'Branch already exists.'}))
+        self.run.assert_not_called()
+        made = {'branch': 'feature/tab', 'path': str(self.root)}
+        self.run.side_effect = OSError('launch failed')
+        with patch.object(agent_tabs.worktrees, 'from_body', return_value=made), \
+                patch.object(delegate, 'new_window_after', return_value='%15'):
+            status, reply = self.request(request)
+        self.assertEqual(status, 503)
+        self.assertIn(made['path'], reply['error'])
+        self.assertIn('agent did not start: launch failed', reply['error'])
+        self.assertTrue(self.root.is_dir())
+        self.assertFalse(any('remove' in call.args[0] or 'new-window' in call.args[0]
+                             for call in self.run.call_args_list))
+
     def test_stop_by_worker_removes_pair_or_all(self):
         self.link()
         self.link(reviewer='%14')
@@ -282,6 +390,13 @@ class AgentTabsTests(unittest.TestCase):
 
 
 class CLITests(unittest.TestCase):
+    def test_worktree_body_is_unchanged_and_uses_long_timeout(self):
+        for branch in ('feature/foo', ' feature/foo ', ''):
+            with self.subTest(branch=branch):
+                self.assertEqual(cli.main(['start', '--worktree', branch, 'task']), 0)
+                self.assertEqual(self.payload()['worktree'], branch)
+                self.assertEqual(self.opener.open.call_args.kwargs, {'timeout': 150})
+
     def setUp(self):
         self.enterContext(patch.dict(os.environ, {'TMUX_PANE': '%12', 'MOBILE_TMUX_PORT': '12345'}))
         self.stdout = self.enterContext(patch.object(sys, 'stdout', new_callable=io.StringIO))

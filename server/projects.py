@@ -357,7 +357,7 @@ def render(pid, agent='claude', home=None):
     parts.append(f'\n## New tabs and reviewers\nTo start a new tab or session, or a reviewer, run `{sys.executable} {cli} start ...`, not raw tmux. '
                  'It opens a tab Tether can track. Options: `--review-it` (this tab reviews the new tab; Tether sends you a review request '
                  'after each of its turns and sends your reply back), `--reviews-me` (the new tab reviews this tab), '
-                 '`--agent claude|codex`, `--name NAME`, `--cwd DIR`, `--context`. '
+                 '`--agent claude|codex`, `--name NAME`, `--cwd DIR`, `--worktree BRANCH` (new branch and folder; refused with `--reviews-me`), `--context`. '
                  '`stop --worker %N [--reviewer %N]` ends a review; `list` shows this tab\'s links. '
                  '`link --worker %N --reviewer %N` makes one open tab review another. '
                  'Start your review reply with APPROVED when nothing is wrong. '

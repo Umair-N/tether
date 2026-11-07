@@ -172,7 +172,7 @@ export const taskLabel = (task: string, details?: FooterTask[]) => {
 export function SessionInfo({ pane, footer, mode, onClose }: { pane: Pane; footer: Footer; mode: string; onClose: () => void }) {
   const modal = useModal(true, onClose)
   const parts = (footer.status ?? '').split('|').map(part => part.trim()).filter(Boolean)
-  const rows: [string, string][] = [['Pane', `${pane.label}`], ['Folder', pane.dir], ['Agent', agentNames[pane.agent]], ['State', pane.state],
+  const rows: [string, string][] = [['Pane', `${pane.label}`], ['Folder', pane.dir], ...(pane.worktree ? [['Worktree branch', pane.worktree] as [string, string]] : []), ['Agent', agentNames[pane.agent]], ['State', pane.state],
     ...(pane.agent === 'claude' ? [['Mode', mode], ['Effort', footer.effort ?? 'Not shown'], ['Status line', parts.join(' · ') || 'Not shown'], ['Goal', footer.goal ? `Active${footer.goal !== 'active' ? ` · ${footer.goal}` : ''}` : 'None'], ['Background tasks', footer.tasks?.map(task => taskLabel(task)).join(', ') || 'None'], ['IDE context', footer.ide || 'None']] as [string, string][] : []),
     ...((footer.agents ?? []).filter(agent => !agent.main).map(agent => ['Background agent', [agent.name, agent.task, agent.detail].filter(Boolean).join(' · ')]) as [string, string][])]
   return <dialog {...modal} className="sheet" aria-labelledby="info-title">

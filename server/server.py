@@ -46,6 +46,7 @@ import shortcuts
 import prefs_sync
 import codex_provider
 import delegate
+import worktrees
 import agent_tabs
 import review_links
 import foundry_spend
@@ -271,7 +272,7 @@ def forget_sessions():
 def session_row(entry):
     """One pane in the session list. `needs` is a one-line summary when the pane waits on the user (the desktop "Needs you" list)."""
     status = shared_status(entry)
-    return dict({key: entry.get(key) for key in ('id', 'tmux_session', 'label', 'agent', 'thread', 'writable', 'pane_name', 'tmux_pane_name', 'pane_icon', 'agent_name', 'codex_profile')},
+    return dict({key: entry.get(key) for key in ('id', 'tmux_session', 'label', 'agent', 'thread', 'writable', 'pane_name', 'tmux_pane_name', 'pane_icon', 'agent_name', 'codex_profile', 'worktree')},
                 dir=home_path(tab_folder(entry)), **status, **timeline(entry['id']), needs=needs.summary(status))
 
 
@@ -1370,6 +1371,18 @@ class Handler(BaseHTTPRequestHandler):
                     self.respond(404, {'error': str(exc)})
                     return
                 self.send_file(found, kind)
+            elif path == '/mobile/api/worktree-info':
+                query = parse_qs(urlsplit(self.path).query)
+                try:
+                    if 'session' in query:
+                        folder = agent_folder(choose(query['session'][0]))
+                        folder = folder if folder and os.path.isdir(folder) else str(paths.HOME)
+                    else:
+                        folder = prefs_sync.session_folder()
+                    repo = worktrees.info(folder)
+                except ValueError:
+                    repo = None
+                self.respond(200, {'repo': True, 'base': home_path(repo['base'])} if repo else {'repo': False})
             elif path in ('/mobile/api/repo/changes', '/mobile/api/repo/diff', '/mobile/api/repo/tree'):
                 # The Changes and Files side panels. folder: the panel's folder (~/x); without it, the tab's own folder.
                 query = parse_qs(urlsplit(self.path).query)
@@ -1649,11 +1662,23 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(200, {'session': pane, 'label': body['name']})
                 return
             if self.path == '/mobile/api/tmux-sessions':
-                with SEND_LOCK:
-                    pane = create_session(body.get('name'), session_folder)
+                if 'worktree' in body:
+                    if not valid_name(body.get('name')):
+                        raise ValueError(NAME_HELP)
+                    taken = subprocess.run([paths.TMUX, 'has-session', '-t', '=' + body['name']],
+                                           capture_output=True, text=True, timeout=5)
+                    if taken.returncode == 0:
+                        raise ValueError('A session with that name already exists.')
+                made = worktrees.from_body(body, session_folder)
+                with SEND_LOCK, worktrees.keeping(made):
+                    pane = create_session(body.get('name'), made['path'] if made else session_folder)
+                    if made:
+                        subprocess.run([paths.TMUX, 'set-option', '-p', '-t', pane, '@worktree', made['branch']],
+                                       check=True, capture_output=True, timeout=5)
                     result = subprocess.run([paths.TMUX, 'display-message', '-p', '-t', pane, '#{session_id}'],
                                             check=True, capture_output=True, text=True, timeout=5)
-                self.respond(201, {'session': result.stdout.strip(), 'name': body['name']})
+                self.respond(201, {'session': result.stdout.strip(), 'name': body['name'],
+                                   **({'worktree': made} if made else {})})
                 return
             if self.path == '/mobile/api/pane-name':
                 pane, name = body.get('pane'), body.get('name')
@@ -1792,10 +1817,14 @@ class Handler(BaseHTTPRequestHandler):
                 entries = sessions()
                 entry = delegate.validate(body, entries)
                 folder = agent_folder(entry)
-                with SEND_LOCK:
+                made = worktrees.from_body(body, folder if folder and os.path.isdir(folder) else str(paths.HOME))
+                with SEND_LOCK, worktrees.keeping(made):
+                    if made:
+                        entry = delegate.validate(body, sessions())
                     pane, name = delegate.start(entry, body, folder if folder and os.path.isdir(folder) else str(paths.HOME),
-                                                run=subprocess.run, recent=lambda: snapshot(entry).get('messages') or [])
-                self.respond(201, {'pane': pane, 'name': name})
+                                                run=subprocess.run, recent=lambda: snapshot(entry).get('messages') or [],
+                                                **({'cwd': made['path'], 'worktree': made['branch']} if made else {}))
+                self.respond(201, {'pane': pane, 'name': name, **({'worktree': made} if made else {})})
                 return
             if self.path == '/mobile/api/fork':
                 pane = body.get('session')
@@ -1986,7 +2015,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.respond(200, {'accepted': True, 'delivery': send_text(config, message)})
         except (ValueError, UnicodeError) as exc:
-            self.respond(400, {'error': str(exc) if self.path in ('/mobile/api/history/hide', '/mobile/api/session', '/mobile/api/broadcast', '/mobile/api/merge', '/mobile/api/model', '/mobile/api/shell', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/delegate', '/mobile/api/agent-tab', '/mobile/api/continue-preview', '/mobile/api/continue', '/mobile/api/review-stop', '/mobile/api/review-link', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/mode', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/menu', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/refresh', '/mobile/api/accounts/switch') else 'Invalid message.'})
+            self.respond(400, {'error': str(exc) if self.path in ('/mobile/api/history/hide', '/mobile/api/session', '/mobile/api/tmux-sessions', '/mobile/api/broadcast', '/mobile/api/merge', '/mobile/api/model', '/mobile/api/shell', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/delegate', '/mobile/api/agent-tab', '/mobile/api/continue-preview', '/mobile/api/continue', '/mobile/api/review-stop', '/mobile/api/review-link', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/mode', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/menu', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/refresh', '/mobile/api/accounts/switch') else 'Invalid message.'})
         except (OSError, RuntimeError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
             # The journal keeps why a send was refused; the access log shows only "503".
             print(f'{self.path} refused: {type(exc).__name__}: {str(exc)[:200]}', file=sys.stderr, flush=True)

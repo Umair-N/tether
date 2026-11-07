@@ -91,7 +91,7 @@ class ProjectTests(unittest.TestCase):
         self.assertLess(text.index('## New tabs and reviewers'), text.index('## Notes'))
         self.assertIn(str(Path(projects.__file__).with_name('agent_tab_cli.py')), text)
         for option in ('--review-it', '--reviews-me', '--agent claude|codex', '--name NAME',
-                       '--cwd DIR', '--context', 'stop --worker %N [--reviewer %N]', '`list`',
+                       '--cwd DIR', '--worktree BRANCH', '--context', 'stop --worker %N [--reviewer %N]', '`list`',
                        '`link --worker %N --reviewer %N` makes one open tab review another.', 'Start your review reply with APPROVED when nothing is wrong.',
                        'send --pane %N "text"', 'wait --pane %N [--timeout SECONDS]',
                        'max 600', '3 timeout (it keeps working)', '4 helper gone', '5 needs_input with the prompt, 6 no_turn (no new turn after 60 s; the message may be lost).'):

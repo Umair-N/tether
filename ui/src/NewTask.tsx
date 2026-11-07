@@ -9,6 +9,8 @@ import { ChatPicker, resumeChat } from './ChatPicker'
 import { AgentIcon, agentNames } from './Sidebar'
 import { keyLabel } from './keys'
 import { useDictation } from './useDictation'
+import { WORKTREE_TIMEOUT, WorktreeField } from './Worktree'
+import type { MadeWorktree } from './Worktree'
 import './NewTask.css'
 
 type Worker = 'claude' | 'codex'
@@ -21,7 +23,7 @@ const lastWorker = () => { try { return localStorage.getItem('tether.newTask.age
 
 // The + on the tab strip: a task for a new tab. The server opens the tab beside this one, starts the agent with the
 // task, and the user stays here (server/delegate.py). Either tab can review the other, and this tab can lend its chat as context.
-export function NewTask({ api, pane, at, onClose, onEmpty, onCreated, onOpen, onMoved, micOk, chime }: { api: Api; pane: Pane; at: Anchor; onClose: () => void; onEmpty: () => void; onCreated: (pane: string) => void; onOpen: (pane: Pane) => void; onMoved: (pane: Pane) => void; micOk: boolean; chime: boolean }) {
+export function NewTask({ api, pane, at, onClose, onEmpty, onCreated, onOpen, onMoved, micOk, chime }: { api: Api; pane: Pane; at: Anchor; onClose: () => void; onEmpty: () => void; onCreated: (pane: string, worktree?: MadeWorktree) => void; onOpen: (pane: Pane) => void; onMoved: (pane: Pane) => void; micOk: boolean; chime: boolean }) {
   const modal = useModal(true, () => { if (!pending) onClose() })
   const [opening, setOpening] = useState(false)
   // Open existing is 100 px wider, and the box keeps its right edge under the +.
@@ -31,6 +33,9 @@ export function NewTask({ api, pane, at, onClose, onEmpty, onCreated, onOpen, on
   const [agent, setAgent] = useState<Worker>(lastWorker)
   const [review, setReview] = useState<Review>('off')
   const [context, setContext] = useState(false)
+  const [worktree, setWorktree] = useState<string | null>(null)
+  // A reviewer stays in this tab's folder: on a clean branch it could not see the work under review.
+  const branch = review === 'new' ? null : worktree
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const [files, setFiles] = useState<TaskFile[]>([])
@@ -72,6 +77,7 @@ export function NewTask({ api, pane, at, onClose, onEmpty, onCreated, onOpen, on
   async function create(event?: React.FormEvent) {
     event?.preventDefault()
     if (creating.current || pending || uploading) return
+    if (branch === '') { setError('Enter a branch name for the new worktree.'); return }
     creating.current = true
     setPending(true); setError('')
     const abort = new AbortController()
@@ -84,9 +90,9 @@ export function NewTask({ api, pane, at, onClose, onEmpty, onCreated, onOpen, on
       // The text goes first: the server names the tab from the first line.
       const message = [task.trim(), files.map(file => file.path).join(' ')].filter(Boolean).join('\n\n')
       if (!message && review !== 'new') { setError('Type a task first.'); setPending(false); field.current?.focus(); return }
-      const result = await api<{ pane: string; name: string }>('delegate', { session: pane.id, thread: pane.thread, agent, message, context: context && canContext, review: review === 'off' ? false : review, ...(!task.trim() && files.length ? { name: files[0].name } : {}) }, abort.signal)
+      const result = await api<{ pane: string; name: string; worktree?: MadeWorktree }>('delegate', { session: pane.id, thread: pane.thread, agent, message, context: context && canContext, review: review === 'off' ? false : review, ...(!task.trim() && files.length ? { name: files[0].name } : {}), ...(branch !== null ? { worktree: branch } : {}) }, abort.signal, undefined, branch !== null ? WORKTREE_TIMEOUT : undefined)
       try { localStorage.setItem('tether.newTask.agent', agent) } catch { /* private mode */ }
-      onCreated(result.pane)
+      onCreated(result.pane, result.worktree)
     } catch (error) {
       if (!abort.signal.aborted) { setError(errorText(error)); setPending(false) }
     } finally { creating.current = false }
@@ -135,6 +141,7 @@ export function NewTask({ api, pane, at, onClose, onEmpty, onCreated, onOpen, on
             : <button type="button" className={`icon-button mic ${listening ? 'active' : ''}`} aria-label={listening ? 'Stop recording' : 'Start voice input'} aria-pressed={listening} aria-keyshortcuts="Alt+V" title={`${listening ? 'Stop recording' : 'Voice input'} (${keyLabel('⌥V')})`} disabled={pending} onClick={() => void dictation.toggle()}>{listening ? <Square size={18} /> : <Mic size={20} />}</button>)}
         </div>
       </div>
+      {review !== 'new' && <WorktreeField api={api} session={pane.id} value={worktree} onChange={value => { setWorktree(value); if (error) setError('') }} disabled={pending} />}
       {agentPane && <div className="task-options">
         <div className="task-review">
           <strong id="task-review-label">Review</strong>

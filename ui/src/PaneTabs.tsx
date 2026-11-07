@@ -5,6 +5,7 @@ import { Eye, Plus } from 'lucide-react'
 import type { Api, Pane } from './api'
 import { NewTask } from './NewTask'
 import { AgentIcon, needsYou, paneTitle, shownIndex } from './Sidebar'
+import { WorktreeMark, worktreeNotice } from './Worktree'
 import { anchorOf, clipTitle } from './hooks'
 import type { Anchor } from './hooks'
 import type { Session } from './Sidebar'
@@ -34,6 +35,7 @@ interface Props {
   onUpdate: () => void
   micOk: boolean
   chime: boolean
+  onNotice: (text: string) => void
 }
 // One shared pill marks the active tab. A side swipe on the chat slides it toward the next tab with the finger.
 const SLIDE_CURVE = 'cubic-bezier(.2,.8,.2,1)'
@@ -86,7 +88,7 @@ const HOLD_MS = 350
 
 // Tabs for the panes of one session. Reorder: long-press a tab, then drag it (a mouse drags at once).
 // A long press without a drag opens the pane actions, as before. Only Tether's order changes; tmux panes stay put.
-export const PaneTabs = forwardRef<HTMLDivElement, Props>(function PaneTabs({ session, pane, onOpenPane, onPaneActions, onSplit, onReorder, api, onUpdate, micOk, chime }, ref) {
+export const PaneTabs = forwardRef<HTMLDivElement, Props>(function PaneTabs({ session, pane, onOpenPane, onPaneActions, onSplit, onReorder, api, onUpdate, micOk, chime, onNotice }, ref) {
   const strip = useRef<HTMLDivElement>(null)
   const words = useWords()
   useImperativeHandle(ref, () => strip.current!)
@@ -268,13 +270,13 @@ export const PaneTabs = forwardRef<HTMLDivElement, Props>(function PaneTabs({ se
       onClick={() => { if (!suppressClick.current) onOpenPane(item) }}
       // A touch long press is handled above (drag, or actions on release). A right-click still opens the actions.
       onMouseEnter={clipTitle} onContextMenu={event => { event.preventDefault(); if (!drag.current?.touch && !suppressClick.current) onPaneActions(item.id, anchorOf(event)) }}>
-      <AgentIcon agent={item.agent} icon={item.pane_icon} size={14} /><span className="pane-tab-name">{paneTitle(item)}</span>{shownIndex(item) && <span className="pane-index">{shownIndex(item)}</span>}{!!item.reviewers?.length && <Eye size={12} className="tab-reviewed" aria-label={`Reviewed by ${item.reviewers.map(id => { const other = byId.get(id); return other ? paneTitle(other) : 'another tab' }).join(', ')}`} />}
+      <AgentIcon agent={item.agent} icon={item.pane_icon} size={14} /><span className="pane-tab-name">{paneTitle(item)}</span>{shownIndex(item) && <span className="pane-index">{shownIndex(item)}</span>}{item.worktree && <WorktreeMark branch={item.worktree} />}{!!item.reviewers?.length && <Eye size={12} className="tab-reviewed" aria-label={`Reviewed by ${item.reviewers.map(id => { const other = byId.get(id); return other ? paneTitle(other) : 'another tab' }).join(', ')}`} />}
       {item.state === 'Working' || needsYou(item.state) ? <span className={`state-dot ${item.state === 'Working' ? 'working' : 'approval'}`} aria-label={item.state === 'Working' ? 'Working' : 'Needs you'} /> : null}
     </button>)}
     <button className="tab-add" aria-label={`${words.newRight} with a task`} title={`${words.newRight} with a task`} aria-haspopup="dialog" aria-expanded={!!taskAt}
       onClick={event => { const box = event.currentTarget.getBoundingClientRect(); setTaskAt({ x: box.right - 360, y: box.bottom + 6 }) }}><Plus size={16} /></button>
     {taskAt && createPortal(<NewTask api={api} pane={pane} at={taskAt} micOk={micOk} chime={chime} onClose={() => setTaskAt(null)} onEmpty={() => { setTaskAt(null); onSplit('right') }}
-      onCreated={id => { setTaskAt(null); setFresh(id); onUpdate() }}
+      onCreated={(id, made) => { setTaskAt(null); setFresh(id); onUpdate(); if (made) onNotice(worktreeNotice(made)) }}
       onOpen={item => { setTaskAt(null); setFresh(item.id); onUpdate(); onOpenPane(item) }}
       onMoved={item => { setTaskAt(null); setFresh(item.id); onUpdate(); onOpenPane(item) }} />, document.body)}
   </div>

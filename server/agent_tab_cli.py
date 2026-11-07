@@ -37,6 +37,7 @@ def arguments(argv):
     start.add_argument('--context', action='store_true')
     start.add_argument('--name')
     start.add_argument('--cwd')
+    start.add_argument('--worktree', metavar='BRANCH')
     start.add_argument('task', nargs='?', default='')
     stop = actions.add_parser('stop')
     stop.add_argument('--worker', required=True)
@@ -59,7 +60,7 @@ def arguments(argv):
             parser.error('a task is required unless --reviews-me is set')
         body.update(message=message, context=args.context,
                     review='new' if args.reviews_me else 'source' if args.review_it else False)
-        for key in ('agent', 'name', 'cwd'):
+        for key in ('agent', 'name', 'cwd', 'worktree'):
             value = getattr(args, key)
             if value is not None:
                 body[key] = os.path.abspath(value) if key == 'cwd' else value
@@ -117,7 +118,7 @@ def main(argv=None):
             'X-Tether-Hook': credential, 'Cookie': auth.COOKIE + '=' + credential})
         opener = build_opener(ProxyHandler({}))
         if not waiting:
-            with opener.open(request, timeout=60 if body['action'] == 'send' else 30) as response:
+            with opener.open(request, timeout=150 if 'worktree' in body else 60 if body['action'] == 'send' else 30) as response:
                 result = json.loads(response.read(262144))
             print(json.dumps(result))
             return FINISHED

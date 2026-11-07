@@ -135,7 +135,7 @@ def codex_database():
 def discover(config, run):
     pane_view.zoom_repair_all()
     result = run([paths.TMUX, 'list-panes', '-a', '-F',
-                  '#{pane_id}\t#{session_id}\t#{session_name}\t#{window_index}.#{pane_index}\t#{pane_pid}\t#{pane_current_path}\t#{@chat_name_at}\t#{@chat_name}\t#{@chat_icon}\t#{@zoom_for}'],
+                  '#{pane_id}\t#{session_id}\t#{session_name}\t#{window_index}.#{pane_index}\t#{pane_pid}\t#{pane_current_path}\t#{@chat_name_at}\t#{@chat_name}\t#{@chat_icon}\t#{@worktree}\t#{@zoom_for}'],
                  capture_output=True, text=True, timeout=5)
     if result.returncode:
         return ([{'id': 'saved', 'label': 'Last chat', 'agent': 'codex',
@@ -162,6 +162,7 @@ def discover(config, run):
             fields = line.split('\t')
             if len(fields) > 9 and fields.pop():
                 continue  # @zoom_for identifies the placeholder, never a chat.
+            worktree = fields.pop() if len(fields) > 9 else ''
             pane, tmux_session, label, position, pid = fields[:5]
             position = positions.get((tmux_session, pane), position)
             if label == SIDE_SHELLS:  # the desktop terminal panel's own shells are not sessions
@@ -180,7 +181,7 @@ def discover(config, run):
             tree = descendants(int(pid), processes)
             names = {processes[p][1] for p in tree if p in processes}
             entry = {'id': pane, 'tmux_session': tmux_session, 'label': label, 'position': position,
-                     'agent': 'shell', 'writable': False,
+                     'agent': 'shell', 'writable': False, 'worktree': worktree.strip()[:200],
                      'pane_pid': int(pid), 'pane_start': process_start(int(pid)), 'cwd': cwd, 'pane_name': pane_name.strip()[:40], 'tmux_pane_name': pane_name.strip()[:40], 'pane_icon': icon if ICON.fullmatch(icon) else '',
                      'pane_named_at': int(named_at) if named_at.isdigit() else 0}
             live = next((r for r in claude if r['pid'] in tree and r.get('tmux', '').endswith('.' + pane)), None)
