@@ -11,7 +11,7 @@ import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from agents import claude_consume, claude_snapshot, discover, usage
 from agents import records
@@ -113,20 +113,45 @@ def notify(payload, urgent):
 NOTIFIER = push.Notifier(notify, watching, levels=push.pane_levels, delivery=push.delivery_settings, context=lambda entry: notification_context(entry))
 
 
+def review_alert(title, body, session):
+    notify({'title': title, 'body': body, 'tag': 'review-' + session, 'session': session,
+            'priority': 'urgent', 'silent': False, 'url': '/mobile/#session=' + quote(session)}, True)
+
+
+def review_work_mark(entry):
+    cwd = entry.get('cwd')
+    if not cwd:
+        return None
+    try:
+        outputs = []
+        for args in (['git', 'rev-parse', 'HEAD'], ['git', 'status', '--porcelain'], ['git', 'diff', 'HEAD']):
+            result = subprocess.run(args, cwd=cwd, env={**os.environ, 'GIT_OPTIONAL_LOCKS': '0'},
+                                    capture_output=True, timeout=5)
+            if result.returncode:
+                return None
+            outputs.append(result.stdout)
+        return hashlib.sha256(b''.join(outputs)).hexdigest()
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
 def monitor_notices():
     """Keep native quota notices even when the phone page is closed."""
     while True:
         try:
             entries = sessions()
-        except (OSError, ValueError, sqlite3.Error, subprocess.SubprocessError):
-            entries = []
+        except Exception as exc:
+            print(f'session discovery failed: {exc!r}', file=sys.stderr)
+            time.sleep(2)
+            continue
         for entry in entries:
             try:
                 if entry.get('owner_pid') and entry.get('writable'):
                     NOTIFIER.observe(entry, shared_status(entry))
             except Exception:  # one odd pane must never stop the monitor for everyone
                 continue
-        review_links.observe(entries, shared_status, review_send, last_reply)
+        review_links.observe(entries, shared_status, review_send, last_reply,
+                             alert=review_alert, work_mark=review_work_mark)
         time.sleep(2)
 
 

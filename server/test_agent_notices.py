@@ -136,6 +136,7 @@ class AgentNoticeTests(unittest.TestCase):
             def inspect(item):
                 quota_notices.capture(item, "⎿ You're out of extra usage · resets tomorrow\n")
             with patch.object(server, 'sessions', return_value=[entry]), patch.object(server, 'live_status', side_effect=inspect), \
+                    patch.object(server.review_links, 'observe'), \
                     patch.object(server.time, 'sleep', side_effect=StopIteration):
                 with self.assertRaises(StopIteration):
                     server.monitor_notices()

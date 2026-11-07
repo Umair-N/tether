@@ -1,4 +1,5 @@
 """Watcher transitions use isolated stores and mocked sends, never live panes."""
+import io
 import json
 from pathlib import Path
 import subprocess
@@ -28,6 +29,8 @@ class ReviewLinksTests(unittest.TestCase):
         self.states = {'%13': 'Idle', '%12': 'Idle'}
         self.status = Mock(side_effect=lambda entry: {'state': self.states[entry['id']]})
         self.send = Mock()
+        self.alert = Mock()
+        self.work_mark = None
         self.reply = Mock(return_value='I fixed it.')
         self.add()
 
@@ -41,7 +44,7 @@ class ReviewLinksTests(unittest.TestCase):
         self.clock.return_value += elapsed
         self.states.update(states)
         review_links.observe(entries if entries is not None else [self.worker, self.reviewer],
-                             self.status, self.send, self.reply)
+                             self.status, self.send, self.reply, alert=self.alert, work_mark=self.work_mark)
 
     def test_feedback_waits_for_workers_review_reply_before_reaching_worker(self):
         for review_reply in ('APPROVED', 'Needs a worker test.'):
@@ -69,12 +72,9 @@ class ReviewLinksTests(unittest.TestCase):
                 self.observe(entries=entries, **{'%13': 'Idle'})
                 self.assertTrue(self.links()[0]['awaiting'])
                 self.assertFalse(self.links()[1]['awaiting'])
-                if review_reply == 'APPROVED':
-                    self.assertEqual(self.send.call_count, 2)
-                else:
-                    self.assertEqual(self.send.call_count, 3)
-                    self.assertEqual(self.send.call_args.args[0], worker)
-                    self.assertIn(review_reply, self.send.call_args.args[1])
+                self.assertEqual(self.send.call_count, 3)
+                self.assertEqual(self.send.call_args.args[0], worker)
+                self.assertIn(review_reply, self.send.call_args.args[1])
 
                 def send(entry, text, state):
                     if entry['id'] == '%13':
@@ -107,9 +107,9 @@ class ReviewLinksTests(unittest.TestCase):
         self.observe(entries=entries)
         self.assertFalse(self.links()[0]['awaiting'])
         self.assertTrue(self.links()[1]['seen_working'])
-        self.assertEqual(self.send.call_count, 1)
-        self.observe(entries=entries, elapsed=0)
         self.assertEqual(self.send.call_count, 2)
+        self.observe(entries=entries, elapsed=0)
+        self.assertEqual(self.send.call_count, 3)
         self.assertIn('(%20) finished a turn.', self.send.call_args.args[1])
 
     def test_review_turn_does_not_request_review_of_reviewers_work(self):
@@ -133,7 +133,7 @@ class ReviewLinksTests(unittest.TestCase):
         self.reply.return_value = 'APPROVED'
         self.observe(entries=entries, **{'%13': 'Idle'})
         self.observe(entries=entries)
-        self.assertEqual(self.send.call_count, 1)
+        self.assertEqual(self.send.call_count, 2)
         self.assertFalse(self.links()[0]['seen_working'])
 
     def test_send_gap_blocks_request_and_feedback_until_six_seconds(self):
@@ -626,15 +626,21 @@ class ReviewLinksTests(unittest.TestCase):
             '[Tether review] Feedback from the reviewer tab (%12):\n\n'
             + 'x' * 3000 + '\n\nFix what it raises, then stop and wait.', 'Idle')
 
-    def test_approved_reply_does_not_return_feedback(self):
+    def test_approved_reply_reaches_worker_with_exact_text(self):
         for reply in ('APPROVED', '  approved: all checks pass.\n', 'Approved with notes'):
             with self.subTest(reply=reply):
                 self.add()
                 self.send.reset_mock()
                 self.request_review()
                 self.finish_review(reply)
-                self.assertEqual(self.send.call_count, 1)
+                self.assertEqual(self.send.call_count, 2)
+                self.send.assert_called_with(self.worker,
+                    '[Tether review] Approved by the reviewer tab (%12):\n\n'
+                    + reply.strip() + '\n\nThe review is complete. Do the next step your instructions give '
+                    'for an approved review, then stop.', 'Idle')
                 self.assertFalse(self.links()[0]['awaiting'])
+                self.assertTrue(self.links()[0]['approved_turn'])
+                self.assertEqual(self.links()[0]['approved_before'], review_links._digest(self.reply(self.worker)))
                 self.assertEqual(self.links()[0].get('rounds', 0), 0)
 
     def test_third_fix_pauses_without_a_fourth_review(self):
@@ -677,11 +683,13 @@ class ReviewLinksTests(unittest.TestCase):
         self.finish_review('APPROVED')
         self.assertNotIn('rounds', self.links()[0])
         self.assertNotIn('paused', self.links()[0])
+        self.request_review()  # the approval follow-up needs no review
+        self.assertNotIn('approved_turn', self.links()[0])
         self.request_review()
         self.finish_review()
         self.assertEqual(self.links()[0]['rounds'], 1)
         self.assertEqual(self.send.call_args.args[0], self.worker)
-        self.assertEqual(self.send.call_count, 2 * review_links.MAX_ROUNDS + 1)
+        self.assertEqual(self.send.call_count, 2 * review_links.MAX_ROUNDS + 2)
 
     def test_stored_awaiting_link_at_limit_pauses_without_feedback(self):
         self.request_review()
@@ -885,18 +893,20 @@ class ReviewLinksTests(unittest.TestCase):
         self.assertEqual(self.send.call_count, 2)
         self.assertEqual(self.links()[0]['rounds'], 1)
 
-    def test_missing_worker_survives_grace_then_drops(self):
+    def test_missing_worker_survives_grace_then_counts_loss(self):
         with patch.object(review_links.time, 'time', return_value=1000):
             self.add()
         original = self.links()
-        for now, expected in ((1001, original), (1030, []), (1031, [])):
-            with self.subTest(now=now):
-                self.file.write_text(json.dumps(original))
-                with patch.object(review_links.time, 'time', return_value=now):
-                    review_links.observe([self.reviewer], self.status, self.send, self.reply)
-                self.assertEqual(self.links(), expected)
+        for now in (1001, 1029):
+            with patch.object(review_links.time, 'time', return_value=now):
+                self.observe(entries=[self.reviewer])
+            self.assertEqual(self.links(), original)
+        with patch.object(review_links.time, 'time', return_value=1030):
+            self.observe(entries=[self.reviewer])
+        self.assertEqual(self.links()[0]['lost_ticks'], 1)
         self.status.assert_not_called()
         self.send.assert_not_called()
+        self.reply.assert_not_called()
 
     def test_missing_reviewer_survives_within_grace(self):
         with patch.object(review_links.time, 'time', return_value=1000):
@@ -908,14 +918,17 @@ class ReviewLinksTests(unittest.TestCase):
         self.status.assert_not_called()
         self.send.assert_not_called()
 
-    def test_changed_reviewer_thread_drops_link_even_with_missing_worker(self):
+    def test_changed_reviewer_thread_counts_loss_even_with_missing_worker(self):
         for entries in ([self.worker, dict(self.reviewer, thread='new-thread')],
                         [dict(self.reviewer, thread='new-thread')]):
             with patch.object(review_links.time, 'time', return_value=1000):
                 self.add()
                 review_links.observe(entries, self.status, self.send, self.reply)
-            self.assertEqual(self.links(), [])
+            self.assertEqual(self.links()[0]['lost_ticks'], 1)
+            self.assertEqual(self.links()[0]['lost_reason'], 'reviewer conversation changed')
+        self.status.assert_not_called()
         self.send.assert_not_called()
+        self.reply.assert_not_called()
 
     def test_malformed_created_is_skipped_without_stopping_other_links(self):
         link, = self.links()
@@ -925,7 +938,7 @@ class ReviewLinksTests(unittest.TestCase):
         self.assertEqual(self.links()[0], bad)
         self.assertTrue(self.links()[1]['seen_working'])
 
-    def test_worker_thread_is_pinned_once_known_and_changes_drop_link(self):
+    def test_worker_thread_is_pinned_once_known_and_changes_count_loss(self):
         for thread in (None, 'pending-123-1', 'not-a-uuid', WORKER_THREAD.upper()):
             self.worker['thread'] = thread
             self.observe(**{'%13': 'Working'})
@@ -939,7 +952,8 @@ class ReviewLinksTests(unittest.TestCase):
             self.assertEqual(self.links()[0]['worker_thread'], WORKER_THREAD)
         self.worker['thread'] = THREAD
         self.observe(**{'%13': 'Idle'})
-        self.assertEqual(self.links(), [])
+        self.assertEqual(self.links()[0]['lost_ticks'], 1)
+        self.assertEqual(self.links()[0]['lost_reason'], 'worker conversation changed')
         self.send.assert_not_called()
 
     def test_reply_is_cut_to_1500_and_claude_label_is_used(self):
@@ -984,6 +998,261 @@ class ReviewLinksTests(unittest.TestCase):
         self.observe(**{'%13': 'Idle'})
         self.send.assert_called_once()
 
+    def test_bad_observations_require_30_ticks_and_alert_once(self):
+        cases = (
+            ([self.reviewer], 'worker tab is gone'),
+            ([self.worker], 'reviewer tab is gone'),
+            ([self.worker, dict(self.reviewer, thread=WORKER_THREAD)], 'reviewer conversation changed'),
+            ([dict(self.worker, thread=THREAD), self.reviewer], 'worker conversation changed'),
+        )
+        self.assertEqual(review_links.LOSS_TICKS, 30)
+        for entries, reason in cases:
+            with self.subTest(reason=reason):
+                self.add(seen_working=True)
+                link, = self.links()
+                link.update(created=0, worker_thread=WORKER_THREAD, awaiting=True)
+                self.file.write_text(json.dumps([link]))
+                self.alert.reset_mock()
+                for tick in range(1, 30):
+                    self.observe(entries=entries)
+                    self.assertEqual(self.links()[0]['lost_ticks'], tick)
+                    self.assertEqual(self.links()[0]['lost_reason'], reason)
+                    self.alert.assert_not_called()
+                with patch('review_links.sys.stderr', new_callable=io.StringIO) as stderr:
+                    self.observe(entries=entries)
+                self.assertEqual(self.links(), [])
+                self.assertEqual(stderr.getvalue(),
+                    f'review link removed: worker=%13 reviewer=%12 name=Fix the bug reason={reason}\n')
+                self.alert.assert_called_once_with('Review link lost',
+                    f'“Fix the bug”: {reason}. Tether no longer reviews this tab.', '%13')
+                self.observe(entries=entries)
+                self.assertEqual(self.alert.call_count, 1)
+        self.status.assert_not_called()
+        self.send.assert_not_called()
+        self.reply.assert_not_called()
+
+    def test_healthy_observation_resets_loss_without_extra_writes(self):
+        link, = self.links()
+        link.update(created=0, worker_thread=WORKER_THREAD)
+        self.file.write_text(json.dumps([link]))
+        for _ in range(29):
+            self.observe(entries=[self.reviewer])
+        self.observe()
+        self.assertNotIn('lost_ticks', self.links()[0])
+        self.assertNotIn('lost_reason', self.links()[0])
+        with patch.object(review_links, '_write') as write:
+            self.observe()
+        write.assert_not_called()
+        self.observe(entries=[self.reviewer])
+        self.assertEqual(self.links()[0]['lost_ticks'], 1)
+        self.alert.assert_not_called()
+
+    def test_failed_discovery_does_not_read_or_change_links(self):
+        original = self.file.read_text()
+        for entries in ([], [{'id': 'saved'}]):
+            with patch.object(review_links, '_read') as read:
+                self.observe(entries=entries)
+            read.assert_not_called()
+            self.assertEqual(self.file.read_text(), original)
+        self.status.assert_not_called()
+        self.send.assert_not_called()
+        self.reply.assert_not_called()
+
+    def test_start_wait_expiry_alert_uses_reason_from_step_copy(self):
+        self.add(reviewer_thread=None)
+        self.reviewer['thread'] = None
+        with patch.object(review_links.time, 'time', return_value=self.links()[0]['created'] + 301), \
+                patch('review_links.sys.stderr', new_callable=io.StringIO) as stderr:
+            self.observe()
+        self.assertEqual(self.links(), [])
+        self.assertIn('reason=reviewer never started', stderr.getvalue())
+        self.alert.assert_called_once_with('Review link lost',
+            '“Fix the bug”: reviewer never started. Tether no longer reviews this tab.', '%13')
+
+    def test_pause_alerts_once_and_explicit_remove_does_not_alert(self):
+        self.add(seen_working=True)
+        link, = self.links()
+        link['rounds'] = review_links.MAX_ROUNDS
+        self.file.write_text(json.dumps([link]))
+        self.observe()
+        self.alert.assert_called_once_with('Review paused',
+            '“Fix the bug” reached the round limit. Send a prompt in that tab to restart reviews.', '%13')
+        self.observe()
+        self.assertTrue(review_links.remove('%13'))
+        self.observe()
+        self.assertEqual(self.alert.call_count, 1)
+
+    def test_alert_failure_keeps_store_changes_and_other_alerts(self):
+        link, = self.links()
+        link.update(created=0, lost_ticks=29)
+        self.file.write_text(json.dumps([link, dict(link, worker='%20')]))
+        self.alert.side_effect = RuntimeError('push failed')
+        with patch('review_links.sys.stderr', new_callable=io.StringIO):
+            self.observe(entries=[self.reviewer])
+        self.assertEqual(self.links(), [])
+        self.assertEqual(self.alert.call_count, 2)
+        self.assertEqual([call.args[2] for call in self.alert.call_args_list], ['%13', '%20'])
+
+    def test_failed_store_write_never_alerts(self):
+        link, = self.links()
+        link.update(created=0, lost_ticks=29)
+        self.file.write_text(json.dumps([link]))
+        with patch.object(review_links, '_write', side_effect=OSError('disk')):
+            self.observe(entries=[self.reviewer])
+        self.assertEqual(self.links(), [link])
+        self.alert.assert_not_called()
+
+    def test_approval_followup_is_skipped_then_next_turn_is_reviewed(self):
+        self.request_review()
+        self.finish_review('APPROVED')
+        self.send.reset_mock()
+        self.observe()  # approval has not started yet
+        self.assertTrue(self.links()[0]['approved_turn'])
+        self.request_review()
+        self.send.assert_not_called()
+        self.assertFalse(self.links()[0]['seen_working'])
+        self.assertNotIn('approved_turn', self.links()[0])
+        self.assertNotIn('approved_before', self.links()[0])
+        self.request_review()
+        self.send.assert_called_once()
+        self.assertEqual(self.send.call_args.args[0], self.reviewer)
+
+    def test_approval_followup_shorter_than_tick_is_skipped(self):
+        self.request_review()
+        self.finish_review('APPROVED')
+        self.send.reset_mock()
+        self.reply.return_value = 'Approved next step is done.'
+        self.observe()
+        self.send.assert_not_called()
+        self.assertNotIn('approved_turn', self.links()[0])
+        self.assertNotIn('approved_before', self.links()[0])
+        self.request_review()
+        self.send.assert_called_once()
+        self.assertEqual(self.send.call_args.args[0], self.reviewer)
+
+    def test_approval_retries_draft_and_runtime_errors(self):
+        self.request_review()
+        self.send.reset_mock()
+        self.send.side_effect = [DraftError('draft'), RuntimeError('gone'), None]
+        self.finish_review('APPROVED')
+        for _ in range(2):
+            self.assertTrue(self.links()[0]['awaiting'])
+            self.assertNotIn('approved_turn', self.links()[0])
+            self.assertNotIn('%13', review_links._last_sent)
+            self.observe()
+        self.assertFalse(self.links()[0]['awaiting'])
+        self.assertTrue(self.links()[0]['approved_turn'])
+        self.assertEqual(self.send.call_count, 3)
+
+    def test_approval_uses_feedback_delivery_gate(self):
+        self.request_review()
+        self.observe(**{'%13': 'Approval'})
+        self.finish_review('APPROVED')
+        self.assertTrue(self.links()[0]['awaiting'])
+        self.observe(**{'%13': 'Working'})  # Codex cannot accept a busy send
+        self.assertTrue(self.links()[0]['awaiting'])
+        self.worker['agent'] = 'claude'
+        review_links._last_sent['%13'] = self.clock.return_value
+        self.observe(elapsed=5)
+        self.assertTrue(self.links()[0]['awaiting'])
+        self.observe(elapsed=1)
+        self.assertFalse(self.links()[0]['awaiting'])
+        self.assertTrue(self.links()[0]['worker_busy_send'])
+        self.send.assert_called_with(self.worker,
+            '[Tether review] Approved by the reviewer tab (%12):\n\nAPPROVED\n\n'
+            'The review is complete. Do the next step your instructions give for an approved review, then stop.',
+            'Working')
+        self.observe(**{'%13': 'Idle'})
+        self.observe()
+        self.assertEqual(self.send.call_count, 2)
+        self.assertNotIn('approved_turn', self.links()[0])
+        self.request_review()
+        self.assertEqual(self.send.call_count, 3)
+
+    def test_empty_turns_use_own_limit_and_alert(self):
+        self.work_mark = Mock(return_value='same tree')
+        self.request_review()
+        self.finish_review()
+        self.assertEqual(self.links()[0]['rounds'], 1)
+        for count in range(1, review_links.MAX_ROUNDS + 1):
+            self.request_review()
+            self.assertTrue(self.links()[0]['empty_turn'])
+            self.finish_review()
+            self.assertEqual(self.links()[0]['rounds'], 1)
+            self.assertEqual(self.links()[0]['empty_rounds'], count)
+            self.assertNotIn('empty_turn', self.links()[0])
+        self.request_review()
+        self.assertTrue(self.links()[0]['paused'])
+        self.assertEqual(self.work_mark.call_count, 4)
+        self.alert.assert_called_once_with('Review paused',
+            '“Fix the bug” reached the round limit. Send a prompt in that tab to restart reviews.', '%13')
+        self.observe()
+        self.assertEqual(self.alert.call_count, 1)
+        self.observe(**{'%13': 'Working'})  # new user prompt resets both limits
+        self.assertNotIn('rounds', self.links()[0])
+        self.assertNotIn('empty_rounds', self.links()[0])
+        self.assertEqual(self.links()[0]['work_mark'], 'same tree')
+
+    def test_changed_or_unknown_mark_counts_as_work(self):
+        for mark in ('new tree', None):
+            with self.subTest(mark=mark):
+                self.add()
+                self.work_mark = Mock(return_value='old tree')
+                self.request_review()
+                self.finish_review()
+                self.work_mark.return_value = mark
+                self.request_review()
+                self.assertNotIn('empty_turn', self.links()[0])
+                self.assertEqual(self.links()[0]['work_mark'], mark)
+                self.finish_review()
+                self.assertEqual(self.links()[0]['rounds'], 2)
+                self.assertNotIn('empty_rounds', self.links()[0])
+
+    def test_work_mark_is_only_stored_on_successful_request(self):
+        self.work_mark = Mock(return_value='tree')
+        self.observe(**{'%13': 'Working'})
+        self.work_mark.assert_not_called()
+        self.observe(**{'%13': 'Idle', '%12': 'Approval'})
+        self.work_mark.assert_not_called()
+        self.send.side_effect = DraftError('draft')
+        self.observe(**{'%12': 'Idle'})
+        self.work_mark.assert_called_once_with(self.worker)
+        self.assertNotIn('work_mark', self.links()[0])
+        self.send.side_effect = None
+        self.observe()
+        self.assertEqual(self.links()[0]['work_mark'], 'tree')
+        self.finish_review()
+        self.assertEqual(self.work_mark.call_count, 2)
+
+    def test_awaiting_empty_round_limit_pauses_and_approval_clears_both_limits(self):
+        self.request_review()
+        link, = self.links()
+        link.update(empty_rounds=review_links.MAX_ROUNDS)
+        self.file.write_text(json.dumps([link]))
+        self.finish_review()
+        self.assertTrue(self.links()[0]['paused'])
+        self.assertEqual(self.alert.call_count, 1)
+        link, = self.links()
+        link.update(awaiting=True, reviewer_seen_working=True, rounds=2, work_mark='tree')
+        self.file.write_text(json.dumps([link]))
+        self.finish_review('APPROVED')
+        for key in ('rounds', 'empty_rounds', 'paused'):
+            self.assertNotIn(key, self.links()[0])
+        self.assertEqual(self.links()[0]['work_mark'], 'tree')
+
+    def test_notice_monitor_fake_pane_tick_preserves_seeded_link(self):
+        link, = self.links()
+        link['created'] = 0
+        self.file.write_text(json.dumps([link]))
+        entry = {'id': '%1', 'agent': 'claude', 'thread': 'conversation', 'owner_pid': 1, 'writable': True}
+        with patch.object(server, 'sessions', return_value=[entry]), \
+                patch.object(server, 'live_status', return_value={'state': 'Idle'}), \
+                patch.object(server.NOTIFIER, 'observe'), \
+                patch.object(server.time, 'sleep', side_effect=StopIteration):
+            with self.assertRaises(StopIteration):
+                server.monitor_notices()
+        self.assertEqual(self.links(), [dict(link, lost_ticks=1, lost_reason='worker tab is gone')])
+
 
 class ServerWatcherTests(unittest.TestCase):
     def test_last_reply_uses_latest_nonempty_assistant_text(self):
@@ -1006,7 +1275,73 @@ class ServerWatcherTests(unittest.TestCase):
             with self.assertRaises(StopIteration):
                 server.monitor_notices()
         self.assertEqual(observe.call_count, 2)
-        observe.assert_called_with(entries, server.shared_status, server.review_send, server.last_reply)
+        observe.assert_called_with(entries, server.shared_status, server.review_send, server.last_reply,
+                                   alert=server.review_alert, work_mark=server.review_work_mark)
+
+    def test_session_discovery_exception_skips_watcher_and_loop_recovers(self):
+        entries = [{'id': '%12'}]
+        with patch.object(server, 'sessions', side_effect=[KeyError('pane'), entries]) as sessions, \
+                patch.object(server.review_links, 'observe') as observe, \
+                patch.object(server.time, 'sleep', side_effect=[None, StopIteration]) as sleep, \
+                patch('server.sys.stderr', new_callable=io.StringIO) as stderr:
+            with self.assertRaises(StopIteration):
+                server.monitor_notices()
+        self.assertEqual(sessions.call_count, 2)
+        observe.assert_called_once_with(entries, server.shared_status, server.review_send, server.last_reply,
+                                        alert=server.review_alert, work_mark=server.review_work_mark)
+        self.assertEqual([call.args for call in sleep.call_args_list], [(2,), (2,)])
+        self.assertEqual(stderr.getvalue(), "session discovery failed: KeyError('pane')\n")
+
+    def test_review_alert_uses_native_payload_keys(self):
+        with patch.object(server, 'notify') as notify:
+            server.review_alert('Review link lost', 'Tab vanished.', '%13')
+        notify.assert_called_once_with({
+            'title': 'Review link lost', 'body': 'Tab vanished.', 'tag': 'review-%13', 'session': '%13',
+            'priority': 'urgent', 'silent': False, 'url': '/mobile/#session=%2513',
+        }, True)
+
+    def test_work_mark_tracks_tree_and_head_in_real_repository(self):
+        with tempfile.TemporaryDirectory() as folder:
+            def git(*args):
+                return subprocess.run(['git', *args], cwd=folder, capture_output=True, check=True)
+            git('init')
+            path = Path(folder) / 'work.txt'
+            path.write_text('initial\n')
+            git('add', 'work.txt')
+            git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                '-c', 'commit.gpgsign=false', 'commit', '-m', 'Initial')
+            entry = {'cwd': folder}
+            initial = server.review_work_mark(entry)
+            self.assertIsInstance(initial, str)
+            self.assertEqual(initial, server.review_work_mark(entry))
+            path.write_text('edited\n')
+            edited = server.review_work_mark(entry)
+            self.assertNotEqual(initial, edited)
+            git('add', 'work.txt')
+            git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                '-c', 'commit.gpgsign=false', 'commit', '-m', 'Edit')
+            committed = server.review_work_mark(entry)
+            self.assertNotEqual(initial, committed)
+            self.assertNotEqual(edited, committed)
+        with tempfile.TemporaryDirectory() as folder:
+            self.assertIsNone(server.review_work_mark({'cwd': folder}))
+        self.assertIsNone(server.review_work_mark({}))
+
+    def test_work_mark_uses_bounded_read_only_git_commands_and_handles_errors(self):
+        with patch.object(server.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, b'output')) as run:
+            self.assertIsInstance(server.review_work_mark({'cwd': '/project'}), str)
+        self.assertEqual([call.args[0] for call in run.call_args_list],
+            [['git', 'rev-parse', 'HEAD'], ['git', 'status', '--porcelain'], ['git', 'diff', 'HEAD']])
+        for call in run.call_args_list:
+            self.assertEqual(call.kwargs['cwd'], '/project')
+            self.assertEqual(call.kwargs['timeout'], 5)
+            self.assertEqual(call.kwargs['env']['GIT_OPTIONAL_LOCKS'], '0')
+            self.assertTrue(call.kwargs['capture_output'])
+        for failure in (OSError('missing'), subprocess.TimeoutExpired('git', 5)):
+            with patch.object(server.subprocess, 'run', side_effect=failure):
+                self.assertIsNone(server.review_work_mark({'cwd': '/project'}))
+        with patch.object(server.subprocess, 'run', return_value=subprocess.CompletedProcess([], 1, b'')):
+            self.assertIsNone(server.review_work_mark({'cwd': '/project'}))
 
 
 if __name__ == '__main__':
