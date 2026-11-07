@@ -1,6 +1,7 @@
 """Release tests use temporary homes, fake systemctl, and random HTTP ports."""
 import contextlib
 import hashlib
+import http.client
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import importlib.machinery
 import importlib.util
@@ -10,10 +11,12 @@ import os
 from pathlib import Path
 import shlex
 import shutil
+import signal
 import subprocess
 import tarfile
 import threading
 import time
+from tempfile import TemporaryDirectory
 import unittest
 from unittest import mock
 
@@ -165,13 +168,13 @@ async function scenario(payloads, expectedCalls, disabledStorage = false) {
     if (name === 'react') return {useSyncExternalStore: (sub, get) => {
       subscribe = sub; snapshot = get; return get();
     }};
-    if (name === './api') return {request: async path => {
+    if (name === './api') return {errorText: error => error.message, request: async path => {
       assert.equal(path, 'update'); const data = payloads[Math.min(calls++, payloads.length - 1)];
       if (data instanceof Error) throw data;
       return data;
     }};
     if (name === 'react/jsx-runtime') return {jsx: (type, props) => ({type, props}), jsxs: (type, props) => ({type, props})};
-    if (name === 'lucide-react') return {X: 'X'};
+    if (name === 'lucide-react') return {X: 'X', LoaderCircle: 'LoaderCircle'};
     throw Error(name);
   }};
   vm.runInNewContext(code, context);
@@ -208,6 +211,410 @@ const complete = {latest: 'v0.2.0', available: true, url: 'https://example.inval
 '''
         result = subprocess.run([node, '-'], input=script, text=True, cwd=ROOT, timeout=30,
                                 capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class UpdateRunTests(unittest.TestCase):
+    def setUp(self):
+        temp = TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.home = Path(temp.name)
+        self.cache = self.home / 'cache'
+        self.root = self.home / '.local/share/tether/releases/0.1.0'
+        self.root.mkdir(parents=True)
+        (self.root / 'VERSION').write_text('0.1.0\n')
+        self.state = self.home / 'install.json'
+        self.state.write_text('{}')
+        for patcher in (mock.patch.object(updates.paths, 'HOME', self.home),
+                        mock.patch.object(updates.paths, 'CACHE', self.cache),
+                        mock.patch.object(updates, 'ROOT', self.root),
+                        mock.patch.object(updates, 'install_file', return_value=self.state),
+                        mock.patch.object(updates.subprocess, 'run'),
+                        mock.patch.object(updates.subprocess, 'Popen')):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.cache.mkdir()
+        (self.cache / 'updates.json').write_text(json.dumps(dict(latest='v0.2.0', checked_at=time.time())))
+
+    def running(self, **overrides):
+        return dict(dict(state='running', target='0.2.0', error='', started_at=time.time()), **overrides)
+
+    def refused(self, status, message, target='0.2.0'):
+        with mock.patch.object(updates, 'launch') as launch:
+            with self.assertRaises(updates.UpdateRefused) as caught:
+                updates.start(target)
+            self.assertEqual((caught.exception.status, str(caught.exception)), (status, message))
+            launch.assert_not_called()
+
+    def test_payload_preserves_keys_and_adds_run_and_capability(self):
+        data = self.running()
+        updates.write_run(data)
+        payload = updates.payload()
+        self.assertEqual(set(payload), {'current', 'latest', 'available', 'url', 'notes', 'checked_at',
+                                       'mode', 'checking', 'can_update', 'run'})
+        self.assertTrue(payload['can_update'])
+        self.assertEqual(payload['run'], data)
+
+    def test_only_managed_release_can_update(self):
+        self.assertTrue(updates.can_update())
+        for marker in ('directory', 'file', 'broken-link'):
+            with self.subTest(marker=marker):
+                git = self.root / '.git'
+                if marker == 'directory':
+                    git.mkdir()
+                elif marker == 'file':
+                    git.write_text('gitdir: elsewhere')
+                else:
+                    git.symlink_to(self.home / 'missing')
+                self.assertFalse(updates.can_update())
+                git.rmdir() if git.is_dir() else git.unlink()
+        with mock.patch.object(updates, 'ROOT', ROOT):
+            self.assertFalse(updates.can_update())
+        with mock.patch.object(updates.paths, 'HOME', self.home / 'elsewhere'):
+            self.assertFalse(updates.can_update())
+        (self.root / 'VERSION').write_text('0.0.9')
+        self.assertFalse(updates.can_update())
+        (self.root / 'VERSION').write_text('0.1.0')
+        for content in ('broken', 'null', '[]'):
+            self.state.write_text(content)
+            self.assertFalse(updates.can_update())
+        self.state.unlink()
+        self.assertFalse(updates.can_update())
+
+    def test_run_file_is_private_atomic_and_validated(self):
+        self.assertEqual(updates.run_file(), self.cache / 'update-run.json')
+        self.assertIsNone(updates.read_run())
+        data = self.running()
+        updates.write_run(data)
+        self.assertEqual(updates.read_run(), data)
+        self.assertEqual(updates.run_file().stat().st_mode & 0o777, 0o600)
+        updates.write_run(self.running(state='done'))
+        self.assertEqual(updates.read_run()['state'], 'done')
+        self.assertEqual(list(self.cache.glob('.update-run-*')), [])
+        before = updates.run_file().read_bytes()
+        with mock.patch.object(updates.json, 'dump', side_effect=OSError('disk full')):
+            with self.assertRaisesRegex(OSError, 'disk full'):
+                updates.write_run(data)
+        self.assertEqual(updates.run_file().read_bytes(), before)
+        self.assertEqual(list(self.cache.glob('.update-run-*')), [])
+        for invalid in ('{', 'null', '[]', '{}', json.dumps(self.running(state='unknown')),
+                        json.dumps(self.running(target='../0.2.0')), json.dumps(self.running(error=None)),
+                        json.dumps(self.running(started_at='now')), json.dumps(self.running(started_at=True)),
+                        json.dumps(self.running(started_at=float('nan')))):
+            with self.subTest(invalid=invalid):
+                updates.run_file().write_text(invalid)
+                self.assertIsNone(updates.read_run())
+
+    def test_stale_running_reads_failed_and_can_retry(self):
+        data = self.running(started_at=time.time() - 901)
+        updates.write_run(data)
+        self.assertEqual(updates.read_run(), dict(data, state='failed',
+                         error='The update stopped without a result. Run tether update on the host.'))
+        with mock.patch.object(updates, 'launch'):
+            self.assertEqual(updates.start('0.2.0')['state'], 'running')
+
+    def test_each_refusal(self):
+        with mock.patch.object(updates, 'mode', return_value='off'):
+            self.refused(409, 'Updates are disabled.')
+        with mock.patch.object(updates, 'can_update', return_value=False):
+            self.refused(409, 'This install updates with git pull.')
+        for target in (None, 2, {}, ['0.2.0']):
+            self.refused(400, 'Choose a release version.', target)
+        for target in ('garbage', '../0.2.0', '0.3.0', '0.1.0'):
+            self.refused(409, 'That update is no longer available.', target)
+        for latest in ('v0.1.0', 'v0.0.9', None):
+            (self.cache / 'updates.json').write_text(json.dumps(dict(latest=latest, checked_at=time.time())))
+            self.refused(409, 'That update is no longer available.', latest or '0.2.0')
+
+    def test_double_start_and_discovery_lock_is_free_during_launch(self):
+        def launch(target):
+            self.assertEqual(target, '0.2.0')
+            self.assertEqual(updates.read_run()['state'], 'running')
+            self.assertTrue(updates._LOCK.acquire(blocking=False))
+            updates._LOCK.release()
+        with mock.patch.object(updates, 'launch', side_effect=launch) as launch_mock:
+            data = updates.start('v0.2.0')
+            self.assertEqual(data, updates.read_run())
+            self.refused(409, 'An update is already running.')
+            launch_mock.assert_called_once_with('0.2.0')
+
+    def test_concurrent_start_launches_only_once(self):
+        barrier = threading.Barrier(3, timeout=3)
+        results = []
+        def start():
+            barrier.wait()
+            try:
+                results.append(updates.start('0.2.0')['state'])
+            except updates.UpdateRefused as error:
+                results.append(error.status)
+        workers = [threading.Thread(target=start) for _ in range(2)]
+        with mock.patch.object(updates, 'launch') as launch:
+            try:
+                for worker in workers:
+                    worker.start()
+                barrier.wait()
+            finally:
+                for worker in workers:
+                    worker.join(5)
+                    self.assertFalse(worker.is_alive())
+            self.assertCountEqual(results, ['running', 409])
+            launch.assert_called_once()
+
+    def test_launch_failure_records_failed(self):
+        with mock.patch.object(updates, 'launch', side_effect=OSError('launch failed')):
+            with self.assertRaises(updates.UpdateRefused) as caught:
+                updates.start('0.2.0')
+        self.assertEqual((caught.exception.status, str(caught.exception)), (500, 'launch failed'))
+        self.assertEqual(updates.read_run()['state'], 'failed')
+        self.assertEqual(updates.read_run()['error'], 'launch failed')
+
+    def test_systemd_launch_environment_and_failure(self):
+        env = dict(PATH='/tools with spaces', TETHER_INSTALL_STATE='/state with spaces', TETHER_REPO='test/repo',
+                   MOBILE_TMUX_CACHE='/cache', XDG_RUNTIME_DIR='/runtime', UNRELATED='private')
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(updates.sys, 'platform', 'linux'), \
+                mock.patch.object(updates.paths, 'SYSTEMD_RUN', '/tools/systemd-run'), \
+                mock.patch.object(updates.subprocess, 'run') as run:
+            run.return_value = subprocess.CompletedProcess([], 0, '', '')
+            updates.launch('0.2.0')
+            argv = run.call_args.args[0]
+            self.assertEqual(argv[:5], ['/tools/systemd-run', '--user', '--collect', '--quiet',
+                                       '--unit=tether-self-update'])
+            self.assertNotIn('--scope', argv)
+            for key, value in env.items():
+                if key != 'UNRELATED':
+                    self.assertIn('--setenv=' + key + '=' + value, argv)
+            self.assertNotIn('--setenv=UNRELATED=private', argv)
+            self.assertEqual(argv[-7:], [updates.sys.executable, str(self.root / 'tether'), 'update',
+                                        '--yes', '--to', '0.2.0', '--report'])
+            self.assertEqual(run.call_args.kwargs, dict(timeout=10, capture_output=True, text=True, env=env))
+            run.return_value = subprocess.CompletedProcess([], 1, '', 'unit failed\n')
+            with self.assertRaisesRegex(RuntimeError, 'unit failed'):
+                updates.launch('0.2.0')
+            run.side_effect = subprocess.TimeoutExpired(argv, 10)
+            with self.assertRaises(updates.UpdateRefused):
+                updates.start('0.2.0')
+            self.assertEqual(updates.read_run()['state'], 'failed')
+
+    def test_detached_fallbacks_and_reaper(self):
+        cases = [('darwin', {}, '/systemd-run'), ('linux', {'TERMUX_VERSION': '1'}, '/systemd-run'),
+                 ('linux', {'PREFIX': '/data/data/com.termux/files/usr'}, '/systemd-run'), ('linux', {}, None)]
+        for platform, env, systemd in cases:
+            with self.subTest(platform=platform, env=env), mock.patch.dict(os.environ, env, clear=True), \
+                    mock.patch.object(updates.sys, 'platform', platform), \
+                    mock.patch.object(updates.paths, 'SYSTEMD_RUN', systemd), \
+                    mock.patch.object(updates.subprocess, 'Popen') as popen, \
+                    mock.patch.object(updates.threading, 'Thread') as thread, \
+                    mock.patch.object(updates.subprocess, 'run') as run:
+                updates.launch('0.2.0')
+                run.assert_not_called()
+                options = popen.call_args.kwargs
+                self.assertTrue(options['start_new_session'])
+                self.assertEqual(options['stdin'], subprocess.DEVNULL)
+                self.assertEqual(options['env'], env)
+                self.assertEqual(options['stdout'].name, str(self.cache / 'update-run.log'))
+                self.assertIs(options['stderr'], options['stdout'])
+                self.assertTrue(options['stdout'].closed)
+                thread.assert_called_once_with(target=popen.return_value.wait, daemon=True)
+                thread.return_value.start.assert_called_once()
+                thread.call_args.kwargs['target']()
+                popen.return_value.wait.assert_called_once()
+
+
+class ReportTests(unittest.TestCase):
+    def setUp(self):
+        temp = TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        patcher = mock.patch.object(updates.paths, 'CACHE', Path(temp.name))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.data = dict(state='running', target='0.2.0', error='', started_at=time.time())
+        updates.write_run(self.data)
+
+    def test_report_reuses_main_and_forwards_stderr(self):
+        main = cli.main
+        def update(argv):
+            self.assertEqual(argv, ['update', '--yes', '--to', '0.2.0'])
+            print('first warning', file=cli.sys.stderr)
+            os.write(2, b'child failure\n\n')
+            return 1
+        with mock.patch.object(cli, 'main', side_effect=update), contextlib.redirect_stderr(io.StringIO()) as output:
+            self.assertEqual(main(['update', '--yes', '--to', '0.2.0', '--report']), 1)
+        self.assertEqual(output.getvalue(), 'first warning\nchild failure\n\n')
+        self.assertEqual(updates.read_run(), dict(self.data, state='failed', error='child failure'))
+
+    def test_report_success_and_default_error(self):
+        for code, state, error in ((0, 'done', ''), (1, 'failed', 'The update failed.')):
+            with self.subTest(code=code), mock.patch.object(cli, 'main', return_value=code) as main:
+                self.assertEqual(cli.report_update(['update']), code)
+                main.assert_called_once_with(['update'])
+            self.assertEqual(updates.read_run(), dict(self.data, state=state, error=error))
+
+    def test_report_without_existing_run(self):
+        updates.run_file().unlink()
+        with mock.patch.object(cli, 'main', return_value=0):
+            self.assertEqual(cli.report_update(['update', '--to', 'v0.2.0']), 0)
+        data = updates.read_run()
+        self.assertEqual(data['state'], 'done')
+        self.assertEqual(data['target'], '0.2.0')
+        self.assertGreaterEqual(data['started_at'], self.data['started_at'])
+
+    def test_report_with_real_stderr_descriptor(self):
+        def update(argv):
+            print('reported warning', file=cli.sys.stderr)
+            os.write(2, b'reported failure\n')
+            return 1
+        with mock.patch.object(cli, 'main', side_effect=update), \
+                mock.patch.object(cli.sys, 'stderr', cli.sys.__stderr__):
+            self.assertEqual(cli.report_update(['update']), 1)
+        self.assertEqual(updates.read_run()['error'], 'reported failure')
+
+    def test_report_records_all_exceptions_and_restores_sigterm(self):
+        previous = signal.getsignal(signal.SIGTERM)
+        for error in (RuntimeError('unexpected'), SystemExit(0), KeyboardInterrupt()):
+            with self.subTest(error=error), mock.patch.object(cli, 'main', side_effect=error), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(type(error)):
+                    cli.report_update(['update'])
+                self.assertEqual(updates.read_run()['state'], 'failed')
+                self.assertEqual(updates.read_run()['target'], self.data['target'])
+                self.assertEqual(updates.read_run()['started_at'], self.data['started_at'])
+                self.assertEqual(signal.getsignal(signal.SIGTERM), previous)
+
+    def test_sigterm_records_failure(self):
+        def terminate(argv):
+            os.kill(os.getpid(), signal.SIGTERM)
+        with mock.patch.object(cli, 'main', side_effect=terminate), contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                cli.report_update(['update'])
+        self.assertEqual(updates.read_run(), dict(self.data, state='failed',
+                                                error='The update was terminated (SIGTERM).'))
+
+    def test_parser_failure_keeps_last_stderr_line(self):
+        with contextlib.redirect_stderr(io.StringIO()) as output:
+            with self.assertRaises(SystemExit):
+                cli.main(['update', '--report', '--unknown-option'])
+        self.assertEqual(updates.read_run()['state'], 'failed')
+        self.assertEqual(updates.read_run()['error'], output.getvalue().strip().splitlines()[-1])
+        self.assertIn('unrecognized arguments', updates.read_run()['error'])
+
+
+class UpdateEndpointTests(unittest.TestCase):
+    def setUp(self):
+        import server
+        self.server = server
+        patcher = mock.patch.object(server.auth, 'MODE', 'proxy')
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.http = ThreadingHTTPServer(('127.0.0.1', 0), server.Handler)
+        self.worker = threading.Thread(target=self.http.serve_forever, daemon=True)
+        self.worker.start()
+        self.addCleanup(self.stop_http)
+
+    def stop_http(self):
+        self.http.shutdown()
+        self.http.server_close()
+        self.worker.join(3)
+        self.assertFalse(self.worker.is_alive())
+
+    def post(self, body, **headers):
+        connection = http.client.HTTPConnection('127.0.0.1', self.http.server_port, timeout=5)
+        try:
+            connection.request('POST', '/mobile/api/update', json.dumps(body),
+                               dict({'Content-Type': 'application/json'}, **headers))
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    def headers(self):
+        return {'Origin': f'http://127.0.0.1:{self.http.server_port}', 'X-Codex-Mobile': '1'}
+
+    def test_post_success_and_refusal(self):
+        data = dict(state='running', target='0.2.0', error='', started_at=time.time())
+        with mock.patch.object(updates, 'start', return_value=data) as start:
+            self.assertEqual(self.post({'version': '0.2.0'}, **self.headers()), (202, {'run': data}))
+            start.assert_called_once_with('0.2.0')
+        for status in (400, 409, 500):
+            with mock.patch.object(updates, 'start', side_effect=updates.UpdateRefused(status, 'refused')):
+                self.assertEqual(self.post({'version': None}, **self.headers()), (status, {'error': 'refused'}))
+
+    def test_post_requires_sign_in_header_and_same_origin(self):
+        with mock.patch.object(updates, 'start') as start:
+            self.assertEqual(self.post({'version': '0.2.0'}, Origin=self.headers()['Origin'])[0], 403)
+            self.assertEqual(self.post({'version': '0.2.0'}, **{'Origin': 'http://foreign.invalid',
+                                                                           'X-Codex-Mobile': '1'})[0], 403)
+            with mock.patch.object(self.server.auth, 'MODE', 'token'):
+                self.assertEqual(self.post({'version': '0.2.0'}, **self.headers())[0], 401)
+            start.assert_not_called()
+
+
+class BannerRunTests(unittest.TestCase):
+    def test_update_now_waits_through_the_restart(self):
+        node = shutil.which('node')
+        if not node or not (ROOT / 'ui/node_modules/typescript').is_dir():
+            self.skipTest('UI dependencies and Node are required for the banner test')
+        script = r'''
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const ts = require('./ui/node_modules/typescript');
+const code = ts.transpileModule(fs.readFileSync('./ui/src/UpdateBanner.tsx', 'utf8'), {compilerOptions: {
+  module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX
+}}).outputText;
+const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
+const text = node => node == null || node === false ? '' : typeof node !== 'object' ? String(node)
+  : Array.isArray(node) ? node.map(text).join('') : text(node.props?.children);
+const find = (node, name) => {
+  if (!node || typeof node !== 'object') return null;
+  if (Array.isArray(node)) { for (const item of node) { const hit = find(item, name); if (hit) return hit; } return null; }
+  if (node.type === 'button' && text(node) === name) return node;
+  return find(node.props?.children, name);
+};
+const idle = {current: '0.1.0', latest: 'v0.2.0', available: true, url: 'https://example.invalid', mode: 'notify', checking: false, can_update: true, run: null};
+async function scenario(replies, postError) {
+  let snapshot, subscribe; const timers = [], posts = [];
+  const context = {exports: {}, Date, setTimeout: fn => timers.push(fn), localStorage: {getItem: () => null, setItem() {}},
+    require: name => {
+      if (name === 'react') return {useSyncExternalStore: (sub, get) => { subscribe = sub; snapshot = get; return get(); }};
+      if (name === 'react/jsx-runtime') return {jsx: (type, props) => ({type, props}), jsxs: (type, props) => ({type, props})};
+      if (name === 'lucide-react') return {X: 'X', LoaderCircle: 'LoaderCircle'};
+      if (name === './api') return {errorText: error => error.message, request: async (path, body) => {
+        if (body) { posts.push(body); if (postError) throw Error(postError); return {}; }
+        const reply = replies.length > 1 ? replies.shift() : replies[0];
+        if (reply instanceof Error) throw reply;
+        return reply;
+      }};
+      throw Error(name);
+    }};
+  vm.runInNewContext(code, context);
+  const banner = context.exports.UpdateBanner;
+  banner(); subscribe(() => {}); await flush();
+  const tick = async () => { timers.shift()(); await flush(); };
+  return {banner, tick, posts, timers};
+}
+(async () => {
+  let run = await scenario([idle]);
+  assert.equal(find(run.banner(), 'Reload'), null);
+  find(run.banner(), 'Update now').props.onClick(); await flush();
+  assert.deepEqual(JSON.parse(JSON.stringify(run.posts)), [{version: '0.2.0'}]);
+  assert.match(text(run.banner()), /Updating to v0\.2\.0/);
+  run = await scenario([idle, Error('restarting'), {...idle, run: {state: 'running', target: '0.2.0', error: ''}}, {...idle, current: '0.2.0', available: false}]);
+  find(run.banner(), 'Update now').props.onClick(); await flush();
+  await run.tick(); assert.match(text(run.banner()), /Updating/); // A failed request during the restart keeps waiting.
+  await run.tick(); assert.match(text(run.banner()), /Updating/);
+  await run.tick(); assert.ok(find(run.banner(), 'Reload')); assert.equal(run.timers.length, 0);
+  run = await scenario([idle, {...idle, run: {state: 'failed', target: '0.2.0', error: 'Went back.'}}]);
+  find(run.banner(), 'Update now').props.onClick(); await flush();
+  await run.tick(); assert.match(text(run.banner()), /Update failed\. Went back\./); assert.ok(find(run.banner(), 'Try again'));
+  run = await scenario([idle], 'Refused.');
+  find(run.banner(), 'Update now').props.onClick(); await flush();
+  assert.match(text(run.banner()), /Update failed\. Refused\./);
+  run = await scenario([{...idle, can_update: false}]);
+  assert.equal(find(run.banner(), 'Update now'), null); // A git checkout keeps the link only.
+  assert.match(text(run.banner()), /Update available/);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+'''
+        result = subprocess.run([node, '-'], input=script, text=True, cwd=ROOT, timeout=30, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
@@ -285,6 +692,37 @@ class ReleaseTests(unittest.TestCase):
         with mock.patch.object(updates, 'fetch_release', return_value=self.release), \
                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             return cli.main(['update', '--yes', *args])
+
+    def prepare_report(self):
+        self.prepare()
+        patcher = mock.patch.object(updates.paths, 'CACHE', self.home / 'cache')
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.report = dict(state='running', target='0.2.0', error='', started_at=time.time())
+        updates.write_run(self.report)
+
+    def test_report_real_update_done(self):
+        self.prepare_report()
+        with mock.patch.object(cli, 'healthy', return_value=True):
+            self.assertEqual(self.update('--report'), 0)
+        self.assertEqual(updates.read_run(), dict(self.report, state='done'))
+        self.assertEqual(self.link.resolve(), self.releases / '0.2.0')
+
+    def test_report_real_update_failed(self):
+        self.prepare_report()
+        (self.asset_dir / 'SHA256SUMS').write_text('0' * 64 + '  tether-0.2.0.tar.gz\n')
+        self.assertEqual(self.update('--report'), 1)
+        self.assertEqual(updates.read_run()['state'], 'failed')
+        self.assertEqual(updates.read_run()['error'], 'Checksum mismatch; install refused')
+        self.assertEqual(self.link.resolve(), self.old)
+
+    def test_report_rollback_is_failed(self):
+        self.prepare_report()
+        with mock.patch.object(cli, 'healthy', return_value=False):
+            self.assertEqual(self.update('--report'), 1)
+        self.assertEqual(updates.read_run(), dict(self.report, state='failed',
+                                                error='Tether went back to v0.1.0. Run tether update on the host to see why.'))
+        self.assertEqual(self.link.resolve(), self.old)
 
     def test_checksum_mismatch_refused(self):
         self.prepare()

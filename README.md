@@ -297,6 +297,8 @@ python3 ~/.local/share/tether/current/install.py --plan --updates auto --no-buil
 python3 ~/.local/share/tether/current/install.py --apply --updates auto --no-build-ui
 ```
 
+In the web UI, **Update now** in the sidebar runs the same verified update. It appears only on release installs.
+
 The installer saves `--updates notify|auto|off`. The default is `notify`.
 Only `auto` writes the daily `tether-update.timer` and its service.
 The timer uses a randomized one-hour delay. Its service runs `tether update --auto`.

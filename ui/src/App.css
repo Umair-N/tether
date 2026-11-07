@@ -1555,7 +1555,11 @@ button.live-chip:active { background: var(--line); }
   .browser-send { height: var(--control-lg); }
 }
 
-.release-update-banner { display: flex; align-items: center; gap: 8px; padding-bottom: 8px; }
+.release-update-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-bottom: 8px; }
+.release-update-banner > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.release-update-banner > .task-spin { flex-shrink: 0; }
+.release-update-error { flex-basis: 100%; margin: 0; color: var(--error); overflow-wrap: anywhere; }
+.release-update-action { flex-basis: 100%; }
 .release-update-banner a { flex: 1; min-width: 0; color: var(--text); overflow-wrap: anywhere; }
 .release-update-banner .icon-button { flex-shrink: 0; }
 
