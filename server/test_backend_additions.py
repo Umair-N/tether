@@ -319,7 +319,8 @@ class BackendTests(unittest.TestCase):
         self.entries.assert_not_called()
 
     def test_history_titles_cwd_live_order_and_limit(self):
-        older = self.transcript([{'type': 'user', 'cwd': str(Path.home()), 'message': {'content': 'first'}},
+        self.enterContext(patch.object(server.Path, 'home', return_value=Path('/Users/test')))
+        older = self.transcript([{'type': 'user', 'cwd': '/Users/test', 'message': {'content': 'first'}},
                                  {'type': 'custom-title', 'customTitle': 'Old'},
                                  {'type': 'summary', 'summary': 'Summary'},
                                  {'type': 'ai-title', 'aiTitle': 'Newest'}])
@@ -534,7 +535,7 @@ class BackendTests(unittest.TestCase):
             self.assertEqual(get(q='secret')['total'], 4)
         self.run.assert_not_called()
 
-    def test_history_route_bad_parameters_query_cap_and_directory_cap(self):
+    def test_history_route_bad_parameters_query_cap_and_uncapped_directories(self):
         for query in ('limit=', 'limit=0', 'limit=101', 'limit=x', 'offset=-1', 'offset=1.2',
                       'offset=', 'offset=x', 'agent=', 'agent=exec', 'state=', 'state=live'):
             with self.subTest(query=query):
@@ -547,7 +548,7 @@ class BackendTests(unittest.TestCase):
             _, body = self.request('/mobile/api/history?' + urlencode({'q': 'x' * 200 + 'missing'}), method='GET')
         self.assertEqual(body['total'], 35)
         self.assertEqual(len(body['chats']), 30)
-        self.assertEqual(len(body['dirs']), 30)
+        self.assertEqual(len(body['dirs']), 35)
         self.assertEqual(body['dirs'][0], {'dir': '/app/00', 'count': 1, 'temporary': False})
         self.run.assert_not_called()
 
@@ -558,6 +559,58 @@ class BackendTests(unittest.TestCase):
 
     def hide(self, **body):
         self.assertEqual(self.request('/mobile/api/history/hide', body), (200, {'ok': True}))
+
+    def test_history_default_hides_temporary_chats_from_all_lists(self):
+        chats = [dict(id=CHAT, agent='claude', title='Keep', cwd='/Users/test/app', time=None),
+                 dict(id=OTHER, agent='codex', title='Temporary', cwd='/tmp/work', time=None)]
+        self.entries.return_value = []
+        self.assertFalse(server.prefs_sync.FILE.with_name('chat-hidden.json').exists())
+        with patch.object(history, 'all_chats', return_value=chats), \
+                patch.object(server.Path, 'home', return_value=Path('/Users/test')):
+            body = self.hidden_history()
+            self.assertEqual([chat['id'] for chat in body['chats']], [CHAT])
+            self.assertEqual(body['dirs'], [{'dir': '~/app', 'count': 1, 'temporary': False}])
+            self.assertEqual(body['counts'], {'all': 1, 'claude': 1, 'codex': 0})
+            self.assertEqual((body['temporary'], body['hiddenCount']), ('hidden', 1))
+            _, filtered = self.request('/mobile/api/history?agent=claude&q=Keep', method='GET')
+            self.assertEqual(filtered['hiddenCount'], 1)
+        self.run.assert_not_called()
+
+    def test_history_default_without_temporary_chats_has_no_hidden_count(self):
+        chats = [dict(id=CHAT, agent='claude', title='Keep', cwd='/Users/test/app', time=None)]
+        self.entries.return_value = []
+        self.assertFalse(server.prefs_sync.FILE.with_name('chat-hidden.json').exists())
+        with patch.object(history, 'all_chats', return_value=chats):
+            body = self.hidden_history()
+        self.assertEqual((body['temporary'], body['hiddenCount']), ('hidden', 0))
+        self.assertEqual([chat['id'] for chat in body['chats']], [CHAT])
+        self.run.assert_not_called()
+
+    def test_history_saved_collapsed_mode_keeps_temporary_chats_listed(self):
+        chats = [dict(id=CHAT, agent='claude', title='Temporary', cwd='/tmp/work', time=None)]
+        self.entries.return_value = []
+        file = server.prefs_sync.FILE.with_name('chat-hidden.json')
+        saved = json.dumps({'temporary': 'collapsed'})
+        file.write_text(saved)
+        with patch.object(history, 'all_chats', return_value=chats):
+            body = self.hidden_history()
+        self.assertEqual((body['temporary'], body['hiddenCount']), ('collapsed', 0))
+        self.assertEqual([chat['id'] for chat in body['chats']], [CHAT])
+        self.assertEqual(body['dirs'], [{'dir': '/tmp/work', 'count': 1, 'temporary': True}])
+        self.assertEqual(file.read_text(), saved)
+        self.run.assert_not_called()
+
+    def test_history_default_keeps_live_temporary_chats_listed(self):
+        chats = [dict(id=CHAT, agent='claude', title='Live', cwd='/tmp/work', time=None)]
+        self.assertFalse(server.prefs_sync.FILE.with_name('chat-hidden.json').exists())
+        with patch.object(history, 'all_chats', return_value=chats):
+            body = self.hidden_history()
+        self.assertEqual((body['temporary'], body['hiddenCount']), ('hidden', 1))
+        self.assertEqual([chat['id'] for chat in body['chats']], [CHAT])
+        self.assertTrue(body['chats'][0]['live'])
+        self.assertEqual(body['dirs'], [{'dir': '/tmp/work', 'count': 1, 'temporary': True}])
+        self.assertEqual(body['counts'], {'all': 1, 'claude': 1, 'codex': 0})
+        self.run.assert_not_called()
 
     def test_hide_chat_updates_all_history_fields_and_preserves_transcript(self):
         transcript = self.transcript([{'type': 'user', 'cwd': '/Users/test/app',
@@ -591,6 +644,7 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(body['dirs'], [{'dir': '/tmp/live', 'count': 1, 'temporary': True}])
 
     def test_hide_folder_and_temporary_filter_before_search_and_paging(self):
+        self.hide(kind='temporary', mode='collapsed')
         chats = [dict(id=CHAT, agent='claude', title='Folder', cwd='/Users/test/app', time=None),
                  dict(id=OTHER, agent='codex', title='Temporary', cwd='/tmp/work', time=None),
                  dict(id='third', agent='codex', title='Keep', cwd='/tmpfoo', time=None)]
@@ -623,6 +677,7 @@ class BackendTests(unittest.TestCase):
                 self.assertEqual(restored['temporary'], mode)
 
     def test_hidden_route_lists_existing_chats_and_folders_newest_first(self):
+        chat_hidden.set_temporary('collapsed')
         chats = [dict(id=CHAT, agent='claude', title='One', cwd='/Users/test/a', time='2026-01-01'),
                  dict(id=OTHER, agent='codex', title='Two', cwd='/tmp/work', time=None)]
         stale = '00000000-0000-0000-0000-000000000000'
@@ -684,7 +739,7 @@ class BackendTests(unittest.TestCase):
         self.assertIn('claude:' + CHAT, chat_hidden.load()['chats'])
 
     def test_hidden_state_defaults_limits_and_temporary_boundaries(self):
-        defaults = {'chats': {}, 'dirs': {}, 'temporary': 'collapsed'}
+        defaults = {'chats': {}, 'dirs': {}, 'temporary': 'hidden'}
         self.assertEqual(chat_hidden.load(), defaults)
         file = server.prefs_sync.FILE.with_name('chat-hidden.json')
         for content in ('broken', '[]', 'null', '{"chats": [], "dirs": null, "temporary": "bad"}'):

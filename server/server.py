@@ -1296,7 +1296,8 @@ class Handler(BaseHTTPRequestHandler):
                 index = history.all_chats()
                 hidden = chat_hidden.load()
                 hidden_count = (sum(chat['agent'] + ':' + chat['id'] in hidden['chats'] for chat in index)
-                                + len(hidden['dirs']) + (hidden['temporary'] == 'hidden'))
+                                + len(hidden['dirs']) + (hidden['temporary'] == 'hidden'
+                                and any(chat_hidden.is_temporary(chat['cwd']) for chat in index)))
                 index = [chat for chat in index if chat['id'] in live or not (
                     chat['agent'] + ':' + chat['id'] in hidden['chats']
                     or home_path(chat['cwd']) in hidden['dirs']
@@ -1317,7 +1318,7 @@ class Handler(BaseHTTPRequestHandler):
                         if chat_hidden.is_temporary(chat['cwd']):
                             temporary_dirs.add(folder)
                 dirs = [{'dir': folder, 'count': count, 'temporary': folder in temporary_dirs} for folder, count in
-                        sorted(directories.items(), key=lambda item: (-item[1], item[0]))[:30]]
+                        sorted(directories.items(), key=lambda item: (-item[1], item[0]))]
                 chats = [dict(id=chat['id'], agent=chat['agent'], title=chat['title'],
                               dir=home_path(chat['cwd']) or None, time=chat['time'],
                               live=chat['id'] in live, pane=live.get(chat['id']))

@@ -198,7 +198,7 @@ export function FolderMenu({ api, value, folders, mode = 'collapsed', hiddenCoun
     if (view === 'hidden') {
       const restore = (run: () => void, label: string) => ({ run, pinTrailing: true, trailing: { label, icon: <ArchiveRestore size={14} aria-hidden="true" />, run } })
       const rows: MenuOption[] = [{ value: '#back', label: 'Hidden', noSearch: true, run: () => setView('folders'), lead: <ChevronLeft size={15} aria-hidden="true" /> }]
-      if (hidden?.temporary === 'hidden') rows.push({ value: '#temporary', label: 'Temporary folders', detail: `${hidden.temporaryCount} chats`, group: 'Folders', ...restore(() => setMode('collapsed'), 'Show temporary folders') })
+      if (hidden?.temporary === 'hidden' && hidden.temporaryCount) rows.push({ value: '#temporary', label: 'Temporary folders', detail: `${hidden.temporaryCount} chats`, group: 'Folders', ...restore(() => setMode('collapsed'), 'Show temporary folders') })
       for (const item of hidden?.dirs ?? []) {
         const { name, parent } = folderParts(item.dir)
         rows.push({ value: `#dir:${item.dir}`, label: name, detail: parent || undefined, count: item.count, search: item.dir, group: 'Folders', ...restore(() => void post({ kind: 'dir', dir: item.dir, hidden: false }), `Show ${item.dir}`) })

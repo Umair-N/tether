@@ -26,7 +26,7 @@ def _valid_dir(directory):
 
 
 def _load():
-    defaults = {'chats': {}, 'dirs': {}, 'temporary': 'collapsed'}
+    defaults = {'chats': {}, 'dirs': {}, 'temporary': 'hidden'}
     try:
         data = json.loads(prefs_sync.FILE.with_name('chat-hidden.json').read_text())
     except (OSError, ValueError):
