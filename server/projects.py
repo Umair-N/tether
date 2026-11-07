@@ -360,7 +360,10 @@ def render(pid, agent='claude', home=None):
                  '`--agent claude|codex`, `--name NAME`, `--cwd DIR`, `--context`. '
                  '`stop --worker %N [--reviewer %N]` ends a review; `list` shows this tab\'s links. '
                  '`link --worker %N --reviewer %N` makes one open tab review another. '
-                 'Start your review reply with APPROVED when nothing is wrong.\n')
+                 'Start your review reply with APPROVED when nothing is wrong. '
+                 '`send --pane %N "text"` (`-` reads stdin) steers a tab you started. '
+                 '`wait --pane %N [--timeout SECONDS]` (max 600) prints JSON with its last reply when its turn ends. '
+                 'Exit: 0 finished, 3 timeout (it keeps working), 4 helper gone, 5 needs_input with the prompt, 6 no_turn (no new turn after 60 s; the message may be lost).\n')
     parts.append(f'\n## Notes\nSave a project fact that other agents in this session need as a Markdown file in {folder}/notes/ '
                  '(one topic per file, a "# Title" first line). Keep your own memory as before. The user reviews notes in Tether.\n')
     if found:

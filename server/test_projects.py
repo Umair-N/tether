@@ -81,7 +81,7 @@ class ProjectTests(unittest.TestCase):
         self.assertIn(str(projects.bundle(PID) / 'notes'), text)
         self.assertNotIn('## Instructions', text)
         self.assertIn('@chat_icon', text)  # agents learn to set their tab icon
-        self.assertLess(len(text), 2000)
+        self.assertLess(len(text), 2500)
         self.assertIn('not evidence of absence', text)
         self.assertLess(text.index('## Naming tabs'), text.index('## Claims of absence'))
         self.assertLess(text.index('## Claims of absence'), text.index('## New tabs and reviewers'))
@@ -92,8 +92,20 @@ class ProjectTests(unittest.TestCase):
         self.assertIn(str(Path(projects.__file__).with_name('agent_tab_cli.py')), text)
         for option in ('--review-it', '--reviews-me', '--agent claude|codex', '--name NAME',
                        '--cwd DIR', '--context', 'stop --worker %N [--reviewer %N]', '`list`',
-                       '`link --worker %N --reviewer %N` makes one open tab review another.', 'APPROVED'):
+                       '`link --worker %N --reviewer %N` makes one open tab review another.', 'Start your review reply with APPROVED when nothing is wrong.',
+                       'send --pane %N "text"', 'wait --pane %N [--timeout SECONDS]',
+                       'max 600', '3 timeout (it keeps working)', '4 helper gone', '5 needs_input with the prompt, 6 no_turn (no new turn after 60 s; the message may be lost).'):
             self.assertIn(option, text)
+        self.assertIn(
+            'It opens a tab Tether can track. Options: `--review-it` '
+            '(this tab reviews the new tab; Tether sends you a review request '
+            'after each of its turns and sends your reply back), '
+            '`--reviews-me` (the new tab reviews this tab), ', text)
+        self.assertIn(
+            'Start your review reply with APPROVED when nothing is wrong. '
+            '`send --pane %N "text"` (`-` reads stdin) steers a tab you started. '
+            '`wait --pane %N [--timeout SECONDS]` (max 600) prints JSON with its last reply when its turn ends. '
+            'Exit: 0 finished, 3 timeout (it keeps working), 4 helper gone, 5 needs_input with the prompt, 6 no_turn (no new turn after 60 s; the message may be lost).', text)
         self.assertFalse(projects.has_context(PID, self.home))
         state = projects.state(PID, self.home)
         self.assertEqual((state['chars'] > 0, state['revision']), (True, 0))

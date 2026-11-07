@@ -192,7 +192,7 @@ class AgentTabsTests(unittest.TestCase):
         self.run.assert_not_called()
 
     def test_start_fills_thread_defaults_agent_and_holds_send_lock(self):
-        def start(entry, body, folder, run, recent, cwd):
+        def start(entry, body, folder, run, recent, cwd, owner):
             self.assertTrue(server.SEND_LOCK.locked())
             self.assertIs(entry, self.entries[0])
             self.assertEqual((body['thread'], body['agent']), (THREAD, 'codex'))

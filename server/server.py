@@ -969,7 +969,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def respond(self, status, body, content_type='application/json', cache='no-store'):
         data = body if isinstance(body, bytes) else body.encode() if isinstance(body, str) else json.dumps(body).encode()
-        if self.command in ('POST', 'DELETE') and status < 300 and self.path.split('?', 1)[0] in TMUX_WRITES:
+        if (self.command in ('POST', 'DELETE') and status < 300 and self.path.split('?', 1)[0] in TMUX_WRITES
+                and not getattr(self, 'keep_sessions', False)):
             forget_sessions()
         self.send_response(status)
         self.send_header('Content-Type', content_type + '; charset=utf-8')
@@ -1540,7 +1541,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if self.path == agent_tabs.PATH:
                 agent_tabs.serve(self, body, sessions=sessions, folder=agent_folder, snapshot=snapshot,
-                                 last_reply=last_reply, run=subprocess.run, lock=SEND_LOCK)
+                                 last_reply=last_reply, run=subprocess.run, lock=SEND_LOCK,
+                                 status=shared_status, send=review_send, timeline=timeline)
                 return
             if self.path == '/mobile/api/file-check':
                 names = body.get('paths')

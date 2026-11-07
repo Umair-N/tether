@@ -8,6 +8,7 @@ import unicodedata
 from uuid import uuid4
 
 import codex_provider
+import helper_tabs
 import paths
 import review_links
 from terminal_input import PROFILE_NAME, UUID, new_window_after
@@ -160,7 +161,7 @@ def launch_command(entry, agent, path, name, *, context=False, profile=None):
     return command + f' "$(cat {shlex.quote(str(path))})"'
 
 
-def start(entry, body, folder, run=subprocess.run, recent=lambda: [], *, cwd=None):
+def start(entry, body, folder, run=subprocess.run, recent=lambda: [], *, cwd=None, owner=None):
     """recent: returns source messages when context or a new reviewer needs them."""
     # Call after validate, under the server's send lock. Only the new pane receives input.
     agent = body['agent']
@@ -178,6 +179,8 @@ def start(entry, body, folder, run=subprocess.run, recent=lambda: [], *, cwd=Non
     run([paths.TMUX, 'set-option', '-p', '-t', pane, '@chat_name', name, ';',
          'set-option', '-p', '-t', pane, '@chat_name_at', str(int(time.time() * 1000))],
         check=True, capture_output=True, timeout=5)
+    if owner is not None:
+        helper_tabs.save(pane, owner, run)
     recent_text = brief(recent()) if context else ''
     prompt = (reviewer_prompt(entry, body['message'], recent_text) if review == 'new' else
               prompt_text(entry, body['message'], agent, context=context, review=review == 'source', recent=recent_text))

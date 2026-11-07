@@ -5,6 +5,7 @@ import re
 
 import auth
 import delegate
+import helper_tabs
 import paths
 import review_links
 from terminal_input import UUID, live_status
@@ -53,11 +54,27 @@ def link_pair(body, entries, last_reply):
     return {'linked': True}
 
 
-def serve(handler, body, *, sessions, folder, snapshot, last_reply, run, lock):
+def serve(handler, body, *, sessions, folder, snapshot, last_reply, run, lock, status, send, timeline):
     credential = handler.headers.get('X-Tether-Hook', '')
     if (not auth.is_loopback(handler.client_address[0]) or not credential
             or not hmac.compare_digest(credential.encode(), auth.session_value().encode())):
         handler.respond(403, {'error': 'Local hook authentication required.'})
+        return
+    if body.get('action') in ('send', 'wait'):
+        entries = sessions()
+        caller = next((entry for entry in entries if entry['id'] == body.get('session')), None)
+        try:
+            if body['action'] == 'send':
+                if caller is None:
+                    raise ValueError('That session has ended. Select another tab.')
+                result = helper_tabs.send_message(body, caller, entries, run, status, send, last_reply,
+                                                  helper_tabs.SEND_LOCK)
+            else:
+                handler.keep_sessions = True
+                result = 200, helper_tabs.poll(body, caller, entries, run, status, last_reply, timeline)
+        except helper_tabs.Stale as exc:
+            result = 409, {'error': str(exc)}
+        handler.respond(*result)
         return
     with lock:
         entries = sessions()
@@ -75,7 +92,7 @@ def serve(handler, body, *, sessions, folder, snapshot, last_reply, run, lock):
             pane, name = delegate.start(caller, request,
                                         directory if directory and os.path.isdir(directory) else str(paths.HOME),
                                         run=run, recent=lambda: snapshot(caller).get('messages') or [],
-                                        cwd=body.get('cwd'))
+                                        cwd=body.get('cwd'), owner=helper_tabs.new_record(caller))
             result = 201, {'pane': pane, 'name': name}
         elif action == 'link':
             if caller['id'] not in (body.get('worker'), body.get('reviewer')):

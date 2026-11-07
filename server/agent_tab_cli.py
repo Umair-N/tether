@@ -1,8 +1,10 @@
 """Start tabs and manage review links from an agent's own Tether pane."""
 import argparse
+import http.client
 import json
 import os
 import sys
+import time
 from urllib.error import HTTPError, URLError
 from urllib.request import ProxyHandler, Request, build_opener
 
@@ -10,6 +12,13 @@ import auth
 from ask_bridge import install_settings
 
 PATH = '/mobile/api/agent-tab'
+FINISHED = 0
+ERROR = 1
+TIMEOUT = 3
+GONE = 4
+NEEDS_INPUT = 5
+NO_TURN = 6
+POLL = 2
 
 
 class Parser(argparse.ArgumentParser):
@@ -36,6 +45,12 @@ def arguments(argv):
     link.add_argument('--worker', required=True)
     link.add_argument('--reviewer', required=True)
     actions.add_parser('list')
+    send = actions.add_parser('send')
+    send.add_argument('--pane', required=True)
+    send.add_argument('text')
+    wait = actions.add_parser('wait')
+    wait.add_argument('--pane', required=True)
+    wait.add_argument('--timeout', type=int, default=600)
     args = parser.parse_args(argv)
     body = {'action': args.action}
     if args.action == 'start':
@@ -52,7 +67,27 @@ def arguments(argv):
         body['worker'] = args.worker
         if args.reviewer is not None:
             body['reviewer'] = args.reviewer
+    elif args.action == 'send':
+        message = sys.stdin.read() if args.text == '-' else args.text
+        if not message.strip():
+            parser.error('a message is required')
+        body.update(pane=args.pane, message=message)
+    elif args.action == 'wait':
+        if not 1 <= args.timeout <= 600:
+            parser.error('timeout must be 1 to 600 seconds')
+        body.update(pane=args.pane, timeout=args.timeout)
     return body
+
+
+def http_error(exc):
+    error = str(exc.code)
+    try:
+        reply = json.loads(exc.read(262144))
+        if isinstance(reply, dict) and isinstance(reply.get('error'), str):
+            error = reply['error']
+    except (ValueError, OSError):
+        pass
+    return error
 
 
 def main(argv=None):
@@ -75,25 +110,50 @@ def main(argv=None):
             raise ValueError('Local hook authentication required.')
         credential = auth.session_value(secret)
         url = f'http://127.0.0.1:{port}'
+        waiting = body['action'] == 'wait'
+        seconds = body.pop('timeout') if waiting else None
         request = Request(url + PATH, json.dumps(body).encode(), headers={
             'Content-Type': 'application/json', 'Origin': url, 'X-Codex-Mobile': '1',
             'X-Tether-Hook': credential, 'Cookie': auth.COOKIE + '=' + credential})
-        with build_opener(ProxyHandler({})).open(request, timeout=30) as response:
-            result = json.loads(response.read(262144))
-        print(json.dumps(result))
-        return 0
+        opener = build_opener(ProxyHandler({}))
+        if not waiting:
+            with opener.open(request, timeout=60 if body['action'] == 'send' else 30) as response:
+                result = json.loads(response.read(262144))
+            print(json.dumps(result))
+            return FINISHED
+        deadline = time.monotonic() + seconds
+        state, error = None, None
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                result = {'status': 'timeout', 'pane': body['pane'], 'state': state, 'timeout': seconds}
+                if error is not None:
+                    result['error'] = error
+                print(json.dumps(result))
+                return TIMEOUT
+            try:
+                with opener.open(request, timeout=min(10, max(1, remaining))) as response:
+                    result = json.loads(response.read(2 * 1024 * 1024))
+                error = None
+                state = result.get('state', state)
+                if result['status'] != 'running':
+                    code = {'finished': FINISHED, 'gone': GONE, 'needs_input': NEEDS_INPUT, 'no_turn': NO_TURN}.get(result['status'])
+                    if code is None:
+                        raise ValueError('Invalid helper status.')
+                    print(json.dumps(result))
+                    return code
+            except HTTPError as exc:
+                if exc.code != 503:
+                    raise
+                error = http_error(exc)
+            except (OSError, URLError, http.client.HTTPException) as exc:
+                error = str(exc)
+            time.sleep(min(POLL, max(0, deadline - time.monotonic())))
     except HTTPError as exc:
-        error = str(exc.code)
-        try:
-            reply = json.loads(exc.read(262144))
-            if isinstance(reply, dict) and isinstance(reply.get('error'), str):
-                error = reply['error']
-        except (ValueError, OSError):
-            pass
-        print(f'Tether tab error: {error}', file=sys.stderr)
+        print(f'Tether tab error: {http_error(exc)}', file=sys.stderr)
     except (OSError, URLError, ValueError, KeyError):
         print('Tether tab error: Could not contact the local Tether server.', file=sys.stderr)
-    return 1
+    return ERROR
 
 
 if __name__ == '__main__':
