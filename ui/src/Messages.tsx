@@ -9,6 +9,7 @@ import { MarkdownTextPrimitive } from '@assistant-ui/react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Api, ChatMessage } from './api'
 import { ToolGroup } from './ToolGroup'
+import { SentContent, sentContent } from './SentImages'
 import { InlineCode, Link, remarkPaths } from './MediaLink'
 import { canSpeak, speak, stopSpeaking, useSpeaking } from './speech'
 import type { ToolSummary } from './api'
@@ -87,7 +88,7 @@ function TerminalSnapshot({ text, shell }: { text: string; shell: boolean }) {
     <CopyButton text={text} label="Copy terminal output" className="copy-chip" />
   </div>
 }
-export function Message({ id, role, kind, title, text, count, time, tools, api, session, actions = true }: { actions?: boolean; id: string; role: string; kind?: unknown; title?: string; text: string; count?: unknown; time?: string; tools?: ToolSummary[]; api: Api; session: string }) {
+export function Message({ id, role, kind, title, text, count, time, tools, api, session, actions = true, images, imageKey }: { images?: number; imageKey?: string; actions?: boolean; id: string; role: string; kind?: unknown; title?: string; text: string; count?: unknown; time?: string; tools?: ToolSummary[]; api: Api; session: string }) {
   // A line Claude Code prints between turns: a hook that blocked it, a "while you were away" recap, a notice.
   if (kind === 'notice' && title) {
     const icon = title.endsWith('hook blocked') ? <ShieldAlert size={15} /> : title === 'While you were away' ? <Clock3 size={15} /> : <Info size={15} />
@@ -122,6 +123,8 @@ export function Message({ id, role, kind, title, text, count, time, tools, api, 
   if (role === 'user' && text.startsWith('This session is being continued from a previous conversation')) {
     return <details className="tool-row compact-row" data-msg-id={id}><summary><Layers size={15} />Conversation compacted<ChevronRight size={15} /></summary><pre>{text}</pre></details>
   }
+  const sent = role === 'user' && !kind ? sentContent(text, session, images, imageKey) : null
+  if (sent?.shots.length) return <MessagePrimitive.Root className="user-message" data-msg-id={id}><SentContent {...sent} /></MessagePrimitive.Root>
   return <MessagePrimitive.Root className={role === 'user' ? 'user-message' : 'assistant-message'} data-msg-id={id}>
     {role === 'user' ? <MessagePrimitive.Parts /> : <><MessagePrimitive.Parts components={{ Text: Markdown }} />{actions && <MessageActions text={text} time={time} />}</>}
   </MessagePrimitive.Root>
@@ -242,7 +245,7 @@ function QuoteBlock(props: React.ComponentProps<'blockquote'>) {
 export function Markdown() { return <MarkdownTextPrimitive remarkPlugins={[remarkGfm, remarkPaths]} smooth={false} components={{ CodeHeader, code: InlineCode, a: Link, blockquote: QuoteBlock }} /> }
 export const convertMessage = (message: ChatMessage): ThreadMessageLike => ({
   id: message.id, role: message.role, content: message.text,
-  metadata: { custom: { kind: message.kind, title: message.title, count: message.count, tools: message.tools, text: message.text, time: message.time } },
+  metadata: { custom: { kind: message.kind, title: message.title, count: message.count, tools: message.tools, text: message.text, time: message.time, images: message.images, imageKey: message.image_key } },
 })
 
 // Phone photos are large and carry location data: re-draw JPEG/HEIC photos (this drops the metadata) and shrink big images.

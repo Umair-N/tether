@@ -814,6 +814,10 @@ button.live-chip:active { background: var(--line); }
 .tool-images button { display: flex; flex-direction: column; gap: 4px; width: 132px; padding: 0; color: var(--muted); font-size: 12px; text-align: left; }
 .tool-images img { width: 132px; height: 96px; object-fit: cover; object-position: top; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 .tool-images span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sent-images { flex-wrap: wrap; overflow-x: visible; margin: 0; padding: 0; white-space: normal; }
+.sent-images:not(:last-child), .sent-images + span { margin-bottom: 8px; }
+.sent-image-gone { display: flex; flex-direction: column; justify-content: center; gap: 4px; width: 132px; height: 96px; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius); color: var(--muted); font-size: 12px; }
+.sent-image-gone span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool-images button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius); }
 .tool-toggle { display: flex; align-items: center; gap: 8px; min-height: var(--control-lg); max-width: 100%; padding: 6px 5px; border-radius: var(--radius-sm); color: inherit; text-align: left; font-size: inherit; }
 .tool-toggle > svg { flex-shrink: 0; }

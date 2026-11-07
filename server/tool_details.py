@@ -122,6 +122,27 @@ def lookup(config, identifier):
 def image(config, identifier, index):
     """The index-th image in one tool result: (media type, bytes)."""
     _, result = find(config, identifier)
+    return decode_image(result, index)
+
+
+def message_image(config, key, index):
+    """Read a user image only from the selected Claude session's transcript."""
+    if config['agent'] != 'claude' or not isinstance(key, str) or not key:
+        raise ValueError('That image is no longer available.')
+    with open(config['transcript']) as stream:
+        for line in stream:
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if record.get('isSidechain') or record.get('isMeta') or record.get('type') != 'user':
+                continue
+            if record.get('uuid') == key:
+                return decode_image(record.get('message'), index)
+    raise ValueError('That image is no longer available.')
+
+
+def decode_image(result, index):
     found = images(result)
     if not 0 <= index < len(found):
         raise ValueError('That image is no longer available.')

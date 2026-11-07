@@ -1,4 +1,5 @@
 """Tool summary and lazy detail contracts for both transcript formats."""
+import base64
 import json
 from pathlib import Path
 import tempfile
@@ -11,6 +12,112 @@ import server
 import tool_details as tools
 
 FIXTURES = Path(__file__).parent / 'tests' / 'fixtures'
+
+
+class MessageImageTests(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.path = Path(folder.name) / 'chat.jsonl'
+        self.config = {'agent': 'claude', 'transcript': self.path}
+        self.text = 'Compare [Image #5] [Image #6]'
+        self.record = {'type': 'user', 'uuid': 'message-1', 'message': {'role': 'user', 'content': [
+            {'type': 'text', 'text': self.text},
+            {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png',
+                                       'data': base64.b64encode(b'first image').decode()}},
+            {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/jpeg',
+                                       'data': base64.b64encode(b'second image').decode()}}]}}
+        self.path.write_text(json.dumps(self.record) + '\n')
+
+    def test_user_images_add_metadata_and_preserve_text(self):
+        messages = []
+        agents.claude_consume(messages, 0, self.record, lambda value: value)
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0]['text'], self.text)
+        self.assertEqual(messages[0]['images'], 2)
+        self.assertEqual(messages[0]['image_key'], self.record['uuid'])
+
+    def test_text_only_user_has_no_image_metadata(self):
+        self.record['message']['content'] = [{'type': 'text', 'text': self.text}]
+        messages = []
+        agents.claude_consume(messages, 0, self.record, lambda value: value)
+        self.assertEqual(len(messages), 1)
+        self.assertNotIn('images', messages[0])
+        self.assertNotIn('image_key', messages[0])
+
+    def test_user_images_require_a_string_uuid(self):
+        for uuid in (None, 1):
+            with self.subTest(uuid=uuid):
+                self.record['uuid'] = uuid
+                messages = []
+                agents.claude_consume(messages, 0, self.record, lambda value: value)
+                self.assertNotIn('images', messages[0])
+                self.assertNotIn('image_key', messages[0])
+
+    def test_message_image_returns_selected_media_type_and_bytes(self):
+        self.assertEqual(tools.message_image(self.config, 'message-1', 1), ('image/jpeg', b'second image'))
+
+    def test_unknown_message_key_is_unavailable(self):
+        with self.assertRaisesRegex(ValueError, '^That image is no longer available\\.$'):
+            tools.message_image(self.config, 'missing', 0)
+
+    def test_message_image_index_must_be_in_range(self):
+        for index in (-1, 2):
+            with self.subTest(index=index), self.assertRaisesRegex(ValueError, '^That image is no longer available\\.$'):
+                tools.message_image(self.config, 'message-1', index)
+
+    def test_message_images_require_claude(self):
+        for agent in ('codex', 'antigravity'):
+            with self.subTest(agent=agent), self.assertRaisesRegex(ValueError, '^That image is no longer available\\.$'):
+                tools.message_image(dict(self.config, agent=agent), 'message-1', 0)
+
+    def test_message_image_skips_ineligible_records(self):
+        records = [dict(self.record, isSidechain=True), dict(self.record, isMeta=True),
+                   dict(self.record, type='assistant')]
+        self.path.write_text('\n'.join(json.dumps(record) for record in records))
+        with self.assertRaisesRegex(ValueError, '^That image is no longer available\\.$'):
+            tools.message_image(self.config, 'message-1', 0)
+
+    def test_message_image_stops_at_matching_key(self):
+        self.record['message']['content'] = []
+        with self.path.open('a') as stream:
+            stream.write(json.dumps(self.record) + '\n')
+        self.assertEqual(tools.message_image(self.config, 'message-1', 1), ('image/jpeg', b'second image'))
+
+    def test_message_image_rejects_invalid_base64(self):
+        self.record['message']['content'][1]['source']['data'] = 'invalid!'
+        self.path.write_text(json.dumps(self.record) + '\n')
+        with self.assertRaisesRegex(ValueError, '^That image is no longer available\\.$'):
+            tools.message_image(self.config, 'message-1', 0)
+
+    def test_message_image_route_selects_session_and_caches_image(self):
+        handler = object.__new__(server.Handler)
+        handler.path = '/mobile/api/message-image?session=%2512&key=message-1&n=1'
+        handler.deny = Mock(return_value=False)
+        handler.respond = Mock()
+        with patch.object(server, 'choose', return_value=self.config) as choose:
+            handler.do_GET()
+            choose.assert_called_once_with('%12')
+        handler.respond.assert_called_once_with(200, b'second image', 'image/jpeg', 'private, max-age=86400')
+
+    def test_message_image_route_returns_404_for_invalid_index(self):
+        for index in ('invalid', '-1', '2'):
+            with self.subTest(index=index):
+                handler = object.__new__(server.Handler)
+                handler.path = '/mobile/api/message-image?key=message-1&n=' + index
+                handler.deny = Mock(return_value=False)
+                handler.respond = Mock()
+                with patch.object(server, 'choose', return_value=self.config):
+                    handler.do_GET()
+                self.assertEqual(handler.respond.call_args.args[0], 404)
+
+    def test_message_image_route_requires_auth(self):
+        handler = object.__new__(server.Handler)
+        handler.path = '/mobile/api/message-image?key=message-1&n=1'
+        handler.deny = Mock(return_value=True)
+        with patch.object(server, 'choose') as choose:
+            handler.do_GET()
+            choose.assert_not_called()
 
 
 class ToolImageTests(unittest.TestCase):

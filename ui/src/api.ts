@@ -104,6 +104,8 @@ export interface ChatMessage {
   tools?: ToolSummary[]
   count?: string
   time: string
+  images?: number  // Claude: images inside this user message. GET message-image serves them by image_key.
+  image_key?: string
 }
 export interface ChatData {
   login_result?: { phase: 'done' | 'failed' | 'unknown'; message: string }

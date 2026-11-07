@@ -1367,6 +1367,15 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 # The image of a finished tool call never changes; the browser may keep it.
                 self.respond(200, data, kind, 'private, max-age=86400')
+            elif path == '/mobile/api/message-image':
+                query = parse_qs(urlsplit(self.path).query)
+                config = choose(query.get('session', [None])[0])
+                try:
+                    kind, data = tool_details.message_image(config, query.get('key', [''])[0], int(query.get('n', ['0'])[0]))
+                except ValueError as exc:
+                    self.respond(404, {'error': str(exc)})
+                    return
+                self.respond(200, data, kind, 'private, max-age=86400')
             elif path == '/mobile/api/tool':
                 query = parse_qs(urlsplit(self.path).query)
                 config = choose(query.get('session', [None])[0])

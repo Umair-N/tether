@@ -446,6 +446,11 @@ def claude_consume(messages, index, record, clean):
         text = tidy_user_text(text)
     if text.strip() and not text.startswith(('<system-reminder>', '<local-command', '<command-name>')):
         item = {'id': str(index), 'role': role, 'text': text, 'time': record.get('timestamp')}
+        if role == 'user' and isinstance(content, list):
+            count = len(tool_details.images({'content': content}))
+            if count > 0 and isinstance(record.get('uuid'), str):
+                item['images'] = count
+                item['image_key'] = record['uuid']
         if role == 'assistant' and record.get('isApiErrorMessage') and error_message(dict(record, message=text)):
             item['kind'] = 'notice'
         messages.append(item)
