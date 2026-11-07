@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { LayoutDashboard, SquareSplitHorizontal, SquareSplitVertical, Terminal } from 'lucide-react'
 import { ApiError, canFork, errorText, request } from './api'
 import type { Api, Pane, PastChat, SessionsData } from './api'
+import { AutoResumeNotice } from './AutoResumeNotice'
 import { useModal, usePolling } from './hooks'
 import type { Anchor } from './hooks'
 import { setPlace, setPlaceHandler } from './backNav'
@@ -710,6 +711,7 @@ function App() {
     {agentsPage && <AgentsPage api={api} sessions={sessions} seen={prefs.seen} selected={openId} onOpen={openPane} onMarkRead={markRead} startMessaging={agentsPage === 'message'} onClose={() => setAgentsPage(false)} />}
     {view && !home && !files && !(wide && share) && <StatusBar panes={panes} loading={loading} error={error} />}
     {updated && <div className="update-banner" role="status"><span>A new version of Tether is ready.</span><button type="button" onClick={reload}>Reload</button></div>}
+    {!updated && !!data?.auto_resume?.failed && <AutoResumeNotice api={api} data={data.auto_resume} onChange={refresh} />}
   </main></WordsContext.Provider>
 }
 export default App

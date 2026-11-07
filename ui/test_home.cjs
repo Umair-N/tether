@@ -70,6 +70,15 @@ assert.deepEqual(plain(homeGroups([], [], {}, undefined, asks)), { needs: [], wo
 assert.equal(hasAgents([]), false)
 assert.equal(hasAgents([shell]), false)
 assert.equal(hasAgents([shell, done]), true)
+const stoppedPane = pane('stopped', { state: 'Stopped', since: 7, finished: 90 })
+const stoppedAsk = pane('stopped-ask', { state: 'Stopped' })
+const stoppedOnly = homeGroups([stoppedPane, stoppedAsk, working], [session([stoppedPane, stoppedAsk, working])], {}, undefined, [{ id: 'ask-2', pane: stoppedAsk.id, text: 'Sign in', at: 3 }])
+assert.deepEqual(ids(stoppedOnly.needs), ['stopped-ask', 'stopped'])
+assert.equal(stoppedOnly.needs[1].kind, 'stopped')
+assert.equal(needs.KIND_LABEL[stoppedOnly.needs[1].kind], 'Stopped')
+assert.equal(stoppedOnly.needs[1].session.id, 'work')
+assert.deepEqual(ids(stoppedOnly.working), ['working'])
+assert.deepEqual(ids(stoppedOnly.done), [])
 console.log('Home grouping: groups, shells, order, missing times, seen/selected, browser asks, archives, removed panes and sessions pass')
 
 const now = 1000000

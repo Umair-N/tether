@@ -271,7 +271,7 @@ export const PaneTabs = forwardRef<HTMLDivElement, Props>(function PaneTabs({ se
       // A touch long press is handled above (drag, or actions on release). A right-click still opens the actions.
       onMouseEnter={clipTitle} onContextMenu={event => { event.preventDefault(); if (!drag.current?.touch && !suppressClick.current) onPaneActions(item.id, anchorOf(event)) }}>
       <AgentIcon agent={item.agent} icon={item.pane_icon} size={14} /><span className="pane-tab-name">{paneTitle(item)}</span>{shownIndex(item) && <span className="pane-index">{shownIndex(item)}</span>}{item.worktree && <WorktreeMark branch={item.worktree} />}{!!item.reviewers?.length && <Eye size={12} className="tab-reviewed" aria-label={`Reviewed by ${item.reviewers.map(id => { const other = byId.get(id); return other ? paneTitle(other) : 'another tab' }).join(', ')}`} />}
-      {item.state === 'Working' || needsYou(item.state) ? <span className={`state-dot ${item.state === 'Working' ? 'working' : 'approval'}`} aria-label={item.state === 'Working' ? 'Working' : 'Needs you'} /> : null}
+      {item.state === 'Working' || needsYou(item.state) ? <span className={`state-dot ${item.state === 'Working' ? 'working' : 'approval'}`} aria-label={item.state === 'Working' ? 'Working' : 'Needs you'} /> : item.state === 'Stopped' ? <span className="state-dot" aria-label="Stopped" /> : null}
     </button>)}
     <button className="tab-add" aria-label={`${words.newRight} with a task`} title={`${words.newRight} with a task`} aria-haspopup="dialog" aria-expanded={!!taskAt}
       onClick={event => { const box = event.currentTarget.getBoundingClientRect(); setTaskAt({ x: box.right - 360, y: box.bottom + 6 }) }}><Plus size={16} /></button>

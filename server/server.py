@@ -72,6 +72,7 @@ import side_shells
 import host_stats
 import tmux_merge
 import tmux_names
+import auto_resume
 import window_size
 import projects_api
 import codex_level
@@ -209,7 +210,7 @@ def shared_status(entry):
         when, status = STATUS_CACHE.get(entry['id'], (0.0, None))
         if time.monotonic() - when > 1:
             try:
-                status = live_status(entry)
+                status = auto_resume.overlay(entry, live_status(entry))
             except (OSError, ValueError, KeyError, subprocess.SubprocessError):  # a pane that just closed must not fail the whole tab list
                 status = {'state': 'Unavailable', 'approval': None}
             if (status.get('attention') or {}).get('askBridge'):
@@ -261,7 +262,7 @@ def sessions():
 # so a page that refreshes right away sees the new pane (or no longer sees the closed one).
 TMUX_WRITES = {'/mobile/api/split', '/mobile/api/fork', '/mobile/api/delegate', '/mobile/api/agent-tab', '/mobile/api/continue', '/mobile/api/review-link', '/mobile/api/resume', '/mobile/api/shell', '/mobile/api/session',
                '/mobile/api/tmux-sessions', '/mobile/api/rename', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/side-shell',
-               '/mobile/api/side-shell/end', '/mobile/api/start', '/mobile/api/merge'}
+               '/mobile/api/side-shell/end', '/mobile/api/start', '/mobile/api/merge', '/mobile/api/auto-resume'}
 
 
 def forget_sessions():
@@ -884,7 +885,7 @@ def chat_payload(config, shell_mode=False, limit=DEFAULT_WINDOW, preview=False):
     """One chat view: the latest `limit` messages plus how many older ones were left out."""
     before = change_signature(config) if preview else None
     shell = config['agent'] == 'shell' and shell_mode
-    state = {'state': 'Shell', 'approval': None} if shell else live_status(config)
+    state = {'state': 'Shell', 'approval': None} if shell else auto_resume.overlay(config, live_status(config))
     data = shell_snapshot(config) if shell else snapshot(config)
     if not shell and isinstance(data.get('messages'), list):
         data = dict(data, messages=shell_log.merge(config['id'], data['messages']))
@@ -1215,6 +1216,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(200, {'shortcuts': shortcuts.load()})
             elif path == '/mobile/api/prefs':
                 self.respond(200, prefs_sync.load())
+            elif path == '/mobile/api/auto-resume':
+                self.respond(200, auto_resume.notice())
             elif path == '/mobile/api/codex-provider':
                 self.respond(200, codex_provider.status())
             elif path == '/mobile/api/update': self.respond(200, updates.payload())
@@ -1465,7 +1468,11 @@ class Handler(BaseHTTPRequestHandler):
                     if links.get(row['id']):
                         row['reviewers'] = links[row['id']]
                     row['reviewers_paused'] = paused.get(row['id'], [])
-                self.respond(200, {'sessions': rows, 'default_thread': settings()['thread']})
+                listing = {'sessions': rows, 'default_thread': settings()['thread']}
+                resume_notice = auto_resume.notice()
+                if resume_notice['failed']:
+                    listing['auto_resume'] = resume_notice
+                self.respond(200, listing)
             elif path == '/mobile/api/side-shells':
                 self.respond(200, {'shells': side_shells.list_shells()})
             elif path == '/mobile/api/tmux-sessions':
@@ -1498,7 +1505,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.respond(403, {'error': 'Reload the page and try again.'})
             return
         if self.path not in ('/mobile/api/history/hide', '/mobile/api/file-check', '/mobile/api/ask-hook', '/mobile/api/ask-answer', '/mobile/api/ask-engage', '/mobile/api/message', '/mobile/api/broadcast', '/mobile/api/approval', '/mobile/api/menu', '/mobile/api/prompt-action', '/mobile/api/start', '/mobile/api/session', '/mobile/api/tmux-sessions', '/mobile/api/key', '/mobile/api/clear-draft', '/mobile/api/unqueue', '/mobile/api/mode', '/mobile/api/type',
-                         '/mobile/api/push/subscribe', '/mobile/api/push/unsubscribe', '/mobile/api/push/test', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/shortcuts', '/mobile/api/prefs', '/mobile/api/codex-provider', '/mobile/api/model-options', '/mobile/api/model', '/mobile/api/rename', '/mobile/api/merge', '/mobile/api/shell', '/mobile/api/upload', '/mobile/api/transcribe', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/delegate', '/mobile/api/agent-tab', '/mobile/api/continue-preview', '/mobile/api/continue', '/mobile/api/review-stop', '/mobile/api/review-link', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/refresh', '/mobile/api/accounts/switch') and not browser_api.handles(self.path) and not projects_api.handles(self.path) and not codex_level.handles(self.path) and not tts.handles(self.path) and not friday_proxy.handles(self.path) and not live_mode.handles(self.path):
+                         '/mobile/api/push/subscribe', '/mobile/api/push/unsubscribe', '/mobile/api/push/test', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/shortcuts', '/mobile/api/prefs', '/mobile/api/codex-provider', '/mobile/api/model-options', '/mobile/api/model', '/mobile/api/rename', '/mobile/api/merge', '/mobile/api/shell', '/mobile/api/upload', '/mobile/api/transcribe', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/delegate', '/mobile/api/agent-tab', '/mobile/api/continue-preview', '/mobile/api/continue', '/mobile/api/review-stop', '/mobile/api/review-link', '/mobile/api/resume', '/mobile/api/auto-resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/refresh', '/mobile/api/accounts/switch') and not browser_api.handles(self.path) and not projects_api.handles(self.path) and not codex_level.handles(self.path) and not tts.handles(self.path) and not friday_proxy.handles(self.path) and not live_mode.handles(self.path):
             self.respond(404, {'error': 'Not found'})
             return
         # Reject unauthenticated and cross-origin submissions.
@@ -1542,6 +1549,13 @@ class Handler(BaseHTTPRequestHandler):
             message = body.get('message') if isinstance(body, dict) else None
             if not isinstance(body, dict):
                 raise ValueError('Invalid request.')
+            if self.path == '/mobile/api/auto-resume':
+                action = body.get('action')
+                if action not in ('retry', 'dismiss'):
+                    raise ValueError('Choose retry or dismiss.')
+                count = auto_resume.retry() if action == 'retry' else auto_resume.dismiss()
+                self.respond(200, {'count': count})
+                return
             if self.path == '/mobile/api/history/hide':
                 kind = body.get('kind')
                 if kind == 'chat':
@@ -2015,7 +2029,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.respond(200, {'accepted': True, 'delivery': send_text(config, message)})
         except (ValueError, UnicodeError) as exc:
-            self.respond(400, {'error': str(exc) if self.path in ('/mobile/api/history/hide', '/mobile/api/session', '/mobile/api/tmux-sessions', '/mobile/api/broadcast', '/mobile/api/merge', '/mobile/api/model', '/mobile/api/shell', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/delegate', '/mobile/api/agent-tab', '/mobile/api/continue-preview', '/mobile/api/continue', '/mobile/api/review-stop', '/mobile/api/review-link', '/mobile/api/resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/mode', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/menu', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/refresh', '/mobile/api/accounts/switch') else 'Invalid message.'})
+            self.respond(400, {'error': str(exc) if self.path in ('/mobile/api/history/hide', '/mobile/api/session', '/mobile/api/tmux-sessions', '/mobile/api/broadcast', '/mobile/api/merge', '/mobile/api/model', '/mobile/api/shell', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/delegate', '/mobile/api/agent-tab', '/mobile/api/continue-preview', '/mobile/api/continue', '/mobile/api/review-stop', '/mobile/api/review-link', '/mobile/api/resume', '/mobile/api/auto-resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/mode', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/menu', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/refresh', '/mobile/api/accounts/switch') else 'Invalid message.'})
         except (OSError, RuntimeError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
             # The journal keeps why a send was refused; the access log shows only "503".
             print(f'{self.path} refused: {type(exc).__name__}: {str(exc)[:200]}', file=sys.stderr, flush=True)
@@ -2099,6 +2113,7 @@ class Handler(BaseHTTPRequestHandler):
                     if pane not in active_panes:
                         self.respond(404, {'error': 'That chat tab has already ended.'})
                         return
+                    auto_resume.forget_pane(pane, run=subprocess.run)
                     subprocess.run([paths.TMUX, 'kill-pane', '-t', pane], check=True,
                                    capture_output=True, timeout=5)
                 self.respond(200, {'closed': pane})
@@ -2113,6 +2128,7 @@ class Handler(BaseHTTPRequestHandler):
                 if identifier not in active:
                     self.respond(404, {'error': 'That tmux session has already ended.'})
                     return
+                auto_resume.forget_session(identifier, run=subprocess.run)
                 subprocess.run([paths.TMUX, 'kill-session', '-t', identifier], check=True,
                                capture_output=True, timeout=5)
             self.respond(200, {'closed': identifier})
@@ -2166,5 +2182,11 @@ if __name__ == '__main__':
         auth.token()
     threading.Thread(target=monitor_notices, daemon=True).start()
     threading.Thread(target=tmux_names.watch, daemon=True).start()  # tmux renames flow back into pane names
+    threading.Thread(target=auto_resume.watch, kwargs={
+        'entries': lambda: (forget_sessions(), sessions())[1],
+        'folder_of': agent_folder, 'status_of': shared_status,
+        'display_dir': lambda entry: home_path(tab_folder(entry)),
+        'on_change': forget_sessions,
+    }, daemon=True).start()
     threading.Thread(target=window_size.watch, daemon=True).start()
     ThreadingHTTPServer((host, port), Handler).serve_forever()

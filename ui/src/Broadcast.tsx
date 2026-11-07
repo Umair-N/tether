@@ -11,7 +11,7 @@ import type { Session } from './Sidebar'
 // (server/broadcast.py). Idle panes start selected. A working agent takes the text while it works (Tether keeps no queue).
 // A pane that waits on an approval or a question is skipped by the server and never typed into.
 type Via = { kind: 'direct' } | { kind: 'claude'; master: string }
-const STATE_LABEL: Record<string, string> = { Idle: 'Idle', Working: 'Working', Approval: 'Approval', 'Input needed': 'Question', Unavailable: 'Unavailable', Unknown: 'Unknown' }
+const STATE_LABEL: Record<string, string> = { Idle: 'Idle', Working: 'Working', Approval: 'Approval', 'Input needed': 'Question', Unavailable: 'Unavailable', Unknown: 'Unknown', Stopped: 'Stopped' }
 const RESULT_LABEL: Record<BroadcastRow['result'], string> = { sent: 'Sent', sent_busy: 'Sent while busy', skipped: 'Skipped', failed: 'Failed', handed_off: 'Handed to the master' }
 const BROADCAST_TIMEOUT = 180000  // the server types into each pane in turn
 

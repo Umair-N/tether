@@ -60,6 +60,7 @@ export function status(panes: Pane[], seen: Record<string, number>, selected?: s
   const tasks = panes.flatMap(pane => pane.tasks ?? [])
   if (tasks.length) return { kind: 'background', label: tasks.join(' · '), at }
   if (panes.some(pane => pane.state === 'Unknown')) return { kind: 'unknown', label: 'Unknown', at }  // the server cannot read this pane: never show it as idle
+  if (panes.some(pane => pane.state === 'Stopped')) return { kind: 'idle', label: 'Stopped', at }
   if (panes.every(pane => pane.state === 'Unavailable')) return { kind: 'unavailable', label: 'Unavailable', at }
   return { kind: 'idle', label: 'Idle', at }
 }

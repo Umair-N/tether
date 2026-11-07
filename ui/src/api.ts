@@ -181,7 +181,8 @@ export interface FoundrySpend {
 export interface CodexProvider { provider: 'plan' | 'foundry'; profile: string; model: string | null; ready: boolean; hint: string | null; everywhere?: boolean }
 export interface UsageAccount { email: string | null; plan: string | null }
 export interface UsageData { claude: UsageReport | null; codex: UsageReport | null; accounts?: { claude: UsageAccount | null; codex: UsageAccount | null }; live_errors?: { claude?: string; codex?: string } }
-export interface SessionsData { sessions: Pane[]; default_thread: string | null }
+export interface AutoResumeData { failed: number; tabs: { thread: string; agent: string; name: string; folder: string; error: string; state: string }[] }
+export interface SessionsData { sessions: Pane[]; default_thread: string | null; auto_resume?: AutoResumeData }
 export class ApiError extends Error {
   status: number
   draft: boolean  // the agent's own input box has text that blocks this action

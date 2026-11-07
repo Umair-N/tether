@@ -574,6 +574,30 @@ dialog::backdrop { background: #11110e66; }
 /* A newer build is on the server. */
 .update-banner { position: fixed; top: max(10px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); z-index: 30; display: flex; align-items: center; gap: 12px; width: max-content; max-width: calc(100% - 32px); padding: 6px 6px 6px 16px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: 0 6px 24px #00000029; font-size: 14px; }
 .update-banner button { min-height: var(--control-lg); padding: 0 14px; border-radius: var(--radius); background: var(--accent); color: var(--accent-text); font-weight: 500; }
+/* Tabs that did not come back after a restart. It stays until Retry or Dismiss, so the page moves down and nothing is covered. */
+.app-shell:has(> .resume-notice) { top: calc(var(--resume-notice) + env(safe-area-inset-top)); }
+:root { --resume-notice: 48px; }
+.resume-notice { position: fixed; top: 0; left: 0; right: 0; z-index: 30; padding-top: env(safe-area-inset-top); border-bottom: 1px solid var(--line); background: var(--surface); }
+.resume-notice-row { display: flex; align-items: center; gap: 2px; height: var(--resume-notice); padding: 0 8px 0 16px; }
+.resume-notice-count { flex: 1; min-width: 0; font-size: 14px; }
+.resume-notice button { min-height: 36px; padding: 0 10px; border-radius: var(--radius); font-size: 14px; font-weight: 500; }
+.resume-notice-quiet { color: var(--muted); }
+.resume-notice-quiet:hover { color: var(--text); }
+.resume-notice .resume-notice-retry { margin-left: 4px; padding: 0 14px; background: var(--accent); color: var(--accent-text); }
+.resume-notice button:disabled { opacity: .6; }
+.resume-notice-failure { margin: 0; padding: 8px 16px; border-top: 1px solid var(--line); background: var(--surface); color: var(--attention); font-size: 13px; }
+.resume-notice ul { max-height: 40vh; max-height: 40dvh; margin: 0; padding: 8px 16px 12px; overflow-y: auto; list-style: none; border-top: 1px solid var(--line); background: var(--surface); }
+.resume-notice li { display: flex; flex-direction: column; gap: 2px; padding: 4px 0; overflow-wrap: anywhere; font-size: 13px; }
+.resume-notice li strong { font-weight: 500; }
+.resume-notice li span { color: var(--muted); }
+@media (max-width: 374px) {
+  :root { --resume-notice: 84px; }
+  .resume-notice-row { flex-wrap: wrap; align-content: center; }
+  .resume-notice-count { flex-basis: 100%; }
+  .resume-notice-quiet:first-of-type { margin-left: -10px; }
+  .resume-notice .resume-notice-retry { margin-left: auto; }
+}
+
 .suggest-status { margin: 0; padding: 8px 12px 10px; color: var(--muted); font-size: 13px; }
 
 /* Claude's bottom strip: update notice, background agents, suggested prompt, composer pills. */
