@@ -132,6 +132,28 @@ def send_message(body, caller, entries, run, status, send, last_reply, lock):
     return 200, {'sent': True, 'pane': pane, 'delivery': delivery}
 
 
+def _approval_prompt(text, options):
+    choices = []
+    if isinstance(options, list):
+        for position, option in enumerate(options, 1):
+            if not isinstance(option, dict):
+                continue
+            label = option.get('text')
+            if not isinstance(label, str) or not label.strip():
+                continue
+            number = option.get('id')
+            if not isinstance(number, int):
+                number = position
+            choices.append(f'{number}. {label}')
+    if not choices:
+        return text[:MAX_PROMPT]
+    choices = '\n'.join(choices)
+    request_limit = MAX_PROMPT - len(choices) - 2
+    if text and request_limit > 0:
+        return text[:request_limit] + '\n\n' + choices
+    return choices[:MAX_PROMPT]
+
+
 def poll(body, caller, entries, run, status, last_reply, timeline, now=time.time):
     pane = _pane(body)
     exists, record = load(pane, run)
@@ -161,6 +183,8 @@ def poll(body, caller, entries, run, status, last_reply, timeline, now=time.time
     if state in ('Approval', 'Input needed'):
         attention = (info.get('approval' if state == 'Approval' else 'attention') or {})
         text = attention.get('text') or ''
+        if state == 'Approval':
+            text = _approval_prompt(text, attention.get('options'))
         bridge = attention.get('askBridge')
         if state == 'Input needed' and isinstance(bridge, dict) and bridge.get('questions'):
             text += '\n' + json.dumps(bridge['questions'], ensure_ascii=False)

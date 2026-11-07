@@ -376,6 +376,44 @@ class HelperTests(unittest.TestCase):
                 self.status.return_value['attention']['askBridge'] = bridge
                 self.assertEqual(self.poll()['prompt'], 'Claude has questions for you.')
 
+    def test_approval_choices_survive_truncation(self):
+        text = 'Would you like to run the following command?\n\n$ curl -sI https://example.com'
+        options = [{'id': 1, 'text': 'Yes, proceed (y)'},
+                   {'id': 2, 'text': "Yes, and don't ask again (p)"},
+                   {'id': 3, 'text': 'No, and tell Codex what to do differently (esc)'}]
+        choices = ("1. Yes, proceed (y)\n2. Yes, and don't ask again (p)\n"
+                   '3. No, and tell Codex what to do differently (esc)')
+        for agent in ('claude', 'codex'):
+            self.entries[1]['agent'] = agent
+            for request in (text, 'x' * (helpers.MAX_PROMPT + 1), ''):
+                with self.subTest(agent=agent, request_length=len(request)):
+                    self.status.return_value = {'state': 'Approval', 'approval': {
+                        'text': request, 'options': options}}
+                    prompt = self.poll()['prompt']
+                    self.assertLessEqual(len(prompt), helpers.MAX_PROMPT)
+                    self.assertTrue(prompt.endswith(choices))
+                    expected = request[:helpers.MAX_PROMPT - len(choices) - 2] + '\n\n' if request else ''
+                    self.assertEqual(prompt, expected + choices)
+            for approval in ({'text': text}, {'text': text, 'options': []}):
+                with self.subTest(agent=agent, approval=approval):
+                    self.status.return_value = {'state': 'Approval', 'approval': approval}
+                    self.assertEqual(self.poll()['prompt'], text)
+            self.status.return_value = {'state': 'Approval', 'approval': {
+                'text': text, 'options': [None, 'invalid', {}, {'text': ''}, {'text': ' '},
+                                         {'text': None}, {'text': 7},
+                                         {'id': 'invalid', 'text': 'Fallback'},
+                                         {'text': 'Missing ID'}, {'id': 12, 'text': 'Explicit ID'}]}}
+            with self.subTest(agent=agent, malformed=True):
+                self.assertEqual(self.poll()['prompt'], text + '\n\n8. Fallback\n9. Missing ID\n12. Explicit ID')
+            self.status.return_value = {'state': 'Approval', 'approval': {
+                'text': text, 'options': [{'text': 'y' * helpers.MAX_PROMPT}]}}
+            with self.subTest(agent=agent, oversized_choices=True):
+                self.assertEqual(self.poll()['prompt'], ('1. ' + 'y' * helpers.MAX_PROMPT)[:helpers.MAX_PROMPT])
+            self.status.return_value = {'state': 'Input needed', 'attention': {
+                'text': text, 'options': options}}
+            with self.subTest(agent=agent, attention=True):
+                self.assertEqual(self.poll()['prompt'], text)
+
     def test_gone_start_and_discovery_grace_and_recovery(self):
         helper = self.entries.pop()
         self.assertEqual(self.poll(), dict(status='running', pane='%13', state='Missing'))
