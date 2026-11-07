@@ -32,6 +32,8 @@ interface Props {
   onReorder: (ids: string[]) => void
   api: Api
   onUpdate: () => void
+  micOk: boolean
+  chime: boolean
 }
 // One shared pill marks the active tab. A side swipe on the chat slides it toward the next tab with the finger.
 const SLIDE_CURVE = 'cubic-bezier(.2,.8,.2,1)'
@@ -84,7 +86,7 @@ const HOLD_MS = 350
 
 // Tabs for the panes of one session. Reorder: long-press a tab, then drag it (a mouse drags at once).
 // A long press without a drag opens the pane actions, as before. Only Tether's order changes; tmux panes stay put.
-export const PaneTabs = forwardRef<HTMLDivElement, Props>(function PaneTabs({ session, pane, onOpenPane, onPaneActions, onSplit, onReorder, api, onUpdate }, ref) {
+export const PaneTabs = forwardRef<HTMLDivElement, Props>(function PaneTabs({ session, pane, onOpenPane, onPaneActions, onSplit, onReorder, api, onUpdate, micOk, chime }, ref) {
   const strip = useRef<HTMLDivElement>(null)
   const words = useWords()
   useImperativeHandle(ref, () => strip.current!)
@@ -271,7 +273,7 @@ export const PaneTabs = forwardRef<HTMLDivElement, Props>(function PaneTabs({ se
     </button>)}
     <button className="tab-add" aria-label={`${words.newRight} with a task`} title={`${words.newRight} with a task`} aria-haspopup="dialog" aria-expanded={!!taskAt}
       onClick={event => { const box = event.currentTarget.getBoundingClientRect(); setTaskAt({ x: box.right - 360, y: box.bottom + 6 }) }}><Plus size={16} /></button>
-    {taskAt && createPortal(<NewTask api={api} pane={pane} at={taskAt} onClose={() => setTaskAt(null)} onEmpty={() => { setTaskAt(null); onSplit('right') }}
+    {taskAt && createPortal(<NewTask api={api} pane={pane} at={taskAt} micOk={micOk} chime={chime} onClose={() => setTaskAt(null)} onEmpty={() => { setTaskAt(null); onSplit('right') }}
       onCreated={id => { setTaskAt(null); setFresh(id); onUpdate() }}
       onOpen={item => { setTaskAt(null); setFresh(item.id); onUpdate(); onOpenPane(item) }}
       onMoved={item => { setTaskAt(null); setFresh(item.id); onUpdate(); onOpenPane(item) }} />, document.body)}

@@ -13,8 +13,7 @@ import { canPickFolder, forgetFolder, latestScreenshot } from './screenshot'
 import { Suggestions } from './Suggest'
 import type { SuggestHandle } from './Suggest'
 import { ImageViewer } from './ImageViewer'
-import { playChime, prepareChime } from './sound'
-import { stopSpeaking } from './speech'
+import { useDictation } from './useDictation'
 import { useHost } from './host'
 import { PasteChip } from './Pasted'
 import { inlinePaste, joinPastes, longPaste, pasteOf } from './pasteText'
@@ -166,117 +165,25 @@ export function Composer({ onTerminalEscape, api, pane, thread, disabled, onSend
     textarea.current?.focus()
     return count
   }
-  // Voice: record here, turn it into text on the server (/mobile/api/transcribe). Chrome's own speech service
-  // ends with no text on some Android phones, so Tether does not use it.
-  const [listening, setListening] = useState(false)
-  const [transcribing, setTranscribing] = useState(false)
-  const [seconds, setSeconds] = useState(0)
-  const [speechError, setSpeechError] = useState('')
-  const recorder = useRef<MediaRecorder | null>(null)
-  // The draft after the final (accurate) text lands. Send waits for it, so it never sends the rough live text.
-  const finalDraft = useRef<Promise<string> | null>(null)
-  // Stop button while the final text is on its way: cancel it and keep the live text.
-  const converting = useRef<AbortController | null>(null)
-  const draftNow = useRef(draft)
-  draftNow.current = draft
   const textarea = useRef<HTMLTextAreaElement>(null)
   const [sending, setSending] = useState(false)
-  useEffect(() => () => { const active = recorder.current; if (active) { active.onstop = null; if (active.state !== 'inactive') active.stop(); active.stream.getTracks().forEach(track => track.stop()) } }, [])
+  const form = useRef<HTMLFormElement>(null)
+  const dictation = useDictation({ text: draft, setText: setDraft, chime, handsFree,
+    onHandsFreeDone: () => form.current?.requestSubmit(), onFinished: () => textarea.current?.focus() })
+  const { listening, transcribing, seconds, error: speechError, setError: setSpeechError, canRecord, toggle: toggleMic } = dictation
   useLayoutEffect(() => {
     const input = textarea.current
     if (input) { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 180)}px` }
   }, [draft])
   // Hands-free: a read-aloud reply asks for the mic (listenRequest). A pause after speech stops it and sends.
-  const form = useRef<HTMLFormElement>(null)
-  const toggleRef = useRef(toggleMic)
-  toggleRef.current = toggleMic
-  useEffect(() => { if (listenRequest && !recorder.current && micOk) void toggleRef.current() }, [listenRequest, micOk])
-  async function toggleMic() {
-    if (recorder.current) { if (recorder.current.state !== 'inactive') recorder.current.stop(); return }
-    stopSpeaking()
-    setSpeechError('')
-    if (chime) { prepareChime(); await playChime() }
-    let stream: MediaStream
-    try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }) } catch (failure) {
-      setSpeechError(failure instanceof DOMException && failure.name === 'NotAllowedError' ? 'Allow microphone access for this site, then try again.' : 'Could not start the microphone. Close other apps that use it, then try again.')
-      return
-    }
-    const type = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4'].find(kind => MediaRecorder.isTypeSupported(kind))
-    const active = new MediaRecorder(stream, type ? { mimeType: type } : undefined)
-    const chunks: Blob[] = []
-    const started = Date.now()
-    // Live text: about every 1.5 s, send the audio so far to the fast model and show its rough text in the box.
-    // The accurate model replaces it after stop.
-    const base = draftNow.current.trimEnd()
-    // One id per recording: the server converts finished sentences while the user speaks, so stop only waits for the rest.
-    const recording = crypto.randomUUID?.() ?? `${started}-${Math.random().toString(36).slice(2)}`
-    let finish: (text: string) => void = () => undefined
-    const final = new Promise<string>(resolve => { finish = resolve })
-    finalDraft.current = final
-    void final.then(() => { if (finalDraft.current === final) finalDraft.current = null })
-    const show = (text: string) => setDraft(`${base}${base && text ? ' ' : ''}${text}`)
-    let asking = false, askedAt = 0, done = false
-    const askLive = async () => {
-      // Wait for 2 s of audio, then ask at most every 1.5 s. Cancel a slow request so the next one can go.
-      if (asking || done || Date.now() - started < 2000 || Date.now() - askedAt < 1500) return
-      asking = true; askedAt = Date.now()
-      const slow = new AbortController(), cancel = window.setTimeout(() => slow.abort(), 8000)
-      try {
-        const audio = new Blob(chunks, { type: active.mimeType || type || 'audio/webm' })
-        const response = await fetch('/mobile/api/transcribe', { method: 'POST', body: audio, credentials: 'same-origin', signal: slow.signal, headers: { 'X-Codex-Mobile': '1', 'X-Live': '1', 'X-Recording': recording, 'Content-Type': audio.type } })
-        const data = response.ok ? await response.json() as { text?: string } : {}
-        if (!done && data.text) show(data.text.trim())
-      } catch { /* live text is a preview; the final pass still runs */ } finally { window.clearTimeout(cancel); asking = false }
-    }
-    const timer = window.setInterval(() => { const elapsed = Math.floor((Date.now() - started) / 1000); setSeconds(elapsed); if (elapsed >= 180 && active.state !== 'inactive') active.stop() }, 250)
-    active.ondataavailable = event => { if (event.data.size) { chunks.push(event.data); if (active.state === 'recording') void askLive() } }
-    active.onstop = () => {
-      done = true
-      window.clearInterval(timer); stream.getTracks().forEach(track => track.stop()); recorder.current = null; setListening(false)
-      const heard = pause?.stop() ?? true
-      const audio = new Blob(chunks, { type: active.mimeType || type || 'audio/webm' })
-      if (!heard) { setDraft(base); finish(base); return }
-      if (Date.now() - started < 600 || !audio.size) { setDraft(base); setSpeechError('Tap the mic, speak, then tap stop.'); finish(base); return }
-      void transcribeAudio(audio, base, recording).then(({ text, ok }) => {
-        finish(text)
-        // Send at once; submit still waits for this final text. Rough text after a failure waits for the person to check it.
-        if (pause && ok && text.trim() && text !== base) form.current?.requestSubmit()
-      })
-    }
-    const pause = handsFree ? watchForPause(stream, () => { if (active.state !== 'inactive') active.stop() }) : null
-    recorder.current = active
-    active.start(1000); setSeconds(0); setListening(true)
-  }
-  // Returns the new draft; ok is false when the accurate text did not come and the box keeps the rough live text.
-  // The server answers within about 25 s (transcribe_worker.py FINAL_BUDGET); 60 s means something is wrong.
-  async function transcribeAudio(audio: Blob, base: string, recording: string): Promise<{ text: string; ok: boolean }> {
-    setTranscribing(true)
-    const cancel = new AbortController()
-    converting.current = cancel
-    let late = false
-    const limit = window.setTimeout(() => { late = true; cancel.abort() }, 60000)
-    try {
-      const response = await fetch('/mobile/api/transcribe', { method: 'POST', body: audio, credentials: 'same-origin', signal: cancel.signal, headers: { 'X-Codex-Mobile': '1', 'X-Recording': recording, 'Content-Type': audio.type } })
-      if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('Sign in again, then try the mic.')
-      const data = await response.json() as { text?: string; error?: string }
-      if (!response.ok) throw new Error(data.error || 'Voice-to-text failed.')
-      const text = (data.text ?? '').trim()
-      if (!text) { setDraft(base); setSpeechError('No speech heard. Tap the mic and speak.'); return { text: base, ok: true } }
-      const next = `${base}${base ? ' ' : ''}${text}`
-      setDraft(next)
-      return { text: next, ok: true }
-    } catch (failure) {
-      if (late) setSpeechError('Voice-to-text took too long. The box has the rough text: check it, then send.')
-      else if (!cancel.signal.aborted) setSpeechError(`${errorText(failure)} The box has the rough text: check it, then send.`)
-      return { text: draftNow.current, ok: false }
-    } finally { window.clearTimeout(limit); converting.current = null; setTranscribing(false); textarea.current?.focus() }
-  }
-  const canRecord = typeof MediaRecorder !== 'undefined' && !!navigator.mediaDevices?.getUserMedia
+  const dictationRef = useRef(dictation)
+  dictationRef.current = dictation
+  useEffect(() => { if (listenRequest && !dictationRef.current.active() && micOk) void dictationRef.current.toggle() }, [listenRequest, micOk])
   async function submit(event: React.FormEvent) {
     event.preventDefault()
-    const waiting = finalDraft.current
+    const waiting = dictation.finalText()
     if (disabled || sending || uploading || (!draft.trim() && !files.length && !pastes.length && !waiting) || (shellMode && !draft.slice(1).trim())) return
-    if (recorder.current?.state === 'recording') recorder.current.stop()
+    dictation.stop()
     const typing = document.activeElement === textarea.current
     setSending(true)
     try {
@@ -374,7 +281,7 @@ export function Composer({ onTerminalEscape, api, pane, thread, disabled, onSend
       </div></>}
     </div>}{!uploading && !listening && !transcribing && options}<span className="composer-status" aria-live="polite">{uploading || (listening ? `Recording ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}` : transcribing ? 'Converting…' : pane.agent === 'shell' ? 'Terminal input' : shellMode ? 'Shell mode' : '')}</span>{!draft && !files.length && !pastes.length && pane.agent !== 'shell' && !listening && !transcribing && !uploading && <span className="composer-keys" aria-hidden="true"><span><kbd>↵</kbd> send</span><span><kbd>⇧↵</kbd> new line</span><span><kbd>/</kbd> commands</span><span><kbd>!</kbd> shell</span></span>}</div><div>
       {micOk && canRecord && (transcribing
-        ? <button type="button" className="icon-button mic active" aria-label="Stop converting and keep the live text" onClick={() => converting.current?.abort()}><X size={19} /></button>
+        ? <button type="button" className="icon-button mic active" aria-label="Stop converting and keep the live text" onClick={() => dictation.cancelConverting()}><X size={19} /></button>
         : <button type="button" className={`icon-button mic ${listening ? 'active' : ''}`} aria-label={listening ? 'Stop recording' : 'Start voice input'} aria-pressed={listening} aria-keyshortcuts="Alt+V" title={`${listening ? 'Stop recording' : 'Voice input'} (${keyLabel('⌥V')})`} disabled={disabled || sending} onClick={() => void toggleMic()}>{listening ? <Square size={18} /> : <Mic size={20} />}</button>)}
       {working && !draft.trim() && !files.length && !pastes.length
         ? <button type="button" className="primary send-button stop-button" aria-label={pane.agent === 'shell' ? 'Stop command (Ctrl+C)' : 'Stop response (Esc)'} disabled={disabled} onClick={onStop}><Square size={15} fill="currentColor" /></button>
@@ -392,28 +299,4 @@ const coarse = typeof matchMedia === 'function' ? matchMedia('(pointer: coarse)'
 function sendsOnEnter(event: React.KeyboardEvent) {
   if (event.key !== 'Enter' || event.nativeEvent.isComposing || event.shiftKey || event.altKey) return false
   return event.ctrlKey || event.metaKey || !!desktop?.matches
-}
-
-// Listen to the mic level. After speech, 1.8 s of quiet calls done. No speech in the first 8 s also calls done.
-// stop() returns whether any speech was heard.
-function watchForPause(stream: MediaStream, done: () => void) {
-  const Context = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
-  if (!Context) return null
-  const context = new Context()
-  const analyser = context.createAnalyser()
-  analyser.fftSize = 1024
-  context.createMediaStreamSource(stream).connect(analyser)
-  const samples = new Float32Array(analyser.fftSize)
-  const started = Date.now()
-  let heard = false, quietSince = Date.now(), floor = 0.01
-  const timer = window.setInterval(() => {
-    analyser.getFloatTimeDomainData(samples)
-    const level = Math.sqrt(samples.reduce((sum, value) => sum + value * value, 0) / samples.length)
-    // The room noise level, learned in the first half second.
-    if (Date.now() - started < 500) { floor = Math.max(floor, level); return }
-    const speech = level > Math.max(0.02, floor * 2.5)
-    if (speech) { heard = true; quietSince = Date.now() }
-    if (heard ? Date.now() - quietSince > 1800 : Date.now() - started > 8000) done()
-  }, 100)
-  return { stop: () => { window.clearInterval(timer); void context.close(); return heard } }
 }

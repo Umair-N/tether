@@ -1,0 +1,158 @@
+import { useEffect, useRef, useState } from 'react'
+import { errorText } from './api'
+import { playChime, prepareChime } from './sound'
+import { stopSpeaking } from './speech'
+
+interface DictationOptions {
+  text: string
+  setText: (text: string) => void
+  chime: boolean
+  handsFree?: boolean
+  onHandsFreeDone?: () => void
+  onFinished?: () => void
+}
+
+// Record once for both task and chat input. Live text is a preview; send waits for the final pass.
+export function useDictation({ text, setText, chime, handsFree, onHandsFreeDone, onFinished }: DictationOptions) {
+  const [listening, setListening] = useState(false)
+  const [transcribing, setTranscribing] = useState(false)
+  const [seconds, setSeconds] = useState(0)
+  const [error, setError] = useState('')
+  const recorder = useRef<MediaRecorder | null>(null)
+  const finalDraft = useRef<Promise<string> | null>(null)
+  const converting = useRef<AbortController | null>(null)
+  const cleanupRecording = useRef<(() => void) | null>(null)
+  const disposed = useRef(false)
+  const textNow = useRef(text)
+  textNow.current = text
+  useEffect(() => {
+    disposed.current = false
+    return () => { disposed.current = true; cleanupRecording.current?.() }
+  }, [])
+  async function toggle() {
+    if (recorder.current) { if (recorder.current.state !== 'inactive') recorder.current.stop(); return }
+    stopSpeaking()
+    setError('')
+    if (chime) { prepareChime(); await playChime() }
+    if (disposed.current) return
+    let stream: MediaStream
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }) } catch (failure) {
+      setError(failure instanceof DOMException && failure.name === 'NotAllowedError' ? 'Allow microphone access for this site, then try again.' : 'Could not start the microphone. Close other apps that use it, then try again.')
+      return
+    }
+    if (disposed.current) { stream.getTracks().forEach(track => track.stop()); return }
+    const label = stream.getAudioTracks()[0]?.label
+    const type = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4'].find(kind => MediaRecorder.isTypeSupported(kind))
+    const active = new MediaRecorder(stream, type ? { mimeType: type } : undefined)
+    const chunks: Blob[] = []
+    const started = Date.now()
+    // Live text: about every 1.5 s, send the audio so far to the fast model and show its rough text in the box.
+    // The accurate model replaces it after stop.
+    const base = textNow.current.trimEnd()
+    // One id per recording: the server converts finished sentences while the user speaks, so stop only waits for the rest.
+    const recording = crypto.randomUUID?.() ?? `${started}-${Math.random().toString(36).slice(2)}`
+    let finish: (text: string) => void = () => undefined
+    const final = new Promise<string>(resolve => { finish = resolve })
+    finalDraft.current = final
+    void final.then(() => { if (finalDraft.current === final) finalDraft.current = null })
+    const show = (text: string) => setText(`${base}${base && text ? ' ' : ''}${text}`)
+    let asking = false, askedAt = 0, done = false
+    const askLive = async () => {
+      // Wait for 2 s of audio, then ask at most every 1.5 s. Cancel a slow request so the next one can go.
+      if (asking || done || Date.now() - started < 2000 || Date.now() - askedAt < 1500) return
+      asking = true; askedAt = Date.now()
+      const slow = new AbortController(), cancel = window.setTimeout(() => slow.abort(), 8000)
+      try {
+        const audio = new Blob(chunks, { type: active.mimeType || type || 'audio/webm' })
+        const response = await fetch('/mobile/api/transcribe', { method: 'POST', body: audio, credentials: 'same-origin', signal: slow.signal, headers: { 'X-Codex-Mobile': '1', 'X-Live': '1', 'X-Recording': recording, 'Content-Type': audio.type } })
+        const data = response.ok ? await response.json() as { text?: string } : {}
+        if (!done && data.text) show(data.text.trim())
+      } catch { /* live text is a preview; the final pass still runs */ } finally { window.clearTimeout(cancel); asking = false }
+    }
+    const timer = window.setInterval(() => { const elapsed = Math.floor((Date.now() - started) / 1000); setSeconds(elapsed); if (elapsed >= 180 && active.state !== 'inactive') active.stop() }, 250)
+    active.ondataavailable = event => { if (event.data.size) { chunks.push(event.data); if (active.state === 'recording') void askLive() } }
+    active.onstop = () => {
+      done = true
+      cleanupRecording.current = null
+      window.clearInterval(timer); stream.getTracks().forEach(track => track.stop()); recorder.current = null; setListening(false)
+      const heard = pause?.stop() ?? true
+      const audio = new Blob(chunks, { type: active.mimeType || type || 'audio/webm' })
+      if (!heard) { setText(base); finish(base); return }
+      if (Date.now() - started < 600 || !audio.size) { setText(base); setError('Tap the mic, speak, then tap stop.'); finish(base); return }
+      void transcribeAudio(audio, base, recording, label).then(({ text, ok }) => {
+        finish(text)
+        // Send at once; submit still waits for this final text. Rough text after a failure waits for the person to check it.
+        if (pause && ok && text.trim() && text !== base) onHandsFreeDone?.()
+      })
+    }
+    const pause = handsFree ? watchForPause(stream, () => { if (active.state !== 'inactive') active.stop() }) : null
+    cleanupRecording.current = () => {
+      done = true
+      active.onstop = null
+      active.ondataavailable = null
+      window.clearInterval(timer); pause?.stop()
+      if (active.state !== 'inactive') active.stop()
+      stream.getTracks().forEach(track => track.stop()); recorder.current = null
+      finish(base)
+    }
+    recorder.current = active
+    active.start(1000); setSeconds(0); setListening(true)
+  }
+  // Returns the new draft; ok is false when the accurate text did not come and the box keeps the rough live text.
+  // The server answers within about 25 s (transcribe_worker.py FINAL_BUDGET); 60 s means something is wrong.
+  async function transcribeAudio(audio: Blob, base: string, recording: string, label: string | undefined): Promise<{ text: string; ok: boolean }> {
+    setTranscribing(true)
+    const cancel = new AbortController()
+    converting.current = cancel
+    let late = false
+    const limit = window.setTimeout(() => { late = true; cancel.abort() }, 60000)
+    try {
+      const response = await fetch('/mobile/api/transcribe', { method: 'POST', body: audio, credentials: 'same-origin', signal: cancel.signal, headers: { 'X-Codex-Mobile': '1', 'X-Recording': recording, 'Content-Type': audio.type } })
+      if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('Sign in again, then try the mic.')
+      const data = await response.json() as { text?: string; error?: string }
+      if (!response.ok) throw new Error(data.error || 'Voice-to-text failed.')
+      const text = (data.text ?? '').trim()
+      if (!text) { setText(base); setError(label ? `No speech heard on ${label}. Check the mic or choose another input, then try again.` : 'No speech heard. Tap the mic and speak.'); return { text: base, ok: true } }
+      const next = `${base}${base ? ' ' : ''}${text}`
+      setText(next)
+      return { text: next, ok: true }
+    } catch (failure) {
+      if (late) setError('Voice-to-text took too long. The box has the rough text: check it, then send.')
+      else if (!cancel.signal.aborted) setError(`${errorText(failure)} The box has the rough text: check it, then send.`)
+      return { text: textNow.current, ok: false }
+    } finally { window.clearTimeout(limit); converting.current = null; setTranscribing(false); onFinished?.() }
+  }
+  const canRecord = typeof MediaRecorder !== 'undefined' && !!navigator.mediaDevices?.getUserMedia
+  return {
+    listening, transcribing, seconds, error, setError, canRecord,
+    active: () => !!recorder.current,
+    toggle,
+    cancelConverting: () => converting.current?.abort(),
+    stop: () => { if (recorder.current && recorder.current.state !== 'inactive') recorder.current.stop() },
+    finalText: () => finalDraft.current,
+  }
+}
+
+// Listen to the mic level. After speech, 1.8 s of quiet calls done. No speech in the first 8 s also calls done.
+// stop() returns whether any speech was heard.
+function watchForPause(stream: MediaStream, done: () => void) {
+  const Context = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+  if (!Context) return null
+  const context = new Context()
+  const analyser = context.createAnalyser()
+  analyser.fftSize = 1024
+  context.createMediaStreamSource(stream).connect(analyser)
+  const samples = new Float32Array(analyser.fftSize)
+  const started = Date.now()
+  let heard = false, quietSince = Date.now(), floor = 0.01
+  const timer = window.setInterval(() => {
+    analyser.getFloatTimeDomainData(samples)
+    const level = Math.sqrt(samples.reduce((sum, value) => sum + value * value, 0) / samples.length)
+    // The room noise level, learned in the first half second.
+    if (Date.now() - started < 500) { floor = Math.max(floor, level); return }
+    const speech = level > Math.max(0.02, floor * 2.5)
+    if (speech) { heard = true; quietSince = Date.now() }
+    if (heard ? Date.now() - quietSince > 1800 : Date.now() - started > 8000) done()
+  }, 100)
+  return { stop: () => { window.clearInterval(timer); void context.close(); return heard } }
+}
