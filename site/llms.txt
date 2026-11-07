@@ -6,7 +6,7 @@ Source: https://github.com/incmak/tether (MIT). Human guide: https://incmak.gith
 
 ## Rules
 
-1. Show the installer plan and wait for an explicit yes before you run `--apply`.
+1. Show the installer plan and wait for an explicit yes before you run `--apply`. Only Step 2 writes before the yes, and only the files it lists.
 2. Never print, copy, or send the access token. Give only the path of the token file.
 3. Do not expose the server to the internet. Do not bind it to 0.0.0.0 unless the person chooses a trusted LAN after you state the warning below.
 4. Stop if a download or checksum fails. Do not fall back to an unverified archive or a git clone of main.
@@ -36,7 +36,8 @@ Report what is missing and how to install it. Ask before you install anything.
     curl -fL https://raw.githubusercontent.com/incmak/tether/v0.1.7/integrations/claude/tether/skills/setup/bootstrap.py -o tether-bootstrap.py
     python3 tether-bootstrap.py
 
-This downloads the latest stable release and SHA256SUMS, checks SHA-256, and links `~/.local/share/tether/current`. It starts no services.
+Tell the person what this writes before you run it: the script in the current folder, and the release files under `~/.local/share/tether`.
+This downloads the latest stable release and SHA256SUMS, checks SHA-256, and links `~/.local/share/tether/current`. It starts no services, installs no dependencies, and changes no settings.
 If `~/.config/tether/install.json` shows an existing git checkout install, stop and ask. Use `python3 ~/.local/share/tether/current/tether migrate` only after a yes.
 
 ## Step 3: Show the baseline plan
@@ -44,6 +45,10 @@ If `~/.config/tether/install.json` shows an existing git checkout install, stop 
     python3 ~/.local/share/tether/current/install.py --plan --json --no-build-ui
 
 A plan writes nothing. Show the URL, host, auth, ports, features, updates, checks, warnings, and `cli_link`. A zero exit code alone does not prove readiness: read every check, and show failed checks with their `fix` text.
+
+Tell the person the defaults. On a first install, the plan turns on the interactive terminal if `ttyd` is on PATH. All other features are off. On a later install, saved choices apply. Step 4 can change any of these.
+
+In `hooks`, read `path` and `action`. An action that starts with `preserve` leaves that file unchanged. Any other action changes it. Ignore the separate `remove` and `replace` fields: they are internal to `--apply`.
 
 ## Step 4: Ask once for choices
 
