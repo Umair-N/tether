@@ -1,14 +1,15 @@
 import type { Approval, Choice, Needs, Pane } from './api'
-import { agentNames, isDone, needsYou } from './Sidebar'
+import { agentNames } from './Sidebar'
+import { isDone, needsYou } from './paneState'
 
 // The rows of the desktop "Needs you" list (Inbox.tsx).
 
-export type Kind = Needs['kind'] | 'done' | 'browser'
+export type Kind = Needs['kind'] | 'done' | 'browser' | 'working'
 /** browser: an agent asked for the person in the shared browser (AgentBrowser.tsx). ask is its id, tab the agent's first tab. */
 export interface InboxItem { pane: Pane; kind: Kind; text: string; at: number; yes?: Choice; no?: Choice; menu?: Choice[]; ask?: string; tab?: string }
 export interface BrowserAskRow { id: string; pane: string | null; text: string; at: number; tab?: string }
 
-export const KIND_LABEL: Record<Kind, string> = { approval: 'Needs permission', plan: 'Plan to review', question: 'Question', done: 'Done', browser: 'Needs you in the browser' }
+export const KIND_LABEL: Record<Kind, string> = { working: 'Working', approval: 'Needs permission', plan: 'Plan to review', question: 'Question', done: 'Done', browser: 'Needs you in the browser' }
 const YES = /^Yes\b/i, ALWAYS = /always|don.t ask|remember/i
 const NO = /^(?:No\b|Reject\b|Cancel\b|Deny\b)/i
 const PLAN = /\bkeep planning\b|tell Claude what to change/i

@@ -1,4 +1,5 @@
 import { terminalText } from './terminalText'
+import { shortFolder } from './paneState'
 import { keyLabel } from './keys'
 import { history, loadHistory, remember } from './history'
 import { chatTitle } from './Sidebar'
@@ -382,12 +383,6 @@ export function Composer({ onTerminalEscape, api, pane, thread, disabled, onSend
           : <button className="primary send-button" aria-label={pane.agent === 'shell' ? 'Run command' : 'Send message'} disabled={disabled || sending || !!uploading || (!draft.trim() && !files.length && !pastes.length)}><ArrowUp size={21} /></button>}
     </div></div>
   </form>{shellMode && <p className="shell-hint" id={hintId}>Runs on {host} · Esc or Backspace on empty leaves shell mode</p>}{(error || speechError) && <p className="composer-error error" role="alert">{error || speechError}{error && errorAction}</p>}</div>
-}
-
-// "~/apps/tether/src/panels" → "…/src/panels": the end of the path names where you are.
-function shortFolder(dir: string) {
-  const parts = (dir || '~').split('/')
-  return parts.length > 3 ? `…/${parts.slice(-2).join('/')}` : dir || '~'
 }
 
 // Desktop (a mouse or trackpad): Enter sends, Shift+Enter adds a line. Phone soft keyboard: Enter adds a line, as before.

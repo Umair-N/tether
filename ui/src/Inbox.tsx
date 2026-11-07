@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { Inbox as InboxIcon, X } from 'lucide-react'
-import { ApiError, errorText } from './api'
-import type { Api, Approval, Choice, Pane } from './api'
+import type { Api, Pane } from './api'
 import { AgentIcon, agentNames, paneTitle, shownIndex } from './Sidebar'
 import type { Session } from './Sidebar'
 import { KIND_LABEL, MOD, age } from './needs'
-import { changeAgentBrowser, watchTab } from './AgentBrowser'
+import { AnswerActions } from './answers'
+import { useAnswers } from './useAnswers'
 import type { InboxItem } from './needs'
 
 // Desktop "Needs you" list: every pane, in every session, that waits on you. Newest first.
@@ -42,21 +42,9 @@ export function InboxButton({ count, open, onToggle }: { count: number; open: bo
 const focusRow = (id: string) => document.querySelector<HTMLButtonElement>(`.inbox [data-pane="${CSS.escape(id)}"] .inbox-open`)?.focus()
 
 export function Inbox({ api, items, sessions, selected, open, onToggle, onOpen, onUpdate }: InboxProps) {
-  const [busy, setBusy] = useState<string | null>(null)
-  const [errors, setErrors] = useState<Record<string, string>>({})
+  const { busy, errors, answer, fail, onAnswerKey } = useAnswers({ api, items, active: open, onUpdate, focusRow })
   const [now, setNow] = useState(() => Date.now() / 1000)
   useEffect(() => { const timer = setInterval(() => setNow(Date.now() / 1000), 30000); return () => clearInterval(timer) }, [])
-  // After an answer, focus moves to the row that was below it, so Y, N and the digits keep working down the list.
-  const refocus = useRef<string | null>(null)
-  const ids = items.map(item => item.pane.id).join(',')
-  useEffect(() => {
-    setErrors(current => { const kept = Object.entries(current).filter(([id]) => ids.split(',').includes(id)); return kept.length === Object.keys(current).length ? current : Object.fromEntries(kept) })
-    const id = refocus.current
-    if (!id || !open) return
-    if (!document.activeElement || document.activeElement === document.body || !document.activeElement.isConnected) focusRow(id)
-    refocus.current = null
-  }, [ids, open])
-
   // ⌘I (Ctrl+I) shows or hides the list. ⌘J (Ctrl+J) opens the next pane that needs you. Letters are read from event.code.
   const keys = useRef({ items, selected, open, onToggle, onOpen })
   useEffect(() => { keys.current = { items, selected, open, onToggle, onOpen } })
@@ -79,44 +67,17 @@ export function Inbox({ api, items, sessions, selected, open, onToggle, onOpen, 
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  const answer = async (item: InboxItem, option: Choice) => {
-    const { pane } = item
-    if (busy) return
-    const at = items.indexOf(item)
-    refocus.current = (items[at + 1] ?? items[at - 1])?.pane.id ?? null
-    setBusy(pane.id)
-    setErrors(current => Object.fromEntries(Object.entries(current).filter(([id]) => id !== pane.id)))
-    try {
-      const approval = pane.approval as Approval | null
-      if (item.kind === 'approval' && approval?.id) await api('approval', { session: pane.id, thread: pane.thread, approval: approval.id, choice: option.id })
-      else await api('menu', { session: pane.id, thread: pane.thread, choice: option.id, label: option.text })
-      onUpdate()
-    } catch (error) {
-      refocus.current = null
-      const text = error instanceof ApiError && error.status === 409 ? 'This pane changed. Open it to check.' : errorText(error)
-      setErrors(current => ({ ...current, [pane.id]: text }))
-      onUpdate()
-    } finally { setBusy(null) }
-  }
-
   // Y, N and 1-3 answer the row that has focus. Arrow keys move between rows.
   const onRowKey = (event: ReactKeyboardEvent<HTMLLIElement>, item: InboxItem) => {
     if (event.ctrlKey || event.metaKey || event.altKey) return
     const rows = [...event.currentTarget.parentElement!.querySelectorAll<HTMLButtonElement>('.inbox-open')]
     const at = rows.indexOf(event.currentTarget.querySelector('.inbox-open')!)
-    let option: Choice | undefined
     if (event.code === 'ArrowDown' || event.code === 'ArrowUp') {
       event.preventDefault(); event.stopPropagation()
       rows[Math.min(rows.length - 1, Math.max(0, at + (event.code === 'ArrowDown' ? 1 : -1)))]?.focus()
       return
     }
-    if (event.shiftKey) return
-    if (event.code === 'KeyY') option = item.yes
-    else if (event.code === 'KeyN') option = item.no
-    else { const digit = /^(?:Digit|Numpad)([1-3])$/.exec(event.code); if (digit) option = item.menu?.find(choice => choice.id === Number(digit[1])) }
-    // Keep the key out of the message box even when this row has no such answer.
-    if (/^Key[YN]$|^(?:Digit|Numpad)[1-3]$/.test(event.code)) { event.preventDefault(); event.stopPropagation() }
-    if (option) void answer(item, option)
+    onAnswerKey(event, item)
   }
 
   if (!open) return null
@@ -142,16 +103,7 @@ export function Inbox({ api, items, sessions, selected, open, onToggle, onOpen, 
             <span className="inbox-meta"><AgentIcon agent={pane.agent} icon={pane.pane_icon} size={13} />{agentNames[pane.agent]}</span>
             {item.text && <span className="inbox-text" title={item.text}>{item.text}</span>}
           </button>
-          {item.kind === 'browser' && <div className="inbox-actions" role="group" aria-label={`Answer ${title}`}>
-            {item.tab && <button type="button" className="inbox-yes" onClick={() => watchTab(item.tab!, pane.id)}>Open the page</button>}
-            <button type="button" onClick={() => void changeAgentBrowser(api, 'browser/ask/dismiss', { id: item.ask })
-              .catch(error => setErrors(current => ({ ...current, [pane.id]: errorText(error) })))}>Done</button>
-          </div>}
-          {(item.yes || item.no || item.menu) && <div className="inbox-actions" role="group" aria-label={`Answer ${title}`}>
-            {item.yes && <button type="button" className="inbox-yes" disabled={waiting} title={item.yes.text} onClick={() => void answer(item, item.yes!)}>Yes <kbd>Y</kbd></button>}
-            {item.no && <button type="button" disabled={waiting} title={item.no.text} onClick={() => void answer(item, item.no!)}>No <kbd>N</kbd></button>}
-            {item.menu?.map(option => <button type="button" key={option.id} disabled={waiting} title={option.text} onClick={() => void answer(item, option)}><kbd>{option.id}</kbd><span>{option.text}</span></button>)}
-          </div>}
+          <AnswerActions api={api} item={item} label={title} waiting={waiting} onAnswer={answer} onFail={fail} />
           {errors[pane.id] && <p className="inbox-error" role="alert">{errors[pane.id]}</p>}
         </li>
       })}

@@ -14,6 +14,7 @@ const GROUPS = [
     ['Previous pinned chat', '⌥['],
     ['Sidebar', '⌘B'],
     ['Needs you list', '⌘I'],
+    ['Home', '⌥H'],
   ] },
   { name: 'Layout', items: [
     ['Split right', '⌘\\'],

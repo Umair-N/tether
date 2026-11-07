@@ -13,7 +13,7 @@
 .app-shell.phone-tabs:has(:is(textarea, input:not([type]), input[type=text], input[type=search], iframe):focus) { bottom: 0; }
 .app-shell.phone-tabs:has(:is(textarea, input:not([type]), input[type=text], input[type=search], iframe):focus) .phone-tabbar { display: none; }
 .app-shell.phone-tabs:has(:is(textarea, input:not([type]), input[type=text], input[type=search], iframe):focus) .composer-area { padding-bottom: max(14px, env(safe-area-inset-bottom)); }
-.app-shell.phone-files :is(.chat-panel, .no-session) { visibility: hidden; }
+.app-shell.phone-files .chat-panel { visibility: hidden; }
 
 /* Files screen */
 .xp { position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; background: var(--surface); padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); }

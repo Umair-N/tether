@@ -1,6 +1,6 @@
 /* Share screen (Share.tsx). Controls come from controls.css; this file sets layout only, plus the tiles. */
-.app-shell.screen-share > :is(.sidebar, .workspace, .no-session, .inbox, .chat) { display: none; }
-.app-shell.phone-share :is(.chat-panel, .no-session) { visibility: hidden; }
+.app-shell.screen-share > :is(.sidebar, .workspace, .inbox, .chat) { display: none; }
+.app-shell.phone-share .chat-panel { visibility: hidden; }
 
 .share { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; background: var(--surface); color: var(--text); font-size: 14px; }
 .share.narrow { position: absolute; inset: 0; z-index: 5; padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); }

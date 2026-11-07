@@ -9,7 +9,7 @@ function load(file) {
   const exports = {}
   runInNewContext(transpile(readFileSync(file, 'utf8')), {
     exports,
-    require: name => name === 'react' ? { lazy: () => null, forwardRef: component => component } : {},
+    require: name => name === './paneState' ? load('src/paneState.ts') : name === 'react' ? { lazy: () => null, forwardRef: component => component } : {},
   })
   return exports
 }

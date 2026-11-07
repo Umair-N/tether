@@ -1,3 +1,4 @@
+import { needsYou, isDone } from './paneState'
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
 import { Archive, ArchiveRestore, Asterisk, BarChart3, BookMarked, BookOpen, Bug, Cpu, Database, FileText, FlaskConical, GitBranch, Globe, LayoutDashboard, MessageSquare, MessagesSquare, Mic, Palette, Rocket, Server, Shield, Sparkles, Wrench, Zap, ChevronRight, Code2, GripVertical, Layers, Pin, PinOff, Plus, RefreshCw, Search, Settings, Terminal, Trash2, X } from 'lucide-react'
 import { KeepChoice, keepNeeded } from './Project'
@@ -47,11 +48,7 @@ export const chatTitle = (pane: Pane, session?: { name: string }) => pane.pane_n
 // One tmux session with all its panes. "ESEF:0.1" is session ESEF, window 0, pane 1.
 export interface Session { id: string; name: string; panes: Pane[]; agent: Agent; state: string; dir: string }
 
-// A turn that ended after you last looked at the pane. The open pane never counts: you are reading it.
-// A permission prompt ("Approval") or a question, menu or plan ("Input needed"): the agent waits on you.
-export const needsYou = (state: string) => state === 'Approval' || state === 'Input needed'
-export const isDone = (pane: Pane, seen: Record<string, number>, selected?: string) =>
-  pane.id !== selected && pane.state !== 'Working' && !needsYou(pane.state) && !!pane.finished && pane.finished > (seen[pane.id] ?? 0)
+export { needsYou, isDone } from './paneState'
 type Status = { kind: 'approval' | 'working' | 'done' | 'background' | 'idle' | 'unavailable'; label: string; at: number }
 export function status(panes: Pane[], seen: Record<string, number>, selected?: string): Status {
   // Only the agent's own activity counts. Opening a session is not activity, so it does not move the session up.

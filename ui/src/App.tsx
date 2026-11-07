@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { LayoutDashboard, Menu, Plus, SquareSplitHorizontal, SquareSplitVertical, Terminal } from 'lucide-react'
+import { LayoutDashboard, SquareSplitHorizontal, SquareSplitVertical, Terminal } from 'lucide-react'
 import { ApiError, canFork, errorText, request } from './api'
 import type { Api, Pane, PastChat, SessionsData } from './api'
 import { useModal, usePolling } from './hooks'
@@ -24,6 +24,8 @@ import type { SlotControls } from './Chat'
 import { SlotPicker, Workspace } from './Workspace'
 import { Inbox, InboxButton } from './Inbox'
 import { inboxItems } from './needs'
+import { Home } from './Home'
+import { hasAgents, homeGroups } from './homeGroups'
 import { DRAG_SLOT, WORKSPACE_QUERY, addPanel, addSlot, deskFor, deskKeyFor, hasPanel, newPanelId, panelCols, placePane, removePanel, withDesk, withPanels, resolveSlots, splitSlot, storeSlots, swapSlots } from './workspace'
 import { PanelColumn, PanelTools } from './PanelColumn'
 import { PANELS, TOOLBAR_PANELS, extraPanels, togglePanelKind } from './panels'
@@ -157,21 +159,37 @@ function App() {
   }, [])
   const [zoomed, setZoomed] = useState(false)
   // Desktop rail: Chats and Terminals are the workspace (chat or terminal view of the focused slot); Files is the explorer.
-  const [screen, setScreen] = useState<Screen>('chats')
+  // A device with no chosen pane starts on Home, unless a link names a pane or a place.
+  const [screen, setScreen] = useState<Screen>(() => prefs.selected || new URL(location.href).searchParams.has('session') || new URL(location.href).searchParams.get('go') === 'attention' ? 'chats' : 'home')
+  // Home takes over when you pick it, and when there is no pane to show. Nothing is on screen behind it, so no pane counts as open.
+  const home = screen === 'home' || (!pane && screen !== 'files' && screen !== 'share')
+  const openId = home ? undefined : pane?.id
+  const followSlot = useRef(false)
+  const leaveHome = useCallback(() => { followSlot.current = true; setScreen(current => current === 'home' ? 'chats' : current) }, [])
   const [filesTarget, setFilesTarget] = useState<FilesTarget | null>(null)
   const files = wide && screen === 'files'
   const phoneFiles = !wide && screen === 'files'
   const share = screen === 'share'
   const chooseScreen = useCallback((next: Screen) => {
     setScreen(next)
-    if (next === 'files' || next === 'share') return
+    if (next === 'home' || next === 'files' || next === 'share') return
     setTimeout(() => {
       const toggle = document.querySelector<HTMLButtonElement>('.slot.focused .terminal-toggle') ?? toggleButton()
       if (toggle && (toggle.getAttribute('aria-pressed') === 'true') !== (next === 'terminals')) toggle.click()
     }, 0)
   }, [])
-  const screenKeys = useRef<{ files: boolean; choose: (next: Screen) => void } | null>(null)
-  useEffect(() => { screenKeys.current = wide ? { files: files || share, choose: chooseScreen } : null }, [wide, files, share, chooseScreen])
+  // A slot keeps its terminal view behind Home, so the rail takes its screen from the slot that just opened.
+  useLayoutEffect(() => {
+    if (!followSlot.current) return
+    followSlot.current = false
+    if (home) return
+    const toggle = document.querySelector<HTMLButtonElement>('.slot.focused .terminal-toggle') ?? toggleButton()
+    if (!toggle) return
+    const shown: Screen = toggle.getAttribute('aria-pressed') === 'true' ? 'terminals' : 'chats'
+    setScreen(current => current === 'chats' || current === 'terminals' ? shown : current)
+  }, [home, pane?.id])
+  const screenKeys = useRef<{ files: boolean; home: boolean; choose: (next: Screen) => void; toggleSidebar: () => void } | null>(null)
+  useEffect(() => { screenKeys.current = wide ? { files: files || share, home, choose: chooseScreen, toggleSidebar: () => setDesk({ sidebar: !desk.sidebar }) } : null })
   useEffect(() => {
     const open = (event: Event) => { const { path, select } = (event as CustomEvent<Partial<FilesTarget>>).detail ?? {}; if (!path) return; setFilesTarget({ path, select }); setScreen('files') }
     window.addEventListener('tether:open-files', open)
@@ -212,7 +230,8 @@ function App() {
   const desktop = !!view
   const agentBrowser = useAgentBrowser(api)
   const asks = useMemo(() => browserAsks(agentBrowser), [agentBrowser])
-  const inbox = useMemo(() => desktop ? inboxItems(panes, prefs.seen, pane?.id, asks) : [], [desktop, panes, prefs.seen, pane?.id, asks])
+  const inbox = useMemo(() => desktop ? inboxItems(panes, prefs.seen, openId, asks) : [], [desktop, panes, prefs.seen, openId, asks])
+  const groups = useMemo(() => homeGroups(panes, sessions, prefs.seen, openId, asks), [panes, sessions, prefs.seen, openId, asks])
   const stacked = !!desk.stack && slotPanes.length === 2
   // Keep the stored slots in step with what shows, so focus moves and pane picks survive a reload.
   const slotKey = view ? `${view.slots.join(',')}|${view.focus}` : ''
@@ -343,6 +362,7 @@ function App() {
     const open = (id: unknown) => {
       if (typeof id !== 'string' || !id) return
       update(() => ({ selected: id }))
+      leaveHome()
       setDrawer(false)
       void refresh()
       const url = new URL(location.href)
@@ -353,19 +373,19 @@ function App() {
     const message = (event: MessageEvent) => { if (event.data?.go) setGo(String(event.data.go)); else open(event.data?.session) }
     if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', message)
     return () => { if ('serviceWorker' in navigator) navigator.serviceWorker.removeEventListener('message', message) }
-  }, [update, refresh])
+  }, [update, refresh, leaveHome])
   useEffect(() => {
     const close = () => {
-      if (!pane?.id || document.visibilityState !== 'visible' || !('serviceWorker' in navigator)) return
+      if (!openId || document.visibilityState !== 'visible' || !('serviceWorker' in navigator)) return
       void navigator.serviceWorker.getRegistration('/chat/').then(async registration => {
-        const notifications = await registration?.getNotifications({ tag: 'session-' + pane.id })
+        const notifications = await registration?.getNotifications({ tag: 'session-' + openId })
         notifications?.forEach(notification => notification.close())
       }).catch(() => {})
     }
     close()
     document.addEventListener('visibilitychange', close)
     return () => document.removeEventListener('visibilitychange', close)
-  }, [pane?.id])
+  }, [openId])
   useEffect(() => {
     if (!go || (go === 'attention' && !data)) return
     const url = new URL(location.href)
@@ -380,12 +400,13 @@ function App() {
     }
     else if (go === 'attention') {
       const target = panes.find(item => needsYou(item.state)) ?? panes.find(item => isDone(item, prefs.seen, prefs.selected ?? undefined))
-      if (target) update(() => ({ selected: target.id }))
+      if (target) { update(() => ({ selected: target.id })); leaveHome() }
       else setNotice('Nothing needs you right now.')
     }
-  }, [go, data, panes, prefs.selected, prefs.seen, update])
+  }, [go, data, panes, prefs.selected, prefs.seen, update, leaveHome])
   // Mark the panes on screen as seen, again whenever a turn ends while you watch, so only turns you missed show Done.
-  const watched = (view && !zoomed ? slotPanes : pane ? [pane] : []).map(item => `${item.id} ${item.finished ?? ''}`).join('|')
+  // Home shows no chat, so a turn that ends behind it stays unread.
+  const watched = (home ? [] : view && !zoomed ? slotPanes : pane ? [pane] : []).map(item => `${item.id} ${item.finished ?? ''}`).join('|')
   useEffect(() => {
     if (!watched) return
     const now = Date.now() / 1000
@@ -396,13 +417,19 @@ function App() {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const typing = (event.target as Element | null)?.closest('input, textarea, select, [contenteditable="true"], dialog')
-      const slots = workspaceKeys.current
       const rail = screenKeys.current
+      // The workspace behind Home takes no keys. ⌘K then searches the sidebar.
+      const slots = rail?.home ? null : workspaceKeys.current
       // ⌘1–4 (Ctrl off a Mac) pick Chats, Files, Terminals or Share. A browser tab may keep these keys; an installed app window gets them.
       const screenKey = /^Digit([1-4])$/.exec(event.code)
       if (rail && screenKey && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && !document.querySelector('dialog[open]')) {
         event.preventDefault()
         rail.choose((['chats', 'files', 'terminals', 'share'] as const)[Number(screenKey[1]) - 1])
+        return
+      }
+      if (rail && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.code === 'KeyH' && !document.querySelector('dialog[open]')) {
+        event.preventDefault()
+        rail.choose('home')
         return
       }
       if (event.altKey && !event.ctrlKey && !event.metaKey && (event.code === 'BracketRight' || event.code === 'BracketLeft')) {
@@ -415,12 +442,18 @@ function App() {
       }
       // The Files and Share screens handle its own keys; the hidden workspace must not take them.
       if (rail?.files) return
+      if (rail && !document.querySelector('dialog[open]')) {
+        const mod = event.ctrlKey || event.metaKey
+        const act = (run: () => void) => { event.preventDefault(); run() }
+        if (mod && !event.altKey && !event.shiftKey && event.code === 'KeyB') return act(rail.toggleSidebar)
+        if (event.altKey && !mod && !event.shiftKey && event.code === 'KeyN') return act(() => setNewSession(true))
+        if (event.key === '?' && !typing && !mod && !event.altKey) return act(() => setMenu('shortcuts'))
+      }
       if (slots && !document.querySelector('dialog[open]')) {
         // Browsers keep Cmd+1-9, Cmd+W and Cmd+N, so slot keys use Alt. Read event.code: Alt+letter types a symbol on a Mac.
         const mod = event.ctrlKey || event.metaKey
         const act = (run: () => void) => { event.preventDefault(); run() }
         if (mod && !event.altKey && event.code === 'Backslash') return act(() => slots.setCount(event.shiftKey ? 4 : Math.min(3, Math.max(2, slots.count + 1)) as DesktopLayout['count']))
-        if (mod && !event.altKey && !event.shiftKey && event.code === 'KeyB') return act(slots.toggleSidebar)
         if (mod && !event.altKey && !event.shiftKey && event.code === 'Period') return act(() => slots.togglePanel('terminal'))
         if (mod && !event.altKey && !event.shiftKey && event.code === 'Semicolon') return act(slots.sideChat)
         if (event.altKey && !mod && !event.shiftKey) {
@@ -430,12 +463,10 @@ function App() {
           if (event.code === 'KeyZ') return act(slots.toggleZoom)
           if (event.code === 'KeyX' && slots.count > 1) return act(() => slots.closeSlot(slots.focus))
           if (event.code === 'KeyT') return act(toggleTerminal)
-          if (event.code === 'KeyN') return act(() => setNewSession(true))
         }
         // ⌥⇧S, C, P and T copy a name of the focused pane: the pane menu's Copy name keys (CopyNames.tsx).
         const copyKind = event.altKey && event.shiftKey && !mod ? nameKindOf(event.code) : undefined
         if (copyKind && slots.pane) { const target = slots.pane; return act(() => void copyPaneName(target, copyKind).then(setNotice)) }
-        if (event.key === '?' && !typing && !mod && !event.altKey) return act(() => setMenu('shortcuts'))
       }
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'k') {
         event.preventDefault()
@@ -492,6 +523,7 @@ function App() {
   const openPane = (target: Pane) => {
     update(current => ({ selected: target.id, lastPane: { ...current.lastPane, [target.tmux_session]: target.id } }))
     setDrawer(false)
+    leaveHome()
   }
   const archiveTab = (target: Pane) => {
     const owner = sessions.find(session => session.panes.some(item => item.id === target.id))
@@ -539,11 +571,12 @@ function App() {
     return true
   }
   useEffect(() => { pinKeys.current = stepPin })
-  const openById = (id: string) => { update(() => ({ selected: id })); setDrawer(false); void refresh() }
+  const openById = (id: string) => { update(() => ({ selected: id })); setDrawer(false); leaveHome(); void refresh() }
   // A new tmux pane. On the desktop workspace it opens in a new slot beside the focused one, on the same side as the tmux split.
   // The list is fetched first so the slot keeps it.
   const openNewPane = async (id: string, direction: 'right' | 'down' = 'right') => {
     setDrawer(false)
+    setScreen(current => current === 'home' ? 'chats' : current)
     if (!view) return openById(id)
     await refresh()
     const shape = splitSlot(view.slots, stacked, view.focus, direction === 'down' ? 'bottom' : 'right', id)
@@ -593,9 +626,10 @@ function App() {
   }
   const canMessage = sessions.some(item => item.panes.some(p => p.agent !== 'shell' && p.writable))
   const words = useMemo(() => wordsFor(prefs.tmuxWords), [prefs.tmuxWords])
-  const sidebarProps = { archivedTabs, onRestoreTab: restoreTab, api, sessions, marks, onMarks: loadMarks, selected: pane?.id, slots: multi ? view?.slots : undefined, drag: !!view, prefs, update, loading, error, onRetry: () => void refresh(), onOpen: openPane, onNew: () => { setDrawer(false); setNewSession(true) }, onActions: (item: Session, remove?: boolean, at?: Anchor) => { if (remove) setDrawer(false); setMenuAt(view ? at : undefined); setActionsDelete(!!remove); setActions(item.id) }, onPaneActions: (item: Pane, at?: Anchor) => { setDrawer(false); setMenuAt(view ? at : undefined); setPaneActions(item.id) }, onPastChat: pickPastChat, onSettings: () => { setDrawer(false); setSettings(true) }, onCommandMenu: view ? () => setMenu('commands') : undefined, onMessageAll: canMessage ? () => { setDrawer(false); setAgentsPage('message') } : undefined, onOpenShell: view ? openShell : undefined, onShellsEnded: shellsEnded, onAddPane: (item: Session) => { const target = item.panes.find(entry => entry.id === prefs.lastPane[item.id]) ?? item.panes[0]; void split('right', target) } }
+  const sidebarProps = { archivedTabs, onRestoreTab: restoreTab, api, sessions, marks, onMarks: loadMarks, selected: openId, slots: multi && !home ? view?.slots : undefined, drag: !!view && !home, prefs, update, loading, error, onRetry: () => void refresh(), onOpen: openPane, onNew: () => { setDrawer(false); setNewSession(true) }, onActions: (item: Session, remove?: boolean, at?: Anchor) => { if (remove) setDrawer(false); setMenuAt(view ? at : undefined); setActionsDelete(!!remove); setActions(item.id) }, onPaneActions: (item: Pane, at?: Anchor) => { setDrawer(false); setMenuAt(view ? at : undefined); setPaneActions(item.id) }, onPastChat: pickPastChat, onSettings: () => { setDrawer(false); setSettings(true) }, onCommandMenu: view && !home ? () => setMenu('commands') : undefined, onMessageAll: canMessage ? () => { setDrawer(false); setAgentsPage('message') } : undefined, onOpenShell: view ? openShell : undefined, onShellsEnded: shellsEnded, onAddPane: (item: Session) => { const target = item.panes.find(entry => entry.id === prefs.lastPane[item.id]) ?? item.panes[0]; void split('right', target) } }
   // The command menu runs the same actions as the keys. A command shows only when it would do something now.
   const commands: Command[] = view ? [
+    { label: 'Home', key: '⌥H', run: () => chooseScreen('home') },
     ...(slotPanes.length < 3 ? [{ label: 'Split right', key: '⌘\\', run: () => setCount(Math.max(2, slotPanes.length + 1) as DesktopLayout['count']) }] : []),
     ...(slotPanes.length < 4 ? [{ label: 'Grid of four', key: '⌘⇧\\', run: () => setCount(4) }] : []),
     ...(multi || zoomed ? [{ label: zoomed ? 'Restore the split' : 'Zoom the focused slot', key: '⌥Z', run: toggleZoom }] : []),
@@ -620,7 +654,7 @@ function App() {
     return <Chat allPanes={panes} sidePin={sidePin} liveReplyPreview={prefs.liveReplyPreview} key={target.id} pane={target} session={owner} api={api} onMenu={() => setDrawer(true)} onUpdate={() => void refresh()} draft={prefs.drafts[target.id]?.text ?? ''} setDraft={text => setDraft(target.id, text)} onOpenPane={openPane} onSessionActions={at => { if (owner) { setMenuAt(view ? at : undefined); setActionsDelete(false); setActions(owner.id) } }} onPaneActions={(id, at) => { setMenuAt(view ? at : undefined); setPaneActions(id) }} onSplit={direction => void split(direction, target)} onFork={() => void fork(target)} onContinued={id => void openNewPane(id).catch(error => setNotice(errorText(error)))} onReorder={ids => { if (owner) update(current => ({ paneOrder: { ...current.paneOrder, [owner.id]: reorderPanes(groupSessions(panes).find(item => item.id === owner.id)!.panes, current.paneOrder[owner.id], ids) } })) }} micOk={!prefs.voiceOff} chime={prefs.voiceSound} readAloud={prefs.readAloud} handsFree={prefs.handsFree} slot={slot} running={running} />
   }
   if (unauthorized) return <main className="signin"><Terminal size={32} strokeWidth={1.4} /><h1>Sign in</h1><p>Sign in to access your terminal sessions.</p><a className="primary" href="/mobile/login?next=/chat/">Sign in</a></main>
-  return <WordsContext.Provider value={words}><main className={['app-shell', view && !desk.sidebar && 'no-sidebar', wide && 'with-rail', files && 'screen-files', wide && share && 'screen-share', !wide && 'phone-tabs', phoneFiles && 'phone-files', !wide && share && 'phone-share'].filter(Boolean).join(' ')}>{wide && <Rail screen={screen} onScreen={chooseScreen} onLive={openLive} />}<aside className="sidebar"><Sidebar {...sidebarProps} /></aside><dialog {...drawerModal} className="drawer" aria-label="Sessions" onClick={event => { const box = event.currentTarget.getBoundingClientRect(); if (event.target === event.currentTarget && (event.clientX > box.right || event.clientX < box.left || event.clientY < box.top || event.clientY > box.bottom)) setDrawer(false) }} onTouchStart={event => { drawerTouch.current = (event.target as Element).closest('.swipe-row') ? null : { x: event.touches[0].clientX, y: event.touches[0].clientY } }} onTouchEnd={event => { const start = drawerTouch.current; drawerTouch.current = null; if (!start) return; const dx = event.changedTouches[0].clientX - start.x, dy = event.changedTouches[0].clientY - start.y; if (dx < -60 && Math.abs(dy) < Math.abs(dx) * 0.6) setDrawer(false) }}>{drawer && <Sidebar {...sidebarProps} onClose={() => setDrawer(false)} />}</dialog>
+  return <WordsContext.Provider value={words}><main className={['app-shell', (view || (wide && home)) && !desk.sidebar && 'no-sidebar', wide && 'with-rail', files && 'screen-files', wide && share && 'screen-share', home && wide && 'screen-home', home && !wide && 'phone-home', !wide && 'phone-tabs', phoneFiles && 'phone-files', !wide && share && 'phone-share'].filter(Boolean).join(' ')}>{wide && <Rail screen={home ? 'home' : screen} waiting={groups.needs.length} onScreen={chooseScreen} onLive={openLive} />}<aside className="sidebar"><Sidebar {...sidebarProps} /></aside><dialog {...drawerModal} className="drawer" aria-label="Sessions" onClick={event => { const box = event.currentTarget.getBoundingClientRect(); if (event.target === event.currentTarget && (event.clientX > box.right || event.clientX < box.left || event.clientY < box.top || event.clientY > box.bottom)) setDrawer(false) }} onTouchStart={event => { drawerTouch.current = (event.target as Element).closest('.swipe-row') ? null : { x: event.touches[0].clientX, y: event.touches[0].clientY } }} onTouchEnd={event => { const start = drawerTouch.current; drawerTouch.current = null; if (!start) return; const dx = event.changedTouches[0].clientX - start.x, dy = event.changedTouches[0].clientY - start.y; if (dx < -60 && Math.abs(dy) < Math.abs(dx) * 0.6) setDrawer(false) }}>{drawer && <Sidebar {...sidebarProps} onClose={() => setDrawer(false)} />}</dialog>
     {pane ? (view ? <Workspace layout={desk} slots={slotPanes} focus={view.focus} zoomed={zoomed && multi} onCount={setCount} onFocus={focusSlot} onLayout={setDesk}
       renderSlot={(target, index, shown) => chatFor(target, shown > 1 || zoomed ? { index, zoomed, onZoom: toggleZoom, onClose: zoomed ? undefined : () => closeSlot(index), onPick: () => setPicking(index), onDragStart: event => { event.dataTransfer.setData(DRAG_SLOT, String(index)); event.dataTransfer.effectAllowed = 'move' } } : undefined)}
       onDropPane={dropPane} onDropSession={dropSession} onDropChat={dropChat} onSwap={swap}
@@ -631,7 +665,8 @@ function App() {
         <InboxButton count={inbox.length} open={desk.inbox} onToggle={() => setDesk({ inbox: !desk.inbox })} />
       </>}
       panelTools={<PanelTools desk={desk} pane={pane} setPanels={setPanels} onSideChat={() => void sideChat()} />}
-      panels={<PanelColumn api={api} desk={desk} pane={pane} setPanels={setPanels} renderChat={id => { const target = panes.find(item => item.id === id); return target ? chatFor(target) : null }} />} /> : chatFor(pane)) : <section className="no-session"><header><button className="icon-button mobile-menu" aria-label="Open sessions" onClick={() => setDrawer(true)}><Menu /></button></header><div><Terminal size={32} strokeWidth={1.4} /><h1>{loading ? 'Finding your sessions…' : 'Space for your next task.'}</h1><p>{error || 'Open a session, or start something new.'}</p><button className="primary" onClick={() => setNewSession(true)}><Plus size={18} />New session</button></div></section>}
+      panels={<PanelColumn api={api} desk={desk} pane={pane} setPanels={setPanels} renderChat={id => { const target = panes.find(item => item.id === id); return target ? chatFor(target) : null }} />} /> : chatFor(pane)) : null}
+    {home && <Home api={api} groups={groups} hasAgents={hasAgents(panes)} loaded={!!data} loading={loading} error={error} onRetry={() => void refresh()} onOpen={openPane} onMarkRead={markRead} onUpdate={() => void refresh()} onNew={() => setNewSession(true)} onMenu={() => setDrawer(true)} />}
     {files && <Explorer api={api} panes={panes} pane={pane} target={filesTarget} onTarget={() => setFilesTarget(null)} onAddToMessage={addToMessage} onTerminalHere={terminalHere} onPin={pinTarget} />}
     {share && <Share wide={wide} onAddToMessage={wide ? addToMessage : pane ? paths => {
       const before = prefs.drafts[pane.id]?.text ?? ''
@@ -646,9 +681,9 @@ function App() {
         choosePhoneScreen('chats', setScreen)
         setNotice(paths.length === 1 ? `Added ${paths[0]} to the message.` : `Added ${paths.length} paths to the message.`)
       } : undefined} />}
-    {prefs.agentBubble && sessions.some(item => item.panes.some(p => p.agent !== 'shell')) && <AgentBubble sessions={sessions} seen={prefs.seen} selected={pane?.id} onOpen={openPane} onMarkRead={markRead} onPage={() => setAgentsPage('list')} onHide={() => { update(() => ({ agentBubble: false })); setNotice('Agents bubble hidden. Turn it on in Settings › Chat.') }} />}
-    {livePins.length > 0 && <SidePins api={api} pins={prefs.sidePins} sessions={sessions} seen={prefs.seen} selected={pane?.id} onOpen={openPane} onPin={pinPane} onUnpin={unpinPane} onNote={notePin} onMove={movePin} onUpdate={() => void refresh()} />}
-    {!wide && <PhoneTabs screen={screen} onScreen={next => choosePhoneScreen(next, setScreen)} setScreen={setScreen} terminals={!!pane} onLive={openLive}
+    {!home && prefs.agentBubble && sessions.some(item => item.panes.some(p => p.agent !== 'shell')) && <AgentBubble sessions={sessions} seen={prefs.seen} selected={openId} onOpen={openPane} onMarkRead={markRead} onPage={() => setAgentsPage('list')} onHide={() => { update(() => ({ agentBubble: false })); setNotice('Agents bubble hidden. Turn it on in Settings › Chat.') }} />}
+    {livePins.length > 0 && <SidePins api={api} pins={prefs.sidePins} sessions={sessions} seen={prefs.seen} selected={openId} onOpen={openPane} onPin={pinPane} onUnpin={unpinPane} onNote={notePin} onMove={movePin} onUpdate={() => void refresh()} />}
+    {!wide && <PhoneTabs screen={home ? 'home' : screen} waiting={groups.needs.length} onScreen={next => choosePhoneScreen(next, setScreen)} setScreen={setScreen} terminals={!!pane} onLive={openLive}
       browser={pane ? {
         // An open ask goes straight to the agent's page. Otherwise the browser opens on the last tab.
         onOpen: () => { const ask = asks.find(item => item.tab); if (ask?.tab && ask.pane) watchTab(ask.tab, ask.pane); else setBrowserSheet(true) },
@@ -656,7 +691,7 @@ function App() {
       } : undefined} />}
     {browserSheet && pane && <BrowserSheet api={api} pane={pane} onClose={() => setBrowserSheet(false)} />}
     {liveMode && <Live api={api} panes={panes} selected={pane} commands={commands.filter(item => !item.label.includes('Live mode'))} onClose={() => setLive(false)} reveal={liveReveal} from={liveFrom} />}
-    {view && <Inbox api={api} items={inbox} sessions={sessions} selected={pane?.id} open={desk.inbox} onToggle={() => setDesk({ inbox: !desk.inbox })} onOpen={openPane} onUpdate={() => void refresh()} />}
+    {view && <Inbox api={api} items={inbox} sessions={sessions} selected={openId} open={desk.inbox} onToggle={() => { if (!home) setDesk({ inbox: !desk.inbox }) }} onOpen={openPane} onUpdate={() => void refresh()} />}
     {view && picking !== null && picking < view.slots.length && <SlotPicker index={picking} sessions={sortByPrefs(sessions, prefs.order).filter(item => !isArchived(item, prefs.archived))} slots={view.slots} onPane={id => { showInSlot(id, picking); setPicking(null) }} onSession={target => { showSession(target); setPicking(null) }} onClose={() => setPicking(null)} />}
     {project && sessions.some(item => item.id === project.session) && <ProjectSheet key={project.session} api={api} session={sessions.find(item => item.id === project.session)!} mark={marks[project.session]} pin={project.pin} onChanged={loadMarks} onClose={() => setProject(null)} />}
     {settings && <Settings api={api} prefs={prefs} update={update} onReload={reload} onClose={() => setSettings(false)} />}
@@ -669,10 +704,10 @@ function App() {
     {resume && <ResumeChat api={api} chat={resume} sessions={sessions} onClose={() => setResume(null)} onOpened={id => { setResume(null); openById(id) }} />}
     {notice && <div className="toast app-toast" role="status">{notice}</div>}
     {planSheet && <PlanUsage api={api} onClose={() => setPlanSheet(false)} />}
-    {view && menu === 'commands' && <CommandMenu sessions={sortByPrefs(sessions, prefs.order).filter(item => !isArchived(item, prefs.archived))} seen={prefs.seen} selected={pane?.id} slots={multi ? view.slots : []} commands={commands} onPane={openPane} onSession={showSession} onClose={() => setMenu(null)} />}
-    {view && menu === 'shortcuts' && <Shortcuts onClose={() => setMenu(null)} />}
-    {agentsPage && <AgentsPage api={api} sessions={sessions} seen={prefs.seen} selected={pane?.id} onOpen={openPane} onMarkRead={markRead} startMessaging={agentsPage === 'message'} onClose={() => setAgentsPage(false)} />}
-    {view && !files && !(wide && share) && <StatusBar panes={panes} loading={loading} error={error} />}
+    {view && menu === 'commands' && <CommandMenu sessions={sortByPrefs(sessions, prefs.order).filter(item => !isArchived(item, prefs.archived))} seen={prefs.seen} selected={openId} slots={multi ? view.slots : []} commands={commands} onPane={openPane} onSession={showSession} onClose={() => setMenu(null)} />}
+    {(view || (wide && home)) && menu === 'shortcuts' && <Shortcuts onClose={() => setMenu(null)} />}
+    {agentsPage && <AgentsPage api={api} sessions={sessions} seen={prefs.seen} selected={openId} onOpen={openPane} onMarkRead={markRead} startMessaging={agentsPage === 'message'} onClose={() => setAgentsPage(false)} />}
+    {view && !home && !files && !(wide && share) && <StatusBar panes={panes} loading={loading} error={error} />}
     {updated && <div className="update-banner" role="status"><span>A new version of Tether is ready.</span><button type="button" onClick={reload}>Reload</button></div>}
   </main></WordsContext.Provider>
 }

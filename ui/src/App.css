@@ -445,9 +445,9 @@ a { -webkit-touch-callout: default; }
 .composer-error { font-size: 13px; line-height: 1.5; margin: 9px 6px 0; }
 .composer-error button { margin-left: 8px; padding: 4px 10px; border-radius: var(--radius); border: 1px solid currentColor; background: none; color: inherit; font: inherit; font-weight: 600; min-height: var(--control); }
 .chat-empty { padding: clamp(35px, 11dvh, 110px) 4px 50px; }
-.chat-empty > svg, .no-session > div > svg { color: var(--muted); margin-bottom: 22px; }
-.chat-empty h2, .no-session h1 { font-family: ui-serif, Georgia, serif; font-size: clamp(27px, 4vw, 36px); font-weight: 400; letter-spacing: -.8px; line-height: 1.2; }
-.chat-empty p, .no-session p { color: var(--muted); font-size: 15px; line-height: 1.6; margin-top: 14px; }
+.chat-empty > svg { color: var(--muted); margin-bottom: 22px; }
+.chat-empty h2 { font-family: ui-serif, Georgia, serif; font-size: clamp(27px, 4vw, 36px); font-weight: 400; letter-spacing: -.8px; line-height: 1.2; }
+.chat-empty p { color: var(--muted); font-size: 15px; line-height: 1.6; margin-top: 14px; }
 .start-options { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 28px; }
 .start-options button { display: flex; gap: 14px; align-items: center; border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 14px; font-size: 14px; }
 .empty-note { color: var(--muted); font-size: 14px; }
@@ -459,10 +459,6 @@ a { -webkit-touch-callout: default; }
 .approval-banner button { min-width: 44px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
 .toast { background: var(--surface); margin: 0 18px 8px; padding: 12px 16px; border: 1px solid var(--line); border-radius: var(--radius); font-size: 14px; line-height: 1.5; }
 .read-only { font-size: 13px; color: var(--muted); padding: 4px 20px; text-align: center; }
-.no-session { display: flex; flex: 1; flex-direction: column; min-width: 0; }
-.no-session header { padding: 14px; min-height: 83px; }
-.no-session > div { margin: auto; padding: 26px; max-width: 600px; }
-.no-session .primary { margin-top: 25px; }
 dialog { color: var(--text); background: var(--surface); border: 1px solid var(--line); }
 dialog::backdrop { background: #11110e66; }
 .drawer { position: fixed; inset: 0 auto 0 0; margin: 0; width: min(340px, 88vw); max-width: none; height: 100dvh; max-height: none; border: 0; padding: 0; background: var(--sidebar); }
