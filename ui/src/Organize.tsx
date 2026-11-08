@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Check, FolderPlus, Sparkles, X } from 'lucide-react'
+import { Check, FolderPlus, ListTree, X } from 'lucide-react'
 import type { Api } from './api'
 import { errorText } from './api'
 import type { Anchor } from './hooks'
@@ -29,6 +29,12 @@ export function withGroup(groupOf: Record<string, string> | undefined, id: strin
 }
 /** The row style for a color, or nothing. */
 export const tagStyle = (color: string | undefined) => color && (TAG_COLORS as readonly string[]).includes(color) ? { ['--tag' as string]: `var(--tag-${color})` } : undefined
+
+/** The small dot after a row's name that shows its color, or nothing. A dot, not a tinted row: a tint reads as the open tab. */
+export const tagDot = (color: string | undefined) => {
+  const style = tagStyle(color)
+  return style ? <span className="tag-dot" style={style} role="img" aria-label={`${color} color`} /> : null
+}
 
 /** A group id from its name: lower case, a-z 0-9 and "-", unique among `taken`. */
 export function groupId(name: string, taken: string[]) {
@@ -104,7 +110,7 @@ export function OrganizeMenu({ api, sessions, prefs, update, at, onClose }: { ap
       <Choice legend="Sort" name="sort" value={prefs.sort} options={[['smart', 'Smart'], ['recent', 'Recent'], ['name', 'Name'], ['manual', 'Manual']]} onChange={sort => update(() => ({ sort }))} />
       <p className="hint organize-hint">{prefs.sort === 'smart' ? 'Done first, then working, then the latest activity.' : prefs.sort === 'recent' ? 'The latest agent activity first.' : prefs.sort === 'name' ? 'A to Z.' : 'Your own order. Use Reorder in a group.'} Sessions that need you always show at the top.</p>
       <section className="suggest-box" aria-live="polite">
-        {!suggestion && <button type="button" className="secondary suggest-button" disabled={asking} onClick={() => void suggest()}><Sparkles size={16} />{asking ? 'Suggesting groups…' : 'Suggest groups'}</button>}
+        {!suggestion && <button type="button" className="secondary suggest-button" disabled={asking} onClick={() => void suggest()}><ListTree size={16} />{asking ? 'Suggesting groups…' : 'Suggest groups'}</button>}
         {suggestion && <>
           <p className="suggest-note">{suggestion.source === 'llm' ? 'Suggested by the local model.' : 'The local model did not answer. These groups follow the folders.'} Apply replaces your groups.</p>
           <ul className="suggest-list">{suggestion.groups.map(group => <li key={group.name}><strong>{group.name}</strong><span>{group.sessions.map(id => names.get(id) ?? id).join(', ')}</span></li>)}</ul>

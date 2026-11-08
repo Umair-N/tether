@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState, type RefObject } from 'react'
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { ArrowUp, History } from 'lucide-react'
 import type { ChatMessage } from './api'
 
 // The bar covers the top of the chat: a message that starts under it counts as out of view.
 export const MINE_BAR_SPACE = 52
+const HIDE_MS = 2500
 
 const oneLine = (text: string) => text.replace(/\s+/g, ' ').trim()
 
@@ -21,10 +22,15 @@ export function MineBar({ view, messages, earlier, onReveal, onEarlier }: {
 }) {
   const mine = useMemo(() => new Map(messages.filter(item => item.role === 'user' && !item.kind).map(item => [item.id, item])), [messages])
   const [above, setAbove] = useState<string | null>(null)
+  // The bar comes only while you scroll back. It goes when you scroll down, reach the end, or stop for HIDE_MS.
+  const [shown, setShown] = useState(false)
+  const held = useRef(false)  // pointer over it or focus in it: keep it
+  const hideTimer = useRef(0)
   useEffect(() => {
     const element = view.current
     if (!element) return
     let frame = 0
+    let last = element.scrollTop
     const measure = () => {
       frame = 0
       const line = element.getBoundingClientRect().top + MINE_BAR_SPACE - 8
@@ -38,22 +44,37 @@ export function MineBar({ view, messages, earlier, onReveal, onEarlier }: {
       }
       setAbove(found)
     }
-    const schedule = () => { if (!frame) frame = requestAnimationFrame(measure) }
-    schedule()
-    element.addEventListener('scroll', schedule, { passive: true })
-    return () => { element.removeEventListener('scroll', schedule); if (frame) cancelAnimationFrame(frame) }
+    const hideLater = () => {
+      window.clearTimeout(hideTimer.current)
+      hideTimer.current = window.setTimeout(() => { if (!held.current) setShown(false) }, HIDE_MS)
+    }
+    const onScroll = () => {
+      const top = element.scrollTop
+      const atEnd = element.scrollHeight - top - element.clientHeight < 48
+      // Compare with the last point where the direction was clear: smooth scroll moves in steps under 4px.
+      if (atEnd || top > last + 4) { if (!held.current) setShown(false); last = top }
+      else if (top < last - 4) { setShown(true); hideLater(); last = top }
+      if (!frame) frame = requestAnimationFrame(measure)
+    }
+    frame = requestAnimationFrame(measure)
+    element.addEventListener('scroll', onScroll, { passive: true })
+    return () => { element.removeEventListener('scroll', onScroll); if (frame) cancelAnimationFrame(frame); window.clearTimeout(hideTimer.current) }
   }, [view, mine])
-  const message = above ? mine.get(above) : undefined
-  if (message) {
-    const text = oneLine(message.text) || (message.images ? 'Image' : 'Message')
-    return <div className="mine-bar"><button type="button" title={text} aria-label={`Go to your message: ${text}`} onClick={() => onReveal(message.id)}>
-      <ArrowUp size={14} aria-hidden="true" /><span className="mine-bar-who">You</span><span className="mine-bar-text">{text}</span>
-    </button></div>
+  const hold = (on: boolean) => () => {
+    held.current = on
+    if (on) window.clearTimeout(hideTimer.current)
+    else hideTimer.current = window.setTimeout(() => setShown(false), HIDE_MS)
   }
-  if (!mine.size || !earlier) return null
-  return <div className="mine-bar"><button type="button" onClick={onEarlier}>
-    <History size={14} aria-hidden="true" /><span className="mine-bar-text">Load earlier messages · {earlier}</span>
-  </button></div>
+  const message = above ? mine.get(above) : undefined
+  if (!message && (!mine.size || !earlier)) return null
+  const text = message ? oneLine(message.text) || (message.images ? 'Image' : 'Message') : ''
+  return <div className={`mine-bar ${shown ? 'shown' : ''}`} inert={!shown} onPointerEnter={hold(true)} onPointerLeave={hold(false)} onFocus={hold(true)} onBlur={hold(false)}>
+    {message
+      ? <button type="button" title={text} aria-label={`Go to your message: ${text}`} onClick={() => onReveal(message.id)}>
+        <ArrowUp size={14} aria-hidden="true" /><span className="mine-bar-who">You</span><span className="mine-bar-text">{text}</span>
+      </button>
+      : <button type="button" onClick={onEarlier}><History size={14} aria-hidden="true" /><span className="mine-bar-text">Load earlier messages · {earlier}</span></button>}
+  </div>
 }
 
 /** "8 Nov, 1:59 PM"; the year shows only when it is not this year. */

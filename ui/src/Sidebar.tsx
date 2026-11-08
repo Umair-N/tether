@@ -21,7 +21,7 @@ import { HostMenu } from './HostMenu'
 import { UpdateBanner } from './UpdateBanner'
 import { Elapsed } from './Notices'
 import { ShellList } from './ShellList'
-import { OrganizeMenu, tagStyle } from './Organize'
+import { OrganizeMenu, tagDot } from './Organize'
 import { useWords } from './words'
 
 export const agentNames: Record<Agent, string> = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity', shell: 'Shell' }
@@ -472,8 +472,8 @@ function SessionList({ items, reorder, selected, prefs, update, onOpen, onAction
       const open = !multi || prefs.expanded[session.id] !== false
       const toggleOpen = () => update(current => ({ expanded: { ...current.expanded, [session.id]: current.expanded[session.id] === false } }))
       const dropping = (over === session.id || touchOver === session.id) && !!carry
-      const tag = tagStyle(prefs.colors?.[session.id] ?? (session.panes.length === 1 ? prefs.colors?.[session.panes[0].id] : undefined))
-      return <li key={session.id} data-id={session.id} style={tag} className={`${tag ? 'tagged' : ''} ${dragging.current === session.id ? 'dragging' : ''} ${dropping ? 'drop-over' : ''} ${carry && !carry.pane && carry.session === session.id ? 'carried' : ''}`} {...dropTarget(session)}>
+      const tag = tagDot(prefs.colors?.[session.id] ?? (session.panes.length === 1 ? prefs.colors?.[session.panes[0].id] : undefined))
+      return <li key={session.id} data-id={session.id} className={`${dragging.current === session.id ? 'dragging' : ''} ${dropping ? 'drop-over' : ''} ${carry && !carry.pane && carry.session === session.id ? 'carried' : ''}`} {...dropTarget(session)}>
         <div className={`swipe-row ${swiped === session.id ? 'swiped' : ''}`}
           onTouchStart={event => { if (!reorder) touch.current = { x: event.touches[0].clientX, y: event.touches[0].clientY, id: session.id } }}
           onTouchEnd={event => {
@@ -492,7 +492,7 @@ function SessionList({ items, reorder, selected, prefs, update, onOpen, onAction
           {renaming?.session === session.id ? <RenameRow key={renaming.pane} api={api} moved={renaming} onDone={onRenamed} /> : <button className="session-main" {...dragAs(multi ? DRAG_SESSION : DRAG_PANE, multi ? session.id : session.panes[0].id, { session: session.id })} aria-current={active && !multi ? 'page' : undefined} aria-expanded={multi ? open : undefined} onMouseEnter={clipTitle} onTouchStart={event => onHold(event, { session: session.id }, session.name, () => onActions(session))} onClick={() => { if (swiped) { setSwiped(null); return } if (multi) toggleOpen(); else onOpen(target) }} onContextMenu={event => { event.preventDefault(); onActions(session, false, anchorOf(event)) }}>
             {multi && <ChevronRight size={14} className="chevron" aria-hidden="true" />}
             {!multi && dot(state)}
-            <span className="session-text"><span className="session-title">{session.name}{pinned ? null : prefs.pinned.includes(session.id) && <Pin size={11} aria-label="Pinned" />}{projectMark(marks?.[session.id])}</span>{prefs.showPaths && <span className="session-folder"><bdi dir="ltr">{session.dir}</bdi></span>}</span>
+            <span className="session-text"><span className="session-title">{session.name}{tag}{pinned ? null : prefs.pinned.includes(session.id) && <Pin size={11} aria-label="Pinned" />}{projectMark(marks?.[session.id])}</span>{prefs.showPaths && <span className="session-folder"><bdi dir="ltr">{session.dir}</bdi></span>}</span>
             {!multi && slotKey(session.panes[0].id)}
             {multi && !open && state.kind !== 'idle' && dot(state)}
           </button>}
@@ -501,7 +501,7 @@ function SessionList({ items, reorder, selected, prefs, update, onOpen, onAction
           {reorder && <span className="grip" aria-label={`Drag to move ${session.name}`} onPointerDown={event => { dragging.current = session.id; event.currentTarget.setPointerCapture(event.pointerId) }} onPointerMove={drag} onPointerUp={() => { dragging.current = null }} onPointerCancel={() => { dragging.current = null }}><GripVertical size={18} /></span>}
         </div>
         </div>
-        {multi && open && !reorder && <ul className="pane-children">{session.panes.map(pane => { const paneState = status([pane], prefs.seen, selected), paneTag = tagStyle(prefs.colors?.[pane.id]); return <li key={pane.id} style={paneTag} className={paneTag ? 'tagged' : undefined}><button {...dragAs(DRAG_PANE, pane.id, { session: session.id, pane: pane.id })} className={pane.id === selected ? 'selected' : ''} aria-current={pane.id === selected ? 'page' : undefined} onMouseEnter={clipTitle} onTouchStart={event => onHold(event, { session: session.id, pane: pane.id }, paneTitle(pane) || session.name, () => onPaneActions(pane))} onClick={() => onOpen(pane)} onContextMenu={event => { event.preventDefault(); onPaneActions(pane, anchorOf(event)) }}>{dot(paneState)}<span className="pane-child-name">{[paneTitle(pane), shownIndex(pane)].filter(Boolean).join(' ')} · {agentNames[pane.agent]}{profileSuffix(pane)}</span>{slotKey(pane.id)}</button></li> })}</ul>}
+        {multi && open && !reorder && <ul className="pane-children">{session.panes.map(pane => { const paneState = status([pane], prefs.seen, selected), paneTag = tagDot(prefs.colors?.[pane.id]); return <li key={pane.id}><button {...dragAs(DRAG_PANE, pane.id, { session: session.id, pane: pane.id })} className={pane.id === selected ? 'selected' : ''} aria-current={pane.id === selected ? 'page' : undefined} onMouseEnter={clipTitle} onTouchStart={event => onHold(event, { session: session.id, pane: pane.id }, paneTitle(pane) || session.name, () => onPaneActions(pane))} onClick={() => onOpen(pane)} onContextMenu={event => { event.preventDefault(); onPaneActions(pane, anchorOf(event)) }}>{dot(paneState)}<span className="pane-child-name">{[paneTitle(pane), shownIndex(pane)].filter(Boolean).join(' ')} · {agentNames[pane.agent]}{profileSuffix(pane)}</span>{paneTag}{slotKey(pane.id)}</button></li> })}</ul>}
       </li>
     })}
   </ul>
