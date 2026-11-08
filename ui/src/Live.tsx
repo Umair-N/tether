@@ -2,8 +2,9 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ArrowUp, AudioLines, Check, ChevronDown, GripHorizontal, Maximize2, Mic, MicOff, Minimize2, Minus, PhoneOff, Square } from 'lucide-react'
 import { errorText, SESSION_NAME, type Api, type Approval, type ChatData, type Choice, type Pane, type SessionsData } from './api'
 import type { Command } from './CommandMenu'
-import { agentNames, paneTitle } from './Sidebar'
-import { agentReady, FridayAgent, type AgentChatList, type AgentChats, type AgentEvent, type ToolHandler } from './fridayAgent'
+import { agentNames, groupSessions, paneTitle } from './Sidebar'
+import { agentReady, FridayAgent, type AgentChats, type AgentEvent, type ToolHandler } from './fridayAgent'
+import { fridayChatList } from './fridaySessions'
 import { LiveVoice, sentences } from './liveVoice'
 import { useBackStep } from './backNav'
 import { useFloatingWindow, type Edge, type FloatMode, type Point, type Rect } from './floatingWindow'
@@ -133,8 +134,8 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
   const queue = useRef<{ who: string; text: string }[]>([])
   const watches = useRef(new Map<string, Watch>())
   const announced = useRef(new Set<string>())
-  const live = useRef({ agents, target, approval, approvalPane, commands, api, onClose })
-  useEffect(() => { live.current = { agents, target, approval, approvalPane, commands, api, onClose } })
+  const live = useRef({ agents, panes, target, approval, approvalPane, commands, api, onClose })
+  useEffect(() => { live.current = { agents, panes, target, approval, approvalPane, commands, api, onClose } })
   const go = (next: Phase) => { phaseNow.current = next; setPhase(next) }
 
   // Every step reads the latest panes and commands through `live`, so the voice callbacks never go stale.
@@ -318,7 +319,7 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
 
   // The tools Friday's brain calls. They run here, with the page's own sign-in, and reply in short facts.
   const tools = useRef<Record<string, ToolHandler>>({
-    list_chats: async () => ({ ...chatList() }),
+    list_chats: async ({ session }) => ({ ...chatList(typeof session === 'string' && session.trim() ? session : undefined) }),
     send_to_chat: async ({ chat, prompt }) => {
       const choice = sessionChoice(live.current.agents, String(chat ?? ''))
       if (choice) return choice
@@ -374,10 +375,13 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
     const busy = agents.filter(pane => !needsOf(pane) && chatState(pane) !== 'idle').map(pane => paneTitle(pane))
     return { target: target ? paneTitle(target) : '', busy, needs, idle: agents.length - busy.length - needs.length }
   }
-  /** Every chat, one short line each: "name, agent, state, tmux session". */
-  function chatList(): AgentChatList {
-    const { agents, target } = live.current
-    return { target: target ? paneTitle(target) : '', chats: agents.map(pane => `${paneTitle(pane)}, ${agentNames[pane.agent]}, ${needsOf(pane) ? 'needs you' : chatState(pane)}, session ${pane.tmux_session}`) }
+  /** Every chat, one short line each, with the sidebar's session name. */
+  function chatList(session?: string) {
+    const { agents, panes, target } = live.current
+    return fridayChatList(agents.map(pane => ({
+      session: pane.tmux_session, chat: paneTitle(pane), agent: agentNames[pane.agent],
+      state: needsOf(pane) ? 'needs you' : chatState(pane), busy: !needsOf(pane) && chatState(pane) !== 'idle',
+    })), groupSessions(panes), target ? paneTitle(target) : '', session)
   }
 
   // Start: the Friday agent when its worker runs, else the phrase loop. Then a short briefing.

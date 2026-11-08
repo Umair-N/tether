@@ -37,6 +37,10 @@ SYSTEM_PROMPT = (
     'Give chat status only when asked about chats or when a chat newly needs the user. '
     'Never end a reply with a status line. Never repeat a status already said in this call. '
     'Call list_chats for idle names. Never read more than 3 names aloud. '
+    'A session is a tmux session: a named group of chats. Speech-to-text may mishear tmux '
+    '(for example as email) and session names; match them to the closest names from list_chats. '
+    'Idle chats are open, not running. Say running or working only for busy chats. '
+    'To list the chats in one session, call list_chats with session. '
     'Speak about chats only from current state or tool results. Never invent a status, result, or file. '
     'If unsure, say you do not know or use the relevant tool. '
     'If the user asks what a chat said or replied, call read_last_reply. '
@@ -61,7 +65,8 @@ SEND_INTENT = re.compile(
 APPROVAL_YES = re.compile(r'\b(?:approve|approved|yes|yeah|yep|ok|okay|sure|allow|go ahead)\b', re.I)
 APPROVAL_NO = re.compile(r"\b(?:deny|denied|no|nope|reject|stop|don't)\b", re.I)
 STT_FIXUPS = {'t third': 'Tether', 'tthird': 'Tether', 'teether': 'Tether',
-              'tetter': 'Tether', "tether's": "Tether's"}
+              'tetter': 'Tether', "tether's": "Tether's",
+              'email sessions': 'tmux sessions', 'email session': 'tmux session'}
 _STT_FIXUP = re.compile(r'\b(?:' + '|'.join(re.escape(word) for word in STT_FIXUPS) + r')\b', re.I)
 CLOSE_STEP_TIMEOUT = 2.0
 REQUEST_TIMEOUT = 9.0
@@ -289,7 +294,8 @@ def tool_schemas():
     """The fixed seven browser tools, in OpenAI JSON schema form."""
     string = {'type': 'string'}
     specs = [
-        ('list_chats', 'Read current chats and the default target.', {}, []),
+        ('list_chats', 'Read current chats, session counts, and the default target. '
+         'With session, list only chats in the closest matching tmux session.', {'session': string}, []),
         ('send_to_chat', 'Send a clear, complete coding prompt to a named chat.',
          {'chat': string, 'prompt': string}, ['chat', 'prompt']),
         ('answer_approval', 'Approve or deny only with clear user consent for this request in this turn.',
