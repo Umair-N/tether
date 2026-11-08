@@ -46,6 +46,16 @@ class SuggestGroupsTests(unittest.TestCase):
         self.assertEqual(json.loads(body['messages'][1]['content']), {'sessions': self.entries})
         self.assertEqual(self.urlopen.call_args.kwargs['timeout'], 25)
 
+    def test_json_with_extra_text_uses_model_groups(self):
+        groups = [{'name': 'Project', 'sessions': ['$6', '$9', '$12']}]
+        output = json.dumps({'groups': groups})
+        for answer in (output + '}', '  ```json\n' + output + '\n```  ',
+                       'Here are the groups:\n' + output):
+            with self.subTest(answer=answer):
+                self.reply(answer)
+                self.assertEqual(suggest_groups.suggest({'sessions': self.entries}),
+                                 {'groups': groups, 'source': 'llm'})
+
     def test_bad_json_and_bad_envelopes_use_folder_fallback(self):
         expected = {'groups': [{'name': 'project', 'sessions': ['$6', '$9']}, {'name': 'Other', 'sessions': ['$12']}],
                     'source': 'folder'}
