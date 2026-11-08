@@ -89,6 +89,34 @@ def remove(worker, reviewer=None):
         return True
 
 
+def resume_stalled(worker, reviewer, request_id, action, *, last_reply=None, reviewer_entry=None):
+    if not all(isinstance(pane, str) and re.fullmatch(r'%[0-9]+', pane)
+               for pane in (worker, reviewer)) or not (
+            isinstance(request_id, str) and re.fullmatch(r'[0-9a-f]{8}', request_id)):
+        raise ValueError('This review is no longer stalled.')
+    with _lock:
+        links = _read()
+        link = next((item for item in links if isinstance(item, dict)
+                     and item.get('worker') == worker and item.get('reviewer') == reviewer
+                     and item.get('stalled') == request_id), None)
+        if link is None:
+            raise ValueError('This review is no longer stalled.')
+        if action not in ('resend', 'latest'):
+            raise ValueError('Choose resend or latest.')
+        if action == 'latest' and (last_reply is None or reviewer_entry is None
+                                   or _digest(last_reply(reviewer_entry)) != link.get('stalled_reply')):
+            raise ValueError('The reviewer replied again. Open the tab.')
+        link.pop('stalled')
+        link.pop('stalled_reply', None)
+        if action == 'resend':
+            link['seen_working'] = True
+        else:
+            link.update(awaiting=True, reviewer_seen_working=True, idle_ticks=0)
+            link.pop('request_id', None)
+        _write(links)
+        return dict(link)
+
+
 def _digest(text):
     return hashlib.sha256((text or '').encode()).hexdigest()
 
@@ -128,7 +156,8 @@ def _send_worker(link, worker, text, state, send, clear, feedback_sent):
     return True
 
 
-def _step(link, entries, status, send, last_reply, awaiting, clear, feedback_sent, work_mark, review_reply):
+def _step(link, entries, status, send, last_reply, awaiting, clear, feedback_sent, work_mark, review_reply,
+          stalled_replies):
     worker = entries.get(link['worker'])
     reviewer = entries.get(link['reviewer'])
     if link['reviewer_thread'] is None:
@@ -186,6 +215,11 @@ def _step(link, entries, status, send, last_reply, awaiting, clear, feedback_sen
             # No turn seen yet. A turn shorter than one tick still changes the last reply; none for 30 ticks: give up.
             link['idle_ticks'] = link.get('idle_ticks', 0) + 1
             if link['idle_ticks'] >= 30:
+                if anchored:
+                    link['stalled'] = link['request_id']
+                    latest = last_reply(reviewer)
+                    link['stalled_reply'] = _digest(latest)
+                    stalled_replies[link['worker'], link['reviewer']] = latest
                 link['awaiting'] = False
         elif reviewer_state == 'Idle':
             reply = (reply if anchored else last_reply(reviewer)).strip()
@@ -252,6 +286,8 @@ def _step(link, entries, status, send, last_reply, awaiting, clear, feedback_sen
             except (DraftError, RuntimeError):
                 pass
         if delivered:
+            link.pop('stalled', None)
+            link.pop('stalled_reply', None)
             link['request_id'] = request_id
             if mark is not None and mark == link.get('work_mark'):
                 link['empty_turn'] = True
@@ -289,12 +325,13 @@ def observe(entries, status, send, last_reply, *, alert=None, work_mark=None, re
         def clear(pane):
             return (pane not in awaiting
                     and time.monotonic() - _last_sent.get(pane, float('-inf')) >= SEND_GAP)
+        stalled_replies = {}
         changes = []
         for link in original:
             try:
                 copy = dict(link)
                 updated = _step(copy, by_pane, status, send, last_reply, awaiting, clear, feedback_sent,
-                                work_mark, review_reply)
+                                work_mark, review_reply, stalled_replies)
             except Exception:  # a malformed link or one bad pane must not stop other reviews
                 continue
             if updated != link:
@@ -319,6 +356,7 @@ def observe(entries, status, send, last_reply, *, alert=None, work_mark=None, re
                 _write(current)
         for old, updated, reason in applied:
             title = body = None
+            review = None
             if updated is None:
                 print(f"review link removed: worker={old['worker']} reviewer={old['reviewer']} "
                       f"name={old['name']} reason={reason}", file=sys.stderr, flush=True)
@@ -328,9 +366,21 @@ def observe(entries, status, send, last_reply, *, alert=None, work_mark=None, re
                 title = 'Review paused'
                 body = (f'“{old["name"]}” reached the round limit. '
                         'Send a prompt in that tab to restart reviews.')
+            elif updated.get('stalled') and not old.get('stalled'):
+                print(f"review stalled: worker={old['worker']} reviewer={old['reviewer']} "
+                      f"name={old['name']}", file=sys.stderr, flush=True)
+                title = 'Review stalled'
+                preview = stalled_replies[old['worker'], old['reviewer']].strip().replace('\n', ' ')
+                preview = preview[:120] + ('…' if len(preview) > 120 else '')
+                body = (f'“{old["name"]}”: Tether could not find the reviewer reply. '
+                        f'Ask the reviewer again, or send its latest reply. Latest reply: “{preview}”')
+                review = {'worker': old['worker'], 'reviewer': old['reviewer'], 'id': updated['stalled']}
             if title and alert is not None:
                 try:
-                    alert(title, body, old['worker'])
+                    if review is not None:
+                        alert(title, body, old['worker'], review=review)
+                    else:
+                        alert(title, body, old['worker'])
                 except Exception:  # a failed notification must not lose other alerts
                     pass
     except Exception:  # disk and discovery errors must never stop the monitor

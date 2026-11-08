@@ -34,9 +34,10 @@ async function notify(payload) {
   const title = payload.title || 'Tether', body = payload.body || ''
   for (const item of await self.registration.getNotifications({ tag: SUMMARY })) item.close()
   await self.registration.showNotification(title, { ...ICONS, body, tag: payload.tag, silent: payload.silent === true,
-    data: { session: payload.session, thread: payload.thread, approval: payload.approval, body: payload.body },
+    data: { session: payload.session, thread: payload.thread, approval: payload.approval, body: payload.body, review: payload.review },
     // A plain yes/no prompt gets Approve and Deny (the server picked it as safe to answer from here); others get Urgent only.
     actions: payload.approval ? [{ action: 'approve', title: 'Approve' }, { action: 'deny', title: 'Deny' }]
+      : payload.review ? [{ action: 'resend', title: 'Ask again' }, { action: 'latest', title: 'Send this reply' }]
       : payload.session ? [{ action: 'mute', title: 'Urgent only' }, { action: 'agents', title: 'All agents' }] : [],
   })
 }
@@ -59,9 +60,33 @@ async function answer(notification, approve) {
     for (const shown of await self.registration.getNotifications({ tag: notification.tag })) if (shown.title === title) shown.close()
   }
 }
+// A stalled review: ask the reviewer again, or send its latest reply. The server checks the review id, so an old
+// notification does nothing. A refusal says why and opens the worker tab on tap.
+async function resumeReview(notification, action) {
+  const { session, review } = notification.data || {}
+  let error = ''
+  try {
+    const response = await fetch('/mobile/api/review-stalled', { method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', 'X-Codex-Mobile': '1' },
+      body: JSON.stringify({ worker: review.worker, reviewer: review.reviewer, id: review.id, action }) })
+    if (!response.ok) error = (await response.json().catch(() => ({}))).error || `Error ${response.status}`
+  } catch { error = 'Could not reach the server.' }
+  const done = action === 'resend' ? 'Asked the reviewer again' : 'Sent the reply'
+  const title = error ? 'Review stalled: not done' : done
+  await self.registration.showNotification(title, { body: error ? `${error} Tap to open.` : '', tag: notification.tag, silent: !error,
+    icon: '/chat/icon-192.png', badge: '/chat/badge-96.png', data: { session } })
+  if (!error) {
+    await new Promise(resolve => setTimeout(resolve, 4000))
+    for (const shown of await self.registration.getNotifications({ tag: notification.tag })) if (shown.title === title) shown.close()
+  }
+}
 self.addEventListener('notificationclick', event => {
   event.notification.close()
   const session = event.notification.data?.session
+  if ((event.action === 'resend' || event.action === 'latest') && event.notification.data?.review) {
+    event.waitUntil(resumeReview(event.notification, event.action))
+    return
+  }
   if ((event.action === 'approve' || event.action === 'deny') && event.notification.data?.approval) {
     event.waitUntil(answer(event.notification, event.action === 'approve'))
     return
