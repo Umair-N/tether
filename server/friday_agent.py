@@ -15,6 +15,7 @@ from collections import deque
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 import json
+import math
 import os
 import re
 import sys
@@ -64,6 +65,47 @@ _STT_FIXUP = re.compile(r'\b(?:' + '|'.join(re.escape(word) for word in STT_FIXU
 CLOSE_STEP_TIMEOUT = 2.0
 REQUEST_TIMEOUT = 9.0
 _closing_tasks = set()
+
+
+def audio_slack(made, elapsed, audio_bytes, sample_rate, num_channels):
+    """Return audio seconds made and slack before the next PCM16 frame."""
+    return made + audio_bytes / 2 / num_channels / sample_rate, made - elapsed
+
+
+def filter_net_stats(data):
+    """Keep only finite numeric audio counters; never log arbitrary client fields."""
+    fields = ('packetsLost', 'packetsReceived', 'jitter', 'concealedSamples',
+              'totalSamplesReceived', 'concealmentEvents', 'jitterBufferAvgMs')
+    if not isinstance(data, dict) or len(data) > 12:
+        return {}
+    return {key: value for key, value in data.items() if key in fields
+            and type(value) in (int, float) and math.isfinite(value)}
+
+
+async def measure_loop_lag():
+    """Report each call's loop lag in ten-second windows and at teardown."""
+    samples = []
+    window = time.monotonic()
+
+    def report():
+        ordered = sorted(samples)
+        data = {'max_lag_ms': round(max(samples, default=0) * 1000, 3),
+                'p95_lag_ms': round(ordered[math.ceil(len(ordered) * .95) - 1] * 1000, 3) if ordered else 0,
+                'over_50ms': sum(lag > .05 for lag in samples)}
+        print('Friday loop ' + json.dumps(data, separators=(',', ':')), file=sys.stderr, flush=True)
+        samples.clear()
+
+    try:
+        while True:
+            start = time.monotonic()
+            await asyncio.sleep(.02)
+            now = time.monotonic()
+            samples.append(now - start - .02)
+            if now - window >= 10:
+                report()
+                window = now
+    finally:
+        report()
 
 
 def fix_transcript(text):
@@ -598,12 +640,33 @@ def runtime_types():
         async def run_tts(self, text, context_id):
             start = time.monotonic()
             first = True
-            async for frame in super().run_tts(text, context_id):
-                if first and getattr(frame, 'audio', None):
-                    first = False
-                    if self.session.tts_ttfb is None:
-                        self.session.tts_ttfb = time.monotonic() - start
-                yield frame
+            first_audio = last_audio = None
+            made = worst = 0.0
+            underruns = 0
+            turn = self.session.turn
+            try:
+                async for frame in super().run_tts(text, context_id):
+                    if first and getattr(frame, 'audio', None):
+                        first = False
+                        if self.session.tts_ttfb is None:
+                            self.session.tts_ttfb = time.monotonic() - start
+                    if getattr(frame, 'audio', None):
+                        last_audio = time.monotonic()
+                        if first_audio is None:
+                            first_audio = last_audio
+                        made, slack = audio_slack(made, last_audio - first_audio,
+                            len(frame.audio), frame.sample_rate, frame.num_channels)
+                        if slack < 0:
+                            underruns += 1
+                            worst = min(worst, slack)
+                    yield frame
+            finally:
+                if made:
+                    gen = last_audio - start
+                    data = {'turn': turn, 'audio': round(made, 3), 'gen': round(gen, 3),
+                            'rtf': round(gen / made, 3), 'underruns': underruns,
+                            'worst_gap_ms': round(-worst * 1000, 3), 'chars': len(text)}
+                    print('Friday tts ' + json.dumps(data, separators=(',', ':')), file=sys.stderr, flush=True)
 
     class FridayLLM(OpenAILLMService):
         supports_developer_role = False
@@ -922,7 +985,7 @@ class Session:
             observers=[self.llm.browser_observer(), rt.FridayObserver(self)],
             idle_timeout_secs=None)
         self.runner = WorkerRunner(handle_sigint=False, handle_sigterm=False)
-        self.run_task = self.queue_task = None
+        self.run_task = self.queue_task = self.loop_task = None
         self.close_task = None
         self.on_closed = None
 
@@ -941,6 +1004,11 @@ class Session:
         @self.aggregators.user().event_handler('on_user_turn_stopped')
         async def user_stopped(aggregator, strategy, message):
             await self.user_stopped(message)
+
+        @transport.event_handler('on_client_connected')
+        async def connected(transport, peer):
+            if self.loop_task is None and self.close_task is None:
+                self.loop_task = asyncio.create_task(measure_loop_lag(), name='friday-loop-lag')
 
         @transport.event_handler('on_client_disconnected')
         async def disconnected(transport, peer):
@@ -1046,6 +1114,10 @@ class Session:
                 await self.rtvi.send_server_message({'t': 'interrupted', 'd': {'turn': turn}})
         elif kind == 'spoken':
             await self.tts.spoken(data)
+        elif kind == 'stats':
+            stats = filter_net_stats(data)
+            if stats:
+                print('Friday net ' + json.dumps(stats, separators=(',', ':')), file=sys.stderr, flush=True)
         elif kind == 'state':
             self.state = json.loads(json.dumps(data))
         elif kind == 'note' and isinstance(data.get('text'), str):
@@ -1113,6 +1185,9 @@ class Session:
         await asyncio.shield(self.close_task)
 
     async def _close(self):
+        if self.loop_task:
+            self.loop_task.cancel()
+            await asyncio.gather(self.loop_task, return_exceptions=True)
         if self.queue_task:
             self.queue_task.cancel()
         await close_step(self.connection.disconnect(), 'connection.disconnect()')

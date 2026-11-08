@@ -15,6 +15,33 @@ except ImportError:
 
 
 class FridayRulesTests(unittest.TestCase):
+    def test_audio_slack_counts_late_frames_before_adding_audio(self):
+        made, slack = friday.audio_slack(0, 0, 4800, 24000, 1)
+        self.assertAlmostEqual(made, .1)
+        self.assertEqual(slack, 0)
+        underruns, worst = 0, 0
+        for elapsed in (.05, .25, .5):
+            made, slack = friday.audio_slack(made, elapsed, 9600, 24000, 2)
+            if slack < 0:
+                underruns += 1
+                worst = min(worst, slack)
+        self.assertAlmostEqual(made, .4)
+        self.assertEqual(underruns, 2)
+        self.assertAlmostEqual(worst, -.2)
+        self.assertEqual(friday.audio_slack(.5, .5, 3200, 16000, 1), (.6, 0))
+
+    def test_stats_filter_keeps_only_finite_audio_numbers(self):
+        valid = {'packetsLost': -1, 'packetsReceived': 10, 'jitter': .01,
+                 'concealedSamples': 0, 'totalSamplesReceived': 960,
+                 'concealmentEvents': 1, 'jitterBufferAvgMs': 12.5}
+        self.assertEqual(friday.filter_net_stats(valid), valid)
+        for data in (None, [], 'stats', 1, {str(i): i for i in range(13)}):
+            self.assertEqual(friday.filter_net_stats(data), {})
+        for value in (True, None, 'secret', [], {}, float('nan'), float('inf')):
+            self.assertEqual(friday.filter_net_stats({'jitter': value}), {})
+        self.assertEqual(friday.filter_net_stats({'text': 'private', 'token': 123,
+                                                 'packetsReceived': 5}), {'packetsReceived': 5})
+
     def test_voice_name_default_and_override(self):
         self.assertEqual(friday.voice_name({}), 'lola')
         self.assertEqual(friday.voice_name({'TETHER_FRIDAY_VOICE': 'anna'}), 'anna')
@@ -340,6 +367,31 @@ class FridayRulesTests(unittest.TestCase):
 
 
 class FridayNoteTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stats_dispatch_logs_only_filtered_numbers(self):
+        session = friday.Session.__new__(friday.Session)
+        with patch('sys.stderr') as stderr:
+            for data in (None, [], {'jitter': 'private'}, {'text': 'private'}):
+                await session.client_message('stats', data)
+            await session.client_message('stats', {'packetsLost': 2, 'jitter': .03,
+                                                   'text': 'private', 'packetsReceived': True})
+        lines = [call.args[0] for call in stderr.write.call_args_list if call.args[0].strip()]
+        self.assertEqual(lines, ['Friday net {"packetsLost":2,"jitter":0.03}'])
+
+    async def test_loop_lag_reports_resets_and_flushes_on_cancel(self):
+        clock = [0, 0, .08, .08, 10.1, 10.1, 10.13, 10.13]
+        with patch.object(friday.time, 'monotonic', side_effect=clock), \
+                patch.object(friday.asyncio, 'sleep', new_callable=AsyncMock) as sleep, \
+                patch('sys.stderr') as stderr:
+            sleep.side_effect = [None, None, None, asyncio.CancelledError()]
+            with self.assertRaises(asyncio.CancelledError):
+                await friday.measure_loop_lag()
+        self.assertTrue(all(call.args == (.02,) for call in sleep.await_args_list))
+        reports = [json.loads(call.args[0].removeprefix('Friday loop '))
+                   for call in stderr.write.call_args_list if call.args[0].strip()]
+        self.assertEqual(reports, [
+            {'max_lag_ms': 10000.0, 'p95_lag_ms': 10000.0, 'over_50ms': 2},
+            {'max_lag_ms': 10.0, 'p95_lag_ms': 10.0, 'over_50ms': 0}])
+
     async def test_close_bounds_all_steps_and_cancels_pipeline_and_queue(self):
         async def hang():
             await asyncio.Event().wait()
@@ -349,6 +401,7 @@ class FridayNoteTests(unittest.IsolatedAsyncioTestCase):
         session.runner = Mock(cancel=AsyncMock(side_effect=hang))
         session.run_task = asyncio.create_task(hang())
         session.queue_task = asyncio.create_task(hang())
+        session.loop_task = None
         session.close_task = None
         session.on_closed = Mock()
         close_step = friday.close_step
