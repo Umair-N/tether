@@ -54,6 +54,7 @@ import transcribe
 import tts
 import friday_proxy
 import live_mode
+import attention
 import suggest_groups
 import thread_started
 import shell_log
@@ -159,6 +160,13 @@ def monitor_notices():
                 continue
         review_links.observe(entries, shared_status, review_send, last_reply,
                              alert=review_alert, work_mark=review_work_mark, review_reply=review_reply)
+        try:
+            attention.STORE.observe(entries, shared_status, notification_reply, lambda entry: timeline(entry['id'])['finished'])
+            digest = attention.STORE.digest_due()
+            if digest:
+                notify(digest, False)
+        except Exception as exc:  # Attention mode must never stop the monitor
+            print(f'attention observe failed: {exc!r}', file=sys.stderr)
         time.sleep(2)
 
 
@@ -289,7 +297,8 @@ def session_row(entry):
     """One pane in the session list. `needs` is a one-line summary when the pane waits on the user (the desktop "Needs you" list)."""
     status = shared_status(entry)
     return dict({key: entry.get(key) for key in ('id', 'tmux_session', 'label', 'agent', 'thread', 'writable', 'pane_name', 'tmux_pane_name', 'pane_icon', 'agent_name', 'codex_profile', 'worktree')},
-                dir=home_path(tab_folder(entry)), **status, **timeline(entry['id']), needs=needs.summary(status))
+                dir=home_path(tab_folder(entry)), **status, **timeline(entry['id']), needs=needs.summary(status),
+                ask=attention.STORE.ask(entry['id'], entry.get('thread')))
 
 
 def files_sessions():
@@ -1490,6 +1499,8 @@ class Handler(BaseHTTPRequestHandler):
                 friday_proxy.get(self)
             elif live_mode.handles(path):
                 live_mode.get(self, lambda: [session_row(entry) for entry in sessions()])
+            elif attention.handles(path):
+                attention.get(self)
             elif path == '/mobile/api/stream':
                 query = parse_qs(urlsplit(self.path).query)
                 self.stream_chat(query.get('session', [None])[0], query.get('mode') == ['shell'], window_limit(query), preview=query.get('preview') == ['1'])
@@ -1542,7 +1553,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.respond(403, {'error': 'Reload the page and try again.'})
             return
         if self.path not in ('/mobile/api/update', '/mobile/api/history/hide', '/mobile/api/file-check', '/mobile/api/ask-hook', '/mobile/api/ask-answer', '/mobile/api/ask-engage', '/mobile/api/message', '/mobile/api/broadcast', '/mobile/api/approval', '/mobile/api/menu', '/mobile/api/prompt-action', '/mobile/api/start', '/mobile/api/session', '/mobile/api/tmux-sessions', '/mobile/api/key', '/mobile/api/clear-draft', '/mobile/api/unqueue', '/mobile/api/mode', '/mobile/api/type',
-                         '/mobile/api/push/subscribe', '/mobile/api/push/unsubscribe', '/mobile/api/push/test', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/shortcuts', '/mobile/api/prefs', '/mobile/api/codex-provider', '/mobile/api/model-options', '/mobile/api/model', '/mobile/api/rename', '/mobile/api/merge', suggest_groups.PATH, '/mobile/api/shell', '/mobile/api/upload', '/mobile/api/transcribe', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/delegate', '/mobile/api/agent-tab', '/mobile/api/continue-preview', '/mobile/api/continue', '/mobile/api/review-stop', '/mobile/api/review-stalled', '/mobile/api/review-link', '/mobile/api/resume', '/mobile/api/auto-resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/refresh', '/mobile/api/accounts/switch') and not browser_api.handles(self.path) and not projects_api.handles(self.path) and not codex_level.handles(self.path) and not tts.handles(self.path) and not friday_proxy.handles(self.path) and not live_mode.handles(self.path):
+                         '/mobile/api/push/subscribe', '/mobile/api/push/unsubscribe', '/mobile/api/push/test', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/shortcuts', '/mobile/api/prefs', '/mobile/api/codex-provider', '/mobile/api/model-options', '/mobile/api/model', '/mobile/api/rename', '/mobile/api/merge', suggest_groups.PATH, '/mobile/api/shell', '/mobile/api/upload', '/mobile/api/transcribe', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/delegate', '/mobile/api/agent-tab', '/mobile/api/continue-preview', '/mobile/api/continue', '/mobile/api/review-stop', '/mobile/api/review-stalled', '/mobile/api/review-link', '/mobile/api/resume', '/mobile/api/auto-resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/refresh', '/mobile/api/accounts/switch') and not browser_api.handles(self.path) and not projects_api.handles(self.path) and not codex_level.handles(self.path) and not tts.handles(self.path) and not friday_proxy.handles(self.path) and not live_mode.handles(self.path) and not attention.handles(self.path):
             self.respond(404, {'error': 'Not found'})
             return
         # Reject unauthenticated and cross-origin submissions.
@@ -1633,11 +1644,18 @@ class Handler(BaseHTTPRequestHandler):
             if ask_bridge.handles(self.path):
                 ask_bridge.serve(self, body, choose)
                 return
+            if attention.handles(self.path):
+                attention.serve(self, body, choose)
+                return
             if self.path == '/mobile/api/message' and (not isinstance(message, str) or not message.strip()):
                 self.respond(400, {'error': 'Enter a message first.'})
                 return
             if self.path == '/mobile/api/broadcast':
-                self.respond(200, broadcast_message(body))
+                result = broadcast_message(body)
+                for row in result.get('results') or []:
+                    if row.get('result') in ('sent', 'sent_busy'):
+                        attention.STORE.clear(row.get('pane'))  # you answered that tab
+                self.respond(200, result)
                 return
             if self.path == '/mobile/api/accounts/refresh':
                 self.respond(200, saved_accounts.listing())
@@ -2059,11 +2077,14 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError('The answer contains terminal control characters.')
                 with SEND_LOCK:
                     menu_choose(config, choice, label=label, answer=answer)
+                attention.STORE.clear(config['id'], config.get('thread'))
                 self.respond(200, {'accepted': True})
                 return
             if self.path == '/mobile/api/type':
                 with SEND_LOCK:
                     type_text(config, body.get('text'), enter=body.get('enter') is True, login_url=body.get('login_url'))
+                if body.get('enter') is True:
+                    attention.STORE.clear(config['id'], config.get('thread'))
                 self.respond(200, {'accepted': True})
                 return
             if self.path == '/mobile/api/unqueue':
@@ -2079,9 +2100,12 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == '/mobile/api/approval':
                 with SEND_LOCK:
                     respond_approval(config, body.get('approval'), body.get('action'), choice=body.get('choice'), feedback=body.get('feedback'))
+                attention.STORE.clear(config['id'], config.get('thread'))
                 self.respond(200, {'accepted': True})
             else:
-                self.respond(200, {'accepted': True, 'delivery': send_text(config, message)})
+                delivery = send_text(config, message)
+                attention.STORE.clear(config['id'], config.get('thread'))  # you answered the tab
+                self.respond(200, {'accepted': True, 'delivery': delivery})
         except (ValueError, UnicodeError) as exc:
             self.respond(400, {'error': str(exc) if self.path in ('/mobile/api/history/hide', '/mobile/api/session', '/mobile/api/tmux-sessions', '/mobile/api/broadcast', '/mobile/api/merge', '/mobile/api/model', '/mobile/api/shell', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/delegate', '/mobile/api/agent-tab', '/mobile/api/continue-preview', '/mobile/api/continue', '/mobile/api/review-stop', '/mobile/api/review-stalled', '/mobile/api/review-link', '/mobile/api/resume', '/mobile/api/auto-resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/mode', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/menu', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/refresh', '/mobile/api/accounts/switch') else 'Invalid message.'})
         except (OSError, RuntimeError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:

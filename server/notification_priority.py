@@ -91,8 +91,8 @@ def turn_source(agent, records):
     return 'user'
 
 
-def classify(kind, agent, records, reply):
-    """Return (priority, preview text). Only a final status line overrides text guesses."""
+def status_line(reply):
+    """('yes' | 'no' | None, the reply's lines without its final "Needs you:" line)."""
     lines = str(reply or '').rstrip().splitlines()
     status = None
     if lines:
@@ -102,6 +102,12 @@ def classify(kind, agent, records, reply):
         if match:
             status = match[1].lower()
             lines.pop()
+    return status, lines
+
+
+def classify(kind, agent, records, reply):
+    """Return (priority, preview text). Only a final status line overrides text guesses."""
+    status, lines = status_line(reply)
     preview = '\n'.join(lines).rstrip()
     if kind in ('approval', 'input') or status == 'yes':
         return 'urgent', preview

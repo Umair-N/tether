@@ -13,6 +13,7 @@ import { Choice, Notifications, SessionSettings, SystemSettings } from './Settin
 import { matchesSetting, SETTINGS_GROUPS } from './settingsIndex'
 import type { SettingIndex, SettingsGroup } from './settingsIndex'
 import { keyLabel } from './keys'
+import { DigestSettings } from './Attention'
 import './Settings.css'
 
 type Scope = 'All devices' | 'This device' | 'This server'
@@ -41,6 +42,10 @@ export function Settings({ api, prefs, update, onReload, onClose }: { api: Api; 
     item('terms', 'workspace', 'tmux words', 'pane split tab terminology ctrl-b', <Toggle title="tmux words" note="Use pane, split and Ctrl-b in place of Tether’s terms." checked={prefs.tmuxWords} onChange={tmuxWords => update(() => ({ tmuxWords }))} />),
     item('preview', 'workspace', 'Live reply preview', 'claude response stream messages', <Toggle title="Live reply preview" note="Show Claude’s reply as it arrives." checked={prefs.liveReplyPreview} onChange={liveReplyPreview => update(() => ({ liveReplyPreview }))} />),
     item('bubble', 'workspace', 'Agents bubble', 'floating working agents hide', <Toggle title="Agents bubble" note="A floating shortcut to your working agents." scope="This device" checked={prefs.agentBubble} onChange={agentBubble => update(() => ({ agentBubble }))} />),
+    item('attention', 'workspace', 'Attention mode', 'waiting on you needs you ask oldest handled snooze remind tomorrow digest daily summary', <>
+      <Toggle title="Attention mode" note="Keep a tab in “Waiting on you” until you answer it, mark it handled or snooze it." checked={prefs.attention} onChange={attention => update(() => ({ attention }))} />
+      {prefs.attention && <DigestSettings api={api} />}
+    </>),
     item('auto-resume', 'workspace', 'Reopen tabs after a restart', 'auto resume restore restart tmux reboot', <Toggle title="Reopen tabs after a restart" note="Bring back open Claude and Codex chats when tmux or the machine restarts." scope="This server" checked={prefs.autoResume} onChange={autoResume => update(() => ({ autoResume }))} />),
     item('microphone', 'voice', 'Voice button', 'mic microphone dictate speech input keyboard', <Toggle title="Voice button" note="Show the microphone in the message box." checked={!prefs.voiceOff} onChange={on => update(() => ({ voiceOff: !on }))} />),
     item('chime', 'voice', 'Start sound', 'mic microphone ready chime volume', <Toggle title="Start sound" note="Play a chime when the microphone is ready." checked={prefs.voiceSound && !prefs.voiceOff} disabled={prefs.voiceOff} onChange={voiceSound => update(() => ({ voiceSound }))} />),
