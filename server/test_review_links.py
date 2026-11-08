@@ -122,8 +122,10 @@ class ReviewLinksTests(unittest.TestCase):
         for reply in (None, ''):
             with self.subTest(reply=reply):
                 self.add()
+                self.alert.reset_mock()
                 self.review_reply = Mock(return_value=reply)
                 self.request_review()
+                request_id = self.links()[0]['request_id']
                 self.send.reset_mock()
                 self.reply.reset_mock()
                 self.reply.return_value = 'Unrelated reply'
@@ -132,12 +134,281 @@ class ReviewLinksTests(unittest.TestCase):
                     self.observe(**{'%12': 'Idle'})
                     self.assertTrue(self.links()[0]['awaiting'])
                     self.assertEqual(self.links()[0]['idle_ticks'], tick)
-                self.observe()
+                with patch('review_links.sys.stderr', new_callable=io.StringIO) as stderr:
+                    self.observe()
                 self.assertFalse(self.links()[0]['awaiting'])
+                self.assertEqual(self.links()[0]['stalled'], request_id)
+                self.alert.assert_called_once_with('Review stalled',
+                    '“Fix the bug”: Tether could not find the reviewer reply. '
+                    'Ask the reviewer again, or send its latest reply. Latest reply: “Unrelated reply”', '%13',
+                    review={'worker': '%13', 'reviewer': '%12', 'id': request_id})
+                self.assertEqual(stderr.getvalue(),
+                    'review stalled: worker=%13 reviewer=%12 name=Fix the bug\n')
                 for key in ('request_id', 'idle_ticks', 'reviewer_seen_working', 'reviewer_before'):
                     self.assertNotIn(key, self.links()[0])
                 self.send.assert_not_called()
-                self.reply.assert_not_called()
+                self.reply.assert_called_with(self.reviewer)
+                self.observe()
+                self.assertEqual(self.alert.call_count, 1)
+                self.send.assert_not_called()
+
+    def test_stalled_alert_preview_strips_flattens_and_bounds_the_reply(self):
+        for reply, preview in [('  First line\nSecond line  ', 'First line Second line'),
+                               ('x' * 120, 'x' * 120),
+                               ('x' * 121, 'x' * 120 + '…'), ('', '')]:
+            with self.subTest(reply=reply):
+                self.add()
+                self.alert.reset_mock()
+                self.reply.return_value = reply
+                self.stall_review()
+                self.assertTrue(self.alert.call_args.args[1].endswith(f'Latest reply: “{preview}”'))
+                self.assertIn('stalled_reply', self.links()[0])
+
+    def test_stalled_preview_and_digest_use_the_same_reply_snapshot(self):
+        self.review_reply = Mock(return_value=None)
+        self.request_review()
+        request_id = self.links()[0]['request_id']
+        for _ in range(29):
+            self.observe()
+        self.reply.side_effect = ['The reply Mak saw.', 'A newer reply.']
+        with patch('review_links.sys.stderr', new_callable=io.StringIO):
+            self.observe()
+        self.assertTrue(self.alert.call_args.args[1].endswith('Latest reply: “The reply Mak saw.”'))
+        self.reply.side_effect = None
+        self.reply.return_value = 'The reply Mak saw.'
+        updated = review_links.resume_stalled('%13', '%12', request_id, 'latest',
+                                              last_reply=self.reply, reviewer_entry=self.reviewer)
+        self.assertTrue(updated['awaiting'])
+
+    def test_anchored_reply_on_tick_29_forwards_without_stalling(self):
+        self.review_reply = Mock(return_value=None)
+        self.request_review()
+        self.send.reset_mock()
+        for _ in range(28):
+            self.observe()
+        self.review_reply.return_value = 'Fix the regression.'
+        self.observe()
+        self.send.assert_called_once()
+        self.assertEqual(self.send.call_args.args[0], self.worker)
+        self.assertIn('Fix the regression.', self.send.call_args.args[1])
+        self.assertFalse(self.links()[0]['awaiting'])
+        self.assertNotIn('stalled', self.links()[0])
+        self.alert.assert_not_called()
+
+    def stall_review(self):
+        self.review_reply = Mock(return_value=None)
+        self.request_review()
+        request_id = self.links()[0]['request_id']
+        with patch('review_links.sys.stderr', new_callable=io.StringIO):
+            for _ in range(30):
+                self.observe()
+        self.send.reset_mock()
+        return request_id
+
+    def test_resume_stalled_resend_queues_a_fresh_request_for_idle_worker(self):
+        with patch.object(review_links.secrets, 'token_hex', return_value='a1b2c3d4'):
+            request_id = self.stall_review()
+        updated = review_links.resume_stalled('%13', '%12', request_id, 'resend')
+        self.assertEqual(updated, self.links()[0])
+        self.assertNotIn('stalled', updated)
+        self.assertNotIn('stalled_reply', updated)
+        self.assertTrue(updated['seen_working'])
+        self.send.assert_not_called()
+        updated['name'] = 'Local copy'
+        self.assertEqual(self.links()[0]['name'], 'Fix the bug')
+        self.observe(**{'%13': 'Input needed'})
+        self.send.assert_not_called()
+        with patch.object(review_links.secrets, 'token_hex', return_value='b2c3d4e5'):
+            self.observe(**{'%13': 'Idle'})
+        self.send.assert_called_once()
+        self.assertEqual(self.send.call_args.args[0], self.reviewer)
+        self.assertIn('Review id: b2c3d4e5.', self.send.call_args.args[1])
+        self.assertNotEqual(self.links()[0]['request_id'], request_id)
+        self.assertTrue(self.links()[0]['awaiting'])
+        self.assertNotIn('stalled', self.links()[0])
+        before = self.file.read_bytes()
+        with self.assertRaisesRegex(ValueError, '^This review is no longer stalled\\.$'):
+            review_links.resume_stalled('%13', '%12', request_id, 'resend')
+        self.assertEqual(self.file.read_bytes(), before)
+
+    def test_new_review_delivery_clears_stalled_only_after_successful_send(self):
+        self.stall_review()
+        self.send.side_effect = DraftError('Keep the draft.')
+        self.request_review()
+        self.assertIn('stalled', self.links()[0])
+        self.assertIn('stalled_reply', self.links()[0])
+        self.assertFalse(self.links()[0]['awaiting'])
+        self.send.side_effect = None
+        self.observe()
+        self.assertNotIn('stalled', self.links()[0])
+        self.assertNotIn('stalled_reply', self.links()[0])
+        self.assertTrue(self.links()[0]['awaiting'])
+
+    def test_resume_stalled_latest_forwards_approval_or_feedback_with_existing_round_rules(self):
+        cases = [('APPROVED fine', 1, False), ('Fix the regression.', 1, False),
+                 ('APPROVED at limit', review_links.MAX_ROUNDS, False),
+                 ('Still needs fixes.', review_links.MAX_ROUNDS, True)]
+        for reply, rounds, pauses in cases:
+            with self.subTest(reply=reply):
+                self.add()
+                self.reply.return_value = reply
+                request_id = self.stall_review()
+                link, = self.links()
+                link.update(rounds=rounds, empty_rounds=1)
+                self.file.write_text(json.dumps([link]))
+                updated = review_links.resume_stalled('%13', '%12', request_id, 'latest',
+                                                      last_reply=self.reply, reviewer_entry=self.reviewer)
+                self.assertEqual(updated, self.links()[0])
+                self.assertNotIn('stalled', updated)
+                self.assertNotIn('stalled_reply', updated)
+                self.assertNotIn('request_id', updated)
+                self.assertTrue(updated['awaiting'])
+                self.assertTrue(updated['reviewer_seen_working'])
+                self.assertEqual(updated['idle_ticks'], 0)
+                self.send.assert_not_called()
+                self.reply.return_value = reply
+                self.review_reply.reset_mock()
+                self.observe(**{'%12': 'Input needed'})
+                self.send.assert_not_called()
+                self.observe(**{'%12': 'Idle'})
+                self.review_reply.assert_not_called()
+                self.reply.assert_any_call(self.reviewer)
+                self.assertFalse(self.links()[0]['awaiting'])
+                if pauses:
+                    self.send.assert_not_called()
+                    self.assertTrue(self.links()[0]['paused'])
+                    self.assertEqual(self.links()[0]['rounds'], rounds)
+                else:
+                    self.send.assert_called_once()
+                    self.assertEqual(self.send.call_args.args[0], self.worker)
+                    self.assertIn(reply, self.send.call_args.args[1])
+                    if reply.startswith('APPROVED'):
+                        self.assertIn('Approved by the reviewer tab', self.send.call_args.args[1])
+                        self.assertNotIn('rounds', self.links()[0])
+                        self.assertNotIn('empty_rounds', self.links()[0])
+                    else:
+                        self.assertIn('Feedback from the reviewer tab', self.send.call_args.args[1])
+                        self.assertEqual(self.links()[0]['rounds'], rounds + 1)
+                        self.assertEqual(self.links()[0]['empty_rounds'], 1)
+
+    def test_resume_stalled_latest_refuses_changed_reply_without_changing_store(self):
+        request_id = self.stall_review()
+        before = self.file.read_bytes()
+        for reply in ('A newer reply.', ' I fixed it. ', ''):
+            with self.subTest(reply=reply):
+                self.reply.return_value = reply
+                with self.assertRaisesRegex(ValueError, '^The reviewer replied again\\. Open the tab\\.$'):
+                    review_links.resume_stalled('%13', '%12', request_id, 'latest',
+                                                last_reply=self.reply, reviewer_entry=self.reviewer)
+                self.assertEqual(self.file.read_bytes(), before)
+                self.send.assert_not_called()
+
+    def test_resume_stalled_rejects_stale_identity_without_changing_store(self):
+        request_id = self.stall_review()
+        before = self.file.read_bytes()
+        for worker, reviewer, identifier in [('%13', '%12', '00000000'),
+                                             ('%14', '%12', request_id),
+                                             ('%13', '%14', request_id)]:
+            with self.subTest(worker=worker, reviewer=reviewer, identifier=identifier):
+                with self.assertRaisesRegex(ValueError, '^This review is no longer stalled\\.$'):
+                    review_links.resume_stalled(worker, reviewer, identifier, 'resend')
+                self.assertEqual(self.file.read_bytes(), before)
+        self.add()
+        before = self.file.read_bytes()
+        with self.assertRaisesRegex(ValueError, '^This review is no longer stalled\\.$'):
+            review_links.resume_stalled('%13', '%12', request_id, 'resend')
+        self.assertEqual(self.file.read_bytes(), before)
+
+    def test_resume_stalled_rejects_bad_arguments_without_changing_store(self):
+        request_id = self.stall_review()
+        before = self.file.read_bytes()
+        for key, values in [('worker', [None, '', '13', '%13;pwd', '%13\n', 13, [], {}]),
+                            ('reviewer', [None, '', '12', '%12;pwd', '%12\n', 12, [], {}]),
+                            ('request_id', [None, '', 'A1B2C3D4', 'a1b2c3d', 'a1b2c3d45',
+                                            'a1b2c3d4\n', 'zzzzzzzz', 12345678, [], {}]),
+                            ('action', [None, '', 'stop', 'RESEND', [], {}])]:
+            for value in values:
+                with self.subTest(key=key, value=value):
+                    arguments = dict(worker='%13', reviewer='%12', request_id=request_id, action='resend')
+                    arguments[key] = value
+                    with self.assertRaises(ValueError) as error:
+                        review_links.resume_stalled(**arguments)
+                    if key == 'action':
+                        self.assertEqual(str(error.exception), 'Choose resend or latest.')
+                    self.assertEqual(self.file.read_bytes(), before)
+
+    def stalled_request(self, payload, *, headers=None, denied=False):
+        handler = object.__new__(server.Handler)
+        handler.path = '/mobile/api/review-stalled'
+        handler.command = 'POST'
+        encoded = json.dumps(payload).encode()
+        handler.rfile = io.BytesIO(encoded)
+        handler.headers = {'Host': 'phone.test', 'Origin': 'http://phone.test', 'X-Codex-Mobile': '1',
+                           'Content-Length': str(len(encoded)), **(headers or {})}
+        handler.headers = {key: value for key, value in handler.headers.items() if value is not None}
+        handler.deny = Mock(return_value=denied)
+        handler.respond = Mock()
+        handler.do_POST()
+        return handler.respond
+
+    def test_review_stalled_endpoint_queues_actions_without_tmux_writes(self):
+        self.assertIn('/mobile/api/review-stalled', server.TMUX_WRITES)
+        for action in ('resend', 'latest'):
+            with self.subTest(action=action):
+                self.add()
+                request_id = self.stall_review()
+                with patch.object(server, 'choose') as choose, \
+                        patch.object(server, 'review_send') as send, \
+                        patch.object(server.subprocess, 'run') as run, \
+                        patch.object(server, 'sessions', return_value=[self.worker, self.reviewer]), \
+                        patch.object(server, 'last_reply', self.reply):
+                    response = self.stalled_request(
+                        {'worker': '%13', 'reviewer': '%12', 'id': request_id, 'action': action})
+                response.assert_called_once_with(200, {'ok': True})
+                choose.assert_not_called()
+                send.assert_not_called()
+                run.assert_not_called()
+                self.assertNotIn('stalled', self.links()[0])
+                self.assertEqual(bool(self.links()[0]['awaiting']), action == 'latest')
+                self.assertEqual(self.links()[0]['seen_working'], action == 'resend')
+                self.send.assert_not_called()
+
+    def test_review_stalled_endpoint_refuses_changed_reply_without_changing_store(self):
+        request_id = self.stall_review()
+        before = self.file.read_bytes()
+        with patch.object(server, 'sessions', return_value=[self.worker, self.reviewer]), \
+                patch.object(server, 'last_reply', return_value='A newer reply.') as reply:
+            response = self.stalled_request(
+                {'worker': '%13', 'reviewer': '%12', 'id': request_id, 'action': 'latest'})
+        response.assert_called_once_with(400, {'error': 'The reviewer replied again. Open the tab.'})
+        reply.assert_called_once_with(self.reviewer)
+        self.assertEqual(self.file.read_bytes(), before)
+        self.send.assert_not_called()
+
+    def test_review_stalled_endpoint_preserves_auth_origin_and_header_guards(self):
+        request_id = self.stall_review()
+        payload = {'worker': '%13', 'reviewer': '%12', 'id': request_id, 'action': 'resend'}
+        before = self.file.read_bytes()
+        for headers in ({'Origin': 'https://evil.test'}, {'Origin': ''}, {'X-Codex-Mobile': None}):
+            with self.subTest(headers=headers):
+                self.stalled_request(payload, headers=headers).assert_called_once_with(
+                    403, {'error': 'Reload the page and try again.'})
+                self.assertEqual(self.file.read_bytes(), before)
+        self.stalled_request(payload, denied=True).assert_not_called()
+        self.assertEqual(self.file.read_bytes(), before)
+
+    def test_review_stalled_endpoint_returns_specific_errors_without_changing_store(self):
+        request_id = self.stall_review()
+        payload = {'worker': '%13', 'reviewer': '%12', 'id': request_id, 'action': 'resend'}
+        before = self.file.read_bytes()
+        for changes, error in [({'id': '00000000'}, 'This review is no longer stalled.'),
+                               ({'worker': '%14'}, 'This review is no longer stalled.'),
+                               ({'worker': '%13;pwd'}, 'This review is no longer stalled.'),
+                               ({'id': None}, 'This review is no longer stalled.'),
+                               ({'action': 'stop'}, 'Choose resend or latest.')]:
+            with self.subTest(changes=changes):
+                self.stalled_request({**payload, **changes}).assert_called_once_with(400, {'error': error})
+                self.assertEqual(self.file.read_bytes(), before)
 
     def test_old_link_without_request_id_uses_last_reply(self):
         self.request_review()
@@ -769,6 +1040,8 @@ class ReviewLinksTests(unittest.TestCase):
         self.assertFalse(self.links()[0]['awaiting'])
         self.assertNotIn('reviewer_before', self.links()[0])
         self.assertEqual(self.send.call_count, calls)
+        self.assertNotIn('stalled', self.links()[0])
+        self.alert.assert_not_called()
 
     def test_feedback_is_stripped_without_cut_below_limit(self):
         self.request_review()
@@ -1485,6 +1758,15 @@ class ServerWatcherTests(unittest.TestCase):
         notify.assert_called_once_with({
             'title': 'Review link lost', 'body': 'Tab vanished.', 'tag': 'review-%13', 'session': '%13',
             'priority': 'urgent', 'silent': False, 'url': '/mobile/#session=%2513',
+        }, True)
+
+    def test_review_alert_includes_review_actions_only_when_given(self):
+        review = {'worker': '%13', 'reviewer': '%12', 'id': 'a1b2c3d4'}
+        with patch.object(server, 'notify') as notify:
+            server.review_alert('Review stalled', 'Reply not found.', '%13', review=review)
+        notify.assert_called_once_with({
+            'title': 'Review stalled', 'body': 'Reply not found.', 'tag': 'review-%13', 'session': '%13',
+            'priority': 'urgent', 'silent': False, 'url': '/mobile/#session=%2513', 'review': review,
         }, True)
 
     def test_work_mark_tracks_tree_and_head_in_real_repository(self):
