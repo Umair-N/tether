@@ -118,11 +118,17 @@ def needs_no_sandbox():
         return False
 
 
-def normalize_url(text):
-    """The URL to open, or ValueError. Only http, https and about:blank. A bare port or host:port means local http."""
+SETTINGS_URL = re.compile(r'chrome://settings(/[A-Za-z0-9/_-]*)?([?#][A-Za-z0-9=&%_.-]*)?', re.I)
+
+
+def normalize_url(text, settings=False):
+    """The URL to open, or ValueError. Only http, https and about:blank. A bare port or host:port means local http.
+    settings: also chrome://settings pages. Only the signed-in browser's own panel passes it (Mak); agents never do."""
     text = str(text or '').strip()
     if not text or text == 'about:blank':
         return 'about:blank'
+    if settings and SETTINGS_URL.fullmatch(text):
+        return 'chrome://settings' + text[len('chrome://settings'):]
     if len(text) > 4096 or any(ord(char) < 32 for char in text):
         raise ValueError('That address is not valid.')
     if re.fullmatch(r'\d{2,5}([/?#].*)?', text):  # "8765" or "8765/path": a local port, not the IP 0.0.34.61
@@ -545,7 +551,7 @@ class Browser:
         return self.state()
 
     def new_tab(self, url='about:blank', mode=None):
-        url = normalize_url(url)
+        url = normalize_url(url, settings=self.signed)
         mode = self.default_mode if mode is None else mode
         if mode not in MODES:
             raise ValueError('Unknown tab mode.')
@@ -586,7 +592,7 @@ class Browser:
                 self._forget(tab)
 
     def navigate(self, target, url):
-        url = normalize_url(url)
+        url = normalize_url(url, settings=self.signed)
         self.ensure()
         tab = self.tab(target)
         return self._navigate(tab, url)
