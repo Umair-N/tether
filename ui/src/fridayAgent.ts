@@ -1,6 +1,9 @@
 import type { PipecatClient } from '@pipecat-ai/client-js'
 import { DeviceVoice, type VoiceKind } from './deviceVoice'
 
+const fridayPeerConnections = new Set<RTCPeerConnection>()
+const statsCounters = ['packetsLost', 'packetsReceived', 'concealedSamples', 'totalSamplesReceived', 'concealmentEvents'] as const
+
 // Friday agent: one WebRTC call to the local voice worker (server/friday_agent.py, through /mobile/api/live/offer).
 // The worker listens, thinks and speaks; this side plays its voice, runs the tools it asks for, and sends it chat events.
 // Client messages are {t, d}: state (chats), event (chat news to speak), say (exact words), note (silent context).
@@ -46,6 +49,11 @@ export class FridayAgent {
   private botSegments = new Map<number | string, string>()
   private events: AgentEvents
   private voice: DeviceVoice
+  private peers = new Set<RTCPeerConnection>()
+  private lastStats = new Map<RTCPeerConnection, { id: string; values: Record<string, number> }>()
+  private statsTimer: ReturnType<typeof setInterval> | null = null
+  private statsPending: Promise<void> = Promise.resolve()
+  private statsStop: Promise<void> | null = null
 
   constructor(events: AgentEvents) {
     this.events = events
@@ -127,7 +135,7 @@ export class FridayAgent {
           // The server heard no words (noise, echo, or a short overlap): no reply comes, so stop showing thinking.
           else if (message?.t === 'idle') { if (this.turn === 'thinking') this.setTurn('listening') }
         },
-        onDisconnected: () => { if (!this.closed) this.events.onClosed('Friday hung up.') },
+        onDisconnected: () => { void this.stopStats(); if (!this.closed) this.events.onClosed('Friday hung up.') },
         onError: message => { if (!this.closed) this.events.onClosed(String((message.data as { message?: string })?.message ?? 'Friday stopped.')) },
       },
     })
@@ -139,7 +147,69 @@ export class FridayAgent {
     }
     void this.voice.open().catch(failure => console.warn('Friday device voice unavailable', failure))
     await client.initDevices()
-    await client.connect()
+    if (this.closed) return
+    const OriginalPeerConnection = window.RTCPeerConnection
+    const peers = this.peers
+    window.RTCPeerConnection = class extends OriginalPeerConnection {
+      constructor(configuration?: RTCConfiguration) {
+        super(configuration)
+        fridayPeerConnections.add(this)
+        peers.add(this)
+      }
+    }
+    try {
+      await client.connect()
+    } catch (failure) {
+      void this.stopStats()
+      throw failure
+    } finally {
+      window.RTCPeerConnection = OriginalPeerConnection
+    }
+    if (!this.closed && !this.statsStop) this.statsTimer = setInterval(() => { void this.reportStats() }, 5000)
+  }
+
+  private reportStats() {
+    this.statsPending = this.statsPending.then(async () => {
+      for (const peer of this.peers) {
+        try {
+          const reports = await peer.getStats()
+          const report = [...reports.values()].find(report => report.type === 'inbound-rtp' && report.kind === 'audio')
+          if (report) {
+            const last = this.lastStats.get(peer)
+            const previous = last && last.id === report.id ? last.values : {}
+            const values: Record<string, number> = {}
+            const data: Record<string, number> = {}
+            const round = (value: number) => Math.round(value * 1000) / 1000
+            for (const field of [...statsCounters, 'jitterBufferDelay', 'jitterBufferEmittedCount']) {
+              if (typeof report[field] === 'number' && Number.isFinite(report[field])) values[field] = report[field]
+            }
+            for (const field of statsCounters) {
+              if (field in values) data[field] = round(values[field] - (previous[field] ?? 0))
+            }
+            // Jitter is a current measurement in seconds, rather than a cumulative counter.
+            if (typeof report.jitter === 'number' && Number.isFinite(report.jitter)) data.jitter = round(report.jitter)
+            if ('jitterBufferDelay' in values && 'jitterBufferEmittedCount' in values) {
+              const emitted = values.jitterBufferEmittedCount - (previous.jitterBufferEmittedCount ?? 0)
+              data.jitterBufferAvgMs = emitted > 0 ? round((values.jitterBufferDelay - (previous.jitterBufferDelay ?? 0)) / emitted * 1000) : 0
+            }
+            this.send('stats', data)
+            this.lastStats.set(peer, { id: report.id, values })
+          }
+        } catch { /* Stats must never affect the call. */ }
+      }
+    }).catch(() => {})
+    return this.statsPending
+  }
+
+  private stopStats() {
+    if (this.statsTimer !== null) clearInterval(this.statsTimer)
+    this.statsTimer = null
+    this.statsStop ??= this.reportStats().finally(() => {
+      for (const peer of this.peers) fridayPeerConnections.delete(peer)
+      this.peers.clear()
+      this.lastStats.clear()
+    })
+    return this.statsStop
   }
 
   close() {
@@ -147,11 +217,14 @@ export class FridayAgent {
     this.closed = true
     this.audio.srcObject = null
     this.voice.close()
-    void this.client?.disconnect().catch(() => {})
-    this.client = null
+    const client = this.client
+    void this.stopStats().finally(() => {
+      void client?.disconnect().catch(() => {})
+      if (this.client === client) this.client = null
+    })
   }
 
-  send(t: 'state' | 'event' | 'say' | 'note' | 'voice' | 'spoken' | 'interrupt', d: unknown) {
+  send(t: 'state' | 'event' | 'say' | 'note' | 'voice' | 'spoken' | 'interrupt' | 'stats', d: unknown) {
     try { this.client?.sendClientMessage(t, d) } catch { /* not connected yet */ }
   }
   state(chats: AgentChats) { this.send('state', chats) }

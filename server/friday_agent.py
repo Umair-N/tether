@@ -6,6 +6,7 @@ to http://127.0.0.1:7687. TETHER_FRIDAY_MODELS overrides the models folder
 under paths.HOME/.local/share/tether/friday-models. Pocket uses models/hf as
 HF_HOME with HF_HUB_OFFLINE=1. WebRTC audio uses direct host-candidate UDP.
 TETHER_FRIDAY_TTS_THREADS overrides Pocket's default of 2 torch threads.
+TETHER_FRIDAY_PREROLL buffers 0.15 seconds before playback (0 disables; clamped to 0..1).
 TETHER_FRIDAY_VOICE selects the Pocket voice (default: lola).
 TETHER_FRIDAY_BRAIN (local/gemini), TETHER_FRIDAY_GCP_PROJECT, TETHER_FRIDAY_GEMINI_MODEL,
 TETHER_FRIDAY_GEMINI_EFFORT configure the brain. TETHER_FRIDAY_VAD_STOP defaults to 0.5s.
@@ -65,6 +66,42 @@ _STT_FIXUP = re.compile(r'\b(?:' + '|'.join(re.escape(word) for word in STT_FIXU
 CLOSE_STEP_TIMEOUT = 2.0
 REQUEST_TIMEOUT = 9.0
 _closing_tasks = set()
+
+
+class AudioPreroll:
+    """Hold the first audio and following controls until enough audio is ready."""
+
+    def __init__(self, seconds):
+        self.seconds = max(0.0, min(1.0, seconds))
+        self.audio = 0.0
+        self.held = []
+        self.ready = self.seconds == 0
+        self.closed = False
+
+    def push(self, frame, duration=0.0):
+        if self.closed:
+            return []
+        if self.ready or (not self.held and duration == 0):
+            return [frame]
+        self.held.append(frame)
+        self.audio += duration
+        if self.audio >= self.seconds:
+            self.ready = True
+            return self._flush()
+        return []
+
+    def _flush(self):
+        frames, self.held = self.held, []
+        return frames
+
+    def finish(self):
+        frames = self._flush() if not self.closed else []
+        self.close()
+        return frames
+
+    def close(self):
+        self.closed = True
+        self.held.clear()
 
 
 def audio_slack(made, elapsed, audio_bytes, sample_rate, num_channels):
@@ -640,12 +677,16 @@ def runtime_types():
         async def run_tts(self, text, context_id):
             start = time.monotonic()
             first = True
-            first_audio = last_audio = None
+            playback_start = last_audio = None
+            preroll_ms = 0.0
+            first_audio = None
+            preroll = AudioPreroll(float(os.environ.get('TETHER_FRIDAY_PREROLL', '0.15')))
             made = worst = 0.0
             underruns = 0
             turn = self.session.turn
             try:
                 async for frame in super().run_tts(text, context_id):
+                    duration = 0.0
                     if first and getattr(frame, 'audio', None):
                         first = False
                         if self.session.tts_ttfb is None:
@@ -654,17 +695,32 @@ def runtime_types():
                         last_audio = time.monotonic()
                         if first_audio is None:
                             first_audio = last_audio
-                        made, slack = audio_slack(made, last_audio - first_audio,
+                        duration = len(frame.audio) / 2 / frame.num_channels / frame.sample_rate
+                        made, slack = audio_slack(made,
+                            last_audio - playback_start if playback_start is not None else 0,
                             len(frame.audio), frame.sample_rate, frame.num_channels)
                         if slack < 0:
                             underruns += 1
                             worst = min(worst, slack)
-                    yield frame
+                    frames = preroll.push(frame, duration)
+                    if frames and first_audio is not None and playback_start is None:
+                        playback_start = time.monotonic()
+                        preroll_ms = (playback_start - first_audio) * 1000
+                    for held in frames:
+                        yield held
+                frames = preroll.finish()
+                if frames and playback_start is None:
+                    playback_start = time.monotonic()
+                    preroll_ms = (playback_start - first_audio) * 1000
+                for held in frames:
+                    yield held
             finally:
+                preroll.close()
                 if made:
                     gen = last_audio - start
                     data = {'turn': turn, 'audio': round(made, 3), 'gen': round(gen, 3),
                             'rtf': round(gen / made, 3), 'underruns': underruns,
+                            'preroll_ms': round(preroll_ms, 3),
                             'worst_gap_ms': round(-worst * 1000, 3), 'chars': len(text)}
                     print('Friday tts ' + json.dumps(data, separators=(',', ':')), file=sys.stderr, flush=True)
 

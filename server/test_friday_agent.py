@@ -14,6 +14,51 @@ except ImportError:
     import friday_agent as friday
 
 
+class AudioPrerollTests(unittest.TestCase):
+    def test_holds_under_threshold_and_flushes_at_threshold(self):
+        buffer = friday.AudioPreroll(.15)
+        self.assertEqual(buffer.push('audio1', .05), [])
+        self.assertEqual(buffer.push('audio2', .1), ['audio1', 'audio2'])
+        self.assertEqual(buffer.push('audio3', .01), ['audio3'])
+        self.assertEqual(buffer.finish(), [])
+
+    def test_short_audio_flushes_only_at_end(self):
+        buffer = friday.AudioPreroll(.15)
+        self.assertEqual(buffer.push('audio', .02), [])
+        self.assertEqual(buffer.finish(), ['audio'])
+        self.assertEqual(buffer.finish(), [])
+
+    def test_zero_disables_and_configuration_is_clamped(self):
+        for seconds in (0, -1):
+            buffer = friday.AudioPreroll(seconds)
+            self.assertEqual(buffer.push('audio', .01), ['audio'])
+        buffer = friday.AudioPreroll(2)
+        self.assertEqual(buffer.push('audio1', .5), [])
+        self.assertEqual(buffer.push('audio2', .5), ['audio1', 'audio2'])
+
+    def test_control_frames_keep_their_order(self):
+        buffer = friday.AudioPreroll(.15)
+        self.assertEqual(buffer.push('start'), ['start'])
+        self.assertEqual(buffer.push('audio1', .05), [])
+        self.assertEqual(buffer.push('control'), [])
+        self.assertEqual(buffer.push('audio2', .1), ['audio1', 'control', 'audio2'])
+        self.assertEqual(buffer.push('stop'), ['stop'])
+        buffer = friday.AudioPreroll(.15)
+        buffer.push('audio', .01)
+        buffer.push('stop')
+        self.assertEqual(buffer.finish(), ['audio', 'stop'])
+
+    def test_close_discards_held_frames_and_prevents_further_output(self):
+        buffer = friday.AudioPreroll(.15)
+        buffer.push('audio', .01)
+        buffer.push('control')
+        buffer.close()
+        self.assertEqual(buffer.held, [])
+        self.assertEqual(buffer.finish(), [])
+        self.assertEqual(buffer.push('late audio', 1), [])
+        self.assertEqual(buffer.push('late control'), [])
+
+
 class FridayRulesTests(unittest.TestCase):
     def test_audio_slack_counts_late_frames_before_adding_audio(self):
         made, slack = friday.audio_slack(0, 0, 4800, 24000, 1)
@@ -487,6 +532,77 @@ class FridayAPITests(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
         cls.rt = friday.runtime_types()
+
+    async def test_tts_preroll_keeps_ttfb_and_measures_slack_from_flush(self):
+        session = SimpleNamespace(turn=4, tts_ttfb=None)
+        service = self.rt.SharedPocketTTS(Mock(sample_rate=24000), 'voice', session)
+        clock = [10.0]
+        audio = SimpleNamespace(audio=b'\0' * 4800, sample_rate=24000, num_channels=1)
+
+        async def source(*args):
+            yield 'start'
+            clock[0] = 10.1
+            yield audio
+            yield 'control'
+            clock[0] = 10.2
+            yield audio
+            clock[0] = 10.35
+            yield audio
+            yield 'stop'
+
+        with patch.object(self.rt.PocketTTSService, 'run_tts', source), \
+                patch.dict(friday.os.environ, {'TETHER_FRIDAY_PREROLL': '.15'}), \
+                patch.object(friday.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch('builtins.print') as log:
+            output = [(clock[0], frame) async for frame in service.run_tts('reply', 'context')]
+        self.assertEqual([frame for _, frame in output], ['start', audio, 'control', audio, audio, 'stop'])
+        self.assertEqual([at for at, _ in output], [10.0, 10.2, 10.2, 10.2, 10.35, 10.35])
+        self.assertAlmostEqual(session.tts_ttfb, .1)
+        data = json.loads(next(call.args[0][len('Friday tts '):] for call in log.call_args_list
+                               if call.args[0].startswith('Friday tts ')))
+        self.assertEqual(data['preroll_ms'], 100)
+        self.assertEqual(data['underruns'], 0)
+        self.assertEqual(data['audio'], .3)
+
+    async def test_tts_preroll_drops_audio_on_generator_exit_and_cancellation(self):
+        for failure in (GeneratorExit, asyncio.CancelledError):
+            session = SimpleNamespace(turn=4, tts_ttfb=None)
+            service = self.rt.SharedPocketTTS(Mock(sample_rate=24000), 'voice', session)
+
+            async def source(*args):
+                yield 'start'
+                yield SimpleNamespace(audio=b'\0' * 480, sample_rate=24000, num_channels=1)
+                raise failure()
+
+            with self.subTest(failure=failure), \
+                    patch.object(self.rt.PocketTTSService, 'run_tts', source), \
+                    patch.dict(friday.os.environ, {'TETHER_FRIDAY_PREROLL': '.15'}), \
+                    patch('builtins.print'):
+                stream = service.run_tts('reply', 'context')
+                self.assertEqual(await anext(stream), 'start')
+                with self.assertRaises(failure):
+                    await anext(stream)
+                with self.assertRaises(StopAsyncIteration):
+                    await anext(stream)
+
+    async def test_tts_preroll_yields_nothing_after_consumer_closes(self):
+        session = SimpleNamespace(turn=4, tts_ttfb=None)
+        service = self.rt.SharedPocketTTS(Mock(sample_rate=24000), 'voice', session)
+        audio = SimpleNamespace(audio=b'\0' * 4800, sample_rate=24000, num_channels=1)
+
+        async def source(*args):
+            yield audio
+            yield 'control'
+            yield audio
+
+        with patch.object(self.rt.PocketTTSService, 'run_tts', source), \
+                patch.dict(friday.os.environ, {'TETHER_FRIDAY_PREROLL': '.15'}), \
+                patch('builtins.print'):
+            stream = service.run_tts('reply', 'context')
+            self.assertIs(await anext(stream), audio)
+            await stream.aclose()
+            with self.assertRaises(StopAsyncIteration):
+                await anext(stream)
 
     async def test_offer_replaces_session_even_when_close_hangs(self):
         import httpx
