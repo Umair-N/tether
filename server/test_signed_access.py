@@ -222,6 +222,45 @@ class AccessTests(Requests, unittest.TestCase):
         self.assertEqual(self.access.ask('Timeout', '%1'), {'ok': False, 'reason': 'timeout'})
         self.assertEqual(self.access.state(), {'requests': [], 'grants': [], 'ended': []})
 
+    def test_grant_ends_when_the_pane_runs_another_chat(self):
+        chat = {'%12': ('claude', 41, '100', None)}
+        self.access.identity_finder = lambda pane: chat.get(pane, ('gone',))
+        self.access.identity_seconds = .05
+        grant, _ = self.grant()
+        chat['%12'] = ('claude', 41, '100', 'thread-a')  # the chat id appears: same chat
+        time.sleep(.3)
+        self.assertIn(grant.row['id'], self.access.grants)
+        self.assertEqual(grant.identity[3], 'thread-a')
+        chat['%12'] = None  # discovery does not know: same chat
+        time.sleep(.2)
+        self.assertIn(grant.row['id'], self.access.grants)
+        chat['%12'] = ('claude', 41, '100', 'thread-b')  # /clear: a new chat in the same process
+        wait_for(lambda: grant.row['id'] not in self.access.grants)
+        self.assertEqual(grant.end_reason, 'conversation_changed')
+        row = self.access.state()['ended'][0]
+        self.assertEqual(row['message'], "The agent's chat changed or ended.")
+
+    def test_grant_survives_one_missed_discovery_but_ends_when_the_agent_exits(self):
+        answers = iter([('codex', 7, '5', 't'), ('gone',), ('codex', 7, '5', 't')])
+        chat = {'now': ('codex', 7, '5', 't')}
+        self.access.identity_finder = lambda pane: next(answers, chat['now'])
+        self.access.identity_seconds = .05
+        grant, _ = self.grant()
+        time.sleep(.3)
+        self.assertIn(grant.row['id'], self.access.grants)
+        chat['now'] = ('gone',)
+        wait_for(lambda: grant.row['id'] not in self.access.grants)
+        self.assertEqual(grant.end_reason, 'conversation_changed')
+
+    def test_same_chat_rules(self):
+        same = signed.same_chat
+        self.assertTrue(same(('claude', 1, 's', 'a'), None))
+        self.assertTrue(same(('claude', 1, 's', None), ('claude', 1, 's', 'a')))
+        self.assertFalse(same(('claude', 1, 's', 'a'), ('claude', 1, 's', 'b')))
+        self.assertFalse(same(('claude', 1, 's', 'a'), ('claude', 2, 's', 'a')))
+        self.assertFalse(same(('claude', 1, 's', 'a'), ('gone',)))
+        self.assertTrue(same(('gone',), ('gone',)))
+
     def test_validation_shortening_limit_and_exact_contract(self):
         for duration in (0, 61, True, 1.2, '15'):
             with self.assertRaises(ValueError):

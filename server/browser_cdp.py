@@ -886,9 +886,9 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(size))
             if not isinstance(body, dict):
                 raise ValueError('Invalid request.')
-            pane = body.get('pane')
-            if pane is None:
-                pane = self.server.proxy.pane_finder(self.client_address[1], self.server.proxy.config['port'])
+            # The pane that owns the socket wins over the pane the agent names, so an agent cannot ask as another tab.
+            # The named pane is used only when the lookup finds nothing (for example on another host).
+            pane = self.server.proxy.pane_finder(self.client_address[1], self.server.proxy.config['port']) or body.get('pane')
             if route == '/ask-signed':
                 access = self.server.proxy.signed_access
                 if access is None:
@@ -904,12 +904,12 @@ class Handler(BaseHTTPRequestHandler):
 PROXY = None
 
 
-def start(notifier, agent_finder=lambda pane: 'agent'):
+def start(notifier, agent_finder=lambda pane: 'agent', identity_finder=lambda pane: None):
     global PROXY
     import signed_access
     import mac_browser
     PROXY = Proxy(notifier=notifier).start(shutdown_hooks=True)
     PROXY.signed_access = mac_browser.RoutedAccess(
-        signed_access.Access(notifier=notifier, agent_finder=agent_finder),
-        mac_browser.MacAccess(mac_browser.BROKER, notifier=notifier, agent_finder=agent_finder))
+        signed_access.Access(notifier=notifier, agent_finder=agent_finder, identity_finder=identity_finder),
+        mac_browser.MacAccess(mac_browser.BROKER, notifier=notifier, agent_finder=agent_finder, identity_finder=identity_finder))
     return PROXY

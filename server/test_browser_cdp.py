@@ -696,6 +696,19 @@ class HTTPTests(unittest.TestCase):
         proxy.ask.assert_called_once_with('Click sign in.', '%12')
         handler.respond.assert_called_once_with(200, {'id': 'a'})
 
+    def test_ask_uses_the_socket_pane_over_the_named_pane(self):
+        for found, expected in (('%12', '%12'), (None, '%99')):
+            proxy = SimpleNamespace(config={'port': 47123, 'token': 'secret'}, pane_finder=Mock(return_value=found),
+                                    ask=Mock(return_value={'id': 'a'}))
+            handler = self.handler('/ask/secret', proxy=proxy)
+            handler.connection = Mock()
+            handler.client_address = ('127.0.0.1', 55001)
+            body = json.dumps({'text': 'Click sign in.', 'pane': '%99'}).encode()
+            handler.headers['Content-Length'] = str(len(body))
+            handler.rfile = io.BytesIO(body)
+            handler.do_POST()
+            proxy.ask.assert_called_once_with('Click sign in.', expected)
+
 
 class PeerTests(unittest.TestCase):
     def fixture(self, tcp6=False):

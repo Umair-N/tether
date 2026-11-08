@@ -253,6 +253,16 @@ SESSIONS_CACHE = [0.0, []]
 SESSIONS_LOCK = threading.Lock()
 
 
+def pane_identity(pane):
+    """The chat that runs in a tmux pane now, for signed browser grants: (agent, pid, start, thread or None while
+    the chat id is not known yet), or ('gone',) when the pane has no agent. signed_access.same_chat compares them."""
+    entry = next((entry for entry in sessions() if entry['id'] == pane), None)
+    if not entry or entry.get('agent') in (None, 'shell'):
+        return ('gone',)
+    thread = None if entry.get('pending_conversation') else entry.get('thread')
+    return (entry.get('agent'), entry.get('owner_pid'), entry.get('process_start'), thread)
+
+
 def sessions():
     """Discovery shells out (ps, tmux, sqlite); every open page and the monitor ask every 2s, so share one result for a second."""
     with SESSIONS_LOCK:
@@ -2220,7 +2230,7 @@ if __name__ == '__main__':
     port = int(os.environ.get('MOBILE_TMUX_PORT', '7683'))
     auth.check_startup(host)
     browser_cdp.start(notify, agent_finder=lambda pane: next(
-        (entry['agent'] for entry in sessions() if entry['id'] == pane), 'agent'))
+        (entry['agent'] for entry in sessions() if entry['id'] == pane), 'agent'), identity_finder=pane_identity)
     if auth.MODE == 'token':
         print('Mobile Tmux listening on http://%s:%d/mobile/ -- sign in with the token in %s' % (host, port, auth.TOKEN_FILE), flush=True)
         auth.token()
