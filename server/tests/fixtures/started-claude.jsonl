@@ -1,0 +1,3 @@
+{"type":"file-history-snapshot","snapshot":{}}
+{"type":"user","timestamp":"2026-11-08T10:29:11+02:00","message":{"role":"user","content":"First request"}}
+{"type":"assistant","timestamp":"2026-11-08T08:30:11Z","message":{"role":"assistant","content":"Later reply"}}

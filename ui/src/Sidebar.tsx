@@ -1,6 +1,6 @@
 import { needsYou, isDone } from './paneState'
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
-import { Archive, ArchiveRestore, Asterisk, BarChart3, BookMarked, BookOpen, Bug, Cpu, Database, FileText, FlaskConical, GitBranch, Globe, LayoutDashboard, MessageSquare, MessagesSquare, Mic, Palette, Rocket, Server, Shield, Sparkles, Wrench, Zap, ChevronRight, Code2, GripVertical, Layers, Pin, PinOff, Plus, RefreshCw, Search, Settings, Terminal, Trash2, X } from 'lucide-react'
+import { Archive, ArchiveRestore, Asterisk, BarChart3, BookMarked, BookOpen, Bug, Cpu, Database, FileText, FlaskConical, GitBranch, Globe, LayoutDashboard, MessageSquare, MessagesSquare, Mic, Palette, Rocket, Server, Shield, Sparkles, Wrench, Zap, ChevronRight, Code2, GripVertical, Layers, Pin, PinOff, Plus, RefreshCw, Search, Settings, SlidersHorizontal, Terminal, Trash2, X } from 'lucide-react'
 import { KeepChoice, keepNeeded } from './Project'
 import { FolderMenu } from './SelectMenu'
 import type { Keep, ProjectMark, ProjectMarks } from './Project'
@@ -21,6 +21,7 @@ import { HostMenu } from './HostMenu'
 import { UpdateBanner } from './UpdateBanner'
 import { Elapsed } from './Notices'
 import { ShellList } from './ShellList'
+import { OrganizeMenu, tagStyle } from './Organize'
 import { useWords } from './words'
 
 export const agentNames: Record<Agent, string> = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity', shell: 'Shell' }
@@ -111,6 +112,34 @@ export function sortByPrefs(sessions: Session[], order: string[]) {
   return [...sessions].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name, undefined, { numeric: true }))
 }
 
+/** The sidebar order for the chosen sort. Smart and recent use agent activity; name is A to Z. */
+export function sortSessions(sessions: Session[], prefs: Pick<Prefs, 'sort' | 'order' | 'seen'>, selected?: string) {
+  if (prefs.sort === 'smart') return sortSmart(sessions, prefs.seen, selected)
+  if (prefs.sort === 'name') return [...sessions].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+  if (prefs.sort === 'recent') return sessions.map(session => ({ session, at: status(session.panes, prefs.seen, selected).at })).sort((a, b) => b.at - a.at || a.session.name.localeCompare(b.session.name)).map(item => item.session)
+  return sortByPrefs(sessions, prefs.order)
+}
+const lastFolder = (dir: string) => dir.split('/').filter(Boolean).pop() || '/'
+/** The body groups under Needs you and Pinned. Each session shows in exactly one group. */
+function bodyGroups(rest: Session[], prefs: Prefs): { key: Section; title: string; items: Session[] }[] {
+  if (prefs.groupBy === 'none') return [{ key: 'all', title: 'Sessions', items: rest }]
+  if (prefs.groupBy === 'folder') {
+    const byFolder = new Map<string, Session[]>()
+    for (const session of rest) byFolder.set(lastFolder(session.dir), [...(byFolder.get(lastFolder(session.dir)) ?? []), session])
+    const shared = [...byFolder.entries()].filter(([, items]) => items.length > 1).sort(([a], [b]) => a.localeCompare(b))
+    const single = rest.filter(session => byFolder.get(lastFolder(session.dir))!.length === 1)
+    return [...shared.map(([folder, items]) => ({ key: `f:${folder}` as const, title: folder, items })), ...(single.length ? [{ key: 'other' as const, title: 'Other', items: single }] : [])]
+  }
+  if (prefs.groupBy === 'custom') {
+    const known = new Set(prefs.groups.map(group => group.id))
+    const own = prefs.groups.map(group => ({ key: `g:${group.id}` as const, title: group.name, items: rest.filter(session => prefs.groupOf[session.id] === group.id) })).filter(group => group.items.length)
+    const loose = rest.filter(session => !known.has(prefs.groupOf[session.id]))
+    return [...own, ...(loose.length || !own.length ? [{ key: 'other' as const, title: own.length ? 'Ungrouped' : 'Sessions', items: loose }] : [])]
+  }
+  return [{ key: 'agents', title: 'Claude & Codex', items: rest.filter(session => session.agent !== 'shell') },
+    ...(rest.some(session => session.agent === 'shell') ? [{ key: 'terminals' as const, title: 'Terminals', items: rest.filter(session => session.agent === 'shell') }] : [])]
+}
+
 export function ago(time: string) {
   const minutes = Math.round((Date.now() - Date.parse(time)) / 60000)
   if (!Number.isFinite(minutes)) return ''
@@ -167,7 +196,8 @@ function RunningNow({ sessions, selected, onOpen }: { sessions: Session[]; selec
   </section>
 }
 
-type Section = 'pinned' | 'agents' | 'terminals' | 'shells' | 'archived' | 'past'
+// Fixed sections, plus g:<id> (your groups) and f:<folder> (folder groups).
+type Section = 'needs' | 'pinned' | 'agents' | 'terminals' | 'shells' | 'archived' | 'past' | 'other' | 'all' | `g:${string}` | `f:${string}`
 // What a sidebar drag carries: a whole session, or one pane of a session with several panes.
 type Carry = { session: string; pane?: string; chat?: PastChat }
 // The server's answer to a merge: the session that now holds the moved panes, for the rename prompt.
@@ -312,19 +342,23 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
     document.addEventListener('contextmenu', menu, true)
     return () => { end(); el.removeEventListener('touchmove', move); el.removeEventListener('touchend', up); el.removeEventListener('touchcancel', cancel); document.removeEventListener('contextmenu', menu, true) }
   }, [drag])
+  const [organizing, setOrganizing] = useState<{ at?: Anchor } | null>(null)
   const renamed = () => { setRenaming(null); onRetry() }
   const search = query.trim().toLowerCase()
-  const smart = prefs.sort === 'smart'
-  const visible = (smart ? sortSmart(sessions, prefs.seen, selected) : sortByPrefs(sessions, prefs.order)).filter(session => !search || `${session.name} ${session.dir} ${session.panes.map(pane => agentNames[pane.agent]).join(' ')}`.toLowerCase().includes(search))
+  const manual = prefs.sort === 'manual'
+  const visible = sortSessions(sessions, prefs, selected).filter(session => !search || `${session.name} ${session.dir} ${session.panes.map(pane => agentNames[pane.agent]).join(' ')}`.toLowerCase().includes(search))
   const archived = visible.filter(session => isArchived(session, prefs.archived))
   const hiddenTabs = archivedTabs.filter(pane => !search || `${paneTitle(pane)} ${sessionName(pane)} ${pane.dir} ${agentNames[pane.agent]}`.toLowerCase().includes(search))
   const live = visible.filter(session => !isArchived(session, prefs.archived))
-  const pinned = live.filter(session => prefs.pinned.includes(session.id))
-  const rest = live.filter(session => !prefs.pinned.includes(session.id))
+  // A session that needs you moves to the top group, out of its usual group, so it shows once.
+  const needs = live.filter(session => status(session.panes, prefs.seen, selected).kind === 'approval')
+  const calm = live.filter(session => !needs.includes(session))
+  const pinned = calm.filter(session => prefs.pinned.includes(session.id))
+  const rest = calm.filter(session => !prefs.pinned.includes(session.id))
   const groups: { key: Section; title: string; items: Session[] }[] = [
+    ...(needs.length ? [{ key: 'needs' as const, title: 'Needs you', items: needs }] : []),
     ...(pinned.length ? [{ key: 'pinned' as const, title: 'Pinned', items: pinned }] : []),
-    { key: 'agents', title: 'Claude & Codex', items: rest.filter(session => session.agent !== 'shell') },
-    ...(rest.some(session => session.agent === 'shell') ? [{ key: 'terminals' as const, title: 'Terminals', items: rest.filter(session => session.agent === 'shell') }] : []),
+    ...bodyGroups(rest, prefs),
     ...(archived.length || hiddenTabs.length ? [{ key: 'archived' as const, title: 'Archived', items: archived }] : []),
   ]
   const closedAtFirst = (key: Section) => key === 'past' || key === 'archived'
@@ -352,17 +386,18 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
       <span className="sidebar-top-actions">{onMessageAll && <button className="icon-button" aria-label="Message all sessions" title="Message all sessions" onClick={onMessageAll}><MessagesSquare size={19} /></button>}<button className="icon-button" aria-label="New session" title="New session" onClick={onNew}><Plus size={20} /></button>
       {onClose && <button className="icon-button" aria-label="Close sessions" onClick={onClose}><X size={20} /></button>}</span>
     </div>
-    <label className="sidebar-search"><Search size={16} aria-hidden="true" /><input type="search" placeholder="Search" aria-label="Search sessions" aria-keyshortcuts={onCommandMenu ? undefined : 'Control+K Meta+K'} value={query} onChange={event => setQuery(event.target.value)} onKeyDown={searchKeys} />{onCommandMenu
+    <div className="sidebar-search-row"><label className="sidebar-search"><Search size={16} aria-hidden="true" /><input type="search" placeholder="Search" aria-label="Search sessions" aria-keyshortcuts={onCommandMenu ? undefined : 'Control+K Meta+K'} value={query} onChange={event => setQuery(event.target.value)} onKeyDown={searchKeys} />{onCommandMenu
       ? <button type="button" className="search-key" aria-label="Command menu" aria-keyshortcuts="Control+K Meta+K" title="Go to a pane or run a command" onClick={onCommandMenu}>{shortcutLabel}</button>
-      : <kbd className="search-key" aria-hidden="true">{shortcutLabel}</kbd>}</label>
+      : <kbd className="search-key" aria-hidden="true">{shortcutLabel}</kbd>}</label><button type="button" className="icon-button organize-button" aria-label="Organize sessions" title="Group and sort" aria-haspopup="dialog" onClick={event => setOrganizing({ at: matchMedia('(hover: hover)').matches ? anchorOf(event) : undefined })}><SlidersHorizontal size={17} /></button></div>
+    {organizing && <OrganizeMenu api={api} sessions={sessions.filter(session => !isArchived(session, prefs.archived))} prefs={prefs} update={update} at={organizing.at} onClose={() => setOrganizing(null)} />}
     <nav className="session-groups" aria-label="Sessions">
       {error && <div className="sidebar-error" role="alert">{error}<button onClick={onRetry}>Retry</button></div>}
       {openingChat && <div className="past-opening" role="status">Opening {openingChat}…</div>}
       {mergeError && <div className="sidebar-error" role="alert">{mergeError}<button onClick={() => setMergeError('')}>Dismiss</button></div>}
-      {groups.map(group => <section key={group.key} className="group">
+      {groups.map(group => <section key={group.key} className={group.key === 'needs' ? 'group needs-group' : 'group'}>
         <div className="group-head">
           <button className="group-toggle" aria-expanded={isOpen(group.key)} onClick={() => toggle(group.key)}>{group.title}<span className="group-count">· {group.items.length + (group.key === 'archived' ? hiddenTabs.length : 0)}</span>{group.key === 'archived' && !isOpen('archived') && [...group.items.map(session => session.panes), ...hiddenTabs.map(pane => [pane])].some(list => status(list, prefs.seen, selected).kind === 'approval') && <span className="state-dot approval" role="img" aria-label="An archived session needs you" />}<ChevronRight size={14} className="chevron" /></button>
-          {isOpen(group.key) && group.items.length > 1 && !search && !smart && group.key !== 'archived' && <button className="group-edit" onClick={() => setReorder(reorder === group.key ? null : group.key)}>{reorder === group.key ? 'Done' : 'Reorder'}</button>}
+          {isOpen(group.key) && group.items.length > 1 && !search && manual && group.key !== 'archived' && group.key !== 'needs' && <button className="group-edit" onClick={() => setReorder(reorder === group.key ? null : group.key)}>{reorder === group.key ? 'Done' : 'Reorder'}</button>}
         </div>
         {isOpen(group.key) && group.key === 'archived' && !group.items.length ? null : isOpen(group.key) && (group.items.length
           ? <SessionList items={group.items} reorder={reorder === group.key} selected={selected} prefs={prefs} update={update} onOpen={onOpen} onActions={onActions} onPaneActions={onPaneActions} onMove={ids => moveWithin(group.items, ids)} pinned={group.key === 'pinned'} slots={slots ?? []} canDrag={!!drag} api={api} carry={carry} onCarry={startCarry} onDrop={dropOn} onHold={holdStart} touchOver={touchOver} renaming={renameRow} onRenamed={renamed} marks={marks} onAddPane={onAddPane} />
@@ -437,7 +472,8 @@ function SessionList({ items, reorder, selected, prefs, update, onOpen, onAction
       const open = !multi || prefs.expanded[session.id] !== false
       const toggleOpen = () => update(current => ({ expanded: { ...current.expanded, [session.id]: current.expanded[session.id] === false } }))
       const dropping = (over === session.id || touchOver === session.id) && !!carry
-      return <li key={session.id} data-id={session.id} className={`${dragging.current === session.id ? 'dragging' : ''} ${dropping ? 'drop-over' : ''} ${carry && !carry.pane && carry.session === session.id ? 'carried' : ''}`} {...dropTarget(session)}>
+      const tag = tagStyle(prefs.colors?.[session.id] ?? (session.panes.length === 1 ? prefs.colors?.[session.panes[0].id] : undefined))
+      return <li key={session.id} data-id={session.id} style={tag} className={`${tag ? 'tagged' : ''} ${dragging.current === session.id ? 'dragging' : ''} ${dropping ? 'drop-over' : ''} ${carry && !carry.pane && carry.session === session.id ? 'carried' : ''}`} {...dropTarget(session)}>
         <div className={`swipe-row ${swiped === session.id ? 'swiped' : ''}`}
           onTouchStart={event => { if (!reorder) touch.current = { x: event.touches[0].clientX, y: event.touches[0].clientY, id: session.id } }}
           onTouchEnd={event => {
@@ -465,7 +501,7 @@ function SessionList({ items, reorder, selected, prefs, update, onOpen, onAction
           {reorder && <span className="grip" aria-label={`Drag to move ${session.name}`} onPointerDown={event => { dragging.current = session.id; event.currentTarget.setPointerCapture(event.pointerId) }} onPointerMove={drag} onPointerUp={() => { dragging.current = null }} onPointerCancel={() => { dragging.current = null }}><GripVertical size={18} /></span>}
         </div>
         </div>
-        {multi && open && !reorder && <ul className="pane-children">{session.panes.map(pane => { const paneState = status([pane], prefs.seen, selected); return <li key={pane.id}><button {...dragAs(DRAG_PANE, pane.id, { session: session.id, pane: pane.id })} className={pane.id === selected ? 'selected' : ''} aria-current={pane.id === selected ? 'page' : undefined} onMouseEnter={clipTitle} onTouchStart={event => onHold(event, { session: session.id, pane: pane.id }, paneTitle(pane) || session.name, () => onPaneActions(pane))} onClick={() => onOpen(pane)} onContextMenu={event => { event.preventDefault(); onPaneActions(pane, anchorOf(event)) }}>{dot(paneState)}<span className="pane-child-name">{[paneTitle(pane), shownIndex(pane)].filter(Boolean).join(' ')} · {agentNames[pane.agent]}{profileSuffix(pane)}</span>{slotKey(pane.id)}</button></li> })}</ul>}
+        {multi && open && !reorder && <ul className="pane-children">{session.panes.map(pane => { const paneState = status([pane], prefs.seen, selected), paneTag = tagStyle(prefs.colors?.[pane.id]); return <li key={pane.id} style={paneTag} className={paneTag ? 'tagged' : undefined}><button {...dragAs(DRAG_PANE, pane.id, { session: session.id, pane: pane.id })} className={pane.id === selected ? 'selected' : ''} aria-current={pane.id === selected ? 'page' : undefined} onMouseEnter={clipTitle} onTouchStart={event => onHold(event, { session: session.id, pane: pane.id }, paneTitle(pane) || session.name, () => onPaneActions(pane))} onClick={() => onOpen(pane)} onContextMenu={event => { event.preventDefault(); onPaneActions(pane, anchorOf(event)) }}>{dot(paneState)}<span className="pane-child-name">{[paneTitle(pane), shownIndex(pane)].filter(Boolean).join(' ')} · {agentNames[pane.agent]}{profileSuffix(pane)}</span>{slotKey(pane.id)}</button></li> })}</ul>}
       </li>
     })}
   </ul>

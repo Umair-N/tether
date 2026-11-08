@@ -9,6 +9,7 @@ cleared draft, kept for two days so an old copy on another device cannot bring i
 """
 import json
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -18,7 +19,9 @@ import paths
 FILE = paths.CACHE / 'prefs.json'
 KEYS = {'pinned': list, 'sidePins': list, 'order': list, 'paneOrder': dict, 'sort': str, 'seen': dict, 'collapsed': dict,
         'showPaths': bool, 'tmuxWords': bool, 'liveReplyPreview': bool, 'voiceOff': bool, 'voiceSound': bool, 'theme': str, 'scheme': str, 'drafts': dict,
-        'archived': dict, 'archivedTabs': dict, 'autoResume': bool, 'layout': dict, 'repos': dict, 'files.pinned': list, 'hosts': list, 'sessionFolder': str}
+        'archived': dict, 'archivedTabs': dict, 'autoResume': bool, 'layout': dict, 'repos': dict, 'files.pinned': list, 'hosts': list, 'sessionFolder': str,
+        'colors': dict, 'groups': list, 'groupOf': dict, 'groupBy': str}
+GROUP_ID = re.compile(r'[a-z0-9-]{1,40}')
 MAX_SEEN = 500
 MAX_DRAFTS = 200
 MAX_DRAFT_TEXT = 20000
@@ -97,10 +100,24 @@ def save(changes):
                 if not valid or normalized in urls:
                     raise ValueError('Invalid preference: hosts.')
                 urls.add(normalized)
+        if key == 'groupBy' and value not in ('custom', 'folder', 'agent', 'none'):
+            raise ValueError('Invalid preference: groupBy.')
     with _lock:
         stored = load()
         prefs = stored['prefs']
         for key, value in changes.items():
+            if key == 'colors':
+                value = {item: color for item, color in value.items()
+                         if isinstance(item, str) and re.fullmatch(r'[$%][0-9]+', item)
+                         and isinstance(color, str) and color in ('red', 'orange', 'yellow', 'green', 'blue', 'purple')}
+            if key == 'groups':
+                value = [{'id': item['id'], 'name': item['name'].strip()} for item in value
+                         if isinstance(item, dict) and isinstance(item.get('id'), str) and GROUP_ID.fullmatch(item['id'])
+                         and isinstance(item.get('name'), str) and 1 <= len(item['name'].strip()) <= 40][:20]
+            if key == 'groupOf':
+                value = {item: group for item, group in value.items()
+                         if isinstance(item, str) and re.fullmatch(r'\$[0-9]+', item)
+                         and isinstance(group, str) and GROUP_ID.fullmatch(group)}
             if key == 'seen':
                 merged = dict(prefs.get('seen') or {})
                 for pane, at in value.items():
