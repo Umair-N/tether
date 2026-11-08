@@ -105,7 +105,9 @@ class ProjectTests(unittest.TestCase):
             'Start your review reply with APPROVED when nothing is wrong. '
             '`send --pane %N "text"` (`-` reads stdin) steers a tab you started. '
             '`wait --pane %N [--timeout SECONDS]` (max 600) prints JSON with its last reply when its turn ends. '
-            'Exit: 0 finished, 3 timeout (it keeps working), 4 helper gone, 5 needs_input with the prompt, 6 no_turn (no new turn after 60 s; the message may be lost).', text)
+            'Exit: 0 finished, 3 timeout (it keeps working), 4 helper gone, 5 needs_input with the prompt, 6 no_turn (no new turn after 60 s; the message may be lost). '
+            'When a tab you started or review is done, save a note in notes/ (what it did, outcome, findings), '
+            'then run `close --pane %N`. Busy tabs stay open.', text)
         self.assertFalse(projects.has_context(PID, self.home))
         state = projects.state(PID, self.home)
         self.assertEqual((state['chars'] > 0, state['revision']), (True, 0))

@@ -4,6 +4,7 @@ import os
 import re
 
 import auth
+import auto_resume
 import delegate
 import helper_tabs
 import paths
@@ -53,6 +54,27 @@ def link_pair(body, entries, last_reply):
                      name=delegate.source_title(source), agent=source['agent'],
                      seen_working=bool(last_reply(source).strip()) and live_status(source)['state'] != 'Working')
     return {'linked': True}
+
+
+def close_tab(body, caller, entries, run, status):
+    """Close a tab this tab started or reviews, after its work is done. A working tab stays open."""
+    pane = helper_tabs._pane(body)
+    if pane == caller['id']:
+        raise ValueError('A tab cannot close itself. Ask the tab that started it.')
+    exists, record = helper_tabs.load(pane, run)
+    if not exists:
+        raise ValueError('That session has ended. Select another tab.')
+    target = next((entry for entry in entries if entry['id'] == pane), None)
+    if record is not None and record['owner_pane'] == caller['id']:
+        helper_tabs.check(caller['id'], caller, target, record, run, pane=pane)
+    elif caller['id'] not in review_links.reviewed_by().get(pane, []):
+        raise ValueError('That tab is not a helper of this tab, and this tab does not review it.')
+    if target is not None and status(target)['state'] in ('Working', 'Approval', 'Input needed'):
+        raise RuntimeError('That tab is working or waits on a prompt. Close it after its work is done.')
+    auto_resume.forget_pane(pane, run=run)
+    run([paths.TMUX, 'kill-pane', '-t', pane], check=True, capture_output=True, timeout=5)
+    review_links.remove(pane)
+    return {'closed': pane}
 
 
 def serve(handler, body, *, sessions, folder, snapshot, last_reply, run, lock, status, send, timeline):
@@ -131,6 +153,8 @@ def serve(handler, body, *, sessions, folder, snapshot, last_reply, run, lock, s
                 elif reviewer != caller['id']:
                     raise ValueError('That review link is not on this tab.')
             result = 200, {'stopped': review_links.remove(worker, reviewer)}
+        elif action == 'close':
+            result = 200, close_tab(body, caller, entries, run, status)
         elif action == 'list':
             links = review_links.reviewed_by()
             by_pane = {entry['id']: entry for entry in entries}
