@@ -34,6 +34,8 @@ DESKTOP = (1280, 800)
 # the stream is still capped at the panel size in device pixels.
 QUALITY = 80
 MOTION_IDLE = 0.3
+# Seconds after the last viewer leaves before a user tab's window is minimized (see Browser._park).
+PARK_SECONDS = 5
 SCROLL_KEYS = {'PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'Home', 'End', ' '}
 
 IPHONE_UA = ('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) '
@@ -346,6 +348,7 @@ class Tab:
         self.motion_generation = 0
         self.changed = threading.Condition()
         self.healed = 0.0  # when the emulation was last applied again (see Browser.heal)
+        self.parked = False  # the tab's window is minimized because nobody watches it
 
     def row(self):
         preset = PRESETS[self.preset]
@@ -480,6 +483,8 @@ class Browser:
                 if stopped.is_set() or not self.running():
                     return
                 busy = any(tab.viewers for tab in self.tabs.values()) or bool(self.agent_proxy and self.agent_proxy.busy())
+                for tab in list(self.tabs.values()):
+                    self._park(tab)  # tabs that no viewer ever opened
                 if busy:
                     self.touch()
                 elif self.clock() - self.used > IDLE_SECONDS:
@@ -729,6 +734,7 @@ class Browser:
             tab.viewers = len(tab.viewer_sizes)
             previous_cast = tab.casting
             try:
+                self._unpark(tab)
                 if tab.viewers == 1:
                     with tab.changed:
                         tab.frame = None  # a previous viewing interval cannot supply this viewer's first frame
@@ -761,10 +767,43 @@ class Browser:
                 self._cancel_motion(tab)
                 tab.casting = None
                 self.conn.send('Page.stopScreencast', session=tab.session)
+            if not tab.viewers and self.running() and tab.target in self.tabs:
+                timer = threading.Timer(PARK_SECONDS, self._park_later, args=(tab,))
+                timer.daemon = True
+                timer.start()
             elif tab.viewers and tab.casting and self.running() and tab.target in self.tabs:
                 size = self._cast_size(tab)
                 if tab.casting != size:
                     self._start_cast(tab, size)
+
+    def _park(self, tab):
+        """Minimize the window of a user tab that nobody watches. Headless Chrome treats every tab as visible, so a
+        page with endless CSS animations kept the software compositor drawing full 2x frames: two Tether chat tabs
+        used 87% CPU, and 7% when minimized. Agent tabs stay visible: Playwright waits on requestAnimationFrame,
+        which a hidden page does not run. The headed signed browser paints only its front tab already."""
+        if (tab.parked or tab.viewers or tab.mode == 'agent' or self.signed or not self.running()
+                or self.tabs.get(tab.target) is not tab):
+            return
+        try:
+            window = self.conn.call('Browser.getWindowForTarget', {'targetId': tab.target})['windowId']
+            self.conn.call('Browser.setWindowBounds', {'windowId': window, 'bounds': {'windowState': 'minimized'}})
+            tab.parked = True
+        except (BrowserError, KeyError, TypeError):
+            pass  # a tab that closed meanwhile; a later sweep tries again
+
+    def _park_later(self, tab):
+        with self.lock:
+            self._park(tab)
+
+    def _unpark(self, tab):
+        if not tab.parked:
+            return
+        try:
+            window = self.conn.call('Browser.getWindowForTarget', {'targetId': tab.target})['windowId']
+            self.conn.call('Browser.setWindowBounds', {'windowId': window, 'bounds': {'windowState': 'normal'}})
+            tab.parked = False
+        except (BrowserError, KeyError, TypeError):
+            pass  # a minimized tab still sends screencast frames
 
     def _cast_size(self, tab):
         size = tuple(max(s[i] for s, _ in tab.viewer_sizes) for i in (0, 1))

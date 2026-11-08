@@ -170,6 +170,48 @@ class StreamRegressions(unittest.TestCase):
                         'A new history entry must enable Back even if URL and title stay equal.')
 
 
+class ParkRegressions(unittest.TestCase):
+    """Lag: headless Chrome drew every unwatched tab with animations at 2x in software (87% CPU for 2 chat tabs)."""
+
+    def calls(self, instance):
+        def call(method, params=None, *args, **kwargs):
+            return {'windowId': 7} if method == 'Browser.getWindowForTarget' else {}
+        instance.conn.call.side_effect = call
+        return lambda: [(c.args[0], (c.args[1] if len(c.args) > 1 else {}).get('bounds', {}).get('windowState'))
+                        for c in instance.conn.call.call_args_list
+                        if c.args[0] in ('Browser.setWindowBounds', 'Page.startScreencast')]
+
+    def test_unwatched_user_tab_is_minimized_and_restored_before_cast(self):
+        instance, tab = panel_browser()
+        seen = self.calls(instance)
+        with patch.object(browser, 'PARK_SECONDS', 0.01):
+            instance.watch('T1', 800, 600)
+            instance.unwatch(tab, (800, 600))
+            deadline = time.monotonic() + 2
+            while not tab.parked and time.monotonic() < deadline:
+                time.sleep(0.01)
+        self.assertTrue(tab.parked)
+        self.assertEqual(seen()[-1], ('Browser.setWindowBounds', 'minimized'))
+        instance.conn.call.reset_mock()
+        instance.watch('T1', 800, 600)
+        self.assertFalse(tab.parked)
+        self.assertEqual(seen(), [('Browser.setWindowBounds', 'normal'), ('Page.startScreencast', None)])
+
+    def test_watched_agent_and_signed_tabs_stay_visible(self):
+        instance, tab = panel_browser()
+        seen = self.calls(instance)
+        instance.watch('T1', 800, 600)
+        instance._park(tab)
+        agent = browser.Tab('A1', 'SA', mode='agent')
+        instance.tabs['A1'] = agent
+        instance._park(agent)
+        signed, signed_tab = panel_browser(signed=True)
+        signed_seen = self.calls(signed)
+        signed._park(signed_tab)
+        self.assertEqual((tab.parked, agent.parked, signed_tab.parked), (False, False, False))
+        self.assertNotIn('minimized', [state for _, state in seen() + signed_seen()])
+
+
 class DeviceRegressions(unittest.TestCase):
     def test_chrome_desktop_preset_clears_previous_phone_user_agent(self):
         broker = mac_browser.Broker(store=Path('/unused-p27-device-store'))
