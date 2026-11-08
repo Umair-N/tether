@@ -5,12 +5,18 @@ The session option @groups holds the list, in order, empty groups included:
 The pane option @group holds a group id. A pane with no @group, or with an id that is not in @groups, is in Main.
 A group's context is a projects.py bundle, made on first use. Removing a group archives the bundle; nothing is deleted.
 This module is the store and its rules. groups_api.py is the HTTP part."""
+import contextlib
 import json
 import re
 import secrets
 import subprocess
 import threading
 import unicodedata
+
+try:
+    import fcntl
+except ImportError:  # Windows: the server is the only writer there
+    fcntl = None
 
 import paths
 import projects
@@ -20,7 +26,36 @@ SESSION = re.compile(r'\$[0-9]+')
 PANE = re.compile(r'%[0-9]+')
 NAME_LIMIT = 40
 MAIN = 'Main'
-LOCK = threading.RLock()  # read-modify-write of @groups
+_THREADS = threading.RLock()
+_depth = 0
+
+
+@contextlib.contextmanager
+def _locked():
+    """Hold for each read-modify-write of @groups. The server, the agent launcher (project_launch.py), auto-resume and
+    tmux merge are separate processes, so a thread lock is not enough: the outermost holder also takes a file lock."""
+    global _depth
+    with _THREADS:
+        handle = None
+        if _depth == 0 and fcntl is not None:
+            try:
+                paths.CACHE.mkdir(mode=0o700, parents=True, exist_ok=True)
+                handle = open(paths.CACHE / 'groups.lock', 'a')
+                fcntl.flock(handle, fcntl.LOCK_EX)
+            except OSError:
+                if handle:
+                    handle.close()
+                handle = None
+        _depth += 1
+        try:
+            yield
+        finally:
+            _depth -= 1
+            if handle:
+                handle.close()  # closing releases the lock
+
+
+LOCK = _locked
 GONE_TAB = 'That tab has ended.'
 GONE_GROUP = 'That group no longer exists.'
 GONE_SESSION = 'That session has ended.'
@@ -172,12 +207,13 @@ def _pane_in(session_id, pane, run):
 def create(session_id, name, run=subprocess.run, pane=None):
     """Add a group at the end of the list. With pane, move that tab into it."""
     name = clean_name(name)
-    with LOCK:
+    with LOCK():
         groups = read(session_id, run)
         _free_name(groups, name)
         if pane is not None:
             _pane_in(session_id, pane, run)
-        group = {'id': _new_id({g['id'] for g in groups}), 'name': name, 'project': ''}
+        # The bundle id is made here, so an agent launcher only reads @groups (context()).
+        group = {'id': _new_id({g['id'] for g in groups}), 'name': name, 'project': secrets.token_hex(6)}
         write(session_id, groups + [group], run)
         if pane is not None:
             _label(pane, group['id'], run)
@@ -186,7 +222,7 @@ def create(session_id, name, run=subprocess.run, pane=None):
 
 def rename(session_id, group_id, name, run=subprocess.run):
     name = clean_name(name)
-    with LOCK:
+    with LOCK():
         groups = read(session_id, run)
         group = _find(groups, group_id)
         _free_name(groups, name, keep=group_id)
@@ -199,7 +235,7 @@ def rename(session_id, group_id, name, run=subprocess.run):
 
 def move(session_id, pane, group_id, run=subprocess.run):
     """Put a tab in a group of its session. None or '' puts it in Main."""
-    with LOCK:
+    with LOCK():
         groups = read(session_id, run)
         if group_id:
             _find(groups, group_id)
@@ -220,7 +256,7 @@ def _archive(group):
 
 def ungroup(session_id, group_id, run=subprocess.run):
     """Move the group's tabs to Main and drop the group. No agent stops. Its context bundle goes to the archive."""
-    with LOCK:
+    with LOCK():
         groups = read(session_id, run)
         group = _find(groups, group_id)
         for pane in _labelled(session_id, group_id, run):
@@ -231,7 +267,7 @@ def ungroup(session_id, group_id, run=subprocess.run):
 
 def remove(session_id, group_id, run=subprocess.run):
     """Drop an empty group. Its context bundle goes to the archive."""
-    with LOCK:
+    with LOCK():
         groups = read(session_id, run)
         group = _find(groups, group_id)
         if _labelled(session_id, group_id, run):
@@ -245,7 +281,7 @@ def find_or_create(session_id, name, run=subprocess.run):
     name = clean_name(name)
     if name.lower() == MAIN.lower():
         return None
-    with LOCK:
+    with LOCK():
         found = next((g for g in read(session_id, run) if g['name'].lower() == name.lower()), None)
         return found or create(session_id, name, run)
 
@@ -265,8 +301,9 @@ def find_in_session_of(pane, group_id, run=subprocess.run):
 
 
 def context(session_id, group_id, run=subprocess.run):
-    """The group's context bundle id. The first call makes the bundle (with its notes folder) and saves the id."""
-    with LOCK:
+    """The group's context bundle id, with its folder made. create() sets the id; a group saved without one (an old
+    @groups value) gets one here, under the cross-process lock."""
+    with LOCK():
         groups = read(session_id, run)
         group = _find(groups, group_id)
         if not group['project']:
@@ -304,7 +341,7 @@ def merge_into(source, target, run=subprocess.run):
     """tmux_merge.merge_session, before the windows move: the target gets the source groups (merged), and source panes
     get the ids their groups have in the target. A source label with no source group is cleared, so no pane points
     to a group it was never in."""
-    with LOCK:
+    with LOCK():
         theirs, ours = read(target, run), read(source, run)
         labels = _tmux(run, 'list-panes', '-s', '-t', source + ':', '-F', '#{pane_id}\t#{@group}')
         _check(labels, GONE_SESSION)
@@ -321,7 +358,7 @@ def restore(session_id, text, run=subprocess.run):
     saved = parse(text)
     if not saved:
         return
-    with LOCK:
+    with LOCK():
         groups = read(session_id, run)
         ids, names = {g['id'] for g in groups}, {g['name'].lower() for g in groups}
         added = [g for g in saved if g['id'] not in ids and g['name'].lower() not in names]

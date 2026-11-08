@@ -14,6 +14,8 @@ import type { Place } from './groups'
 export interface GroupHooks {
   seen: Record<string, number>
   selected?: string
+  /** Archived tabs of the session. The strip leaves them out, but they are still in their group. */
+  hidden: Pane[]
   /** Start a new tab in a group ('' = Main), next to `from`. */
   onStart: (group: string, from: Pane) => void
   /** Open the group's context in the project editor. */
@@ -121,7 +123,10 @@ function GroupMenu({ api, session, place, at, from, hooks, onClose, onDone }: {
   const [error, setError] = useState('')
   const dialog = useActionsDialog(at, () => { if (!pending) onClose() })
   if (!group) return null
-  const count = place.panes.length
+  // Archived tabs are hidden from the strip but still in the group: close all and remove must count them.
+  const archived = hooks.hidden.filter(item => item.group === group.id)
+  const all = [...place.panes, ...archived]
+  const count = all.length
   const tabs = `${count} ${count === 1 ? 'tab' : 'tabs'}`
   async function run(action: () => Promise<unknown>) {
     setPending(true); setError('')
@@ -129,11 +134,11 @@ function GroupMenu({ api, session, place, at, from, hooks, onClose, onDone }: {
   }
   const nameError = mode === 'rename' ? groupNameError(name, session.groups, group.id) : ''
   // Agents that a close would stop in the middle of a turn, or that wait on you.
-  const busy = place.panes.filter(item => item.state === 'Working' || needsYou(item.state))
-  const endsSession = count > 0 && count === session.panes.length
+  const busy = all.filter(item => item.state === 'Working' || needsYou(item.state))
+  const endsSession = count > 0 && count === session.panes.length + hooks.hidden.length
   async function closeAll() {
     // One close at a time with the existing close route, then remove the empty group (the session ends with its last tab).
-    for (const item of place.panes) await api('session', { pane: item.id }, undefined, 'DELETE')
+    for (const item of all) await api('session', { pane: item.id }, undefined, 'DELETE')
     if (!endsSession) await api('groups/remove', { session: session.id, group: group!.id })
   }
   return <dialog {...dialog} aria-labelledby="group-menu-title">
@@ -148,7 +153,7 @@ function GroupMenu({ api, session, place, at, from, hooks, onClose, onDone }: {
         </form>
       : mode === 'close'
       ? <div className="confirm-box" role="alertdialog" aria-labelledby="group-close-title">
-          <p id="group-close-title"><strong>{count === 1 ? 'Close the tab' : `Close all ${tabs}`} in {group.name}?</strong> {busy.length ? `This stops ${busy.map(item => `${chatTitle(item)} (${needsYou(item.state) ? 'needs you' : 'working'})`).join(', ')}. ` : ''}{endsSession ? `${count === 1 ? 'It is the last tab' : 'They are the last tabs'}, so this also ends the session ${session.name}. ` : 'Then the empty group is removed. '}You cannot undo this.</p>
+          <p id="group-close-title"><strong>{count === 1 ? 'Close the tab' : `Close all ${tabs}`} in {group.name}?</strong> {archived.length ? `${archived.length === 1 ? '1 of them is' : `${archived.length} of them are`} archived. ` : ''}{busy.length ? `This stops ${busy.map(item => `${chatTitle(item)} (${needsYou(item.state) ? 'needs you' : 'working'})`).join(', ')}. ` : ''}{endsSession ? `${count === 1 ? 'It is the last tab' : 'They are the last tabs'}, so this also ends the session ${session.name}. ` : 'Then the empty group is removed. '}You cannot undo this.</p>
           <div className="sheet-buttons"><button type="button" className="secondary" disabled={pending} onClick={() => setMode('menu')}>Cancel</button><button type="button" className="danger" disabled={pending} onClick={() => void run(closeAll)}>{pending ? 'Closing…' : `Close ${tabs}`}</button></div>
         </div>
       : <div className="action-list">

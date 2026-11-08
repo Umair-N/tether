@@ -439,9 +439,12 @@ function App() {
         rail.choose('home')
         return
       }
-      // ⌥⇧] and ⌥⇧[ go to the next or previous group of the focused tab's session. Read event.code: on a Mac the keys type ” and “.
+      // ⌥⇧] and ⌥⇧[ go to the next or previous group of the focused tab's session. Read event.code: on a Mac the keys type ” and “,
+      // so a text field or an open dialog keeps them and gets the character.
       if (event.altKey && event.shiftKey && !event.ctrlKey && !event.metaKey && (event.code === 'BracketRight' || event.code === 'BracketLeft')) {
-        if (groupKeys.current(event.code === 'BracketRight' ? 1 : -1)) event.preventDefault()
+        const target = event.target as HTMLElement | null
+        const typing = !!target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+        if (!typing && !document.querySelector('dialog[open]') && groupKeys.current(event.code === 'BracketRight' ? 1 : -1)) event.preventDefault()
         return
       }
       if (event.altKey && !event.ctrlKey && !event.metaKey && (event.code === 'BracketRight' || event.code === 'BracketLeft')) {
@@ -677,7 +680,7 @@ function App() {
     const at = livePins.findIndex(item => item.pane.id === target.id)
     const sidePin = target.agent !== 'shell' ? { pinned: at >= 0, index: at, total: livePins.length, note: at >= 0 ? livePins[at].pin.note ?? '' : '', onToggle: () => at >= 0 ? unpinPane(target.id) : pinPane(target.id), onNote: (text: string) => notePin(target.id, text), onStep: (dir: 1 | -1) => stepPin(dir, target.id) } : undefined
     const groupHooks: GroupHooks | undefined = owner?.groups?.length ? {
-      seen: prefs.seen, selected: openId,
+      seen: prefs.seen, selected: openId, hidden: archivedTabs.filter(item => item.tmux_session === owner.id),
       onStart: (group, from) => void split('right', from, group),
       onContext: group => setProject({ session: owner.id, group: group.id }),
     } : undefined
@@ -725,7 +728,7 @@ function App() {
     {liveMode && <Live api={api} panes={panes} selected={pane} commands={commands.filter(item => !item.label.includes('Live mode'))} onClose={() => setLive(false)} reveal={liveReveal} from={liveFrom} />}
     {view && <Inbox api={api} items={inbox} sessions={sessions} selected={openId} open={desk.inbox} onToggle={() => { if (!home) setDesk({ inbox: !desk.inbox }) }} onOpen={openPane} onUpdate={() => void refresh()} />}
     {view && picking !== null && picking < view.slots.length && <SlotPicker index={picking} sessions={sortByPrefs(sessions, prefs.order).filter(item => !isArchived(item, prefs.archived))} slots={view.slots} onPane={id => { showInSlot(id, picking); setPicking(null) }} onSession={target => { showSession(target); setPicking(null) }} onClose={() => setPicking(null)} />}
-    {project && sessions.some(item => item.id === project.session && (!project.group || item.groups?.some(group => group.id === project.group))) && <ProjectSheet key={`${project.session}/${project.group ?? ''}`} api={api} session={sessions.find(item => item.id === project.session)!} group={project.group ? sessions.find(item => item.id === project.session)!.groups?.find(item => item.id === project.group) : undefined} mark={project.group ? undefined : marks[project.session]} pin={project.pin} onChanged={loadMarks} onClose={() => setProject(null)} />}
+    {project && sessions.some(item => item.id === project.session && (!project.group || item.groups?.some(group => group.id === project.group))) && <ProjectSheet key={`${project.session}/${project.group ?? ''}`} api={api} session={sessions.find(item => item.id === project.session)!} group={project.group ? sessions.find(item => item.id === project.session)!.groups?.find(item => item.id === project.group) : undefined} mark={marks[project.session]} pin={project.pin} onChanged={loadMarks} onClose={() => setProject(null)} />}
     {settings && <Settings api={api} prefs={prefs} update={update} onReload={reload} onClose={() => setSettings(false)} />}
     {newSession && <NewSession api={api} onClose={() => setNewSession(false)} onCreated={(created, made) => { openPane(created); setNewSession(false); void refresh(); if (made) setNotice(worktreeNotice(made)) }} />}
     {actionSession && pane && <SessionActions key={`${actionSession.id}-${actionsDelete}`} tabCount={panes.filter(item => item.tmux_session === actionSession.id).length} startDelete={actionsDelete} at={actionsDelete ? undefined : menuAt} place={placeFor(actionSession.panes[0].id, actionSession)} api={api} session={actionSession} pane={actionSession.panes.find(item => item.id === pane.id)?.id ?? actionSession.panes[0].id} pinned={prefs.pinned.includes(actionSession.id)} archived={isArchived(actionSession, prefs.archived)} canMoveUp={ordered.indexOf(actionSession.id) > 0} canMoveDown={ordered.indexOf(actionSession.id) < ordered.length - 1} targets={moveTargets} marks={marks} onMarks={loadMarks}

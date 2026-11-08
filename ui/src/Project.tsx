@@ -99,7 +99,10 @@ export function ProjectSheet({ api, session, group, mark, pin, onChanged, onClos
   const dirty = !!project && text.trim() !== project.instructions.trim()
   const fresh = project?.notes.filter(item => item.new).length ?? 0
   const level = project ? project.chars / project.budget : 0
-  const staleCount = mark && project && mark.project === project.id ? mark.stale.length : 0
+  // The session mark lists stale tabs by pane. A group sheet counts only the tabs in its group.
+  const staleCount = !mark || !project ? 0
+    : group ? mark.stale.filter(id => session.panes.some(item => item.id === id && item.group === group.id)).length
+    : mark.project === project.id ? mark.stale.length : 0
   const pinName = pinPath?.split('/').pop()
 
   return <dialog {...modal} className="sheet settings-sheet project-sheet" aria-labelledby="project-title">

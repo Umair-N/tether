@@ -46,9 +46,10 @@ class Bundles(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         self.home = Path(temp.name) / 'home'
         self.home.mkdir()
-        patch = mock.patch.object(paths, 'TETHER', Path(temp.name) / 'tether')
-        patch.start()
-        self.addCleanup(patch.stop)
+        for name, value in (('TETHER', Path(temp.name) / 'tether'), ('CACHE', Path(temp.name) / 'cache')):
+            patch = mock.patch.object(paths, name, value)
+            patch.start()
+            self.addCleanup(patch.stop)
 
 
 class NameAndParseTests(unittest.TestCase):
@@ -227,7 +228,8 @@ class TmuxTests(Bundles):
         self.assertEqual((self.label(self.a1), self.label(self.a2)), ('', second['id']))
         self.assertEqual(groups.all_groups(run), {self.a: groups.read(self.a, run)})
         stored = self.tmux('show-options', '-v', '-t', self.a, '@groups').stdout.strip()
-        self.assertEqual(json.loads(stored)[0], {'id': first['id'], 'name': 'Docs', 'project': ''})
+        self.assertEqual(json.loads(stored)[0], {'id': first['id'], 'name': 'Docs', 'project': first['project']})
+        self.assertTrue(projects.ID.fullmatch(first['project']), 'create makes the bundle id')
 
     def test_names_are_unique_and_main_is_reserved(self):
         run = self.run_tmux
@@ -287,6 +289,32 @@ class TmuxTests(Bundles):
         groups.rename(self.a, docs['id'], 'Guides', run)
         self.assertEqual(projects.meta(pid)['name'], 'Guides')
 
+    def test_context_of_a_new_group_only_reads(self):
+        # An agent launcher calls context() in its own process; it must not write @groups back (spec 6 review, defect 1).
+        run = self.run_tmux
+        docs = groups.create(self.a, 'Docs', run)
+        with mock.patch.object(groups, 'write', side_effect=AssertionError('context wrote @groups')):
+            self.assertEqual(groups.context(self.a, docs['id'], run), docs['project'])
+        old = {'id': 'gaaaaaaaa', 'name': 'Old', 'project': ''}  # saved before create made ids
+        groups.write(self.a, groups.read(self.a, run) + [old], run)
+        pid = groups.context(self.a, old['id'], run)
+        self.assertEqual([g['project'] for g in groups.read(self.a, run)], [docs['project'], pid])
+
+    def test_writers_in_other_processes_lose_no_group(self):
+        # The server and agent launchers are separate processes. Each read-modify-write holds a file lock.
+        env = {key: value for key, value in os.environ.items() if key not in ('TMUX', 'TMUX_PANE')}
+        env.update(TMUX_TMPDIR=self.socket_dir, MOBILE_TMUX_CACHE=str(paths.CACHE), TETHER_HOME=str(paths.TETHER))
+        code = ('import sys, groups\n'
+                'for i in range(15):\n'
+                '    groups.create(sys.argv[1], sys.argv[2] + str(i))\n')
+        workers = [subprocess.Popen([os.sys.executable, '-c', code, self.a, prefix], cwd=Path(__file__).parent, env=env,
+                                    stderr=subprocess.PIPE, text=True) for prefix in ('A', 'B', 'C')]
+        for worker in workers:
+            self.assertEqual(worker.wait(timeout=60), 0, worker.stderr.read())
+            worker.stderr.close()
+        names = sorted(g['name'] for g in groups.read(self.a, self.run_tmux))
+        self.assertEqual(names, sorted(f'{p}{i}' for p in 'ABC' for i in range(15)))
+
     def test_find_or_create(self):
         run = self.run_tmux
         made = groups.find_or_create(self.a, 'Docs', run)
@@ -309,7 +337,7 @@ class TmuxTests(Bundles):
         caller = {'id': self.a1}
         self.assertIsNone(agent_tabs._start_group({}, caller, run))
         made = agent_tabs._start_group({'group': 'Docs'}, caller, run)
-        self.assertEqual(groups.read(self.a, run), [{'id': made, 'name': 'Docs', 'project': ''}])
+        self.assertEqual([(g['id'], g['name']) for g in groups.read(self.a, run)], [(made, 'Docs')])
         self.assertEqual(agent_tabs._start_group({'group': 'docs'}, caller, run), made)
         self.assertEqual(agent_tabs._start_group({'group': 'Main'}, caller, run), '')
         self.assertEqual(self.status(lambda: agent_tabs._start_group({'group': ''}, caller, run)), 400)
