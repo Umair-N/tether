@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 
+import groups
 import paths
 import projects
 import side_shells
@@ -145,6 +146,7 @@ def merge_session(source, target, run=subprocess.run, keep=None):
     windows = _tmux(run, 'list-windows', '-t', source + ':', '-F', '#{window_id}')
     _check(windows, GONE)
     plan = _name_plan(run, source, target, list(_names(run, source)))
+    groups.merge_into(source, target, run)  # before the move, so no moved pane points to a missing group
     for window in windows.stdout.split():
         _check(_tmux(run, 'move-window', '-d', '-s', window, '-t', target + ':'), 'Could not move the window.')
     _apply_names(run, plan)
@@ -159,8 +161,14 @@ def move_pane(pane, target, run=subprocess.run):
         raise ValueError('The pane is already in that session.')
     plan = _name_plan(run, source, target, [pane])
     _check(_tmux(run, 'break-pane', '-d', '-s', pane, '-t', target + ':'), 'Could not move the pane.')
+    _ungroup(run, pane)
     _apply_names(run, plan)
     return _moved(run, target, pane)
+
+
+def _ungroup(run, pane):
+    """A pane that leaves its session goes to Main: groups belong to one session (groups.py)."""
+    _tmux(run, 'set-option', '-p', '-u', '-t', pane, '@group')
 
 
 def _free_name(run, wanted=''):
@@ -191,6 +199,7 @@ def break_out(pane, run=subprocess.run):
         _tmux(run, 'kill-session', '-t', session_id)
         _check(moved, 'Could not move the pane.')
     _tmux(run, 'kill-pane', '-t', placeholder)
+    _ungroup(run, pane)
     return _moved(run, session_id, pane)
 
 

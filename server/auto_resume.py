@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 
+import groups
 import history
 import paths
 import prefs_sync
@@ -25,10 +26,11 @@ VERIFY_SECS = 60
 MAX_PASS = 20
 GAP = 1.5
 OPTIONS = ('@chat_name', '@chat_name_at', '@chat_icon', '@chat_icon_by',
-           '@project_rev', '@worktree', '@subproject')
+           '@project_rev', '@worktree', '@group')
+SESSION_OPTIONS = ('@project', '@groups')  # @groups: the session's groups (groups.py), so restored @group labels resolve
 _STATES = ('open', 'pending', 'resuming', 'failed', 'deferred')
 _FORMAT = '\t'.join('#{' + field + '}' for field in
-                    ('pane_id', *OPTIONS, '@project'))
+                    ('pane_id', *OPTIONS, *SESSION_OPTIONS))
 _lock = threading.Lock()
 _wake = threading.Event()
 _tombstones = {}
@@ -64,7 +66,7 @@ def _valid_tab(thread, tab):
             and all(isinstance(tab.get(key), dict) and all(
                 opt in allowed and isinstance(value, str) and value
                 for opt, value in tab[key].items())
-                for key, allowed in (('options', OPTIONS), ('session_options', ('@project',)))))
+                for key, allowed in (('options', OPTIONS), ('session_options', SESSION_OPTIONS))))
 
 
 def _read():
@@ -184,9 +186,9 @@ def _pane_rows(*, run):
     rows = {}
     for line in result.stdout.splitlines():
         fields = line.split('\t')
-        if len(fields) == len(OPTIONS) + 2:
+        if len(fields) == len(OPTIONS) + len(SESSION_OPTIONS) + 1:
             pane, *values = fields
-            rows[pane] = dict(zip((*OPTIONS, '@project'), values))
+            rows[pane] = dict(zip((*OPTIONS, *SESSION_OPTIONS), values))
     return rows
 
 
@@ -255,7 +257,7 @@ def tick(*, entries, folder_of, status_of, display_dir, run=subprocess.run,
                 order=_order(entry.get('position')),
                 folder=folder_of(entry) or '', name=row.get('@chat_name') or entry.get('pane_name') or '',
                 icon=entry.get('pane_icon') or '', options={opt: row[opt] for opt in OPTIONS if row.get(opt)},
-                session_options={'@project': row['@project']} if row.get('@project') else {},
+                session_options={opt: row[opt] for opt in SESSION_OPTIONS if row.get(opt)},
                 working=status_of(entry).get('state') == 'Working', state='open', error='', started=0,
                 missing_since=None, stopped=False, offset=0, transcript=entry.get('transcript') or '')
 
@@ -318,6 +320,11 @@ def _options(tab, pane, session_id, *, run):
     name = options.get('@chat_name') or tab['name']
     if name:
         _tmux(run, 'set-option', '-p', '-t', pane, '@chat_name', name, check=True)
+    if tab['session_options'].get('@groups'):
+        try:  # before the labels, so @group points to a real group
+            groups.restore(session_id, tab['session_options']['@groups'], run)
+        except (ValueError, OSError, subprocess.SubprocessError):
+            pass  # the tab still resumes; it shows in Main
     for opt in OPTIONS[1:]:
         if options.get(opt):
             _tmux(run, 'set-option', '-p', '-t', pane, opt, options[opt], check=True)
@@ -376,7 +383,7 @@ def launch(*, entries, run=subprocess.run, now=time.time, sleep=time.sleep):
             existing = _tmux(run, 'list-panes', '-s', '-t', '=' + tab['session'] + ':', '-F', '#{pane_id}')
             panes = existing.stdout.splitlines() if existing.returncode == 0 else []
             if panes:
-                pane = new_window_after(panes[-1], run, cwd=tab['folder'])
+                pane = new_window_after(panes[-1], run, cwd=tab['folder'], group=tab['options'].get('@group', ''))
                 cleanup = True
             else:
                 pane = resume_session(tab['session'], tab['folder'], thread, run=run,

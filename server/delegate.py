@@ -163,8 +163,9 @@ def launch_command(entry, agent, path, name, *, context=False, profile=None):
     return command + f' "$(cat {shlex.quote(str(path))})"'
 
 
-def start(entry, body, folder, run=subprocess.run, recent=lambda: [], *, cwd=None, worktree=None, owner=None):
-    """recent: returns source messages when context or a new reviewer needs them."""
+def start(entry, body, folder, run=subprocess.run, recent=lambda: [], *, cwd=None, worktree=None, owner=None, group=None):
+    """recent: returns source messages when context or a new reviewer needs them.
+    group: None = the source tab's group; "" = Main; a group id = that group (set before the launch command)."""
     # Call after validate, under the server's send lock. Only the new pane receives input.
     agent = body['agent']
     review = normalize_review(body.get('review', False))
@@ -177,7 +178,7 @@ def start(entry, body, folder, run=subprocess.run, recent=lambda: [], *, cwd=Non
     _check_profile(profile)
     name = (body['name'].strip() if 'name' in body else
             ('Review: ' + source_title(entry))[:60] if review == 'new' else task_name(body['message']))
-    pane = new_window_after(entry['id'], run, cwd=folder)
+    pane = new_window_after(entry['id'], run, cwd=folder, group=group)
     options = [paths.TMUX, 'set-option', '-p', '-t', pane, '@chat_name', name, ';',
                'set-option', '-p', '-t', pane, '@chat_name_at', str(int(time.time() * 1000))]
     if worktree is not None:

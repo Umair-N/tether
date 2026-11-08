@@ -235,7 +235,7 @@ class LaunchTests(unittest.TestCase):
 
     def test_start_creates_next_window_names_and_sends_only_to_worker(self):
         def result(argv, **kwargs):
-            output = ('@3\t/source\n' if '#{window_id}\t#{pane_current_path}' in argv
+            output = ('@3\t/source\n' if '#{window_id}\t#{pane_current_path}\t#{@group}' in argv
                       else 'latest\t120\t40\n' if argv[1] == 'display-message' else '%13\n')
             return subprocess.CompletedProcess(argv, 0, stdout=output, stderr='')
         run = Mock(side_effect=result)
@@ -264,7 +264,7 @@ class LaunchTests(unittest.TestCase):
 
     def test_worktree_sets_pane_option_in_name_call_and_new_window_path(self):
         def result(argv, **kwargs):
-            output = ('@3\t/source\n' if '#{window_id}\t#{pane_current_path}' in argv
+            output = ('@3\t/source\n' if '#{window_id}\t#{pane_current_path}\t#{@group}' in argv
                       else 'latest\t120\t40\n' if argv[1] == 'display-message' else '%13\n')
             return subprocess.CompletedProcess(argv, 0, stdout=output, stderr='')
         run = Mock(side_effect=result)

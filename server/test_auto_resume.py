@@ -15,6 +15,7 @@ import paths
 import server
 
 THREAD = '0f8fad5b-d9cb-469f-a165-70867728950e'
+GROUPS = '[{"id": "g1a2b3c4d", "name": "Docs", "project": ""}]'
 
 
 class FakeTmux:
@@ -334,7 +335,8 @@ class AutoResumeTests(unittest.TestCase):
         first = self.add(3, label='alpha', tmux_session='$3', position='4.0')
         self.tmux.panes['%2'].update({'@chat_name': 'Saved', '@chat_icon': 'star', '@chat_icon_by': 'user',
                                      '@chat_name_at': '123', '@project': 'project-1', '@project_rev': 'rev',
-                                     '@worktree': 'tree', '@subproject': 'sub'})
+                                     '@worktree': 'tree', '@group': 'g1a2b3c4d',
+                                     '@groups': GROUPS})
         self.tick()
         saved_options = self.saved()['tabs'][second['thread']]['options']
         self.restart()
@@ -352,6 +354,9 @@ class AutoResumeTests(unittest.TestCase):
         for opt, value in saved_options.items():
             self.assertIn([paths.TMUX, 'set-option', '-p', '-t', tab['pane'], opt, value], self.tmux.calls)
         self.assertIn([paths.TMUX, 'set-option', '-t', tab['session_id'], '@project', 'project-1'], self.tmux.calls)
+        self.assertEqual(saved_options['@group'], 'g1a2b3c4d')
+        self.assertEqual(self.tmux.panes[tab['pane']]['@group'], 'g1a2b3c4d')
+        self.assertIn([paths.TMUX, 'set-option', '-t', tab['session_id'], '@groups', GROUPS], self.tmux.calls)
         self.assertEqual(tab['profile'], 'foundry')
         self.assertEqual(self.sleeps, [auto_resume.GAP, auto_resume.GAP])
         self.changed.assert_called_once_with()

@@ -65,15 +65,34 @@ def current_project():
     return projects.session_project(shown.stdout.strip(), lambda args, **kw: subprocess.run(args, **kw))[0]
 
 
-def record_revision(pid):
-    """The pane remembers which project revision its agent started with, so Tether can say "restart to apply"."""
+def current_group():
+    """{'pid', 'name'} of this pane's group (groups.py), with its bundle made, or None: no group, outside tmux, or any
+    failure. Read at each launch and hook, so a tab moved into a group gets the group context at its next clear."""
+    pane = os.environ.get('TMUX_PANE', '')
+    if not os.environ.get('TMUX') or not re.fullmatch(r'%[0-9]+', pane):
+        return None
+    try:
+        import groups
+        run = lambda args, **kw: subprocess.run(args, **kw)
+        session_id, group = groups.group_of_pane(pane, run)
+        return {'pid': groups.context(session_id, group['id'], run), 'name': group['name']} if group else None
+    except Exception:  # noqa: BLE001 - a broken group never stops the session project
+        return None
+
+
+def record_revision(pid, group=None):
+    """The pane remembers which project revision its agent started with, so Tether can say "restart to apply".
+    A tab in a group remembers both: "pid:rev+gpid:grev" (projects.marks)."""
     import projects
     pane = os.environ.get('TMUX_PANE', '')
     if os.environ.get('TMUX') and re.fullmatch(r'%[0-9]+', pane):
-        _tmux('set-option', '-p', '-t', pane, '@project_rev', f'{pid}:{projects.meta(pid)["revision"]}')
+        mark = f'{pid}:{projects.meta(pid)["revision"]}'
+        if group:
+            mark += f'+{group["pid"]}:{projects.meta(group["pid"])["revision"]}'
+        _tmux('set-option', '-p', '-t', pane, '@project_rev', mark)
 
 
-def claude_args(pid, args):
+def claude_args(pid, args, group=None):
     if any(arg in CLAUDE_PLAIN or arg == '--settings' or arg.startswith('--settings=') for arg in args):
         return args
     import projects
@@ -82,9 +101,10 @@ def claude_args(pid, args):
     hook = f'{shlex.quote(sys.executable)} {shlex.quote(str(Path(__file__).resolve()))} hook {pid}'
     settings = {'hooks': {'SessionStart': [{'matcher': 'startup|resume|clear|compact',
                                             'hooks': [{'type': 'command', 'command': hook, 'timeout': 10}]}]}}
-    record_revision(pid)
+    record_revision(pid, group)
+    folders = [str(folder), str(projects.bundle(group['pid']))] if group else [str(folder)]
     # --add-dir takes several folders: --settings after it ends the list, so a prompt in args stays a prompt.
-    return ['--add-dir', str(folder), '--settings', json.dumps(settings), *args]
+    return ['--add-dir', *folders, '--settings', json.dumps(settings), *args]
 
 
 def codex_has_own_instructions():
@@ -96,14 +116,14 @@ def codex_has_own_instructions():
     return re.search(r'^\s*developer_instructions\s*=', text, re.M) is not None
 
 
-def codex_args(pid, args):
+def codex_args(pid, args, group=None):
     if any(arg in CODEX_PLAIN or 'developer_instructions' in arg for arg in args) or codex_has_own_instructions():
         return args
     text = ''
     if pid:
         import projects
-        text = projects.render(pid, 'codex')
-        record_revision(pid)
+        text = projects.render(pid, 'codex', group=group)
+        record_revision(pid, group)
     if os.environ.get('TETHER_CDP_URL'):
         from agent_browser_cli import note
         text = text + '\n\n' + note() if text else note()
@@ -150,7 +170,8 @@ def launch(agent, args):
             sys.path.insert(0, str(HERE))
             pid = current_project()
             if pid or agent == 'codex':
-                final = (claude_args if agent == 'claude' else codex_args)(pid, list(args))
+                group = current_group() if pid else None
+                final = (claude_args if agent == 'claude' else codex_args)(pid, list(args), group)
         except Exception as exc:  # noqa: BLE001 - any failure: start the plain agent
             print(f'tether-{agent}: project not loaded ({exc.__class__.__name__}). Starting plain {agent}.', file=sys.stderr)
             final = args
@@ -166,8 +187,9 @@ def hook(pid):
     try:
         sys.path.insert(0, str(HERE))
         import projects
-        text = projects.render(pid, 'claude')
-        record_revision(pid)
+        group = current_group()
+        text = projects.render(pid, 'claude', group=group)
+        record_revision(pid, group)
     except Exception:  # noqa: BLE001 - a hook must never stop a session
         return
     if text:

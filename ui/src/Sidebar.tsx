@@ -4,7 +4,7 @@ import { Archive, ArchiveRestore, Asterisk, BarChart3, BookMarked, BookOpen, Bug
 import { KeepChoice, keepNeeded } from './Project'
 import { FolderMenu } from './SelectMenu'
 import type { Keep, ProjectMark, ProjectMarks } from './Project'
-import type { Agent, Api, ChatAgent, Pane, PastChat, UsageData, UsageReport, UsageWindow } from './api'
+import type { Agent, Api, ChatAgent, GroupInfo, Pane, PastChat, UsageData, UsageReport, UsageWindow } from './api'
 import { SESSION_NAME, SESSION_NAME_HELP, errorText } from './api'
 import { anchorOf, clipTitle, useModal, usePolling } from './hooks'
 import type { Anchor } from './hooks'
@@ -49,7 +49,7 @@ export function AgentIcon({ agent, icon, size = 16 }: { agent: Agent; icon?: str
 export const chatTitle = (pane: Pane, session?: { name: string }) => pane.pane_name || pane.agent_name || session?.name || pane.label
 
 // One tmux session with all its panes. "ESEF:0.1" is session ESEF, window 0, pane 1.
-export interface Session { id: string; name: string; panes: Pane[]; agent: Agent; state: string; dir: string }
+export interface Session { id: string; name: string; panes: Pane[]; agent: Agent; state: string; dir: string; groups?: GroupInfo[] }
 
 export { needsYou, isDone } from './paneState'
 type Status = { kind: 'approval' | 'working' | 'done' | 'background' | 'unknown' | 'idle' | 'unavailable'; label: string; at: number }

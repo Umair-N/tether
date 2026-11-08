@@ -193,8 +193,9 @@ class AgentTabsTests(unittest.TestCase):
         self.run.assert_not_called()
 
     def test_start_fills_thread_defaults_agent_and_holds_send_lock(self):
-        def start(entry, body, folder, run, recent, cwd, owner):
+        def start(entry, body, folder, run, recent, cwd, owner, group):
             self.assertTrue(server.SEND_LOCK.locked())
+            self.assertIsNone(group)  # no --group: the new tab inherits through new_window_after
             self.assertIs(entry, self.entries[0])
             self.assertEqual((body['thread'], body['agent']), (THREAD, 'codex'))
             self.assertEqual((folder, cwd), (str(self.root), str(self.root)))

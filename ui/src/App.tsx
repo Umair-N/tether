@@ -65,6 +65,8 @@ import { SidePins } from './SidePins'
 import { AgentsPage } from './AgentsView'
 import { choosePhoneScreen, toggleButton } from './phoneScreen'
 import { WordsContext, wordsFor } from './words'
+import type { GroupHooks } from './Groups'
+import { groupOf, placesOf, stepPlace, tabFor } from './groups'
 import './App.css'
 import './TitleBar.css'
 
@@ -92,7 +94,7 @@ function App() {
   const [notice, setNotice] = useState('')
   const [settings, setSettings] = useState(false)
   // The Project sheet for a tmux session, with a file from Files to pin when it came from there.
-  const [project, setProject] = useState<{ session: string; pin?: string } | null>(null)
+  const [project, setProject] = useState<{ session: string; pin?: string; group?: string } | null>(null)
   const [planSheet, setPlanSheet] = useState(false)
   const [liveMode, setLive] = useState(false)
   const [liveReveal, setLiveReveal] = useState(0)  // a new ask while Friday runs as a bubble opens its window again
@@ -146,10 +148,11 @@ function App() {
     return () => { document.removeEventListener('visibilitychange', check); clearInterval(timer) }
   }, [])
   const panes = useMemo(() => data?.sessions ?? [], [data])
-  const sessions = useMemo(() => groupSessions(panes, item => isTabArchived(item, prefs.archivedTabs) && item.id !== prefs.selected).map(item => ({ ...item, panes: orderPanes(item.panes, prefs.paneOrder[item.id]) })), [panes, prefs.archivedTabs, prefs.selected, prefs.paneOrder])
+  const sessions = useMemo(() => groupSessions(panes, item => isTabArchived(item, prefs.archivedTabs) && item.id !== prefs.selected).map(item => ({ ...item, panes: orderPanes(item.panes, prefs.paneOrder[item.id]), groups: data?.groups?.[item.id] })), [panes, data?.groups, prefs.archivedTabs, prefs.selected, prefs.paneOrder])
   const archivedTabs = useMemo(() => groupSessions(panes).flatMap(session => session.panes.filter(item => isTabArchived(item, prefs.archivedTabs) && item.id !== prefs.selected)), [panes, prefs.archivedTabs, prefs.selected])
   const livePins = useMemo(() => prefs.sidePins.flatMap(pin => { const pane = panes.find(item => item.id === pin.pane && item.agent !== 'shell'); return pane ? [{ pin, pane }] : [] }), [prefs.sidePins, panes])
   const pinKeys = useRef<(dir: 1 | -1) => boolean>(() => false)
+  const groupKeys = useRef<(dir: 1 | -1) => boolean>(() => false)
   const previousSelection = useRef<SelectionSnapshot>({ sessions: [] })
   const orderedSessions = useMemo(() => sortByPrefs(sessions, prefs.order), [sessions, prefs.order])
   const pane = selectPane(orderedSessions, prefs.selected, previousSelection.current, data?.default_thread, prefs.lastPane)
@@ -461,6 +464,14 @@ function App() {
         rail.choose('home')
         return
       }
+      // ⌥⇧] and ⌥⇧[ go to the next or previous group of the focused tab's session. Read event.code: on a Mac the keys type ” and “,
+      // so a text field or an open dialog keeps them and gets the character.
+      if (event.altKey && event.shiftKey && !event.ctrlKey && !event.metaKey && (event.code === 'BracketRight' || event.code === 'BracketLeft')) {
+        const target = event.target as HTMLElement | null
+        const typing = !!target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+        if (!typing && !document.querySelector('dialog[open]') && groupKeys.current(event.code === 'BracketRight' ? 1 : -1)) event.preventDefault()
+        return
+      }
       if (event.altKey && !event.ctrlKey && !event.metaKey && (event.code === 'BracketRight' || event.code === 'BracketLeft')) {
         if (pinKeys.current(event.code === 'BracketRight' ? 1 : -1)) { event.preventDefault(); return }
       }
@@ -600,6 +611,17 @@ function App() {
     return true
   }
   useEffect(() => { pinKeys.current = stepPin })
+  // The next group (with a tab) of the focused tab's session; it opens the tab last open there on this device.
+  const stepGroup = (dir: 1 | -1) => {
+    const owner = pane && sessions.find(item => item.id === pane.tmux_session)
+    if (!pane || !owner?.groups?.length) return false
+    const next = stepPlace(placesOf(owner.panes, owner.groups).filter(place => place.panes.length), groupOf(pane, owner.groups), dir)
+    const target = next && tabFor(owner.id, next)
+    if (!target || target.id === pane.id) return false
+    openPane(target)
+    return true
+  }
+  useEffect(() => { groupKeys.current = stepGroup })
   const openById = (id: string) => { update(() => ({ selected: id })); setDrawer(false); leaveHome(); void refresh() }
   // A new tmux pane. On the desktop workspace it opens in a new slot beside the focused one, on the same side as the tmux split.
   // The list is fetched first so the slot keeps it.
@@ -613,9 +635,10 @@ function App() {
     setZoomed(false)
     update(current => ({ selected: id, layout: withDesk(current.layout, deskKey, { ...deskFor(current.layout, deskKey), ...next }) }))
   }
-  async function split(direction: 'right' | 'down', target = pane) {
+  // `group` puts the new tab in that group ('' = Main); without it the tab joins the group of `target`.
+  async function split(direction: 'right' | 'down', target = pane, group?: string) {
     if (!target) return
-    try { await openNewPane((await api<{ pane: string }>('split', { session: target.id, direction })).pane, direction) } catch (error) { setNotice(errorText(error)) }
+    try { await openNewPane((await api<{ pane: string }>('split', { session: target.id, direction, ...(group !== undefined ? { group } : {}) })).pane, direction) } catch (error) { setNotice(errorText(error)) }
   }
   // A copy of the chat with its full history, in a new window of the same tmux session (claude --fork-session, codex fork).
   async function fork(target: Pane) {
@@ -666,6 +689,7 @@ function App() {
     { label: 'Terminal view of the focused pane', key: '⌥T', run: toggleTerminal },
     ...(pane ? [...TOOLBAR_PANELS.map(({ kind, key }) => ({ label: `${hasPanel(panelCols(desk), kind) ? 'Hide' : 'Show'} the ${PANELS[kind].title.toLowerCase()} panel`, key, run: () => togglePanelKind(setPanels, kind) })),
       ...extraPanels(desk, pane).map(({ kind, key, open }) => ({ label: open ? `Hide the ${PANELS[kind].title.toLowerCase()} panel` : kind === 'chat' ? 'Side chat: fork this chat beside it' : `Show ${PANELS[kind].title.toLowerCase()}`, key, run: () => kind === 'chat' ? void sideChat() : togglePanelKind(setPanels, kind) }))] : []),
+    ...(pane && placesOf(sessions.find(item => item.id === pane.tmux_session)?.panes ?? [], sessions.find(item => item.id === pane.tmux_session)?.groups).filter(place => place.panes.length).length > 1 ? [{ label: 'Next group', key: '⌥⇧]', run: () => stepGroup(1) }, { label: 'Previous group', key: '⌥⇧[', run: () => stepGroup(-1) }] : []),
     ...(livePins.length > 1 ? [{ label: 'Next pinned chat', key: '⌥]', run: () => stepPin(1) }, { label: 'Previous pinned chat', key: '⌥[', run: () => stepPin(-1) }] : []),
     { label: 'New session', key: '⌥N', run: () => setNewSession(true) },
     { label: desk.sidebar ? 'Hide the sidebar' : 'Show the sidebar', key: '⌘B', run: () => setDesk({ sidebar: !desk.sidebar }) },
@@ -681,8 +705,14 @@ function App() {
     const at = livePins.findIndex(item => item.pane.id === target.id)
     const sidePin = target.agent !== 'shell' ? { pinned: at >= 0, index: at, total: livePins.length, note: at >= 0 ? livePins[at].pin.note ?? '' : '', onToggle: () => at >= 0 ? unpinPane(target.id) : pinPane(target.id), onNote: (text: string) => notePin(target.id, text), onStep: (dir: 1 | -1) => stepPin(dir, target.id) } : undefined
     const ask = prefs.attention ? visibleAsk(target, now) : null
+    const groupHooks: GroupHooks | undefined = owner?.groups?.length ? {
+      seen: prefs.seen, selected: openId, hidden: archivedTabs.filter(item => item.tmux_session === owner.id),
+      onStart: (group, from) => void split('right', from, group),
+      onContext: group => setProject({ session: owner.id, group: group.id }),
+    } : undefined
+    const onDropGroup = owner ? (id: string, group: string) => { api('groups/move', { session: owner.id, pane: id, group: group || null }).then(() => refresh(), error => setNotice(errorText(error))) } : undefined
     return <Chat headerExtra={view ? undefined : <OldestButton compact items={waiting} sessions={sessions} selected={openId} onOpen={openPane} />}
-      askBar={ask && target.writable ? <AskChips api={api} pane={target} ask={ask} onDone={setNotice} onUpdate={() => void refresh()} /> : undefined} allPanes={panes} sidePin={sidePin} liveReplyPreview={prefs.liveReplyPreview} key={target.id} pane={target} session={owner} api={api} onMenu={() => setDrawer(true)} onUpdate={() => void refresh()} draft={prefs.drafts[target.id]?.text ?? ''} setDraft={text => setDraft(target.id, text)} onOpenPane={openPane} onSessionActions={at => { if (owner) { setMenuAt(view ? at : undefined); setActionsDelete(false); setActions(owner.id) } }} onPaneActions={(id, at) => { setMenuAt(view ? at : undefined); setPaneActions(id) }} onSplit={direction => void split(direction, target)} onFork={() => void fork(target)} onContinued={id => void openNewPane(id).catch(error => setNotice(errorText(error)))} onReorder={ids => { if (owner) update(current => ({ paneOrder: { ...current.paneOrder, [owner.id]: reorderPanes(groupSessions(panes).find(item => item.id === owner.id)!.panes, current.paneOrder[owner.id], ids) } })) }} micOk={!prefs.voiceOff} chime={prefs.voiceSound} readAloud={prefs.readAloud} handsFree={prefs.handsFree} slot={slot} running={running} />
+      groupHooks={groupHooks} onDropGroup={onDropGroup} askBar={ask && target.writable ? <AskChips api={api} pane={target} ask={ask} onDone={setNotice} onUpdate={() => void refresh()} /> : undefined} allPanes={panes} sidePin={sidePin} liveReplyPreview={prefs.liveReplyPreview} key={target.id} pane={target} session={owner} api={api} onMenu={() => setDrawer(true)} onUpdate={() => void refresh()} draft={prefs.drafts[target.id]?.text ?? ''} setDraft={text => setDraft(target.id, text)} onOpenPane={openPane} onSessionActions={at => { if (owner) { setMenuAt(view ? at : undefined); setActionsDelete(false); setActions(owner.id) } }} onPaneActions={(id, at) => { setMenuAt(view ? at : undefined); setPaneActions(id) }} onSplit={direction => void split(direction, target)} onFork={() => void fork(target)} onContinued={id => void openNewPane(id).catch(error => setNotice(errorText(error)))} onReorder={ids => { if (owner) update(current => ({ paneOrder: { ...current.paneOrder, [owner.id]: reorderPanes(groupSessions(panes).find(item => item.id === owner.id)!.panes, current.paneOrder[owner.id], ids) } })) }} micOk={!prefs.voiceOff} chime={prefs.voiceSound} readAloud={prefs.readAloud} handsFree={prefs.handsFree} slot={slot} running={running} />
   }
   // Layouts (layouts.ts, layouts.css): the grid shows on the wide workspace screen only. Home, Files, Share and the
   // phone keep today's arrangement and take only the colours and the Style. Classic adds no attribute and no style.
@@ -744,7 +774,7 @@ function App() {
     {liveMode && <Live api={api} panes={panes} selected={pane} commands={commands.filter(item => !item.label.includes('Live mode'))} onClose={() => setLive(false)} reveal={liveReveal} from={liveFrom} />}
     {view && <Inbox api={api} items={inbox} sessions={sessions} selected={openId} open={desk.inbox} onToggle={() => { if (!home) setDesk({ inbox: !desk.inbox }) }} onOpen={openPane} onUpdate={() => void refresh()} />}
     {view && picking !== null && picking < view.slots.length && <SlotPicker index={picking} sessions={sortByPrefs(sessions, prefs.order).filter(item => !isArchived(item, prefs.archived))} slots={view.slots} onPane={id => { showInSlot(id, picking); setPicking(null) }} onSession={target => { showSession(target); setPicking(null) }} onClose={() => setPicking(null)} />}
-    {project && sessions.some(item => item.id === project.session) && <ProjectSheet key={project.session} api={api} session={sessions.find(item => item.id === project.session)!} mark={marks[project.session]} pin={project.pin} onChanged={loadMarks} onClose={() => setProject(null)} />}
+    {project && sessions.some(item => item.id === project.session && (!project.group || item.groups?.some(group => group.id === project.group))) && <ProjectSheet key={`${project.session}/${project.group ?? ''}`} api={api} session={sessions.find(item => item.id === project.session)!} group={project.group ? sessions.find(item => item.id === project.session)!.groups?.find(item => item.id === project.group) : undefined} mark={marks[project.session]} pin={project.pin} onChanged={loadMarks} onClose={() => setProject(null)} />}
     {settings && <Settings api={api} prefs={prefs} update={update} onReload={reload} onClose={() => setSettings(false)} />}
     {newSession && <NewSession api={api} onClose={() => setNewSession(false)} onCreated={(created, made) => { openPane(created); setNewSession(false); void refresh(); if (made) setNotice(worktreeNotice(made)) }} />}
     {actionSession && pane && <SessionActions key={`${actionSession.id}-${actionsDelete}`} tabCount={panes.filter(item => item.tmux_session === actionSession.id).length} startDelete={actionsDelete} at={actionsDelete ? undefined : menuAt} place={placeFor(actionSession.panes[0].id, actionSession)} api={api} session={actionSession} pane={actionSession.panes.find(item => item.id === pane.id)?.id ?? actionSession.panes[0].id} pinned={prefs.pinned.includes(actionSession.id)} archived={isArchived(actionSession, prefs.archived)} canMoveUp={ordered.indexOf(actionSession.id) > 0} canMoveDown={ordered.indexOf(actionSession.id) < ordered.length - 1} targets={moveTargets} marks={marks} onMarks={loadMarks}

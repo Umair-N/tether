@@ -80,6 +80,7 @@ export interface Pane {
   approval: unknown
   pane_name?: string
   tmux_pane_name?: string  // the raw tmux name (@chat_name); pane_name is empty when a newer /rename wins
+  group?: string  // the group id (tmux option @group, server/groups.py); empty or unknown = Main
   worktree?: string  // the branch, when Tether started this tab in a new worktree (tmux option @worktree)
   pane_icon?: string  // tmux option @chat_icon: a lucide icon name, or svg-<name> for an icon Claude drew (Sidebar.tsx AgentIcon)
   agent_name?: string  // the Claude or Codex session name (/rename); shown when the pane has no Tether name
@@ -186,7 +187,9 @@ export interface CodexProvider { provider: 'plan' | 'foundry'; profile: string; 
 export interface UsageAccount { email: string | null; plan: string | null }
 export interface UsageData { claude: UsageReport | null; codex: UsageReport | null; accounts?: { claude: UsageAccount | null; codex: UsageAccount | null }; live_errors?: { claude?: string; codex?: string } }
 export interface AutoResumeData { failed: number; tabs: { thread: string; agent: string; name: string; folder: string; error: string; state: string }[] }
-export interface SessionsData { sessions: Pane[]; default_thread: string | null; auto_resume?: AutoResumeData }
+/** A group in a tmux session (session option @groups). `project` is its context bundle id, empty until made. */
+export interface GroupInfo { id: string; name: string; project: string }
+export interface SessionsData { sessions: Pane[]; default_thread: string | null; auto_resume?: AutoResumeData; groups?: Record<string, GroupInfo[]> }
 export class ApiError extends Error {
   status: number
   draft: boolean  // the agent's own input box has text that blocks this action

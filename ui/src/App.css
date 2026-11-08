@@ -1730,3 +1730,30 @@ button.live-chip:active { background: var(--line); }
 .suggest-list { display: flex; flex-direction: column; gap: 8px; max-height: 40vh; overflow: auto; margin: 0 0 12px; padding: 0; list-style: none; }
 .suggest-list li { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
 .suggest-list span { color: var(--muted); overflow-wrap: anywhere; }
+
+/* Groups (Groups.tsx): a row of groups above the tab strip on wide screens; on phones a switcher left of the strip. */
+.group-row { display: flex; align-items: stretch; gap: 2px; overflow-x: auto; padding: 0 max(12px, env(safe-area-inset-left)); border-bottom: 1px solid var(--line); scrollbar-width: none; }
+.group-tab { display: flex; align-items: center; gap: 7px; flex-shrink: 0; min-height: 36px; padding: 0 12px; margin-bottom: -1px; border-bottom: 2px solid transparent; font-size: 13px; color: var(--muted); }
+.group-tab:hover { color: var(--text); }
+.group-tab.active { color: var(--text); font-weight: 600; border-bottom-color: var(--accent); }
+.group-tab.drop-over { background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: var(--radius) var(--radius) 0 0; }
+.group-name { max-width: 20ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-tab .group-count { color: var(--muted); font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; }
+.group-add { display: grid; place-items: center; flex-shrink: 0; width: 34px; color: var(--muted); }
+.group-add:hover { color: var(--text); }
+.group-strip { display: contents; }
+.group-switch { display: none; }
+.group-badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--radius-sm); background: var(--attention); color: var(--bg); font-size: 11px; font-weight: 600; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
+.group-crumb { max-width: 28ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-list-row { display: flex; align-items: center; gap: 4px; }
+.group-list-row > button:first-child { flex: 1; min-width: 0; }
+.group-list-row > button[aria-current] { font-weight: 600; }
+.group-list-row > button[aria-current]::after { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+@media (max-width: 600px) {
+  .group-row { display: none; }
+  .group-strip { display: flex; align-items: center; min-height: calc(var(--control) + 13px); border-bottom: 1px solid var(--line); }
+  .group-strip > .pane-tabs { flex: 1; min-width: 0; border-bottom: 0; padding-left: 6px; }
+  .group-switch { display: flex; align-items: center; gap: 5px; flex-shrink: 0; max-width: 42vw; min-height: var(--control); margin-left: max(12px, env(safe-area-inset-left)); padding: 0 8px 0 10px; border: 1px solid var(--line); border-radius: var(--radius); font-size: 13px; font-weight: 600; }
+  .group-switch .group-name { max-width: 13ch; }
+  .group-crumb { max-width: 16ch; }
+}

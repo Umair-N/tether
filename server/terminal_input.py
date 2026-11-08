@@ -90,14 +90,20 @@ def fork_name(entry, entries):
     return f'{base} {number}'
 
 
-def new_window_after(pane, run=subprocess.run, *, cwd=None):
-    """Open after the source window, preserving its directory and manual size."""
-    source = run([paths.TMUX, 'display-message', '-p', '-t', pane, '#{window_id}\t#{pane_current_path}'],
+def new_window_after(pane, run=subprocess.run, *, cwd=None, group=None):
+    """Open after the source window, preserving its directory and manual size. The new pane joins the source pane's
+    group (@group, groups.py), unless group is given: "" puts it in Main, a group id in that group."""
+    source = run([paths.TMUX, 'display-message', '-p', '-t', pane, '#{window_id}\t#{pane_current_path}\t#{@group}'],
                  capture_output=True, text=True, timeout=5)
     fields = source.stdout.rstrip('\n').split('\t', 1)
+    if len(fields) == 2 and '\t' in fields[1]:
+        fields[1], label = fields[1].rsplit('\t', 1)
+    else:
+        label = ''
     if source.returncode or len(fields) != 2 or not re.fullmatch(r'@[0-9]+', fields[0]) or not fields[1]:
         raise RuntimeError(source.stderr.strip() or 'Could not split the pane.')
     window, folder = fields
+    label = label if group is None else group
     size = run([paths.TMUX, 'display-message', '-p', '-t', window,
                 '#{window-size}\t#{window_width}\t#{window_height}'],
                capture_output=True, text=True, timeout=5)
@@ -112,6 +118,8 @@ def new_window_after(pane, run=subprocess.run, *, cwd=None):
     new_pane = result.stdout.strip()
     if not re.fullmatch(r'%[0-9]+', new_pane):
         raise RuntimeError('Pane creation could not be confirmed.')
+    if re.fullmatch(r'g[0-9a-f]{8}', label or ''):  # before any launch command is sent
+        run([paths.TMUX, 'set-option', '-p', '-t', new_pane, '@group', label], capture_output=True, text=True, timeout=5)
     if dimensions[0] == 'manual':
         run([paths.TMUX, 'resize-window', '-t', new_pane, '-x', dimensions[1], '-y', dimensions[2]],
             check=True, capture_output=True, text=True, timeout=5)

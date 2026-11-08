@@ -6,6 +6,7 @@ import re
 import auth
 import auto_resume
 import delegate
+import groups
 import helper_tabs
 import paths
 import review_links
@@ -77,6 +78,16 @@ def close_tab(body, caller, entries, run, status):
     return {'closed': pane}
 
 
+def _start_group(body, caller, run):
+    """`start --group NAME`: the id of that group in the caller's session, made when missing ("" for Main).
+    None without --group: the new tab then joins the caller's group (terminal_input.new_window_after)."""
+    if 'group' not in body:
+        return None
+    session_id = groups.group_of_pane(caller['id'], run)[0]
+    group = groups.find_or_create(session_id, body['group'], run)
+    return group['id'] if group else ''
+
+
 def serve(handler, body, *, sessions, folder, snapshot, last_reply, run, lock, status, send, timeline):
     credential = handler.headers.get('X-Tether-Hook', '')
     if (not auth.is_loopback(handler.client_address[0]) or not credential
@@ -107,6 +118,8 @@ def serve(handler, body, *, sessions, folder, snapshot, last_reply, run, lock, s
         request = dict(body, thread=caller.get('thread'))
         request.setdefault('agent', caller['agent'] if caller.get('agent') in ('claude', 'codex') else 'claude')
         delegate.validate(request, entries)
+        if 'group' in body:
+            groups.clean_name(body['group'])  # before the worktree is made
         if 'cwd' in body and (not isinstance(body['cwd'], str) or not os.path.isabs(body['cwd'])
                               or not os.path.isdir(body['cwd'])):
             raise ValueError('Choose an absolute path to an existing directory.')
@@ -115,10 +128,11 @@ def serve(handler, body, *, sessions, folder, snapshot, last_reply, run, lock, s
         made = worktrees.from_body(body, body.get('cwd', directory))
         with lock, worktrees.keeping(made):
             caller = delegate.validate(request, sessions())
+            group = _start_group(body, caller, run)
             pane, name = delegate.start(caller, request, directory, run=run,
                                         recent=lambda: snapshot(caller).get('messages') or [],
                                         cwd=made['path'], worktree=made['branch'],
-                                        owner=helper_tabs.new_record(caller))
+                                        owner=helper_tabs.new_record(caller), group=group)
         handler.respond(201, {'pane': pane, 'name': name, 'worktree': made})
         return
     with lock:
@@ -134,10 +148,11 @@ def serve(handler, body, *, sessions, folder, snapshot, last_reply, run, lock, s
             if 'cwd' in body and body['cwd'] is None:
                 raise ValueError('Choose an absolute path to an existing directory.')
             directory = folder(caller)
+            group = _start_group(body, caller, run)
             pane, name = delegate.start(caller, request,
                                         directory if directory and os.path.isdir(directory) else str(paths.HOME),
                                         run=run, recent=lambda: snapshot(caller).get('messages') or [],
-                                        cwd=body.get('cwd'), owner=helper_tabs.new_record(caller))
+                                        cwd=body.get('cwd'), owner=helper_tabs.new_record(caller), group=group)
             result = 201, {'pane': pane, 'name': name}
         elif action == 'link':
             if caller['id'] not in (body.get('worker'), body.get('reviewer')):
