@@ -378,6 +378,63 @@ class AgentTabsTests(unittest.TestCase):
             'reviewers': [{'pane': '%12', 'name': 'Source'}]}))
         self.run.assert_not_called()
 
+    def close(self, target='%13', record=None, exists=True, state='Idle', **extra):
+        self.status_shared.return_value = {'state': state}
+        with patch.object(agent_tabs.helper_tabs, 'load', return_value=(exists, record)), \
+                patch.object(agent_tabs.auto_resume, 'forget_pane') as forget:
+            result = self.request(dict(action='close', pane=target, **extra))
+        return result, forget
+
+    def kills(self):
+        return [call for call in self.run.call_args_list if 'kill-pane' in call.args[0]]
+
+    def test_close_by_owner_kills_pane_forgets_resume_and_drops_links(self):
+        self.status_shared = self.enterContext(patch.object(server, 'shared_status'))
+        self.link(worker='%13', reviewer='%14')
+        record = {'owner_pane': '%12', 'owner_thread': THREAD, 'helper_thread': THREAD}
+        result, forget = self.close(record=record)
+        self.assertEqual(result, (200, {'closed': '%13'}))
+        forget.assert_called_once_with('%13', run=self.run)
+        self.assertEqual(self.kills()[0].args[0][-3:], ['kill-pane', '-t', '%13'])
+        self.assertEqual(review_links.reviewed_by(), {})
+
+    def test_close_by_linked_reviewer_without_owner_record(self):
+        self.status_shared = self.enterContext(patch.object(server, 'shared_status'))
+        self.link(worker='%13', reviewer='%12')
+        result, forget = self.close()
+        self.assertEqual(result, (200, {'closed': '%13'}))
+        self.assertEqual(len(self.kills()), 1)
+
+    def test_close_refusals_leave_pane_open(self):
+        self.status_shared = self.enterContext(patch.object(server, 'shared_status'))
+        self.link(worker='%13', reviewer='%12')
+        stranger = {'owner_pane': '%14', 'owner_thread': None, 'helper_thread': None}
+        cases = [
+            (dict(target='%12'), 400, 'A tab cannot close itself.'),
+            (dict(target='bad'), 400, 'Select a helper tab.'),
+            (dict(exists=False), 400, 'That session has ended.'),
+            (dict(target='%14', record=stranger), 400, 'not a helper of this tab'),
+            (dict(state='Working'), 503, 'That tab is working'),
+            (dict(state='Approval'), 503, 'That tab is working'),
+            (dict(state='Input needed'), 503, 'That tab is working'),
+        ]
+        for kwargs, code, text in cases:
+            with self.subTest(**kwargs):
+                (status, body), forget = self.close(**kwargs)
+                self.assertEqual(status, code)
+                self.assertIn(text, body['error'])
+                forget.assert_not_called()
+        self.assertEqual(self.kills(), [])
+        self.assertEqual(review_links.reviewed_by(), {'%13': ['%12']})
+
+    def test_close_by_owner_after_thread_change_is_stale(self):
+        self.status_shared = self.enterContext(patch.object(server, 'shared_status'))
+        record = {'owner_pane': '%12', 'owner_thread': 'another-thread', 'helper_thread': None}
+        (status, body), forget = self.close(record=record)
+        self.assertEqual(status, 503)
+        self.assertIn('changed conversations', body['error'])
+        self.assertEqual(self.kills(), [])
+
     def test_success_invalidates_session_cache(self):
         self.assertIn(agent_tabs.PATH, server.TMUX_WRITES)
         handler = object.__new__(server.Handler)
@@ -446,6 +503,10 @@ class CLITests(unittest.TestCase):
         self.assertNotIn('reviewer', self.payload())
         self.assertEqual(cli.main(['list']), 0)
         self.assertEqual(self.payload(), dict(action='list', session='%12'))
+
+    def test_close_builds_pane_body(self):
+        self.assertEqual(cli.main(['close', '--pane', '%13']), 0)
+        self.assertEqual(self.payload(), dict(action='close', session='%12', pane='%13'))
 
     def test_link_builds_pair_body(self):
         self.assertEqual(cli.main(['link', '--worker', '%13', '--reviewer', '%12']), 0)
