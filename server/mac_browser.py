@@ -1,5 +1,6 @@
 """Paired outbound Chrome transport and one-tab signed grants. No local Chrome process."""
 import base64
+from collections import deque
 import hashlib
 import hmac
 import json
@@ -248,6 +249,7 @@ class Connection:
         self.lock = threading.RLock()
         self.domain_lock = threading.RLock()  # Never held by the extension event reader.
         self.enabled, self.contexts, self.runtime_started = {}, {}, set()
+        self.log_entries, self.log_started = {}, set()
 
     def register_sink(self, session, sink):
         with self.lock:
@@ -270,17 +272,20 @@ class Connection:
         with self.domain_lock:
             with self.lock:
                 enabled = self.enabled.setdefault(session, set())
-                if domain == 'Runtime' and action == 'enable' and domain in enabled:
+                if domain in ('Runtime', 'Log') and action == 'enable' and domain in enabled:
                     return {}
                 shared = any(domain in domains and self.sessions.get(other) == target
                              for other, domains in self.enabled.items() if other != session)
-                started = target in self.runtime_started
+                started = target in (self.runtime_started if domain == 'Runtime' else self.log_started)
             if action == 'disable':
-                result = {} if domain == 'Runtime' or shared else request()
+                # Keep Runtime and Log on in Chrome: a real Log.disable then enable makes
+                # Chrome replay its own history on top of the relay cache.
+                result = {} if domain in ('Runtime', 'Log') or shared else request()
                 with self.lock:
                     enabled.discard(domain)
                 return result
-            result = {} if domain == 'Runtime' and started else request()
+            local = domain in ('Runtime', 'Log') and started
+            result = {} if local else request()
             with self.lock:
                 enabled.add(domain)
                 if domain == 'Runtime':
@@ -292,6 +297,12 @@ class Connection:
                         for context in self.contexts.get(target, {}).values():
                             sink({'method': 'Runtime.executionContextCreated',
                                   'params': {'context': context}, 'sessionId': session})
+                elif domain == 'Log':
+                    self.log_started.add(target)
+                    sink = self.sinks.get(session)
+                    if sink:
+                        for entry in self.log_entries.get(target, ()):
+                            sink({'method': 'Log.entryAdded', 'params': entry, 'sessionId': session})
             return result
 
     def info(self, target):
@@ -339,6 +350,11 @@ class Connection:
         domain, _, action = method.partition('.')
         if domain in SHARED_DOMAINS and action in ('enable', 'disable'):
             return self.domain_command(method, params, session, target, request)
+        if method == 'Log.clear':
+            with self.domain_lock:
+                with self.lock:
+                    self.log_entries.pop(target, None)
+                return request()
         if method == 'Page.setLifecycleEventsEnabled':
             with self.domain_lock:
                 with self.lock:
@@ -399,9 +415,12 @@ class Connection:
                             contexts.pop(ident)
             elif method == 'Runtime.executionContextsCleared':
                 contexts.clear()
+            elif method == 'Log.entryAdded':
+                self.log_entries.setdefault(target, deque(maxlen=100)).append(params)
             sinks = [(session, sink) for session, sink in self.sinks.items() if self.sessions.get(session) == target]
             for session, sink in sinks:
-                if method.startswith('Runtime.') and 'Runtime' not in self.enabled.get(session, set()):
+                domain = method.split('.', 1)[0]
+                if domain in ('Runtime', 'Log') and domain not in self.enabled.get(session, set()):
                     continue
                 if method != 'Page.screencastFrame':  # panel owns the cast and its acknowledgments
                     sink({'method': method, 'params': params, 'sessionId': session})
@@ -452,6 +471,8 @@ class MacBrowser(browser.Browser):
                         self.conn.detach(session)
                 with self.conn.lock:
                     self.conn.contexts.pop(target, None)
+                    self.conn.log_entries.pop(target, None)
+                    self.conn.log_started.discard(target)
                     self.conn.runtime_started.discard(target)
                 with tab.changed:
                     tab.changed.notify_all()

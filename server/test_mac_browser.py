@@ -265,6 +265,59 @@ class RealContextTests(GrantHarness, unittest.TestCase):
                               {'expression': 'document.body.tagName', 'contextId': main['id']}, session)
         self.assertEqual(result['result']['value'], 'BODY')
 
+    def test_log_history_replayed_to_second_session(self):
+        url = self.serve_page()
+        grant = self.grant()
+        first, a, one = self.attach(grant)
+        # console.error belongs to Runtime; a failed resource supplies a real
+        # browser-console error in Log.entryAdded as well.
+        self.command(first, a, 'Page.navigate', {'url': url}, one)
+        wait_for(lambda: self.transport.conn.call('Runtime.evaluate',
+                 {'expression': 'location.href + " " + document.readyState'},
+                 self.transport.session)['result'].get('value') == url + ' complete')
+        self.command(first, a, 'Runtime.evaluate',
+                     {'expression': "console.error('p28'); fetch('/missing-log').catch(() => {})",
+                      'awaitPromise': True}, one)
+        self.command(first, a, 'Log.enable', session=one)
+        wait_for(lambda: any(event.get('method') == 'Log.entryAdded' for event in a.messages))
+        entries = [event['params'] for event in a.messages if event.get('method') == 'Log.entryAdded']
+        self.assertTrue(any(entry['entry']['level'] == 'error' for entry in entries))
+        second, b, two = self.attach(grant)
+        self.command(second, b, 'Log.enable', session=two)
+        replay = [event['params'] for event in b.messages if event.get('method') == 'Log.entryAdded']
+        self.assertEqual(replay, entries, 'Second synthetic session never receives Log history')
+        self.assertEqual([event['params'] for event in a.messages
+                          if event.get('method') == 'Log.entryAdded'], entries)
+        self.assertEqual(sum(row.get('method') == 'Log.enable' for row in self.transport.sent), 1)
+
+    def test_chromium_navigation_clears_native_log_but_relay_retains_it(self):
+        url = self.serve_page()
+        grant = self.grant()
+        conn, session = self.transport.conn, self.transport.session
+        conn.call('Log.enable', session=session)
+        conn.call('Runtime.evaluate',
+                  {'expression': "fetch('" + url + "missing-log').catch(() => {})", 'awaitPromise': True}, session)
+        wait_for(lambda: any(method == 'Log.entryAdded' for method, _ in self.transport.events))
+        entries = [params for method, params in self.transport.events if method == 'Log.entryAdded']
+        conn.call('Log.disable', session=session)
+        self.transport.events.clear()
+        conn.call('Log.enable', session=session)
+        before_navigation = [params for method, params in self.transport.events if method == 'Log.entryAdded']
+        self.assertEqual(before_navigation, entries)
+        cached = list(self.broker.browser.conn.log_entries[grant.row['tab']])
+        conn.call('Page.navigate', {'url': url}, session)
+        wait_for(lambda: conn.call('Runtime.evaluate', {'expression': 'document.readyState'},
+                                  session)['result'].get('value') == 'complete')
+        conn.call('Log.disable', session=session)
+        self.transport.events.clear()
+        conn.call('Log.enable', session=session)
+        replay = [params for method, params in self.transport.events if method == 'Log.entryAdded']
+        self.assertEqual(replay, [], 'Chromium navigation behavior changed')
+        client, capture, synthetic = self.attach(grant)
+        self.command(client, capture, 'Log.enable', session=synthetic)
+        self.assertEqual([event['params'] for event in capture.messages
+                          if event.get('method') == 'Log.entryAdded'], cached)
+
     def serve_page(self):
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
         class Page(BaseHTTPRequestHandler):
@@ -272,7 +325,7 @@ class RealContextTests(GrantHarness, unittest.TestCase):
                 pass
             def do_GET(self):
                 data = ('<title>Mac context test</title><h1>Mac context ' + self.path + '</h1>').encode()
-                self.send_response(200)
+                self.send_response(404 if self.path == '/missing-log' else 200)
                 self.send_header('Content-Length', str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
@@ -506,11 +559,49 @@ class GrantTests(GrantHarness, unittest.TestCase):
         self.assertEqual(conn.enabled, {})
         self.assertEqual(conn.runtime_started, set())
 
+    def test_log_history_bound_clear_and_isolation(self):
+        grant = self.grant()
+        conn = self.broker.browser.conn
+        target = grant.row['tab']
+        one, two = [conn.call('Target.attachToTarget', {'targetId': target})['sessionId'] for _ in range(2)]
+        a, b = [], []
+        conn.register_sink(one, a.append)
+        conn.register_sink(two, b.append)
+        conn.call('Log.enable', session=one)
+        for index in range(105):
+            self.device.handle({'type': 'event', 'epoch': self.device.epoch, 'grant': grant.row['id'],
+                                'tab': 7, 'method': 'Log.entryAdded',
+                                'params': {'entry': {'text': str(index)}}})
+        self.assertEqual(b, [])
+        conn.call('Log.enable', session=two)
+        self.assertEqual([row['params']['entry']['text'] for row in b], [str(i) for i in range(5, 105)])
+        self.assertEqual(len(a), 105)
+        conn.call('Log.enable', session=two)
+        self.assertEqual(len(b), 100)
+        conn.call('Log.clear', session=one)
+        self.assertEqual(self.transport.sent[-1]['method'], 'Log.clear')
+        conn.call('Log.disable', session=two)
+        b.clear()
+        conn.call('Log.enable', session=two)
+        self.assertEqual(b, [])
+        conn.call('Log.disable', session=one)
+        conn.call('Log.disable', session=two)
+        self.assertNotIn('Log.disable', [row.get('method') for row in self.transport.sent])
+        conn.detach(one)
+        conn.detach(two)
+        three = conn.call('Target.attachToTarget', {'targetId': target})['sessionId']
+        before = len(self.transport.sent)
+        conn.call('Log.enable', session=three)
+        self.assertEqual(len(self.transport.sent), before)  # Real Log remains enabled after detach.
+        self.access.end(grant.row['id'])
+        self.assertEqual(conn.log_entries, {})
+        self.assertEqual(conn.log_started, set())
+
     def test_shared_domains_disable_only_when_last_subscriber_disables(self):
         grant = self.grant()
         conn = self.broker.browser.conn
         sessions = [conn.call('Target.attachToTarget', {'targetId': grant.row['tab']})['sessionId'] for _ in range(2)]
-        for domain in sorted(mac.SHARED_DOMAINS - {'Runtime'}):
+        for domain in sorted(mac.SHARED_DOMAINS - {'Runtime', 'Log'}):  # these stay on in Chrome
             with self.subTest(domain=domain):
                 for session in sessions:
                     conn.call(domain + '.enable', session=session)
