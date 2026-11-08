@@ -2,6 +2,7 @@
 import io
 import json
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import unittest
@@ -31,6 +32,7 @@ class ReviewLinksTests(unittest.TestCase):
         self.send = Mock()
         self.alert = Mock()
         self.work_mark = None
+        self.review_reply = None
         self.reply = Mock(return_value='I fixed it.')
         self.add()
 
@@ -44,7 +46,144 @@ class ReviewLinksTests(unittest.TestCase):
         self.clock.return_value += elapsed
         self.states.update(states)
         review_links.observe(entries if entries is not None else [self.worker, self.reviewer],
-                             self.status, self.send, self.reply, alert=self.alert, work_mark=self.work_mark)
+                             self.status, self.send, self.reply, alert=self.alert, work_mark=self.work_mark,
+                             review_reply=self.review_reply)
+
+    def test_idle_review_forwards_anchored_reply_before_unrelated_turn(self):
+        self.review_reply = server.review_reply
+        self.request_review()
+        request = self.send.call_args.args[1]
+        self.send.reset_mock()
+        self.reply.return_value = 'Unrelated reply'
+        messages = [
+            {'role': 'user', 'text': request},
+            {'role': 'assistant', 'text': 'APPROVED fine'},
+            {'role': 'user', 'text': 'Other request'},
+            {'role': 'assistant', 'text': 'Unrelated reply'},
+        ]
+        with patch.object(server, 'snapshot', return_value={'messages': messages}):
+            self.observe()
+        self.send.assert_called_once()
+        self.assertEqual(self.send.call_args.args[0], self.worker)
+        self.assertIn('APPROVED fine', self.send.call_args.args[1])
+        self.assertNotIn('Unrelated reply', self.send.call_args.args[1])
+        self.assertFalse(self.links()[0]['awaiting'])
+        self.assertNotIn('request_id', self.links()[0])
+
+    def test_busy_review_forwards_queued_request_reply_on_first_idle(self):
+        self.review_reply = server.review_reply
+        self.observe(**{'%12': 'Working'})
+        self.request_review()
+        request = self.send.call_args.args[1]
+        self.assertEqual(self.send.call_args.args[2], 'Working')
+        self.assertTrue(self.links()[0]['reviewer_busy_send'])
+        self.send.reset_mock()
+        self.reply.return_value = 'Unrelated reply'
+        messages = [
+            {'role': 'user', 'text': 'Existing task'},
+            {'role': 'user', 'text': request, 'delivery': 'queued'},
+            {'role': 'assistant', 'text': 'APPROVED mid-turn'},
+            {'role': 'user', 'text': 'Notice'},
+            {'role': 'assistant', 'text': 'Unrelated reply'},
+        ]
+        with patch.object(server, 'snapshot', return_value={'messages': messages}):
+            self.observe(**{'%12': 'Idle'})
+        self.send.assert_called_once()
+        self.assertEqual(self.send.call_args.args[0], self.worker)
+        self.assertIn('APPROVED mid-turn', self.send.call_args.args[1])
+        self.assertNotIn('Unrelated reply', self.send.call_args.args[1])
+        self.assertFalse(self.links()[0]['awaiting'])
+        self.assertNotIn('reviewer_busy_send', self.links()[0])
+        self.assertNotIn('request_id', self.links()[0])
+
+    def test_busy_review_waits_until_request_reaches_conversation(self):
+        self.review_reply = Mock(return_value=None)
+        self.observe(**{'%12': 'Working'})
+        self.request_review()
+        request_id = self.links()[0]['request_id']
+        self.send.reset_mock()
+        self.reply.reset_mock()
+        self.reply.return_value = 'Unrelated reply'
+        self.observe(**{'%12': 'Idle'})
+        self.review_reply.assert_called_once_with(self.reviewer, request_id)
+        self.send.assert_not_called()
+        self.reply.assert_not_called()
+        self.assertTrue(self.links()[0]['awaiting'])
+        self.assertEqual(self.links()[0]['idle_ticks'], 1)
+        self.review_reply.return_value = 'Fix the regression.'
+        self.observe()
+        self.assertEqual(self.send.call_args.args[0], self.worker)
+        self.assertIn('Fix the regression.', self.send.call_args.args[1])
+        self.assertNotIn('Unrelated reply', self.send.call_args.args[1])
+        self.assertFalse(self.links()[0]['awaiting'])
+        self.assertNotIn('request_id', self.links()[0])
+
+    def test_missing_or_empty_anchored_reply_expires_after_30_idle_ticks(self):
+        for reply in (None, ''):
+            with self.subTest(reply=reply):
+                self.add()
+                self.review_reply = Mock(return_value=reply)
+                self.request_review()
+                self.send.reset_mock()
+                self.reply.reset_mock()
+                self.reply.return_value = 'Unrelated reply'
+                self.observe(**{'%12': 'Working'})
+                for tick in range(1, 30):
+                    self.observe(**{'%12': 'Idle'})
+                    self.assertTrue(self.links()[0]['awaiting'])
+                    self.assertEqual(self.links()[0]['idle_ticks'], tick)
+                self.observe()
+                self.assertFalse(self.links()[0]['awaiting'])
+                for key in ('request_id', 'idle_ticks', 'reviewer_seen_working', 'reviewer_before'):
+                    self.assertNotIn(key, self.links()[0])
+                self.send.assert_not_called()
+                self.reply.assert_not_called()
+
+    def test_old_link_without_request_id_uses_last_reply(self):
+        self.request_review()
+        link, = self.links()
+        link.pop('request_id')
+        self.file.write_text(json.dumps([link]))
+        self.review_reply = Mock(return_value='APPROVED anchored')
+        self.reply.return_value = 'APPROVED legacy'
+        self.send.reset_mock()
+        self.observe()
+        self.review_reply.assert_not_called()
+        self.send.assert_called_once()
+        self.assertEqual(self.send.call_args.args[0], self.worker)
+        self.assertIn('APPROVED legacy', self.send.call_args.args[1])
+        self.assertFalse(self.links()[0]['awaiting'])
+
+    def test_review_reply_length_keeps_12000_characters_and_reports_cuts(self):
+        for approved in (False, True):
+            for size in (3500, 12000, 15000):
+                for transcript in ('/project/reviewer.jsonl', ''):
+                    with self.subTest(approved=approved, size=size, transcript=transcript):
+                        self.add()
+                        self.reviewer.pop('transcript', None)
+                        if transcript:
+                            self.reviewer['transcript'] = transcript
+                        self.review_reply = Mock(return_value=None)
+                        self.request_review()
+                        self.send.reset_mock()
+                        prefix = 'APPROVED ' if approved else 'Fix '
+                        self.review_reply.return_value = prefix + 'x' * (size - len(prefix))
+                        self.observe()
+                        self.send.assert_called_once()
+                        self.assertEqual(self.send.call_args.args[0], self.worker)
+                        if size == 15000:
+                            body = prefix + 'x' * (12000 - len(prefix))
+                            body += f'\n\n[Cut at 12000 characters. Full reply: {transcript}]'
+                        else:
+                            body = prefix + 'x' * (size - len(prefix))
+                        if approved:
+                            expected = ('[Tether review] Approved by the reviewer tab (%12):\n\n'
+                                        + body + '\n\nThe review is complete. Do the next step your '
+                                        'instructions give for an approved review, then stop.')
+                        else:
+                            expected = ('[Tether review] Feedback from the reviewer tab (%12):\n\n'
+                                        + body + '\n\nFix what it raises, then stop and wait.')
+                        self.assertEqual(self.send.call_args.args[1], expected)
 
     def test_feedback_waits_for_workers_review_reply_before_reaching_worker(self):
         for review_reply in ('APPROVED', 'Needs a worker test.'):
@@ -358,13 +497,24 @@ class ReviewLinksTests(unittest.TestCase):
         self.observe(**{'%13': 'Working'})
         self.send.assert_not_called()
         self.assertTrue(self.links()[0]['seen_working'])
+        self.assertNotIn('request_id', self.links()[0])
         self.assertEqual(self.links()[0]['worker_thread'], WORKER_THREAD)
         self.observe(**{'%13': 'Idle'})
+        request_id = self.links()[0].get('request_id')
+        self.assertRegex(request_id or '', r'^[0-9a-f]{8}$')
         self.send.assert_called_once_with(self.reviewer,
             '[Tether review] The Codex tab “Fix the bug” (%13) finished a turn. '
             'Review its work: check the changes and the claims, then list what is wrong or missing. '
             'Start your reply with APPROVED if nothing is. Tether sends your reply to that tab. '
+            f'Review id: {request_id}. '
             'Its last reply:\n\nI fixed it.\n\nTranscript: /project/worker.jsonl', 'Idle')
+        pattern = (r'^\[Tether review\] The (\S+) tab “([^”]*)” \((%\d+)\) finished a turn\.'
+                   r'[\s\S]*?Its last reply:\s*([\s\S]*?)\s*Transcript: (\S*)'
+                   r'( This is the last round: your reply stays here\.)?\s*$')
+        match = re.match(pattern, self.send.call_args.args[1])
+        self.assertIsNotNone(match)
+        self.assertEqual(match.groups()[:5],
+                         ('Codex', 'Fix the bug', '%13', 'I fixed it.', '/project/worker.jsonl'))
         self.assertFalse(self.links()[0]['seen_working'])
         self.assertTrue(self.links()[0]['awaiting'])
         self.assertFalse(self.links()[0]['reviewer_seen_working'])
@@ -377,6 +527,7 @@ class ReviewLinksTests(unittest.TestCase):
         self.reply.return_value = 'APPROVED'
         self.observe(**{'%12': 'Working'})
         self.observe(**{'%12': 'Idle'})
+        self.assertNotIn('request_id', self.links()[0])
         self.observe(**{'%13': 'Working'})
         self.observe(**{'%13': 'Idle'})
         self.assertEqual(self.send.call_count, 2)
@@ -619,12 +770,12 @@ class ReviewLinksTests(unittest.TestCase):
         self.assertNotIn('reviewer_before', self.links()[0])
         self.assertEqual(self.send.call_count, calls)
 
-    def test_feedback_is_stripped_then_cut_to_3000(self):
+    def test_feedback_is_stripped_without_cut_below_limit(self):
         self.request_review()
         self.finish_review(' \n' + 'x' * 4000 + '\n ')
         self.send.assert_called_with(self.worker,
             '[Tether review] Feedback from the reviewer tab (%12):\n\n'
-            + 'x' * 3000 + '\n\nFix what it raises, then stop and wait.', 'Idle')
+            + 'x' * 4000 + '\n\nFix what it raises, then stop and wait.', 'Idle')
 
     def test_approved_reply_reaches_worker_with_exact_text(self):
         for reply in ('APPROVED', '  approved: all checks pass.\n', 'Approved with notes'):
@@ -1255,6 +1406,40 @@ class ReviewLinksTests(unittest.TestCase):
 
 
 class ServerWatcherTests(unittest.TestCase):
+    def test_review_reply_anchors_last_request_and_bounds_at_next_user_message(self):
+        request = {'role': 'user', 'text': 'Review id: a1b2c3d4.'}
+        queued = dict(request, delivery='queued')
+        cases = [
+            ([], None),
+            ([{'role': 'assistant', 'text': 'Review id: a1b2c3d4.'}], None),
+            ([{'role': 'user', 'text': 'Review id: other.'}], None),
+            ([request], ''),
+            ([request, {'role': 'assistant', 'text': '  '},
+              {'role': 'assistant', 'text': None}, {'role': 'tool', 'text': 'tool result'}], ''),
+            ([request, {'role': 'assistant', 'text': 'first'},
+              {'role': 'assistant', 'text': '  APPROVED fine  '},
+              {'role': 'assistant', 'text': ''},
+              {'role': 'user', 'text': 'Other request'},
+              {'role': 'assistant', 'text': 'Unrelated reply'}], '  APPROVED fine  '),
+            ([request, {'role': 'assistant', 'text': 'old review'}, queued,
+              {'role': 'assistant', 'text': 'APPROVED mid-turn'},
+              {'role': 'user', 'text': 'Notice', 'delivery': 'queued'},
+              {'role': 'assistant', 'text': 'Unrelated reply'}], 'APPROVED mid-turn'),
+            ([request, {'role': 'assistant', 'text': 'old review'}, queued,
+              {'role': 'user', 'text': 'Other request'},
+              {'role': 'assistant', 'text': 'Unrelated reply'}], ''),
+        ]
+        entry = {'id': '%12'}
+        for messages, expected in cases:
+            with self.subTest(messages=messages), \
+                    patch.object(server, 'snapshot', return_value={'messages': messages}) as snapshot:
+                self.assertEqual(server.review_reply(entry, 'a1b2c3d4'), expected)
+                snapshot.assert_called_once_with(entry)
+        with patch.object(server, 'snapshot', return_value={}):
+            self.assertIsNone(server.review_reply(entry, 'a1b2c3d4'))
+        with patch.object(server, 'snapshot', side_effect=RuntimeError('no history')):
+            self.assertIsNone(server.review_reply(entry, 'a1b2c3d4'))
+
     def test_last_reply_uses_latest_nonempty_assistant_text(self):
         messages = [{'role': 'assistant', 'text': 'old'}, {'role': 'assistant', 'text': 'latest'},
                     {'role': 'user', 'text': 'question'}, {'role': 'assistant', 'text': '  '},
@@ -1276,7 +1461,8 @@ class ServerWatcherTests(unittest.TestCase):
                 server.monitor_notices()
         self.assertEqual(observe.call_count, 2)
         observe.assert_called_with(entries, server.shared_status, server.review_send, server.last_reply,
-                                   alert=server.review_alert, work_mark=server.review_work_mark)
+                                   alert=server.review_alert, work_mark=server.review_work_mark,
+                                   review_reply=server.review_reply)
 
     def test_session_discovery_exception_skips_watcher_and_loop_recovers(self):
         entries = [{'id': '%12'}]
@@ -1288,7 +1474,8 @@ class ServerWatcherTests(unittest.TestCase):
                 server.monitor_notices()
         self.assertEqual(sessions.call_count, 2)
         observe.assert_called_once_with(entries, server.shared_status, server.review_send, server.last_reply,
-                                        alert=server.review_alert, work_mark=server.review_work_mark)
+                                        alert=server.review_alert, work_mark=server.review_work_mark,
+                                        review_reply=server.review_reply)
         self.assertEqual([call.args for call in sleep.call_args_list], [(2,), (2,)])
         self.assertEqual(stderr.getvalue(), "session discovery failed: KeyError('pane')\n")
 
