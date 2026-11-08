@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { KeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { GripHorizontal, PanelRightOpen } from 'lucide-react'
+import { GripHorizontal, PanelRightOpen, X } from 'lucide-react'
 import { BrowserPanel } from './BrowserPanel'
+import type { Api, Pane } from './api'
 import type { PanelBodyProps } from './panels'
 import './BrowserWindow.css'
 
@@ -25,21 +26,37 @@ function clamp(rect: Rect): Rect {
 }
 const defaultRect = (): Rect => clamp({ width: 480, height: Math.min(760, innerHeight - 96), x: innerWidth - 480 - 24, y: 72 })
 
-/** The Browser panel body: in the column, or popped out into a window the person can move and resize. */
+// One floating flag for the app. The window is drawn by the app (BrowserFloat), not by the panel, so closing the side panel keeps it open.
+let floatingNow = load(FLOAT_KEY, false)
+const listeners = new Set<() => void>()
+function setFloating(value: boolean) {
+  floatingNow = value
+  save(FLOAT_KEY, value)
+  listeners.forEach(listener => listener())
+}
+const useFloating = () => useSyncExternalStore(listener => { listeners.add(listener); return () => { listeners.delete(listener) } }, () => floatingNow)
+
+/** The Browser panel body: the browser, or a note when it is popped out into its own window. */
 export function BrowserDock(props: PanelBodyProps) {
-  const [floating, setFloating] = useState(() => load(FLOAT_KEY, false))
-  const change = (value: boolean) => { setFloating(value); save(FLOAT_KEY, value) }
-  if (!floating) return <BrowserPanel {...props} onPopOut={() => change(true)} />
-  return <>
-    <div className="panel-empty browser-away">
-      <p>The browser is in its own window.</p>
-      <button type="button" className="browser-text-button" onClick={() => change(false)}>Put it back here</button>
-    </div>
-    {createPortal(<BrowserWindow onDock={() => change(false)}><BrowserPanel {...props} /></BrowserWindow>, document.body)}
-  </>
+  const floating = useFloating()
+  if (!floating) return <BrowserPanel {...props} onPopOut={() => setFloating(true)} />
+  return <div className="panel-empty browser-away">
+    <p>The browser is in its own window.</p>
+    <button type="button" className="browser-text-button" onClick={() => setFloating(false)}>Put it back here</button>
+  </div>
 }
 
-function BrowserWindow({ onDock, children }: { onDock: () => void; children: ReactNode }) {
+/** The popped-out browser window. The app mounts it once, beside the workspace.
+ * onDock: open the side Browser panel if it is closed. onClose: close the side Browser panel if it is open. */
+export function BrowserFloat({ api, pane, onDock, onClose }: { api: Api; pane: Pane; onDock: () => void; onClose: () => void }) {
+  const floating = useFloating()
+  if (!floating) return null
+  return createPortal(<BrowserWindow onDock={() => { setFloating(false); onDock() }} onClose={() => { setFloating(false); onClose() }}>
+    <BrowserPanel api={api} pane={pane} folder={pane.dir || null} active />
+  </BrowserWindow>, document.body)
+}
+
+function BrowserWindow({ onDock, onClose, children }: { onDock: () => void; onClose: () => void; children: ReactNode }) {
   const [rect, setRect] = useState<Rect>(() => clamp(load(RECT_KEY, defaultRect())))
   const rectRef = useRef(rect)
   rectRef.current = rect
@@ -80,6 +97,7 @@ function BrowserWindow({ onDock, children }: { onDock: () => void; children: Rea
       <button type="button" className="browser-window-grip" aria-label="Move the browser window. Arrow keys move it, Shift with arrows resizes it." onKeyDown={onKey}><GripHorizontal size={16} /></button>
       <strong>Browser</strong>
       <button type="button" className="browser-icon" aria-label="Put the browser back in the side column" title="Put back in the side column" onClick={onDock}><PanelRightOpen size={17} /></button>
+      <button type="button" className="browser-icon" aria-label="Close the browser window" title="Close" onClick={onClose}><X size={17} /></button>
     </header>
     {children}
     <div className="browser-window-size" aria-hidden="true" onPointerDown={start('size')} onPointerMove={move} onPointerUp={end} onPointerCancel={end} />
