@@ -3,6 +3,7 @@ import { ShellOutput } from './ShellOutput'
 import { ContinueWith } from './ContinueWith'
 import { shellCommand } from './shellCommand'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { useWords } from './words'
 import { ArrowDown, ArrowLeftRight, Blocks, GitFork, Check, ChevronDown, ChevronRight, Clock3, Columns2, CornerDownRight, Gauge, Info, Layers, Maximize2, Menu, MessageSquare, Minimize2, MoreHorizontal, PanelTop, Pencil, Pin, PinOff, RefreshCw, RotateCcw, Rows2, Search, Settings2, Shield, ShieldAlert, SquareTerminal, Target, Terminal, WifiOff, X } from 'lucide-react'
 import { MineBar, MINE_BAR_SPACE, startedLabel } from './MineBar'
@@ -46,7 +47,7 @@ import { agentBrowserItems, useAgentBrowser } from './AgentBrowser'
 import { codexRunItems, useCodexRuns } from './CodexRuns'
 
 
-interface ChatProps { liveReplyPreview: boolean; pane: Pane; session: Session | undefined; api: Api; onMenu: () => void; onUpdate: () => void; draft: string; setDraft: (text: string) => void; onOpenPane: (pane: Pane) => void; onSessionActions: (at?: Anchor) => void; onPaneActions: (pane: string, at?: Anchor) => void; onSplit: (direction: 'right' | 'down') => void; onFork: () => void; onContinued: (id: string) => void; onReorder: (ids: string[]) => void; micOk: boolean; chime: boolean; readAloud: boolean; handsFree: boolean; slot?: SlotControls; running?: number; sidePin?: SidePinControls; allPanes: Pane[] }
+interface ChatProps { liveReplyPreview: boolean; pane: Pane; session: Session | undefined; api: Api; onMenu: () => void; onUpdate: () => void; draft: string; setDraft: (text: string) => void; onOpenPane: (pane: Pane) => void; onSessionActions: (at?: Anchor) => void; onPaneActions: (pane: string, at?: Anchor) => void; onSplit: (direction: 'right' | 'down') => void; onFork: () => void; onContinued: (id: string) => void; onReorder: (ids: string[]) => void; micOk: boolean; chime: boolean; readAloud: boolean; handsFree: boolean; slot?: SlotControls; running?: number; sidePin?: SidePinControls; allPanes: Pane[]; headerExtra?: ReactNode; askBar?: ReactNode }
 /** Desktop workspace controls for a Chat shown in a slot next to other slots. */
 export interface SlotControls { index: number; zoomed: boolean; onZoom: () => void; onClose?: () => void; onPick?: () => void; onDragStart?: (event: React.DragEvent) => void }
 export interface SidePinControls { pinned: boolean; index: number; total: number; note: string; onToggle(): void; onNote(text: string): void; onStep(dir: 1 | -1): void }
@@ -204,7 +205,7 @@ function useSteadyPreview(text: string | undefined) {
   return text && wait <= 0 ? text : undefined
 }
 
-export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, draft, setDraft, onOpenPane, onSessionActions, onPaneActions, onSplit, onFork, onContinued, onReorder, micOk, chime, readAloud, handsFree, slot, running = 0, sidePin, allPanes }: ChatProps) {
+export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, draft, setDraft, onOpenPane, onSessionActions, onPaneActions, onSplit, onFork, onContinued, onReorder, micOk, chime, readAloud, handsFree, slot, running = 0, sidePin, allPanes, headerExtra, askBar }: ChatProps) {
   const agentBrowser = useAgentBrowser(api)
   const words = useWords()
   const browserAsk = agentBrowser?.asks.find(item => item.pane === pane.id) ?? null
@@ -773,6 +774,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
       const dx = end.clientX - start.x, dy = end.clientY - start.y
       if (Math.abs(dx) >= 50 && Math.abs(dy) < 0.6 * Math.abs(dx)) sidePin.onStep(dx < 0 ? 1 : -1)
     }} onTouchCancel={() => { headerTouch.current = null }}><button className="icon-button mobile-menu" onClick={onMenu} aria-label={running ? `Open sessions. ${running} agents running or waiting` : 'Open sessions'}><Menu />{running > 0 && <span className="menu-count" aria-hidden="true">{running}</span>}</button>{slot && <kbd className="slot-badge" title={`Focus this slot: Alt+${slot.index + 1}`}>⌥{slot.index + 1}</kbd>}<button type="button" className="chat-title" aria-label="Session details" onClick={() => setInfo(true)}><h1>{chatTitle(pane, session)}</h1><div><AgentIcon agent={activePane.agent} icon={activePane.pane_icon} /><span className="agent-word">{agentNames[activePane.agent]}</span>{activePane.agent === 'codex' && pane.codex_profile && <span className="provider-badge" title={`Runs on codex -p ${pane.codex_profile}`}>{profileName(pane.codex_profile)}</span>}<span className="header-separator agent-word">·</span><State state={state} />{context && <><span className="header-separator">·</span><span className={Number(context) >= 80 ? 'context-high' : ''}>{context}%<span className="context-word"> context</span></span></>}{activePane.worktree && <><span className="header-separator">·</span><WorktreeMark branch={activePane.worktree} /></>}{activePane.dir && !activePane.worktree && <><span className="header-separator">·</span><bdi className="header-folder" dir="ltr" title={activePane.dir} aria-label={`Directory: ${activePane.dir}`}>{activePane.dir.split('/').filter(Boolean).pop() || '/'}</bdi></>}{started && <span className="header-started" title={`Chat started ${started}`} aria-label={`Started ${started}`}><Clock3 size={12} aria-hidden="true" />{started}</span>}{sidePin?.pinned && <PinMark pin={sidePin} />}</div></button>
+      {headerExtra}
       <ReviewLinks api={api} pane={pane} panes={allPanes} onOpen={onOpenPane} onChanged={onUpdate} onToast={setToast} />
       {sidePin && activePane.agent !== 'shell' && <button type="button" className="icon-button side-pin-toggle" aria-pressed={sidePin.pinned} aria-label={sidePin.pinned ? 'Unpin from side tab' : 'Pin to side tab'} title={sidePin.pinned ? 'Unpin from side tab' : 'Pin to side tab'} onClick={sidePin.onToggle}>{sidePin.pinned ? <PinOff size={20} /> : <Pin size={20} />}</button>}
       <button type="button" className="icon-button search-toggle" aria-label="Search this chat" title="Search this chat" disabled={!data} onClick={() => setSearching(true)}><Search size={20} /></button>
@@ -808,6 +810,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
       {bang && <><div className="user-message"><span>{bangItem?.text ?? `!${bang.command}`}</span></div>
         <div className="assistant-message bang-run" role="status"><small><Terminal size={12} />Running{bang.seconds != null ? ` · ${bang.seconds}s` : ''}<button type="button" className="bang-stop" aria-label="Stop this command" disabled={!writable || acting} onClick={() => void sendKey('C-c')}><X size={13} />Stop</button></small><pre>{bang.output ? <Linked text={bang.output} /> : 'No output yet'}</pre></div></>}
       {state === 'Working' && preview && <div className="assistant-message reply-preview"><small>typing</small><div>{preview}</div></div>}
+      {askBar}
     </div></div>{jump && <button className="jump-button icon-button" aria-label="Jump to latest message" onClick={() => { sticky.current = true; setJump(false); viewport.current?.scrollTo({ top: viewport.current.scrollHeight }) }}><ArrowDown size={20} /></button>}<SelectionCopy messages={messages} />{data && activePane.agent !== 'shell' && <MineBar view={viewport} messages={messages} earlier={data.limit === limit ? data.earlier : 0} onReveal={revealMine} onEarlier={loadEarlier} />}</ThreadPrimitive.Root>
     {searching && <SearchSheet api={api} pane={activePane} shell={activePane.agent === 'shell'} onClose={() => setSearching(false)} onPick={(match, maxLimit) => {
       setSearching(false); setTerm(false); target.current = match.id; sticky.current = false; anchor.current = null

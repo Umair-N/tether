@@ -27,6 +27,8 @@ import type { SlotControls } from './Chat'
 import { SlotPicker, Workspace } from './Workspace'
 import { Inbox, InboxButton } from './Inbox'
 import { inboxItems } from './needs'
+import { AskChips, OldestButton } from './Attention'
+import { useNow, visibleAsk, waitingAsks } from './attention'
 import { Home } from './Home'
 import { hasAgents, homeGroups } from './homeGroups'
 import { DRAG_SLOT, WORKSPACE_QUERY, addPanel, addSlot, deskFor, deskKeyFor, hasPanel, newPanelId, panelCols, placePane, removePanel, withDesk, withPanels, resolveSlots, splitSlot, storeSlots, swapSlots } from './workspace'
@@ -236,6 +238,10 @@ function App() {
   const asks = useMemo(() => browserAsks(agentBrowser), [agentBrowser])
   const inbox = useMemo(() => desktop ? inboxItems(panes, prefs.seen, openId, asks) : [], [desktop, panes, prefs.seen, openId, asks])
   const groups = useMemo(() => homeGroups(panes, sessions, prefs.seen, openId, asks), [panes, sessions, prefs.seen, openId, asks])
+  // Attention mode: the tabs whose ask waits on you (oldest first). The Home badge counts them with the open prompts.
+  const now = useNow()
+  const waiting = useMemo(() => prefs.attention ? waitingAsks(panes, now) : [], [prefs.attention, panes, now])
+  const waitingCount = new Set([...groups.needs.map(item => item.pane.id), ...waiting.map(item => item.pane.id)]).size
   const stacked = !!desk.stack && slotPanes.length === 2
   // Keep the stored slots in step with what shows, so focus moves and pane picks survive a reload.
   const slotKey = view ? `${view.slots.join(',')}|${view.focus}` : ''
@@ -403,11 +409,11 @@ function App() {
       void navigator.serviceWorker?.getRegistration('/chat/').then(async registration => (await registration?.getNotifications({ tag: 'tether-summary' }))?.forEach(item => item.close())).catch(() => {})
     }
     else if (go === 'attention') {
-      const target = panes.find(item => needsYou(item.state)) ?? panes.find(item => isDone(item, prefs.seen, prefs.selected ?? undefined))
+      const target = waiting[0]?.pane ?? panes.find(item => needsYou(item.state)) ?? panes.find(item => isDone(item, prefs.seen, prefs.selected ?? undefined))
       if (target) { update(() => ({ selected: target.id })); leaveHome() }
       else setNotice('Nothing needs you right now.')
     }
-  }, [go, data, panes, prefs.selected, prefs.seen, update, leaveHome])
+  }, [go, data, panes, waiting, prefs.selected, prefs.seen, update, leaveHome])
   // Mark the panes on screen as seen, again whenever a turn ends while you watch, so only turns you missed show Done.
   // Home shows no chat, so a turn that ends behind it stays unread.
   const watched = (home ? [] : view && !zoomed ? slotPanes : pane ? [pane] : []).map(item => `${item.id} ${item.finished ?? ''}`).join('|')
@@ -655,10 +661,12 @@ function App() {
     const owner = sessions.find(item => item.id === target.tmux_session)
     const at = livePins.findIndex(item => item.pane.id === target.id)
     const sidePin = target.agent !== 'shell' ? { pinned: at >= 0, index: at, total: livePins.length, note: at >= 0 ? livePins[at].pin.note ?? '' : '', onToggle: () => at >= 0 ? unpinPane(target.id) : pinPane(target.id), onNote: (text: string) => notePin(target.id, text), onStep: (dir: 1 | -1) => stepPin(dir, target.id) } : undefined
-    return <Chat allPanes={panes} sidePin={sidePin} liveReplyPreview={prefs.liveReplyPreview} key={target.id} pane={target} session={owner} api={api} onMenu={() => setDrawer(true)} onUpdate={() => void refresh()} draft={prefs.drafts[target.id]?.text ?? ''} setDraft={text => setDraft(target.id, text)} onOpenPane={openPane} onSessionActions={at => { if (owner) { setMenuAt(view ? at : undefined); setActionsDelete(false); setActions(owner.id) } }} onPaneActions={(id, at) => { setMenuAt(view ? at : undefined); setPaneActions(id) }} onSplit={direction => void split(direction, target)} onFork={() => void fork(target)} onContinued={id => void openNewPane(id).catch(error => setNotice(errorText(error)))} onReorder={ids => { if (owner) update(current => ({ paneOrder: { ...current.paneOrder, [owner.id]: reorderPanes(groupSessions(panes).find(item => item.id === owner.id)!.panes, current.paneOrder[owner.id], ids) } })) }} micOk={!prefs.voiceOff} chime={prefs.voiceSound} readAloud={prefs.readAloud} handsFree={prefs.handsFree} slot={slot} running={running} />
+    const ask = prefs.attention ? visibleAsk(target, now) : null
+    return <Chat headerExtra={view ? undefined : <OldestButton compact items={waiting} sessions={sessions} selected={openId} onOpen={openPane} />}
+      askBar={ask && target.writable ? <AskChips api={api} pane={target} ask={ask} onDone={setNotice} onUpdate={() => void refresh()} /> : undefined} allPanes={panes} sidePin={sidePin} liveReplyPreview={prefs.liveReplyPreview} key={target.id} pane={target} session={owner} api={api} onMenu={() => setDrawer(true)} onUpdate={() => void refresh()} draft={prefs.drafts[target.id]?.text ?? ''} setDraft={text => setDraft(target.id, text)} onOpenPane={openPane} onSessionActions={at => { if (owner) { setMenuAt(view ? at : undefined); setActionsDelete(false); setActions(owner.id) } }} onPaneActions={(id, at) => { setMenuAt(view ? at : undefined); setPaneActions(id) }} onSplit={direction => void split(direction, target)} onFork={() => void fork(target)} onContinued={id => void openNewPane(id).catch(error => setNotice(errorText(error)))} onReorder={ids => { if (owner) update(current => ({ paneOrder: { ...current.paneOrder, [owner.id]: reorderPanes(groupSessions(panes).find(item => item.id === owner.id)!.panes, current.paneOrder[owner.id], ids) } })) }} micOk={!prefs.voiceOff} chime={prefs.voiceSound} readAloud={prefs.readAloud} handsFree={prefs.handsFree} slot={slot} running={running} />
   }
   if (unauthorized) return <main className="signin"><Terminal size={32} strokeWidth={1.4} /><h1>Sign in</h1><p>Sign in to access your terminal sessions.</p><a className="primary" href="/mobile/login?next=/chat/">Sign in</a></main>
-  return <WordsContext.Provider value={words}><main className={['app-shell', (view || (wide && home)) && !desk.sidebar && 'no-sidebar', wide && 'with-rail', files && 'screen-files', wide && share && 'screen-share', home && wide && 'screen-home', home && !wide && 'phone-home', !wide && 'phone-tabs', phoneFiles && 'phone-files', !wide && share && 'phone-share'].filter(Boolean).join(' ')}>{wide && <Rail screen={home ? 'home' : screen} waiting={groups.needs.length} onScreen={chooseScreen} onLive={openLive} />}<aside className="sidebar"><Sidebar {...sidebarProps} /></aside><dialog {...drawerModal} className="drawer" aria-label="Sessions" onClick={event => { const box = event.currentTarget.getBoundingClientRect(); if (event.target === event.currentTarget && (event.clientX > box.right || event.clientX < box.left || event.clientY < box.top || event.clientY > box.bottom)) setDrawer(false) }} onTouchStart={event => { drawerTouch.current = (event.target as Element).closest('.swipe-row') ? null : { x: event.touches[0].clientX, y: event.touches[0].clientY } }} onTouchEnd={event => { const start = drawerTouch.current; drawerTouch.current = null; if (!start) return; const dx = event.changedTouches[0].clientX - start.x, dy = event.changedTouches[0].clientY - start.y; if (dx < -60 && Math.abs(dy) < Math.abs(dx) * 0.6) setDrawer(false) }}>{drawer && <Sidebar {...sidebarProps} onClose={() => setDrawer(false)} />}</dialog>
+  return <WordsContext.Provider value={words}><main className={['app-shell', (view || (wide && home)) && !desk.sidebar && 'no-sidebar', wide && 'with-rail', files && 'screen-files', wide && share && 'screen-share', home && wide && 'screen-home', home && !wide && 'phone-home', !wide && 'phone-tabs', phoneFiles && 'phone-files', !wide && share && 'phone-share'].filter(Boolean).join(' ')}>{wide && <Rail screen={home ? 'home' : screen} waiting={waitingCount} onScreen={chooseScreen} onLive={openLive} />}<aside className="sidebar"><Sidebar {...sidebarProps} /></aside><dialog {...drawerModal} className="drawer" aria-label="Sessions" onClick={event => { const box = event.currentTarget.getBoundingClientRect(); if (event.target === event.currentTarget && (event.clientX > box.right || event.clientX < box.left || event.clientY < box.top || event.clientY > box.bottom)) setDrawer(false) }} onTouchStart={event => { drawerTouch.current = (event.target as Element).closest('.swipe-row') ? null : { x: event.touches[0].clientX, y: event.touches[0].clientY } }} onTouchEnd={event => { const start = drawerTouch.current; drawerTouch.current = null; if (!start) return; const dx = event.changedTouches[0].clientX - start.x, dy = event.changedTouches[0].clientY - start.y; if (dx < -60 && Math.abs(dy) < Math.abs(dx) * 0.6) setDrawer(false) }}>{drawer && <Sidebar {...sidebarProps} onClose={() => setDrawer(false)} />}</dialog>
     {pane ? (view ? <Workspace layout={desk} slots={slotPanes} focus={view.focus} zoomed={zoomed && multi} onCount={setCount} onFocus={focusSlot} onLayout={setDesk}
       renderSlot={(target, index, shown) => chatFor(target, shown > 1 || zoomed ? { index, zoomed, onZoom: toggleZoom, onClose: zoomed ? undefined : () => closeSlot(index), onPick: () => setPicking(index), onDragStart: event => { event.dataTransfer.setData(DRAG_SLOT, String(index)); event.dataTransfer.effectAllowed = 'move' } } : undefined)}
       onDropPane={dropPane} onDropSession={dropSession} onDropChat={dropChat} onSwap={swap}
@@ -666,6 +674,7 @@ function App() {
         {owner && owner.panes.length > 1 && <button type="button" className="icon-button" aria-label={`Show all panes of ${owner.name}`} title={`Show all panes of ${owner.name}`} onClick={() => showSession(owner)}><LayoutDashboard size={17} /></button>}
         <button type="button" className="icon-button" aria-label={words.newRight} title={words.tmux ? 'New pane right (tmux split, opens in a new slot)' : 'New tab, opens in a new slot'} onClick={() => void split('right')}><SquareSplitHorizontal size={17} /></button>
         <button type="button" className="icon-button" aria-label={words.newBelow} title={words.tmux ? 'New pane below (tmux split, opens in a new slot)' : 'New tab below, opens in a new slot'} onClick={() => void split('down')}><SquareSplitVertical size={17} /></button>
+        <OldestButton items={waiting} sessions={sessions} selected={openId} onOpen={openPane} />
         <InboxButton count={inbox.length} open={desk.inbox} onToggle={() => setDesk({ inbox: !desk.inbox })} />
       </>}
       panelTools={<PanelTools desk={desk} pane={pane} setPanels={setPanels} onSideChat={() => void sideChat()} />}
@@ -688,7 +697,7 @@ function App() {
       } : undefined} />}
     {!home && prefs.agentBubble && sessions.some(item => item.panes.some(p => p.agent !== 'shell')) && <AgentBubble sessions={sessions} seen={prefs.seen} selected={openId} onOpen={openPane} onMarkRead={markRead} onPage={() => setAgentsPage('list')} onHide={() => { update(() => ({ agentBubble: false })); setNotice('Agents bubble hidden. Turn it on in Settings › Chat.') }} />}
     {livePins.length > 0 && <SidePins api={api} pins={prefs.sidePins} sessions={sessions} seen={prefs.seen} selected={openId} onOpen={openPane} onPin={pinPane} onUnpin={unpinPane} onNote={notePin} onMove={movePin} onUpdate={() => void refresh()} />}
-    {!wide && <PhoneTabs screen={home ? 'home' : screen} waiting={groups.needs.length} onScreen={next => choosePhoneScreen(next, setScreen)} setScreen={setScreen} terminals={!!pane} onLive={openLive}
+    {!wide && <PhoneTabs screen={home ? 'home' : screen} waiting={waitingCount} onScreen={next => choosePhoneScreen(next, setScreen)} setScreen={setScreen} terminals={!!pane} onLive={openLive}
       browser={pane ? {
         // An open ask goes straight to the agent's page. Otherwise the browser opens on the last tab.
         onOpen: () => { const ask = asks.find(item => item.tab); if (ask?.tab && ask.pane) watchTab(ask.tab, ask.pane); else setBrowserSheet(true) },

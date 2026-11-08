@@ -23,6 +23,8 @@ import { Elapsed } from './Notices'
 import { ShellList } from './ShellList'
 import { OrganizeMenu, tagDot } from './Organize'
 import { useWords } from './words'
+import { WaitingBox } from './Attention'
+import { waitingAsks } from './attention'
 
 export const agentNames: Record<Agent, string> = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity', shell: 'Shell' }
 // Icons a pane can wear instead of its agent's icon (tmux option @chat_icon). The person picks one in the pane menu,
@@ -390,6 +392,7 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
       ? <button type="button" className="search-key" aria-label="Command menu" aria-keyshortcuts="Control+K Meta+K" title="Go to a pane or run a command" onClick={onCommandMenu}>{shortcutLabel}</button>
       : <kbd className="search-key" aria-hidden="true">{shortcutLabel}</kbd>}</label><button type="button" className="icon-button organize-button" aria-label="Organize sessions" title="Group and sort" aria-haspopup="dialog" onClick={event => setOrganizing({ at: matchMedia('(hover: hover)').matches ? anchorOf(event) : undefined })}><SlidersHorizontal size={17} /></button></div>
     {organizing && <OrganizeMenu api={api} sessions={sessions.filter(session => !isArchived(session, prefs.archived))} prefs={prefs} update={update} at={organizing.at} onClose={() => setOrganizing(null)} />}
+    {prefs.attention && <WaitingBox items={waitingAsks(sessions.flatMap(item => item.panes), Date.now() / 1000)} sessions={sessions} selected={selected} onOpen={onOpen} />}
     <nav className="session-groups" aria-label="Sessions">
       {error && <div className="sidebar-error" role="alert">{error}<button onClick={onRetry}>Retry</button></div>}
       {openingChat && <div className="past-opening" role="status">Opening {openingChat}…</div>}

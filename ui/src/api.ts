@@ -89,10 +89,13 @@ export interface Pane {
   tasks?: string[]  // background work from Claude's footer: "1 shell", "1 monitor"
   attention?: Attention | null
   needs?: Needs | null  // a one-line summary while the pane waits on you (the desktop "Needs you" list)
+  ask?: Ask | null  // Attention mode: the ask that waits on you until you answer it (server/attention.py)
   reviewers?: string[]
   reviewers_paused?: string[]  // the panes that review each finished turn of this one (server/review_links.py)
 }
 export interface Needs { kind: 'approval' | 'plan' | 'question'; text: string }
+// since and snoozed_until are Unix seconds. next is the reply's "Next:" line or the prompt's question.
+export interface Ask { pane: string; thread: string | null; since: number; next: string; kind: 'reply' | 'approval' | 'plan' | 'question'; opened: boolean; snoozed_until: number | null }
 // images: how many images the tool result holds (Claude's Read of a screenshot). GET tool-image serves them.
 export interface ToolSummary { id: string; name: string; title: string; is_error: boolean; status: 'pending' | 'complete'; images?: number; description?: string; started?: string; ended?: string }
 export interface ToolDetail extends ToolSummary { detail: string; format: 'text' | 'diff'; truncated: boolean }
