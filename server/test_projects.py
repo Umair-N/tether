@@ -94,18 +94,17 @@ class ProjectTests(unittest.TestCase):
                        '--cwd DIR', '--worktree BRANCH', '--context', 'stop --worker %N [--reviewer %N]', '`list`',
                        '`link --worker %N --reviewer %N` makes one open tab review another.', 'Start your review reply with APPROVED when nothing is wrong.',
                        'send --pane %N "text"', 'wait --pane %N [--timeout SECONDS]',
-                       'max 600', '3 timeout (it keeps working)', '4 helper gone', '5 needs_input with the prompt, 6 no_turn (no new turn after 60 s; the message may be lost).'):
+                       'max 600', '3 timeout (still working)', '4 gone', '5 needs_input (with prompt), 6 no_turn (none in 60 s; message may be lost).'):
             self.assertIn(option, text)
         self.assertIn(
             'It opens a tab Tether can track. Options: `--review-it` '
-            '(this tab reviews the new tab; Tether sends you a review request '
-            'after each of its turns and sends your reply back), '
+            '(this tab reviews each turn of the new tab), '
             '`--reviews-me` (the new tab reviews this tab), ', text)
         self.assertIn(
             'Start your review reply with APPROVED when nothing is wrong. '
-            '`send --pane %N "text"` (`-` reads stdin) steers a tab you started. '
-            '`wait --pane %N [--timeout SECONDS]` (max 600) prints JSON with its last reply when its turn ends. '
-            'Exit: 0 finished, 3 timeout (it keeps working), 4 helper gone, 5 needs_input with the prompt, 6 no_turn (no new turn after 60 s; the message may be lost). '
+            '`send --pane %N "text"` (`-` = stdin) steers a tab you started. '
+            '`wait --pane %N [--timeout SECONDS]` (max 600) prints its new reply as JSON. '
+            'Exit: 0 finished, 3 timeout (still working), 4 gone, 5 needs_input (with prompt), 6 no_turn (none in 60 s; message may be lost). '
             'When a tab you started or review is done, save a note in notes/ (what it did, outcome, findings), '
             'then run `close --pane %N`. Busy tabs stay open.', text)
         self.assertFalse(projects.has_context(PID, self.home))
