@@ -1689,15 +1689,17 @@ button.live-chip:active { background: var(--line); }
   .shell-page .composer-area { width: 100%; max-width: 900px; align-self: center; padding-inline: 24px; }
 }
 
-/* Your own messages, one at a time: the bar at the top of the chat. */
-.mine-bar { position: absolute; top: 8px; left: 0; right: 0; z-index: 3; display: flex; justify-content: center; padding: 0 16px; pointer-events: none; }
-.mine-bar button { pointer-events: auto; display: flex; align-items: center; gap: 7px; width: 100%; max-width: 740px; min-height: 36px; padding: 0 14px; border: 1px solid var(--line); border-radius: var(--radius-xl); background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: blur(8px); box-shadow: 0 2px 10px #00000010; font-size: 13px; color: var(--muted); text-align: left; }
+/* Your own messages, one at a time: a bar that comes while you scroll back, then goes. */
+.mine-bar { position: absolute; top: 8px; left: 0; right: 0; z-index: 3; display: flex; justify-content: center; padding: 0 16px; pointer-events: none; opacity: 0; transform: translateY(-6px); transition: opacity 160ms ease-out, transform 160ms ease-out; }
+.mine-bar.shown { opacity: 1; transform: none; }
+.mine-bar.shown button { pointer-events: auto; }
+.mine-bar button { display: flex; align-items: center; gap: 8px; max-width: min(100%, 560px); min-height: 36px; padding: 0 14px; border: 0; border-radius: 18px; background: var(--surface); box-shadow: 0 1px 2px #0000000f, 0 4px 12px #00000014; font-size: 13px; color: var(--muted); text-align: left; }
 .mine-bar button:hover { background: var(--hover); }
 .mine-bar button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .mine-bar svg { flex-shrink: 0; }
 .mine-bar-who { flex-shrink: 0; font-weight: 600; color: var(--text); }
 .mine-bar-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--chat-text); }
-.thread:has(.mine-bar) .messages { padding-top: 60px; }
+@media (prefers-reduced-motion: reduce) { .mine-bar { transition: none; transform: none; } }
 .chat-started { margin: 0 auto 22px; text-align: center; font-size: 12px; color: var(--muted); }
 .header-started { display: inline-flex; gap: 4px; align-items: center; font-size: 11px; white-space: nowrap; }
 .header-started svg { width: 12px; height: 12px; }
@@ -1705,8 +1707,7 @@ button.live-chip:active { background: var(--line); }
 
 /* Sidebar colors and groups. Mid-tone colors read on light and dark backgrounds; text never sits on them. */
 :root { --tag-red: #e5484d; --tag-orange: #f76b15; --tag-yellow: #e2a336; --tag-green: #30a46c; --tag-blue: #0090ff; --tag-purple: #8e4ec6; }
-.session-list > li.tagged > .swipe-row .session-row, .pane-children > li.tagged > button { box-shadow: inset 3px 0 0 var(--tag); background: color-mix(in srgb, var(--tag) 10%, transparent); }
-.session-list > li.tagged > .swipe-row .session-row.selected, .pane-children > li.tagged > button.selected { background: color-mix(in srgb, var(--tag) 18%, var(--hover)); }
+.tag-dot { flex-shrink: 0; display: inline-block; width: 7px; height: 7px; margin-inline: 1px 2px; border-radius: 50%; background: var(--tag); vertical-align: middle; }
 .needs-group > .group-head .group-toggle { color: var(--attention); font-weight: 600; }
 .sidebar-search-row { display: flex; align-items: center; gap: 4px; margin: 4px 8px 10px 12px; }
 .sidebar-search-row .sidebar-search { flex: 1; min-width: 0; margin: 0; }
@@ -1715,7 +1716,7 @@ button.live-chip:active { background: var(--line); }
 .color-row { display: flex; gap: 8px; padding: 6px 12px 10px; }
 .color-swatch { display: grid; place-items: center; width: 30px; height: 30px; min-height: 0; padding: 0; border-radius: 50%; border: 1px solid transparent; background: var(--tag); color: #fff; }
 .color-swatch.none { border-color: var(--line); background: transparent; color: var(--muted); }
-.color-swatch[aria-checked="true"] { outline: 2px solid var(--text); outline-offset: 2px; }
+.color-swatch[aria-checked="true"] { outline: 2px solid var(--tag, var(--muted)); outline-offset: 2px; }
 .color-swatch:focus-visible { outline: 2px solid var(--focus, var(--accent)); outline-offset: 2px; }
 .picker-space { display: inline-block; width: 18px; flex-shrink: 0; }
 .group-new { display: flex; gap: 8px; margin: 10px 0; }
