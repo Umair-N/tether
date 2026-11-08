@@ -149,7 +149,10 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
   // The stage mounts late in Your Chrome (after the pairing card), so observe the element itself, not the load.
   const [stageBox, setStageBox] = useState<HTMLDivElement | null>(null)
   const stageSlot = useCallback((box: HTMLDivElement | null) => { stageRef.current = box; setStageBox(box) }, [])
-  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  // The canvas mounts late in Your Chrome too, so the wheel listener follows the element.
+  const [canvasBox, setCanvasBox] = useState<HTMLCanvasElement | null>(null)
+  const canvasSlot = useCallback((box: HTMLCanvasElement | null) => { canvasRef.current = box; setCanvasBox(box) }, [])
   const marksRef = useRef<HTMLCanvasElement>(null)
   const keysRef = useRef<HTMLTextAreaElement>(null)
   const urlRef = useRef<HTMLInputElement>(null)
@@ -227,10 +230,13 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
   // Frames: decode the newest one and skip any that arrive while one decodes.
   const pending = useRef<FrameMessage | null>(null)
   const decoding = useRef(false)
+  // Each stream gets a number. A frame that finishes decoding after its stream closed is dropped.
+  const streamGen = useRef(0)
   async function paint() {
     decoding.current = true
     while (pending.current) {
       const message = pending.current
+      const gen = streamGen.current
       pending.current = null
       try {
         const binary = atob(message.jpeg)
@@ -238,7 +244,7 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
         for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index)
         const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/jpeg' }))
         const canvas = canvasRef.current
-        if (canvas && !notingRef.current) {
+        if (canvas && !notingRef.current && gen === streamGen.current) {
           if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) { canvas.width = bitmap.width; canvas.height = bitmap.height }
           canvas.getContext('2d')?.drawImage(bitmap, 0, 0)
           setFrame(old => old && old.width === message.width && old.height === message.height ? old : { width: message.width, height: message.height })
@@ -252,23 +258,40 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
   // The stream runs only while the panel is shown, the page is visible, and no note is open on a still frame.
   const streamWidth = Math.min(2560, Math.max(160, Math.ceil(stage.width * devicePixelRatio / 64) * 64))
   const streamHeight = Math.min(2560, Math.max(160, Math.ceil(stage.height * devicePixelRatio / 64) * 64))
+  const [retry, setRetry] = useState(0)
   useEffect(() => {
     if (!active || !visible || !tabId || noting || !stage.width) return
+    const gen = ++streamGen.current
+    let again = 0
     const source = new EventSource(`/mobile/api/browser/stream?tab=${encodeURIComponent(tabId)}&w=${streamWidth}&h=${streamHeight}&cssw=${Math.max(1, stage.width)}&cssh=${Math.max(1, stage.height)}${which === 'test' ? '' : `&browser=${which}`}`)
-    source.addEventListener('frame', event => { pending.current = JSON.parse((event as MessageEvent).data); setLive(true); if (!decoding.current) void paint() })
+    source.addEventListener('frame', event => { if (gen !== streamGen.current) return; pending.current = JSON.parse((event as MessageEvent).data); setLive(true); if (!decoding.current) void paint() })
     source.addEventListener('tabs', event => apply(JSON.parse((event as MessageEvent).data)))
     source.addEventListener('closed', () => void load())
     source.onopen = () => setLive(true)
-    source.onerror = () => setLive(false) // EventSource connects again by itself
-    return () => source.close()
-  }, [active, visible, tabId, noting, streamWidth, streamHeight, stage.width > 0]) // eslint-disable-line react-hooks/exhaustive-deps
+    // EventSource connects again by itself after a network drop, but not after an error reply
+    // (for example a tab that a server restart replaced). Then reload the tabs and open a new stream.
+    source.onerror = () => {
+      setLive(false)
+      if (again) return
+      again = window.setTimeout(() => {
+        again = 0
+        void load()
+        if (source.readyState === EventSource.CLOSED) setRetry(count => count + 1)
+      }, 2000)
+    }
+    return () => { source.close(); clearTimeout(again); streamGen.current++; pending.current = null }
+  }, [active, visible, tabId, noting, streamWidth, streamHeight, stage.width > 0, retry]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Input: queue events, merge moves and wheel turns, and send one batch per animation frame.
   const queue = useRef<Gesture[]>([])
+  const queueTab = useRef<string | null>(null)
   const sending = useRef(false)
   const scheduled = useRef(false)
   function push(...events: Gesture[]) {
     if (watchingRef.current) return
+    // The queue belongs to one tab. Input for a new tab never goes to the old one.
+    const id = tabRef.current?.id ?? null
+    if (queueTab.current !== id) { queue.current = []; queueTab.current = id }
     for (const event of events) {
       const last = queue.current[queue.current.length - 1]
       if (last && last.type === event.type && event.type === 'move') queue.current[queue.current.length - 1] = event
@@ -278,7 +301,7 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
     if (!scheduled.current) { scheduled.current = true; requestAnimationFrame(() => { scheduled.current = false; void flush() }) }
   }
   async function flush() {
-    const target = tabRef.current?.id
+    const target = queueTab.current
     if (sending.current || !queue.current.length || !target) return
     sending.current = true
     const events = queue.current.splice(0, 200)
@@ -300,6 +323,8 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
   }
 
   const lastDown = useRef({ time: 0, x: 0, y: 0, count: 0 })
+  // A press the page saw. It must always get its release (pointer cancel, tab change, unmount).
+  const pressed = useRef<{ button: string; x: number; y: number } | null>(null)
   const drag = useRef<{ id: number; x: number; y: number; start: { x: number; y: number }; moved: boolean } | null>(null)
   function onPointerDown(event: ReactPointerEvent<HTMLCanvasElement>) {
     if (!tab) return
@@ -312,6 +337,7 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
     const now = performance.now(), last = lastDown.current
     const count = now - last.time < 500 && Math.abs(point.x - last.x) < 5 && Math.abs(point.y - last.y) < 5 ? Math.min(3, last.count + 1) : 1
     lastDown.current = { time: now, ...point, count }
+    pressed.current = { button: BUTTONS[event.button] ?? 'left', ...point }
     push({ type: 'down', ...point, button: BUTTONS[event.button] ?? 'left', buttons: event.buttons, clicks: count, modifiers: modifiers(event) })
   }
   function onPointerMove(event: ReactPointerEvent<HTMLCanvasElement>) {
@@ -328,6 +354,7 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
     }
     // A phone or tablet tab gets only pressed moves (the server sends them as a finger drag); hover means nothing there.
     if (tab.touch ? !event.buttons : event.pointerType === 'touch') return
+    if (pressed.current) Object.assign(pressed.current, pagePoint(event))
     push({ type: 'move', ...pagePoint(event), button: event.buttons & 1 ? 'left' : event.buttons & 2 ? 'right' : 'none', buttons: event.buttons, modifiers: modifiers(event) })
   }
   function onPointerUp(event: ReactPointerEvent<HTMLCanvasElement>) {
@@ -339,11 +366,12 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
       return
     }
     if (event.button > 2) return
+    pressed.current = null
     push({ type: 'up', ...pagePoint(event), button: BUTTONS[event.button] ?? 'left', buttons: event.buttons, clicks: lastDown.current.count, modifiers: modifiers(event) })
   }
   // React adds wheel listeners as passive, so the page could not stop the panel from scrolling. Add it here.
   useEffect(() => {
-    const canvas = canvasRef.current
+    const canvas = canvasBox
     if (!canvas) return
     const wheel = (event: WheelEvent) => {
       if (notingRef.current || !tabRef.current) return
@@ -353,11 +381,29 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
     }
     canvas.addEventListener('wheel', wheel, { passive: false })
     return () => canvas.removeEventListener('wheel', wheel)
-  }, [loaded]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [canvasBox]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Keyboard: a hidden text box takes the keys. Keys with a meaning go as key events; phone keyboards send text.
   const lastEscape = useRef(0)
-  const held = useRef(new Set<string>())
+  const held = useRef(new Map<string, { key: string; code: string }>())
+  // Releases for every held key and the held button, to send before focus or the tab moves away.
+  function releases(): Gesture[] {
+    const events: Gesture[] = [...held.current.values()].map(({ key, code }) => ({ type: 'keyup', key, code, modifiers: 0 }))
+    held.current.clear()
+    const press = pressed.current
+    pressed.current = null
+    if (press) events.push({ type: 'up', x: press.x, y: press.y, button: press.button, buttons: 0, clicks: 1, modifiers: 0 })
+    return events
+  }
+  // Leaving a tab: release keys and buttons there, and drop its queued input.
+  useEffect(() => {
+    if (!tabId) return
+    return () => {
+      const events = releases()
+      if (queueTab.current === tabId) queue.current = []
+      if (events.length) void api('browser/input', { tab: tabId, events }).catch(() => undefined)
+    }
+  }, [tabId]) // eslint-disable-line react-hooks/exhaustive-deps
   function onKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
     if (event.nativeEvent.isComposing || event.key === 'Unidentified' || event.key === 'Process' || ['Shift', 'Control', 'Alt', 'Meta'].includes(event.key)) return
     if (event.key === 'Escape') {
@@ -369,8 +415,9 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
     if (command && event.key.toLowerCase() === 'v') return // the paste event brings the text
     if (event.key.length !== 1 && !KEYS.has(event.key)) return
     event.preventDefault()
+    event.stopPropagation() // the page owns this key; Tether's own shortcuts must not run
     const name = command ? COMMANDS[event.key.toLowerCase()] : undefined
-    held.current.add(event.code + event.key)
+    held.current.set(event.code + event.key, { key: event.key, code: event.code })
     push({ type: 'keydown', key: event.key, code: event.code, modifiers: modifiers(event), ...(name ? { commands: [event.shiftKey && name === 'undo' ? 'redo' : name] } : {}) })
   }
   function onKeyUp(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
@@ -614,8 +661,8 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
 
     <div className={typing ? 'browser-stage typing' : 'browser-stage'} ref={stageSlot} tabIndex={-1} aria-label="Page">
       <div className="browser-screen" style={view}>
-        <canvas ref={canvasRef} className="browser-canvas" aria-hidden="true" style={view}
-          onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={() => { drag.current = null }} onContextMenu={event => event.preventDefault()}
+        <canvas ref={canvasSlot} className="browser-canvas" aria-hidden="true" style={view}
+          onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={() => { drag.current = null; const press = pressed.current; pressed.current = null; if (press) push({ type: 'up', x: press.x, y: press.y, button: press.button, buttons: 0, clicks: 1, modifiers: 0 }) }} onContextMenu={event => event.preventDefault()}
           onMouseDown={event => event.preventDefault() /* keep focus in the keys box, not the stage */} />
         {noting && <canvas ref={marksRef} className={`browser-marks tool-${tool}`} aria-label="Draw notes on the frame" style={view} onPointerDown={onMarkDown} onPointerMove={onMarkMove} onPointerUp={onMarkUp} onPointerCancel={onMarkUp} />}
         {noting && label && <input className="browser-label" style={{ left: label.left, top: label.top }} aria-label="Note text" autoFocus value={label.text}
@@ -624,7 +671,7 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
       </div>
       {!frame && tab && <p className="browser-wait">{live ? 'Loading the page…' : 'Connecting…'}</p>}
       <textarea ref={keysRef} className="browser-keys" aria-label="Keys for the page. Press Escape twice to leave." defaultValue={SENTINEL} autoCapitalize="off" autoCorrect="off" spellCheck={false}
-        onFocus={() => setTyping(true)} onBlur={() => setTyping(false)} onKeyDown={onKeyDown} onKeyUp={onKeyUp}
+        onFocus={() => setTyping(true)} onBlur={() => { setTyping(false); const events = releases(); if (events.length) push(...events) }} onKeyDown={onKeyDown} onKeyUp={onKeyUp}
         onInput={event => { if (!(event.nativeEvent as InputEvent).isComposing) syncText() }} onCompositionEnd={syncText}
         onPaste={event => { event.preventDefault(); const text = event.clipboardData.getData('text/plain'); if (text) push({ type: 'text', text: text.slice(0, 20000) }) }} />
     </div>
