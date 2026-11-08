@@ -79,6 +79,7 @@ import auto_resume
 import window_size
 import projects_api
 import codex_level
+import custom_layouts
 import codex_runs
 import browser_api
 import mac_browser
@@ -1491,6 +1492,8 @@ class Handler(BaseHTTPRequestHandler):
                 projects_api.get(self)
             elif codex_level.handles(path):
                 codex_level.get(self)
+            elif custom_layouts.handles(path):
+                custom_layouts.get(self)
             elif codex_runs.handles(path):
                 codex_runs.get(self, choose)
             elif tts.handles(path):

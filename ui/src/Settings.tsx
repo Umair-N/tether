@@ -14,6 +14,7 @@ import { matchesSetting, SETTINGS_GROUPS } from './settingsIndex'
 import type { SettingIndex, SettingsGroup } from './settingsIndex'
 import { keyLabel } from './keys'
 import { DigestSettings } from './Attention'
+import { LayoutPicker, StylePicker } from './LookSettings'
 import './Settings.css'
 
 type Scope = 'All devices' | 'This device' | 'This server'
@@ -35,6 +36,8 @@ export function Settings({ api, prefs, update, onReload, onClose }: { api: Api; 
   const items: Setting[] = [
     item('theme', 'appearance', 'Theme', 'light dark automatic system', <Field scope="All devices"><Choice legend="Theme" name="theme" value={prefs.theme} options={[["system", "System"], ["light", "Light"], ["dark", "Dark"]]} onChange={theme => update(() => ({ theme }))} /></Field>),
     item('colors', 'appearance', 'Colors', `color colour scheme palette ${SCHEMES.map(s => `${s.id} ${s.name}`).join(' ')}`, <Field scope="All devices"><fieldset className="choice"><legend>Colors</legend><div className="preferences-colors">{SCHEMES.map(scheme => <label key={scheme.id} title={scheme.name}><input type="radio" name="scheme" value={scheme.id} checked={schemeById(prefs.scheme).id === scheme.id} onChange={() => update(() => ({ scheme: scheme.id }))} /><span className="preferences-color" style={{ background: scheme[prefs.theme === 'light' ? 'light' : 'dark'].bg, borderColor: scheme[prefs.theme === 'light' ? 'light' : 'dark'].accent }} aria-hidden="true" /><span>{scheme.name}</span></label>)}</div></fieldset></Field>),
+    item('layout', 'appearance', 'Layout', 'layout grid panels islands vs code vscode zed status column custom json my look', <Field scope="This device"><LayoutPicker api={api} prefs={prefs} update={update} /></Field>),
+    item('style', 'appearance', 'Style', 'glass flat blur translucent frosted backdrop ember graphite dusk', <Field scope="This device"><StylePicker prefs={prefs} update={update} /></Field>),
     item('text-size', 'appearance', 'Text size', 'font small large readability zoom', <Field scope="This device"><Choice legend="Text size" name="text-size" value={prefs.textSize} options={[["small", "Small"], ["default", "Default"], ["large", "Large"]]} onChange={textSize => update(() => ({ textSize }))} /></Field>),
     item('folder', 'workspace', 'Default folder', 'working directory path home new session start projects', <Field scope="This server"><SessionSettings api={api} /></Field>),
     item('sort', 'workspace', 'Session order', 'sidebar sort smart manual recent', <Field scope="All devices"><Choice legend="Session order" name="sort" value={prefs.sort} options={[["smart", "Smart"], ["recent", "Recent"], ["name", "Name"], ["manual", "Manual"]]} onChange={sort => update(() => ({ sort }))} /><p className="setting-note">{prefs.sort === 'smart' ? 'Needs you, then Done, Working, and most recent.' : prefs.sort === 'recent' ? 'Needs you, then the latest agent activity.' : prefs.sort === 'name' ? 'Needs you, then A to Z.' : 'Use Reorder in the sidebar to arrange sessions.'}</p></Field>),

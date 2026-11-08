@@ -22,6 +22,7 @@ TETHER = Path(os.environ.get('TETHER_HOME') or HOME / '.tether')  # session proj
 SHARE = Path(os.environ.get('TETHER_SHARE') or TETHER / 'share')
 CONFIG = Path(os.environ.get('MOBILE_TMUX_CONFIG') or HOME / '.config/mobile-tmux')
 ATTENTION = Path(os.environ.get('TETHER_ATTENTION') or CACHE / 'attention.json')  # Attention mode asks (attention.py)
+LAYOUTS = Path(os.environ.get('TETHER_LAYOUTS') or CONFIG / 'layouts')  # custom layout JSON files (custom_layouts.py)
 TMUX = _find_tmux()
 SYSTEMD_RUN = shutil.which('systemd-run')
 # server.py sets this at start when it runs as a systemd service. Not read from the environment here: tmux panes

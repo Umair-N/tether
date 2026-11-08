@@ -43,7 +43,7 @@ function cardNames(card: HomeCard) {
   return { title, session: session === name ? '' : session }
 }
 
-function Card({ api, card, group, waiting, error, onOpen, onAnswer, onFail, onKey, onMarkRead }: {
+export function Card({ api, card, group, waiting, error, onOpen, onAnswer, onFail, onKey, onMarkRead }: {
   api: Api; card: HomeCard; group: GroupKey; waiting: boolean; error?: string
   onOpen: (pane: Pane) => void
   onAnswer: Parameters<typeof AnswerActions>[0]['onAnswer']

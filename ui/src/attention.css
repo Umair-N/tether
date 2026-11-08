@@ -35,3 +35,5 @@
 .attention-digest .digest-hour { display: flex; align-items: center; gap: 10px; margin-top: 8px; font-size: 14px; }
 .attention-digest select { min-height: 36px; padding: 0 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--bg); color: var(--text); font: inherit; }
 .attention-digest .digest-error { margin: 6px 0 0; color: var(--error); font-size: 13px; }
+/* A layout with its own waiting panel shows the asks there, so the sidebar box hides. */
+.app-shell[data-waiting] .sidebar .waiting-box{display:none}
