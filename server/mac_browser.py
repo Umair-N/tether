@@ -448,6 +448,23 @@ class MacBrowser(browser.Browser):
     def list_tabs(self):
         return self.state()  # never create a tab outside an Allow decision
 
+    def refresh(self, tab):
+        """Read real metadata through the granted page; Target.getTargetInfo is synthetic on the relay."""
+        try:
+            if 'Page' not in self.conn.enabled.get(tab.session, set()):
+                self.conn.call('Page.enable', session=tab.session, timeout=5)
+            history = self.conn.call('Page.getNavigationHistory', session=tab.session, timeout=5)
+            entries, index = history.get('entries') or [], history.get('currentIndex', -1)
+        except Exception:  # metadata only; a failed read must never end the grant
+            return
+        if not 0 <= index < len(entries) or self.tabs.get(tab.target) is not tab:
+            return
+        entry = entries[index]
+        url, title = entry.get('url') or tab.url, entry.get('title') or ''
+        if (tab.url, tab.title) != (url, title):
+            tab.url, tab.title = url, title
+            self._bump()
+
     def new_tab(self, *args, **kwargs):
         raise ValueError('Ask for your Chrome access to open a tab.')
 
@@ -530,6 +547,7 @@ class MacAccess(signed.Access):
                         raise browser.BrowserError('That Chrome request has ended.')
                     session = secrets.token_urlsafe(12)
                     tab = browser.Tab(target, session, mode='agent')
+                    tab.url = slot['row']['url'] or tab.url
                     self.browser.tabs[target] = self.browser.by_session[session] = tab
                     self.browser.conn.sessions[session] = target
                     self.browser.native_targets[reply['tab']] = target
@@ -542,6 +560,7 @@ class MacAccess(signed.Access):
                     self._watch(grant, slot['identity'])
                     self._answer(slot, {'ok': True, 'browser': 'chrome', 'cdp': self.url(grant), 'tab': target,
                                         'expires': grant.row['expires']})
+                self.browser.refresh(tab)  # a CDP round trip: never under the access lock
             except Exception:
                 if not device.closed:
                     device.send({'type': 'end', 'id': ident})

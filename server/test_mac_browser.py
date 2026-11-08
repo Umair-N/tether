@@ -250,6 +250,33 @@ class RealContextTests(GrantHarness, unittest.TestCase):
                                {'targetId': grant.row['tab'], 'flatten': True})['sessionId']
         return client, capture, session
 
+    def test_panel_refresh_reads_real_url_title_and_history_events(self):
+        url = self.serve_page()
+        grant = self.grant()
+        tab = self.broker.browser.tab(grant.row['tab'])
+        conn, session = self.transport.conn, self.transport.session
+        conn.call('Page.navigate', {'url': url}, session)
+        wait_for(lambda: conn.call('Runtime.evaluate',
+                 {'expression': 'location.href + " " + document.readyState'},
+                 session)['result'].get('value') == url + ' complete')
+
+        def refreshed():
+            self.broker.browser.refresh(tab)
+            return (tab.url, tab.title) == (url, 'Mac context test')
+
+        wait_for(refreshed)
+        version = self.broker.browser.version
+        conn.call('Runtime.evaluate', {'expression': 'history.pushState({}, "", location.href)'}, session)
+        wait_for(lambda: self.broker.browser.version > version)
+        self.assertTrue(self.broker.browser.nav_state(tab.target)['back'])
+        conn.call('Runtime.evaluate', {'expression': 'document.title = "Updated title"'}, session)
+
+        def retitled():
+            self.broker.browser.refresh(tab)
+            return (tab.url, tab.title) == (url, 'Updated title')
+
+        wait_for(retitled)
+
     def test_runtime_already_enabled_second_session_gets_main_world(self):
         grant = self.grant()
         first, out, session = self.attach(grant)
@@ -609,6 +636,11 @@ class GrantTests(GrantHarness, unittest.TestCase):
                 conn.call(domain + '.disable', session=sessions[0])
                 self.assertEqual(len(self.transport.sent), before)
                 conn.call(domain + '.disable', session=sessions[1])
+                if domain == 'Page':
+                    self.assertEqual(len(self.transport.sent), before)
+                    # The panel keeps Page events for history changes until it also unsubscribes.
+                    panel = self.broker.browser.tab(grant.row['tab']).session
+                    conn.call('Page.disable', session=panel)
                 self.assertEqual(self.transport.sent[-1]['method'], domain + '.disable')
                 self.assertEqual(len(self.transport.sent), before + 1)
         for session in sessions:

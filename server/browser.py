@@ -677,9 +677,8 @@ class Browser:
                            {'width': width, 'height': height, 'deviceScaleFactor': spec['scale'], 'mobile': False}, session)
             self.conn.call('Emulation.setTouchEmulationEnabled', {'enabled': False}, session)
             self.conn.call('Emulation.setEmitTouchEventsForMouse', {'enabled': False}, session)
-            if self.user_agent:
-                # Keep Chrome's native UA and client hints on signed-in desktop tabs.
-                self.conn.call('Emulation.setUserAgentOverride', {'userAgent': '' if self.signed else self.user_agent}, session)
+            # An empty override restores the native UA, including on relayed tabs without a cached desktop UA.
+            self.conn.call('Emulation.setUserAgentOverride', {'userAgent': '' if self.signed else self.user_agent}, session)
         else:
             self.conn.call('Emulation.setDeviceMetricsOverride',
                            {'width': spec['width'], 'height': spec['height'], 'deviceScaleFactor': spec['scale'],
@@ -728,11 +727,25 @@ class Browser:
                 css_size = tuple(css_size)
             tab.viewer_sizes.append((size, css_size))
             tab.viewers = len(tab.viewer_sizes)
-            if self.signed:  # headed Chrome paints only the front tab: a tab behind streamed 0.2 fps, in front 37 fps
-                self.conn.call('Page.bringToFront', session=tab.session)
-            size = self._cast_size(tab)
-            if tab.casting != size:
-                self._start_cast(tab, size)
+            previous_cast = tab.casting
+            try:
+                if tab.viewers == 1:
+                    with tab.changed:
+                        tab.frame = None  # a previous viewing interval cannot supply this viewer's first frame
+                if self.signed:  # headed Chrome paints only the front tab
+                    self.conn.call('Page.bringToFront', session=tab.session)
+                size = self._cast_size(tab)
+                if tab.casting != size:
+                    self._start_cast(tab, size)
+            except Exception:
+                tab.viewer_sizes.pop()  # only this registration; existing viewers still own the tab
+                tab.viewers = len(tab.viewer_sizes)
+                if tab.viewers and previous_cast and tab.casting != previous_cast:
+                    try:
+                        self._start_cast(tab, previous_cast)
+                    except BrowserError:
+                        pass  # a detached renderer cannot restore the previous cast
+                raise
             return tab
 
     def unwatch(self, tab, size=None, css_size=None):
@@ -822,9 +835,10 @@ class Browser:
             self._agent_size(tab)
         if tab.casting:  # headed Chrome refuses a second start ("Screencast is already active"); headless allows it
             self.conn.call('Page.stopScreencast', session=tab.session)
-        tab.casting = size
+            tab.casting = None
         self.conn.call('Page.startScreencast', {'format': 'jpeg', 'quality': QUALITY, 'maxWidth': size[0], 'maxHeight': size[1],
                                                 'everyNthFrame': 1}, tab.session)
+        tab.casting = size
 
     def _restart_cast(self, tab):
         if tab.casting:
@@ -869,8 +883,10 @@ class Browser:
                     tab.size = size
                     self._bump()
             return True
-        width = (frame[1] or {}).get('deviceWidth')
-        if not frame[3] or not width or abs(width - tab.row()['width']) <= 1:
+        metadata = frame[1] or {}
+        row = tab.row()
+        if all(metadata.get(field) and abs(metadata[field] - row[dimension]) <= 1
+               for field, dimension in (('deviceWidth', 'width'), ('deviceHeight', 'height'))):
             return True
         now = self.clock()
         if now - tab.healed >= 1.0:
@@ -912,6 +928,8 @@ class Browser:
                 tab.frame = (tab.seq, params.get('metadata') or {}, params.get('data') or '', params.get('sessionId', 0))
                 self.ack(tab, tab.frame)
                 tab.changed.notify_all()
+        elif method == 'Page.navigatedWithinDocument' and tab is not None:
+            self._bump()  # pushState can change Back/Forward without changing the URL or title
         elif method == 'Target.targetInfoChanged':
             info = params.get('targetInfo') or {}
             known = self.tabs.get(info.get('targetId'))
