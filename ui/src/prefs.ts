@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { request } from './api'
 import type { GroupBy, SessionGroup, SortBy } from './Organize'
+import { DEFAULT_LOOK } from './layouts'
+import type { Look, SavedLook } from './layouts'
 
 // seen: when you last looked at each pane (seconds), so a turn that ended later shows as Done.
 // SYNCED choices are shared by every device through the server (/mobile/api/prefs). The rest stay in this browser:
@@ -53,6 +55,9 @@ export interface Prefs {
   /** The host menu's other Tether servers (synced). url: the server's origin, for example https://mac.example.com. */
   hosts: Host[]
   layout: { desktop?: DesktopLayout; desks?: Record<string, Partial<DesktopLayout>>; active?: string }
+  /** Settings › Layout, Style and Backdrop (this device; layouts.ts). myLook: the look saved before a layout replaced it. */
+  look: Look
+  myLook: SavedLook | null
 }
 export interface Host { name: string; url: string }
 export interface DesktopLayout { count: 1 | 2 | 3 | 4; panes: string[]; focus: number; cols: Record<string, number[]>; row: number; inbox: boolean; sidebar: boolean; /** With 2 slots: one above the other. */ stack?: boolean; /** Panes of other sessions that the user placed in this layout. */ guests?: string[]
@@ -69,7 +74,7 @@ export interface ArchivedTab { thread: string | null; dir: string }
 export interface SidePin { pane: string; note?: string }
 const KEY = 'tmux-chat.prefs.v1'
 const CLEARED_KEEP = 2 * 86400  // Match CLEARED_KEEP in server/prefs_sync.py (seconds).
-const DEFAULTS: Prefs = { autoResume: true, pinned: [], sidePins: [], order: [], collapsed: { past: true }, expanded: {}, selected: null, lastPane: {}, voiceOff: false, voiceSound: true, readAloud: false, handsFree: false, agentBubble: true, liveReplyPreview: true, theme: 'system', scheme: 'claude', textSize: 'default', showPaths: false, tmuxWords: false, sort: 'smart', colors: {}, groups: [], groupOf: {}, groupBy: 'agent', seen: {}, paneOrder: {}, drafts: {}, archived: {}, archivedTabs: {}, hosts: [], layout: {} }
+const DEFAULTS: Prefs = { autoResume: true, pinned: [], sidePins: [], order: [], collapsed: { past: true }, expanded: {}, selected: null, lastPane: {}, voiceOff: false, voiceSound: true, readAloud: false, handsFree: false, agentBubble: true, liveReplyPreview: true, theme: 'system', scheme: 'claude', textSize: 'default', showPaths: false, tmuxWords: false, sort: 'smart', colors: {}, groups: [], groupOf: {}, groupBy: 'agent', seen: {}, paneOrder: {}, drafts: {}, archived: {}, archivedTabs: {}, hosts: [], layout: {}, look: DEFAULT_LOOK, myLook: null }
 
 function keptDrafts(drafts: Record<string, Draft>) {
   const now = Date.now() / 1000
