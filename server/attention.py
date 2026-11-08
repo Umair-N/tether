@@ -198,8 +198,8 @@ class Attention:
                     ask.update(kind='reply', next=text, opened=False, reply=key)  # keeps its first `since`
                 else:
                     self._start(pane, thread, 'reply', text, now, key)
-            elif status == 'no' and ask:
-                del self.asks[pane]
+            elif ask and ask['kind'] == 'reply':
+                del self.asks[pane]  # a new turn without "Needs you: yes": you answered it, here or in the terminal
             return True
 
     def clear(self, pane, thread=None, save=True):

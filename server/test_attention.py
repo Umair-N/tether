@@ -91,6 +91,14 @@ class AttentionTest(unittest.TestCase):
         self.world.observe(entry())
         self.assertIsNone(self.store.ask('%1', 't1'))
 
+    def test_a_new_turn_without_a_status_line_clears(self):
+        # You answered in the terminal and the agent ran another turn: the old ask is stale.
+        self.world.turn('%1', 'Next: pick a name.\nNeeds you: yes', 10)
+        self.world.observe(entry())
+        self.world.turn('%1', 'Done, named it web.', 20)
+        self.world.observe(entry())
+        self.assertIsNone(self.store.ask('%1', 't1'))
+
     def test_a_later_yes_keeps_the_first_since_and_resets_opened(self):
         self.world.turn('%1', 'Next: pick a name.\nNeeds you: yes', 10)
         self.world.observe(entry())
