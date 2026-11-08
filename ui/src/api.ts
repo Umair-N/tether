@@ -125,6 +125,7 @@ export interface ChatData {
   approval: unknown
   plan?: { id: string; text: string } | null
   claude_name?: string | null  // Claude's own session name (/rename); null when it has none
+  started?: string | null  // ISO time of the thread's first record; null when unknown
   attention?: Attention | null
   footer?: Footer
 }

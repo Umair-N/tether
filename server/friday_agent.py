@@ -428,6 +428,10 @@ def runtime_types():
 
         def decode(self, audio):
             samples = np.frombuffer(audio, dtype='<i2').astype(np.float32) / 32768.0
+            # Raise quiet PCM so Parakeet does not drop short words.
+            peak = np.max(np.abs(samples), initial=0)
+            if 0 < peak < 0.01:
+                samples *= 0.2 / peak
             stream = self.recognizer.create_stream()
             stream.accept_waveform(16000, samples)
             self.recognizer.decode_stream(stream)

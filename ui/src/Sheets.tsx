@@ -1,6 +1,8 @@
 import { useWords, count } from './words'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Eye, Archive, ArchiveRestore, ArrowDown, BookMarked, ArrowUp, Bell, Check, Columns2, GitFork, LayoutDashboard, Merge, ArrowRightLeft, Plus, PanelBottom, PanelRight, Pencil, Pin, PinOff, Shapes, Sparkles, RotateCw, Rows2, Square, Trash2, X } from 'lucide-react'
+import { FolderInput, Eye, Archive, ArchiveRestore, ArrowDown, BookMarked, ArrowUp, Bell, Check, Columns2, GitFork, LayoutDashboard, Merge, ArrowRightLeft, Plus, PanelBottom, PanelRight, Pencil, Pin, PinOff, Shapes, Sparkles, RotateCw, Rows2, Square, Trash2, X } from 'lucide-react'
+import { ColorRow, GroupPicker } from './Organize'
+import type { SessionGroup, TagColor } from './Organize'
 import { ReviewLinkPicker } from './ReviewLinks'
 import { SelectMenu } from './SelectMenu'
 import { SESSION_NAME, SESSION_NAME_HELP, canFork, creditsLabel, errorText, usageLabel } from './api'
@@ -99,13 +101,14 @@ function SessionPicker({ label, targets, pending, extra, onPick, onCancel }: { l
 }
 
 /** A sheet on the phone; a popover at `at` on the desktop. The popover closes on Esc or a click outside it. */
-function useActionsDialog(at: Anchor | undefined, close: () => void) {
+export function useActionsDialog(at: Anchor | undefined, close: () => void) {
   const modal = useModal(true, close)
   const popover = usePopover(modal.ref, at, close)
   return { ...modal, ...popover, className: at ? 'sheet popover' : 'sheet' }
 }
 
-export function SessionActions({ api, session, tabCount, pane, pinned, archived, canMoveUp, canMoveDown, startDelete = false, at, place, targets, marks, onMarks, onPin, onArchive, onMove, onProject, onDone, onClose }: {
+export function SessionActions({ api, session, tabCount, pane, pinned, archived, canMoveUp, canMoveDown, startDelete = false, at, place, targets, marks, onMarks, onPin, onArchive, onMove, onProject, onDone, onClose, color, onColor, groups = [], group, onGroup }: {
+  color?: string; onColor?: (color: TagColor | null) => void; groups?: SessionGroup[]; group?: string; onGroup?: (group: SessionGroup | null, created?: SessionGroup) => void
   api: Api; session: Session; tabCount: number; pane: string; pinned: boolean; archived: boolean; canMoveUp: boolean; canMoveDown: boolean; startDelete?: boolean; at?: Anchor; place?: Place; targets: Session[]; marks?: ProjectMarks; onMarks?: () => void
   onPin: () => void; onArchive: () => void; onMove: (step: -1 | 1) => void; onProject: () => void; onDone: (newPane?: string, direction?: 'right' | 'down') => void; onClose: () => void
 }) {
@@ -114,6 +117,7 @@ export function SessionActions({ api, session, tabCount, pane, pinned, archived,
   const [confirming, setConfirming] = useState(startDelete)
   // "Merge into…": choose a session, then confirm, as a drop of the whole session asks first.
   const [merging, setMerging] = useState<Session | 'pick' | null>(null)
+  const [grouping, setGrouping] = useState(false)
   const [keep, setKeep] = useState<Keep | null>(null)  // which project a merge keeps, when both sessions have one
   const [name, setName] = useState(session.name)
   const [pending, setPending] = useState(false)
@@ -138,7 +142,9 @@ export function SessionActions({ api, session, tabCount, pane, pinned, archived,
   return <dialog {...dialog} aria-labelledby="actions-title">
     <div className="sheet-heading"><h2 id="actions-title">{session.name}</h2>{!at && <button type="button" className="icon-button" aria-label="Close" disabled={pending} onClick={onClose}><X /></button>}</div>
     <p className="sheet-sub">{count(words, tabCount)} · {session.dir}</p>
-    {merging === 'pick'
+    {grouping && onGroup
+      ? <GroupPicker groups={groups} value={group} onPick={(picked, created) => { onGroup(picked, created); onClose() }} onBack={() => setGrouping(false)} />
+      : merging === 'pick'
       ? <SessionPicker label={`Merge ${session.name} into`} targets={targets.filter(target => target.id !== session.id)} pending={pending} onPick={target => { setKeep(null); setMerging(target) }} onCancel={() => setMerging(null)} />
       : merging
       ? <div className="confirm-box" role="alertdialog" aria-labelledby="merge-session-title">
@@ -159,11 +165,13 @@ export function SessionActions({ api, session, tabCount, pane, pinned, archived,
           <div className="sheet-buttons"><button type="button" className="secondary" disabled={pending} onClick={() => setRenaming(false)}>Cancel</button><button className="primary" disabled={pending}>{pending ? 'Renaming…' : 'Rename'}</button></div>
         </form>
       : <div className="action-list">
+          {onColor && <ColorRow value={color} disabled={pending} onChange={onColor} />}
           <button disabled={pending} onClick={() => { onPin(); onClose() }}>{pinned ? <PinOff size={18} /> : <Pin size={18} />}{pinned ? 'Unpin' : 'Pin to top'}</button>
           <button disabled={pending} onClick={() => { onArchive(); onClose() }}>{archived ? <ArchiveRestore size={18} /> : <Archive size={18} />}{archived ? 'Restore from archive' : 'Archive'}</button>
           <button disabled={pending} onClick={() => setRenaming(true)}><Pencil size={18} />Rename</button>
           <CopyNames pane={session.panes.find(item => item.id === pane) ?? session.panes[0]} disabled={pending} onCopied={onClose} />
           <button disabled={pending} onClick={onProject}><BookMarked size={18} />Project…</button>
+          {onGroup && <button disabled={pending} onClick={() => setGrouping(true)}><FolderInput size={18} />{group && groups.some(item => item.id === group) ? `Group: ${groups.find(item => item.id === group)!.name}` : 'Add to group…'}</button>}
           <button disabled={pending || !canMoveUp} onClick={() => onMove(-1)}><ArrowUp size={18} />Move up</button>
           <button disabled={pending || !canMoveDown} onClick={() => onMove(1)}><ArrowDown size={18} />Move down</button>
           <button disabled={pending} onClick={() => setMerging('pick')}><Merge size={18} />Merge into…</button>
@@ -178,7 +186,8 @@ export function SessionActions({ api, session, tabCount, pane, pinned, archived,
   </dialog>
 }
 
-export function PaneActions({ api, session, tabCount, archived, pane, panes, at, place, targets, onArchive, onFork, onDone, onClose }: {
+export function PaneActions({ api, session, tabCount, archived, pane, panes, at, place, targets, onArchive, onFork, onDone, onClose, color, onColor }: {
+  color?: string; onColor?: (color: TagColor | null) => void
   api: Api; session: Session | undefined; tabCount: number; archived: boolean; pane: Pane; panes: Pane[]; at?: Anchor; place?: Place; targets: Session[]; onArchive: () => void; onFork?: () => void; onDone: (newPane?: string, direction?: 'right' | 'down') => void; onClose: () => void
 }) {
   const words = useWords()
@@ -224,6 +233,7 @@ export function PaneActions({ api, session, tabCount, archived, pane, panes, at,
           <div className="sheet-buttons"><button type="button" className="secondary" disabled={pending} onClick={() => setMode('menu')}>Cancel</button><button type="button" className="danger" disabled={pending} onClick={() => void run(async () => { await api('session', { pane: pane.id }, undefined, 'DELETE'); return undefined })}>{pending ? 'Closing…' : `Close ${words.pane}`}</button></div>
         </div>
       : <div className="action-list">
+          {onColor && <ColorRow value={color} disabled={pending} onChange={onColor} />}
           <button disabled={pending} onClick={() => setMode('rename')}><Pencil size={18} />Rename {words.pane}</button>
           <CopyNames pane={pane} disabled={pending} onCopied={onClose} />
           <button disabled={pending} onClick={() => setMode('icon')}><Shapes size={18} />Change icon</button>

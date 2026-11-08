@@ -5,6 +5,7 @@ import { shellCommand } from './shellCommand'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useWords } from './words'
 import { ArrowDown, ArrowLeftRight, Blocks, GitFork, Check, ChevronDown, ChevronRight, Clock3, Columns2, CornerDownRight, Gauge, Info, Layers, Maximize2, Menu, MessageSquare, Minimize2, MoreHorizontal, PanelTop, Pencil, Pin, PinOff, RefreshCw, RotateCcw, Rows2, Search, Settings2, Shield, ShieldAlert, SquareTerminal, Target, Terminal, WifiOff, X } from 'lucide-react'
+import { MineBar, MINE_BAR_SPACE, startedLabel } from './MineBar'
 import { AssistantRuntimeProvider, ThreadPrimitive, useExternalStoreRuntime } from '@assistant-ui/react'
 import { ApiError, canFork, creditsLabel, errorText, goalStatusLabel } from './api'
 import type { Api, Approval, AskBridge, Attention, ChatData, ChatMessage, Choice, Footer, Pane, PromptAction } from './api'
@@ -572,6 +573,17 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     setPending(list => list.filter(other => other.id !== item.id))
     setDraft(draft.trim() ? `${draft.trimEnd()}\n${item.text}` : item.text)
   }
+  // A tap on the bar with your messages: put that message just under the bar and flash it.
+  function revealMine(id: string) {
+    const view = viewport.current, element = view?.querySelector<HTMLElement>(`[data-msg-id="${CSS.escape(id)}"]`)
+    if (!view || !element) return
+    sticky.current = false; setJump(true)
+    view.scrollTop += element.getBoundingClientRect().top - view.getBoundingClientRect().top - MINE_BAR_SPACE - 4
+    hold.current = { top: view.scrollTop, until: Date.now() + 1500 }
+    element.classList.add('search-hit')
+    setTimeout(() => element.classList.remove('search-hit'), 2400)
+  }
+  const started = startedLabel(data?.started)
   function loadEarlier() {
     if (!data?.earlier || data.limit !== limit) return
     const view = viewport.current
@@ -760,7 +772,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
       if (!start || !end || !sidePin) return
       const dx = end.clientX - start.x, dy = end.clientY - start.y
       if (Math.abs(dx) >= 50 && Math.abs(dy) < 0.6 * Math.abs(dx)) sidePin.onStep(dx < 0 ? 1 : -1)
-    }} onTouchCancel={() => { headerTouch.current = null }}><button className="icon-button mobile-menu" onClick={onMenu} aria-label={running ? `Open sessions. ${running} agents running or waiting` : 'Open sessions'}><Menu />{running > 0 && <span className="menu-count" aria-hidden="true">{running}</span>}</button>{slot && <kbd className="slot-badge" title={`Focus this slot: Alt+${slot.index + 1}`}>⌥{slot.index + 1}</kbd>}<button type="button" className="chat-title" aria-label="Session details" onClick={() => setInfo(true)}><h1>{chatTitle(pane, session)}</h1><div><AgentIcon agent={activePane.agent} icon={activePane.pane_icon} /><span className="agent-word">{agentNames[activePane.agent]}</span>{activePane.agent === 'codex' && pane.codex_profile && <span className="provider-badge" title={`Runs on codex -p ${pane.codex_profile}`}>{profileName(pane.codex_profile)}</span>}<span className="header-separator agent-word">·</span><State state={state} />{context && <><span className="header-separator">·</span><span className={Number(context) >= 80 ? 'context-high' : ''}>{context}%<span className="context-word"> context</span></span></>}{activePane.worktree && <><span className="header-separator">·</span><WorktreeMark branch={activePane.worktree} /></>}{activePane.dir && !activePane.worktree && <><span className="header-separator">·</span><bdi className="header-folder" dir="ltr" title={activePane.dir} aria-label={`Directory: ${activePane.dir}`}>{activePane.dir.split('/').filter(Boolean).pop() || '/'}</bdi></>}{sidePin?.pinned && <PinMark pin={sidePin} />}</div></button>
+    }} onTouchCancel={() => { headerTouch.current = null }}><button className="icon-button mobile-menu" onClick={onMenu} aria-label={running ? `Open sessions. ${running} agents running or waiting` : 'Open sessions'}><Menu />{running > 0 && <span className="menu-count" aria-hidden="true">{running}</span>}</button>{slot && <kbd className="slot-badge" title={`Focus this slot: Alt+${slot.index + 1}`}>⌥{slot.index + 1}</kbd>}<button type="button" className="chat-title" aria-label="Session details" onClick={() => setInfo(true)}><h1>{chatTitle(pane, session)}</h1><div><AgentIcon agent={activePane.agent} icon={activePane.pane_icon} /><span className="agent-word">{agentNames[activePane.agent]}</span>{activePane.agent === 'codex' && pane.codex_profile && <span className="provider-badge" title={`Runs on codex -p ${pane.codex_profile}`}>{profileName(pane.codex_profile)}</span>}<span className="header-separator agent-word">·</span><State state={state} />{context && <><span className="header-separator">·</span><span className={Number(context) >= 80 ? 'context-high' : ''}>{context}%<span className="context-word"> context</span></span></>}{activePane.worktree && <><span className="header-separator">·</span><WorktreeMark branch={activePane.worktree} /></>}{activePane.dir && !activePane.worktree && <><span className="header-separator">·</span><bdi className="header-folder" dir="ltr" title={activePane.dir} aria-label={`Directory: ${activePane.dir}`}>{activePane.dir.split('/').filter(Boolean).pop() || '/'}</bdi></>}{started && <span className="header-started" title={`Chat started ${started}`} aria-label={`Started ${started}`}><Clock3 size={12} aria-hidden="true" />{started}</span>}{sidePin?.pinned && <PinMark pin={sidePin} />}</div></button>
       <ReviewLinks api={api} pane={pane} panes={allPanes} onOpen={onOpenPane} onChanged={onUpdate} onToast={setToast} />
       {sidePin && activePane.agent !== 'shell' && <button type="button" className="icon-button side-pin-toggle" aria-pressed={sidePin.pinned} aria-label={sidePin.pinned ? 'Unpin from side tab' : 'Pin to side tab'} title={sidePin.pinned ? 'Unpin from side tab' : 'Pin to side tab'} onClick={sidePin.onToggle}>{sidePin.pinned ? <PinOff size={20} /> : <Pin size={20} />}</button>}
       <button type="button" className="icon-button search-toggle" aria-label="Search this chat" title="Search this chat" disabled={!data} onClick={() => setSearching(true)}><Search size={20} /></button>
@@ -783,6 +795,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
       {error && !data && <div className="inline-error" role="alert">{error}<button onClick={() => void refresh()}>Retry</button></div>}
       {loading && <p className="empty-note" role="status">Loading conversation…</p>}
       {pulled > 0 && <p className="pull-note" style={{ height: pulled }} role="status">{pulled >= 70 ? 'Release to load earlier' : 'Pull to load earlier'}</p>}
+      {started && !data?.earlier && activePane.agent !== 'shell' && <p className="chat-started">Chat started {started}</p>}
       {!!data?.earlier && <button className="load-earlier" disabled={data.limit !== limit} onClick={loadEarlier}>{data.limit !== limit ? 'Loading…' : `Load earlier · ${data.earlier}`}</button>}
       {data && activePane.agent !== 'shell' && !messages.length && <div className="chat-empty"><Terminal size={27} strokeWidth={1.4} /><h2>No messages yet</h2><p>{`Send a message to ${pane.label} to get started.`}</p>
         {writable && <div className="starter-actions" aria-label="Ways to start">
@@ -795,7 +808,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
       {bang && <><div className="user-message"><span>{bangItem?.text ?? `!${bang.command}`}</span></div>
         <div className="assistant-message bang-run" role="status"><small><Terminal size={12} />Running{bang.seconds != null ? ` · ${bang.seconds}s` : ''}<button type="button" className="bang-stop" aria-label="Stop this command" disabled={!writable || acting} onClick={() => void sendKey('C-c')}><X size={13} />Stop</button></small><pre>{bang.output ? <Linked text={bang.output} /> : 'No output yet'}</pre></div></>}
       {state === 'Working' && preview && <div className="assistant-message reply-preview"><small>typing</small><div>{preview}</div></div>}
-    </div></div>{jump && <button className="jump-button icon-button" aria-label="Jump to latest message" onClick={() => { sticky.current = true; setJump(false); viewport.current?.scrollTo({ top: viewport.current.scrollHeight }) }}><ArrowDown size={20} /></button>}<SelectionCopy messages={messages} /></ThreadPrimitive.Root>
+    </div></div>{jump && <button className="jump-button icon-button" aria-label="Jump to latest message" onClick={() => { sticky.current = true; setJump(false); viewport.current?.scrollTo({ top: viewport.current.scrollHeight }) }}><ArrowDown size={20} /></button>}<SelectionCopy messages={messages} />{data && activePane.agent !== 'shell' && <MineBar view={viewport} messages={messages} earlier={data.limit === limit ? data.earlier : 0} onReveal={revealMine} onEarlier={loadEarlier} />}</ThreadPrimitive.Root>
     {searching && <SearchSheet api={api} pane={activePane} shell={activePane.agent === 'shell'} onClose={() => setSearching(false)} onPick={(match, maxLimit) => {
       setSearching(false); setTerm(false); target.current = match.id; sticky.current = false; anchor.current = null
       const need = Math.min(maxLimit, Math.max(limit, match.from_end + 10))

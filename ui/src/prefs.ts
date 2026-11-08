@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { request } from './api'
+import type { GroupBy, SessionGroup, SortBy } from './Organize'
 
 // seen: when you last looked at each pane (seconds), so a turn that ended later shows as Done.
 // SYNCED choices are shared by every device through the server (/mobile/api/prefs). The rest stay in this browser:
@@ -30,7 +31,13 @@ export interface Prefs {
   showPaths: boolean
   /** Use tmux words in the UI (pane, split, Ctrl-b keys) instead of Tether's (tab). */
   tmuxWords: boolean
-  sort: 'smart' | 'manual'
+  sort: SortBy
+  // Sidebar colors: tmux session id ("$6") or pane id ("%12") -> color name.
+  colors: Record<string, string>
+  // Your own session groups, in display order, and the group of each session (tmux id -> group id).
+  groups: SessionGroup[]
+  groupOf: Record<string, string>
+  groupBy: GroupBy
   seen: Record<string, number>
   // Tether's own order of the pane tabs, per session id. tmux pane order does not change.
   paneOrder: Record<string, string[]>
@@ -62,7 +69,7 @@ export interface ArchivedTab { thread: string | null; dir: string }
 export interface SidePin { pane: string; note?: string }
 const KEY = 'tmux-chat.prefs.v1'
 const CLEARED_KEEP = 2 * 86400  // Match CLEARED_KEEP in server/prefs_sync.py (seconds).
-const DEFAULTS: Prefs = { autoResume: true, pinned: [], sidePins: [], order: [], collapsed: { past: true }, expanded: {}, selected: null, lastPane: {}, voiceOff: false, voiceSound: true, readAloud: false, handsFree: false, agentBubble: true, liveReplyPreview: true, theme: 'system', scheme: 'claude', textSize: 'default', showPaths: false, tmuxWords: false, sort: 'smart', seen: {}, paneOrder: {}, drafts: {}, archived: {}, archivedTabs: {}, hosts: [], layout: {} }
+const DEFAULTS: Prefs = { autoResume: true, pinned: [], sidePins: [], order: [], collapsed: { past: true }, expanded: {}, selected: null, lastPane: {}, voiceOff: false, voiceSound: true, readAloud: false, handsFree: false, agentBubble: true, liveReplyPreview: true, theme: 'system', scheme: 'claude', textSize: 'default', showPaths: false, tmuxWords: false, sort: 'smart', colors: {}, groups: [], groupOf: {}, groupBy: 'agent', seen: {}, paneOrder: {}, drafts: {}, archived: {}, archivedTabs: {}, hosts: [], layout: {} }
 
 function keptDrafts(drafts: Record<string, Draft>) {
   const now = Date.now() / 1000
@@ -86,7 +93,7 @@ function load(): Prefs {
   return { ...prefs, drafts: keptDrafts(prefs.drafts) }
 }
 
-const SYNCED = ['pinned', 'sidePins', 'order', 'paneOrder', 'sort', 'seen', 'collapsed', 'showPaths', 'tmuxWords', 'liveReplyPreview', 'voiceOff', 'voiceSound', 'theme', 'scheme', 'drafts', 'archived', 'archivedTabs', 'hosts', 'layout', 'autoResume'] as const
+const SYNCED = ['pinned', 'sidePins', 'order', 'paneOrder', 'sort', 'colors', 'groups', 'groupOf', 'groupBy', 'seen', 'collapsed', 'showPaths', 'tmuxWords', 'liveReplyPreview', 'voiceOff', 'voiceSound', 'theme', 'scheme', 'drafts', 'archived', 'archivedTabs', 'hosts', 'layout', 'autoResume'] as const
 type Shared = Partial<Pick<Prefs, typeof SYNCED[number]>>
 interface Stored { prefs: Shared; version: number }
 const PULL_MS = 20000

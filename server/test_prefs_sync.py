@@ -56,6 +56,54 @@ class PrefsSyncTests(unittest.TestCase):
         # The page syncs 'scheme' with every first save; refusing it failed every prefs save from that device.
         self.assertEqual(prefs_sync.save({'scheme': 'claude', 'theme': 'dark'})['prefs'], {'scheme': 'claude', 'theme': 'dark'})
 
+    def test_sidebar_preferences_round_trip(self):
+        values = {'colors': {'$6': 'red', '%12': 'purple'},
+                  'groups': [{'id': 'project-1', 'name': ' Project '}],
+                  'groupOf': {'$6': 'project-1'}, 'groupBy': 'custom', 'sort': 'name'}
+        expected = dict(values, groups=[{'id': 'project-1', 'name': 'Project'}])
+        self.assertEqual(prefs_sync.save(values)['prefs'], expected)
+        self.assertEqual(prefs_sync.load()['prefs'], expected)
+        for group_by in ('custom', 'folder', 'agent', 'none'):
+            self.assertEqual(prefs_sync.save({'groupBy': group_by})['prefs']['groupBy'], group_by)
+        for sort in ('smart', 'manual', 'name', 'recent', 'legacy-unknown'):
+            self.assertEqual(prefs_sync.save({'sort': sort})['prefs']['sort'], sort)
+
+    def test_sidebar_colors_drop_invalid_entries(self):
+        colors = {'$1': 'red', '%2': 'orange', '$3': 'yellow', '%4': 'green', '$5': 'blue', '%6': 'purple',
+                  '$7': 'pink', '$8': [], 'session': 'red', '%x': 'red', '$-1': 'red', '$1\n': 'red', 1: 'red'}
+        self.assertEqual(prefs_sync.save({'colors': colors})['prefs']['colors'],
+                         {'$1': 'red', '%2': 'orange', '$3': 'yellow', '%4': 'green', '$5': 'blue', '%6': 'purple'})
+
+    def test_sidebar_groups_drop_invalid_items_and_keep_twenty(self):
+        bad = [None, [], 'name', {}, {'id': 'Uppercase', 'name': 'No'}, {'id': 'bad_id', 'name': 'No'},
+               {'id': '', 'name': 'No'}, {'id': 'a' * 41, 'name': 'No'}, {'id': 1, 'name': 'No'},
+               {'id': 'valid', 'name': None}, {'id': 'valid', 'name': ' '}, {'id': 'valid', 'name': 'n' * 41}]
+        good = [{'id': str(index).ljust(40, 'a'), 'name': '  ' + 'n' * 40 + '  '} for index in range(21)]
+        self.assertEqual(prefs_sync.save({'groups': bad + good})['prefs']['groups'],
+                         [{'id': item['id'], 'name': 'n' * 40} for item in good[:20]])
+
+    def test_sidebar_group_assignments_drop_bad_ids(self):
+        assignments = {'$6': 'project-1', '%12': 'project-1', 'session': 'project-1', '$7': '',
+                       '$8': 'Uppercase', '$9': 'a' * 41, '$10': [], '$11': 'a' * 40}
+        self.assertEqual(prefs_sync.save({'groupOf': assignments})['prefs']['groupOf'],
+                         {'$6': 'project-1', '$11': 'a' * 40})
+
+    def test_sidebar_keys_use_last_write_wins_and_can_clear(self):
+        prefs_sync.save({'colors': {'$1': 'red'}, 'groups': [{'id': 'one', 'name': 'One'}],
+                         'groupOf': {'$1': 'one'}, 'groupBy': 'folder', 'theme': 'dark'})
+        stored = prefs_sync.save({'colors': {'%2': 'blue'}, 'groups': [], 'groupOf': {}, 'groupBy': 'none'})
+        self.assertEqual(stored['prefs'], {'colors': {'%2': 'blue'}, 'groups': [], 'groupOf': {},
+                                          'groupBy': 'none', 'theme': 'dark'})
+        self.assertEqual(prefs_sync.save({'colors': {}})['prefs']['colors'], {})
+        self.assertEqual(prefs_sync.load()['version'], 3)
+
+    def test_sidebar_bad_types_and_group_mode_do_not_save(self):
+        for change in ({'colors': []}, {'groups': {}}, {'groupOf': []}, {'groupBy': 'unknown'},
+                       {'groupBy': []}, {'sort': None}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                prefs_sync.save(change)
+        self.assertEqual(prefs_sync.load()['version'], 0)
+
     def test_side_pins_round_trip(self):
         pins = [{'pane': '%12', 'note': 'Review the plan'}, {'pane': '%3'}]
         stored = prefs_sync.save({'sidePins': pins})
