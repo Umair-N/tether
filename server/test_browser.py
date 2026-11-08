@@ -82,6 +82,17 @@ def make():
 
 
 class UrlTests(unittest.TestCase):
+    def test_settings_pages_only_with_the_signed_flag(self):
+        self.assertEqual(browser.normalize_url('chrome://settings', settings=True), 'chrome://settings')
+        self.assertEqual(browser.normalize_url('CHROME://settings/passwords', settings=True), 'chrome://settings/passwords')
+        self.assertEqual(browser.normalize_url('chrome://settings/searchEngines?search=x', settings=True), 'chrome://settings/searchEngines?search=x')
+        for text in ('chrome://settings', 'chrome://settings/'):
+            with self.assertRaises(ValueError):
+                browser.normalize_url(text)
+        for text in ('chrome://version', 'chrome://settings-x', 'chrome://settings/../flags', 'chrome://settingsx', 'chrome://flags'):
+            with self.assertRaises(ValueError, msg=text):
+                browser.normalize_url(text, settings=True)
+
     def test_local_shortcuts(self):
         self.assertEqual(browser.normalize_url('8765'), 'http://127.0.0.1:8765')
         self.assertEqual(browser.normalize_url('localhost:8765'), 'http://127.0.0.1:8765')
