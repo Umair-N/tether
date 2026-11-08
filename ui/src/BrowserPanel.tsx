@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { AppWindow, ArrowLeft, ArrowRight, Bot, Check, ChevronDown, Crosshair, FlaskConical, HatGlasses, Keyboard, KeyRound, Monitor, PenLine, PictureInPicture2, Plus, RotateCw, Send, Smartphone, Square, Tablet, Trash2, Type, UserRound, X } from 'lucide-react'
 import { errorText } from './api'
@@ -145,7 +145,10 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
   watchingRef.current = watching
   const owner = usePaneLabel(tab?.owner?.pane)
 
-  const stageRef = useRef<HTMLDivElement>(null)
+  const stageRef = useRef<HTMLDivElement | null>(null)
+  // The stage mounts late in Your Chrome (after the pairing card), so observe the element itself, not the load.
+  const [stageBox, setStageBox] = useState<HTMLDivElement | null>(null)
+  const stageSlot = useCallback((box: HTMLDivElement | null) => { stageRef.current = box; setStageBox(box) }, [])
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const marksRef = useRef<HTMLCanvasElement>(null)
   const keysRef = useRef<HTMLTextAreaElement>(null)
@@ -195,12 +198,12 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
 
   // Stage size: the page is scaled to fit it, and a Desktop tab takes its size.
   useEffect(() => {
-    const box = stageRef.current
+    const box = stageBox
     if (!box) return
     const observer = new ResizeObserver(([entry]) => setStage({ width: Math.floor(entry.contentRect.width), height: Math.floor(entry.contentRect.height) }))
     observer.observe(box)
     return () => observer.disconnect()
-  }, [loaded])
+  }, [stageBox])
   // The screen in use owns the size; never react to another viewer's size.
   function claimSize() {
     const tab = tabRef.current
@@ -609,7 +612,7 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
       <button type="button" className="browser-text-button" aria-pressed={!watching} disabled={handing} onClick={() => void handOver(watching)}>{handing ? '…' : watching ? 'Take over' : 'Give back'}</button>
     </div>}
 
-    <div className={typing ? 'browser-stage typing' : 'browser-stage'} ref={stageRef} tabIndex={-1} aria-label="Page">
+    <div className={typing ? 'browser-stage typing' : 'browser-stage'} ref={stageSlot} tabIndex={-1} aria-label="Page">
       <div className="browser-screen" style={view}>
         <canvas ref={canvasRef} className="browser-canvas" aria-hidden="true" style={view}
           onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={() => { drag.current = null }} onContextMenu={event => event.preventDefault()}
