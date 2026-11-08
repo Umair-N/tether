@@ -51,6 +51,7 @@ import { ExplorerPhone } from './ExplorerPhone'
 import { Share } from './Share'
 import { PhoneTabs } from './PhoneTabs'
 import { ASSISTANT, Live } from './Live'
+import { BrowserFloat } from './BrowserWindow'
 import { BrowserSheet, WATCH_EVENT, browserAsks, setPaneLabels, useAgentBrowser, watchTab } from './AgentBrowser'
 import { AgentBubble } from './AgentBubble'
 import { SidePins } from './SidePins'
@@ -669,6 +670,7 @@ function App() {
       </>}
       panelTools={<PanelTools desk={desk} pane={pane} setPanels={setPanels} onSideChat={() => void sideChat()} />}
       panels={<PanelColumn api={api} desk={desk} pane={pane} setPanels={setPanels} renderChat={id => { const target = panes.find(item => item.id === id); return target ? chatFor(target) : null }} />} /> : chatFor(pane)) : null}
+    {pane && view && wide && <BrowserFloat api={api} pane={pane} onDock={() => { if (!hasPanel(panelCols(desk), 'browser')) togglePanelKind(setPanels, 'browser') }} onClose={() => { if (hasPanel(panelCols(desk), 'browser')) togglePanelKind(setPanels, 'browser') }} />}
     {home && <Home api={api} groups={groups} hasAgents={hasAgents(panes)} loaded={!!data} loading={loading} error={error} onRetry={() => void refresh()} onOpen={openPane} onMarkRead={markRead} onUpdate={() => void refresh()} onNew={() => setNewSession(true)} onMenu={() => setDrawer(true)} />}
     {files && <Explorer api={api} panes={panes} pane={pane} target={filesTarget} onTarget={() => setFilesTarget(null)} onAddToMessage={addToMessage} onTerminalHere={terminalHere} onPin={pinTarget} />}
     {share && <Share wide={wide} onAddToMessage={wide ? addToMessage : pane ? paths => {
