@@ -11,9 +11,9 @@ const VOICE = 'af_heart'  // Same voice as the server Kokoro worker.
 const PROBE = 'Hello, I am Friday. I am ready when you are.'
 const FAST = 0.5          // Seconds of work per second of speech; above this a device is too slow.
 const STORE = 'tether.fridayVoice.v1'
-// A bad result can be one slow moment, so it does not last for good. A retry of the built-in voice can lose one reply; a Kokoro probe loads 326 MB.
+// A silent built-in voice can be one bad moment, so it gets a retry after a day; its lost reply is spoken by the server.
+// Kokoro gets no retry: each probe loads 326 MB, and that crashed a phone tab (2026-11-06).
 const RETRY_SYSTEM = 24 * 60 * 60 * 1000
-const RETRY_KOKORO = 7 * 24 * 60 * 60 * 1000
 
 export type VoiceKind = 'kokoro' | 'system'
 
@@ -176,7 +176,7 @@ async function voicesReady() {
   })
 }
 
-interface Saved { kokoro?: 'fast' | 'slow'; kokoroAt?: number; rtf?: number; system?: 'silent'; systemAt?: number }
+interface Saved { kokoro?: 'fast' | 'slow'; kokoroTry?: number; rtf?: number; system?: 'silent'; systemAt?: number }
 /** True while a saved bad result still counts. A note with no time is old: retry it. */
 const recent = (at: number | undefined, wait: number) => at !== undefined && Date.now() - at < wait
 function saved(): Saved | null {
@@ -189,18 +189,36 @@ function save(value: Saved) { try { localStorage.setItem(STORE, JSON.stringify({
 let model: Promise<KokoroTTS | null> | null = null
 
 async function loadModel(): Promise<KokoroTTS | null> {
-  if (saved()?.kokoro === 'slow' && recent(saved()?.kokoroAt, RETRY_KOKORO)) return null
+  const note = saved()
+  if (note?.kokoro === 'slow') return null
+  // A probe that started and never saved a result most likely crashed the tab: do not try again.
+  if (note?.kokoro !== 'fast' && note?.kokoroTry) return null
   const gpu = (navigator as Navigator & { gpu?: { requestAdapter(): Promise<unknown> } }).gpu
   if (!gpu || !(await gpu.requestAdapter().catch(() => null))) return null
-  const { KokoroTTS } = await import('kokoro-js')
-  const tts = await KokoroTTS.from_pretrained(MODEL, { dtype: 'fp32', device: 'webgpu' })
-  await tts.generate('Hi.', { voice: VOICE })  // Warm up shaders.
-  const start = performance.now()
-  const probe = await tts.generate(PROBE, { voice: VOICE })
-  const rtf = (performance.now() - start) / 1000 / (probe.audio.length / probe.sampling_rate)
-  save({ kokoro: rtf <= FAST ? 'fast' : 'slow', kokoroAt: Date.now(), rtf: Math.round(rtf * 100) / 100 })
-  console.info('Friday Kokoro probe', { rtf })
-  return rtf <= FAST ? tts : null
+  save({ kokoroTry: Date.now() })
+  let tts: KokoroTTS | null = null
+  try {
+    const { KokoroTTS } = await import('kokoro-js')
+    tts = await KokoroTTS.from_pretrained(MODEL, { dtype: 'fp32', device: 'webgpu' })
+    await tts.generate('Hi.', { voice: VOICE })  // Warm up shaders.
+    const start = performance.now()
+    const probe = await tts.generate(PROBE, { voice: VOICE })
+    const rtf = (performance.now() - start) / 1000 / (probe.audio.length / probe.sampling_rate)
+    save({ kokoro: rtf <= FAST ? 'fast' : 'slow', kokoroTry: undefined, rtf: Math.round(rtf * 100) / 100 })
+    console.info('Friday Kokoro probe', { rtf })
+    if (rtf <= FAST) return tts
+  } catch (failure) {
+    save({ kokoroTry: undefined })  // A load error is not a crash: a later call may try again.
+    free(tts)
+    throw failure
+  }
+  free(tts)  // Too slow: give its GPU memory back now.
+  return null
+}
+
+/** Release a model's GPU and WASM memory. */
+function free(tts: KokoroTTS | null) {
+  void (tts as unknown as { model?: { dispose?: () => Promise<unknown> } } | null)?.model?.dispose?.().catch(() => {})
 }
 
 async function loadKokoro(): Promise<KokoroEngine | null> {

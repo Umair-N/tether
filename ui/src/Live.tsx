@@ -15,6 +15,8 @@ import './Live.css'
 // and the reply comes back as one or two spoken sentences. Colors come from the Settings color scheme.
 
 export const ASSISTANT = 'Friday'
+/** The tmux session that holds the chats Friday creates, one tab each. */
+const FRIDAY_SESSION = 'Friday chats'
 
 // Like a phone call: the mic stays open and each pause sends the phrase. 'paused' is the person's own pause button.
 // 'thinking' is the Friday agent's gap between the end of speech and its voice.
@@ -268,20 +270,28 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
     panel(verb: string, kind: string) {
       void flow.current.say(ASSISTANT, flow.current.toggle(verb === 'open' || verb === 'show', kind).words)
     },
-    /** A new tmux session with an agent in it; the first prompt goes in when the agent is up. */
+    /** A new tab in the "Friday chats" session with an agent in it; the first prompt goes in when the agent is up. */
     async create(wanted: string, kind: 'claude' | 'codex', prompt: string) {
       const { api } = live.current
       const clean = wanted.replace(/[^A-Za-z0-9 _-]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40).replace(/[ ]+$/, '') || `${kind} ${new Date().toTimeString().slice(0, 5).replace(':', '')}`
       if (!SESSION_NAME.test(clean)) throw new Error('Use letters, numbers, spaces or hyphens for the chat name.')
-      const made = await api<{ session: string; name: string }>('tmux-sessions', { name: clean })
-      let pane: Pane | undefined
-      for (let tries = 0; tries < 20 && !pane; tries++) {
-        pane = (await api<SessionsData>('sessions')).sessions.find(item => item.label === made.name)
-        if (!pane) await wait(300)
+      // Friday's chats live together in one tmux session, one tab each. Other sessions stay as they are.
+      const home = (await api<SessionsData>('sessions')).sessions.find(item => item.tmux_session === FRIDAY_SESSION)
+      let id: string
+      if (home) id = (await api<{ pane: string }>('split', { session: home.id, direction: 'right' })).pane
+      else {
+        const made = await api<{ session: string; name: string }>('tmux-sessions', { name: FRIDAY_SESSION })
+        let first: Pane | undefined
+        for (let tries = 0; tries < 20 && !first; tries++) {
+          first = (await api<SessionsData>('sessions')).sessions.find(item => item.label === made.name)
+          if (!first) await wait(300)
+        }
+        if (!first) throw new Error(`The session ${made.name} started, but its pane is not visible yet.`)
+        id = first.id
       }
-      if (!pane) throw new Error(`The session ${made.name} started, but its pane is not visible yet.`)
-      await api('start', { session: pane.id, thread: null, agent: kind })
-      const id = pane.id
+      await api('pane-name', { pane: id, name: clean })
+      await api('start', { session: id, thread: null, agent: kind })
+      const made = { name: clean }
       if (prompt.trim()) void (async () => {
         // The agent takes a few seconds to start; type the prompt once the pane shows it.
         for (let tries = 0; tries < 40; tries++) {
