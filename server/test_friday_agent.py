@@ -1055,6 +1055,24 @@ class FridayAPITests(unittest.IsolatedAsyncioTestCase):
         recognizer.create_stream.return_value.result.text = '  '
         self.assertIsInstance([f async for f in service.run_stt(b'\0\0')][0], self.rt.EmptySTTSegmentFrame)
 
+    async def test_parakeet_normalizes_quiet_pcm_without_changing_silence(self):
+        import numpy as np
+
+        recognizer = Mock()
+        recognizer.create_stream.return_value.result.text = 'Hey.'
+        service = self.rt.ParakeetSTT(recognizer, SimpleNamespace(stt_seconds=0))
+        quiet = np.array([16, -32, 0], dtype='<i2')
+        self.assertEqual(service.decode(quiet.tobytes()), 'Hey.')
+        rate, samples = recognizer.create_stream.return_value.accept_waveform.call_args.args
+        self.assertEqual(rate, 16000)
+        np.testing.assert_allclose(samples, [.1, -.2, 0], atol=1e-7)
+        self.assertEqual(samples.dtype, np.float32)
+        for audio in (b'', b'\0\0' * 1600):
+            with self.subTest(length=len(audio)):
+                service.decode(audio)
+                samples = recognizer.create_stream.return_value.accept_waveform.call_args.args[1]
+                np.testing.assert_array_equal(samples, np.zeros(len(audio) // 2, dtype=np.float32))
+
     async def segment_pipeline(self, text, smart=True):
         from pipecat.audio.turn.base_turn_analyzer import EndOfTurnState, BaseTurnParams
         from pipecat.frames.frames import UserStoppedSpeakingFrame, InputAudioRawFrame
