@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import sys
 import tempfile
 import threading
@@ -92,6 +93,12 @@ def _digest(text):
     return hashlib.sha256((text or '').encode()).hexdigest()
 
 
+def _bounded_reply(reply, reviewer):
+    if len(reply) <= 12000:
+        return reply
+    return reply[:12000] + f"\n\n[Cut at 12000 characters. Full reply: {reviewer.get('transcript', '')}]"
+
+
 def _lost(link, reason):
     link['lost_ticks'] = link.get('lost_ticks', 0) + 1
     link['lost_reason'] = reason
@@ -121,7 +128,7 @@ def _send_worker(link, worker, text, state, send, clear, feedback_sent):
     return True
 
 
-def _step(link, entries, status, send, last_reply, awaiting, clear, feedback_sent, work_mark):
+def _step(link, entries, status, send, last_reply, awaiting, clear, feedback_sent, work_mark, review_reply):
     worker = entries.get(link['worker'])
     reviewer = entries.get(link['reviewer'])
     if link['reviewer_thread'] is None:
@@ -167,21 +174,24 @@ def _step(link, entries, status, send, last_reply, awaiting, clear, feedback_sen
             link.pop('paused', None)
     if link.get('awaiting', False):
         reviewer_state = status(reviewer)['state']
+        anchored = review_reply is not None and link.get('request_id')
+        reply = review_reply(reviewer, link['request_id']) if anchored and reviewer_state == 'Idle' else None
         if reviewer_state == 'Working':
             link['reviewer_seen_working'] = True
-        elif reviewer_state == 'Idle' and link.pop('reviewer_busy_send', False):
+        elif reviewer_state == 'Idle' and link.pop('reviewer_busy_send', False) and not anchored:
             return link
-        elif reviewer_state == 'Idle' and not link.get('reviewer_seen_working', False) \
-                and _digest(last_reply(reviewer)) == link.get('reviewer_before'):
+        elif reviewer_state == 'Idle' and (
+                anchored and not reply or not anchored and not link.get('reviewer_seen_working', False)
+                and _digest(last_reply(reviewer)) == link.get('reviewer_before')):
             # No turn seen yet. A turn shorter than one tick still changes the last reply; none for 30 ticks: give up.
             link['idle_ticks'] = link.get('idle_ticks', 0) + 1
             if link['idle_ticks'] >= 30:
                 link['awaiting'] = False
         elif reviewer_state == 'Idle':
-            reply = last_reply(reviewer).strip()
+            reply = (reply if anchored else last_reply(reviewer)).strip()
             if reply.upper().startswith('APPROVED'):
                 text = (f"[Tether review] Approved by the reviewer tab ({link['reviewer']}):\n\n"
-                        f'{reply[:3000]}\n\nThe review is complete. Do the next step your instructions give '
+                        f'{_bounded_reply(reply, reviewer)}\n\nThe review is complete. Do the next step your instructions give '
                         'for an approved review, then stop.')
                 if _send_worker(link, worker, text, state, send, clear, feedback_sent):
                     link.pop('rounds', None)
@@ -195,13 +205,13 @@ def _step(link, entries, status, send, last_reply, awaiting, clear, feedback_sen
                 link['awaiting'] = False
             else:
                 text = (f"[Tether review] Feedback from the reviewer tab ({link['reviewer']}):\n\n"
-                        f'{reply[:3000]}\n\nFix what it raises, then stop and wait.')
+                        f'{_bounded_reply(reply, reviewer)}\n\nFix what it raises, then stop and wait.')
                 if _send_worker(link, worker, text, state, send, clear, feedback_sent):
                     key = 'empty_rounds' if link.pop('empty_turn', False) else 'rounds'
                     link[key] = link.get(key, 0) + 1
                     link['awaiting'] = False
         if not link['awaiting']:
-            for key in ('wait_ticks', 'idle_ticks', 'reviewer_before', 'reviewer_seen_working', 'retries'):
+            for key in ('wait_ticks', 'idle_ticks', 'reviewer_before', 'reviewer_seen_working', 'retries', 'request_id'):
                 link.pop(key, None)
         return link
     if state == 'Working':
@@ -227,9 +237,11 @@ def _step(link, entries, status, send, last_reply, awaiting, clear, feedback_sen
         delivered = False
         if reviewer.get('writable'):
             agent = 'Claude' if link['agent'] == 'claude' else 'Codex'
+            request_id = secrets.token_hex(4)
             text = (f"[Tether review] The {agent} tab “{link['name']}” ({link['worker']}) finished a turn. "
                     'Review its work: check the changes and the claims, then list what is wrong or missing. '
                     'Start your reply with APPROVED if nothing is. Tether sends your reply to that tab. '
+                    f'Review id: {request_id}. '
                     f"Its last reply:\n\n{last_reply(worker)[:1500]}\n\nTranscript: {worker.get('transcript', '')}")
             before = _digest(last_reply(reviewer))
             mark = work_mark(worker) if work_mark is not None else None
@@ -240,6 +252,7 @@ def _step(link, entries, status, send, last_reply, awaiting, clear, feedback_sen
             except (DraftError, RuntimeError):
                 pass
         if delivered:
+            link['request_id'] = request_id
             if mark is not None and mark == link.get('work_mark'):
                 link['empty_turn'] = True
             else:
@@ -254,7 +267,7 @@ def _step(link, entries, status, send, last_reply, awaiting, clear, feedback_sen
     return link
 
 
-def observe(entries, status, send, last_reply, *, alert=None, work_mark=None):
+def observe(entries, status, send, last_reply, *, alert=None, work_mark=None, review_reply=None):
     """Callbacks run outside the store lock: send takes SEND_LOCK, while add already holds it."""
     try:
         if not any(isinstance(entry.get('id'), str) and entry['id'].startswith('%') for entry in entries):
@@ -280,7 +293,8 @@ def observe(entries, status, send, last_reply, *, alert=None, work_mark=None):
         for link in original:
             try:
                 copy = dict(link)
-                updated = _step(copy, by_pane, status, send, last_reply, awaiting, clear, feedback_sent, work_mark)
+                updated = _step(copy, by_pane, status, send, last_reply, awaiting, clear, feedback_sent,
+                                work_mark, review_reply)
             except Exception:  # a malformed link or one bad pane must not stop other reviews
                 continue
             if updated != link:

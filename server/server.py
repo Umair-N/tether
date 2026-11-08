@@ -153,7 +153,7 @@ def monitor_notices():
             except Exception:  # one odd pane must never stop the monitor for everyone
                 continue
         review_links.observe(entries, shared_status, review_send, last_reply,
-                             alert=review_alert, work_mark=review_work_mark)
+                             alert=review_alert, work_mark=review_work_mark, review_reply=review_reply)
         time.sleep(2)
 
 
@@ -803,6 +803,28 @@ def last_reply(entry):
     except Exception:
         pass
     return ''
+
+
+def review_reply(entry, request_id):
+    """The last assistant text in the turn anchored by this review request."""
+    try:
+        messages = snapshot(entry)['messages']
+        marker = f'Review id: {request_id}.'
+        for index in range(len(messages) - 1, -1, -1):
+            message = messages[index]
+            text = message.get('text')
+            if message.get('role') == 'user' and isinstance(text, str) and marker in text:
+                reply = ''
+                for message in messages[index + 1:]:
+                    if message.get('role') == 'user':
+                        break
+                    text = message.get('text')
+                    if message.get('role') == 'assistant' and isinstance(text, str) and text.strip():
+                        reply = text
+                return reply
+    except Exception:
+        pass
+    return None
 
 
 def submit(message, config=None):
