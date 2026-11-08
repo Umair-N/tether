@@ -518,6 +518,7 @@ class MacAccess(signed.Access):
                     grant.timer = threading.Timer(max(0, grant.row['expires'] - self.clock()), self.end, args=(ident, 'expired'))
                     grant.timer.daemon = True
                     grant.timer.start()
+                    self._watch(grant, slot['identity'])
                     self._answer(slot, {'ok': True, 'browser': 'chrome', 'cdp': self.url(grant), 'tab': target,
                                         'expires': grant.row['expires']})
             except Exception:
@@ -542,6 +543,8 @@ class MacAccess(signed.Access):
             if grant:
                 self._retire(grant, reason)
                 grant.timer.cancel()
+                if grant.watch:
+                    grant.watch.cancel()
             clients = [client for client in self.clients if client.grant is grant]
             self.browser._bump()
         for client in clients:

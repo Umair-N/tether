@@ -65,7 +65,22 @@ END_MESSAGES = {
     'stream_backpressure': 'Too many commands at once.',
     'attach_failed': 'Chrome did not allow the debugger.',
     'browser_stopped': 'The browser stopped.',
+    'conversation_changed': "The agent's chat changed or ended.",
 }
+IDENTITY_SECONDS = 3  # How often a grant checks that its pane still runs the chat that asked.
+IDENTITY_MISSES = 2  # Discovery can miss a pane once; end only after this many checks in a row disagree.
+
+
+def same_chat(old, new):
+    """True while the pane still runs the chat that asked. Unknown now (None) counts as the same.
+    The process must match. The chat id must match only when both are known (a new chat id appears after /clear)."""
+    if new is None:
+        return True
+    if len(old) != 4 or len(new) != 4:
+        return old == new
+    if old[:3] != new[:3]:
+        return False
+    return old[3] is None or new[3] is None or old[3] == new[3]
 
 
 def end_message(reason):
@@ -128,6 +143,9 @@ class Grant:
         self.active = True
         self.end_reason = None
         self.timer = None
+        self.watch = None
+        self.identity = None
+        self.misses = 0
         self.emulation = {}  # Shared across reconnects and concurrent sockets; used by the p12 handoff.
 
 
@@ -135,11 +153,15 @@ class Access:
     browser_id = 'server'
     page_allowed = PAGE_ALLOWED
     def __init__(self, the_browser=None, notifier=lambda *a, **k: None, agent_finder=lambda pane: 'agent',
-                 clock=time.time, request_seconds=REQUEST_SECONDS):
+                 clock=time.time, request_seconds=REQUEST_SECONDS, identity_finder=lambda pane: None,
+                 identity_seconds=IDENTITY_SECONDS):
         self.browser = the_browser or browser.SIGNED_BROWSER
         if not self.browser.signed:
             raise ValueError('Signed access requires the signed-in browser.')
         self.notifier, self.agent_finder, self.clock = notifier, agent_finder, clock
+        # identity_finder(pane): the chat that runs in the pane now (agent, thread, process), or None when unknown.
+        # A grant belongs to the chat that asked: it ends when the pane's chat changes (/clear, a new agent) or ends.
+        self.identity_finder, self.identity_seconds = identity_finder, identity_seconds
         self.request_seconds = request_seconds
         self.lock = threading.RLock()
         self.request_lock, self.request_peers = self.lock, [self]
@@ -201,7 +223,7 @@ class Access:
         row = dict(id=secrets.token_urlsafe(16), pane=pane, agent=self.agent_finder(pane), reason=reason.strip(),
                    minutes=duration, url=url, created=self.clock(), browser=self.browser_id)
         slot = {'row': row, 'event': threading.Event(), 'result': {'ok': False, 'reason': 'denied'},
-                'deadline': time.monotonic() + self.request_seconds}
+                'deadline': time.monotonic() + self.request_seconds, 'identity': self._identity(pane)}
         with self.request_lock, self.lock:
             if self.stopped:
                 return slot['result']
@@ -225,6 +247,39 @@ class Access:
                 if not slot['event'].is_set():
                     self._answer(slot, {'ok': False, 'reason': 'timeout'})
         return slot['result']
+
+    def _identity(self, pane):
+        try:
+            return self.identity_finder(pane)
+        except Exception:
+            return None
+
+    def _watch(self, grant, identity):
+        # Call under Access.lock when the grant starts. No identity at ask time: nothing to compare, so no watch.
+        grant.identity = identity
+        if identity is None:
+            return
+        grant.watch = threading.Timer(self.identity_seconds, self._check, args=(grant,))
+        grant.watch.daemon = True
+        grant.watch.start()
+
+    def _check(self, grant):
+        with self.lock:
+            if self.grants.get(grant.row['id']) is not grant:
+                return
+        now = self._identity(grant.row['pane'])
+        if same_chat(grant.identity, now):
+            grant.misses = 0
+            if len(grant.identity) == 4 and grant.identity[3] is None and now and len(now) == 4 and now[3]:
+                grant.identity = now  # The chat id is known now: a later /clear changes it.
+        else:
+            grant.misses += 1
+            if grant.misses >= IDENTITY_MISSES:
+                self.end(grant.row['id'], 'conversation_changed')
+                return
+        with self.lock:
+            if self.grants.get(grant.row['id']) is grant:
+                self._watch(grant, grant.identity)
 
     def _answer(self, slot, result):
         self.pending.pop(slot['row']['id'], None)
@@ -277,6 +332,7 @@ class Access:
                     grant.timer = threading.Timer(max(0, grant.row['expires'] - self.clock()), self.end, args=(ident, 'expired'))
                     grant.timer.daemon = True
                     grant.timer.start()
+                    self._watch(grant, slot['identity'])
                     grant.row['browser'] = self.browser_id
                     self._answer(slot, {'ok': True, 'browser': self.browser_id, 'cdp': self.url(grant),
                                         'tab': row['id'], 'expires': grant.row['expires']})
@@ -303,6 +359,8 @@ class Access:
             if grant:
                 self._retire(grant, reason)
                 grant.timer.cancel()
+                if grant.watch:
+                    grant.watch.cancel()
             clients = [client for client in self.clients if client.grant is grant]
             self.browser._bump()
         for client in clients:
@@ -324,6 +382,8 @@ class Access:
             for grant in grants:
                 self._retire(grant, 'browser_stopped')
                 grant.timer.cancel()
+                if grant.watch:
+                    grant.watch.cancel()
             for slot in list(self.pending.values()):
                 self._answer(slot, {'ok': False, 'reason': 'denied'})
             clients = list(self.clients)
