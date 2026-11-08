@@ -1,6 +1,8 @@
 """HTTP routes for the browser panel (/mobile/api/browser/...). server.py checks sign-in, Origin and the
 X-Codex-Mobile header before it calls these."""
 import json
+import re
+import threading
 import time
 from urllib.parse import parse_qs, urlsplit
 
@@ -15,7 +17,55 @@ KEEP_WARM = 0.08  # seconds between comment lines while warm
 WARM_AFTER_INPUT = 15  # seconds to keep warm after user input
 STREAM_LIFETIME = 600
 KEEPALIVE = 15
-POST_NAMES = {'new', 'close', 'navigate', 'history', 'input', 'device', 'agents', 'agents/setup', 'ask/dismiss',
+# Flow control. Without it the server sent up to 30 frames a second (130-400 KB of base64 each) whatever the link
+# carried, so frames queued in tailscale serve and HTTP/2 buffers and the picture fell seconds behind input. A panel
+# that opens the stream with `sid` confirms each frame (POST ack); a frame waits until fewer than ACK_WINDOW are
+# unconfirmed, at most ACK_WAIT (a lost confirmation slows the stream, it never stops it).
+ACK_WINDOW = 2
+ACK_WAIT = 1.0
+SID = re.compile(r'[A-Za-z0-9_-]{8,64}')
+
+
+class Flow:
+    def __init__(self):
+        self.sent, self.acked = [], 0
+        self.changed = threading.Condition()
+
+    def ack(self, seq):
+        with self.changed:
+            if seq > self.acked:
+                self.acked = seq
+                self.sent = [value for value in self.sent if value > seq]
+                self.changed.notify_all()
+
+    def wait_room(self, timeout):
+        deadline = time.monotonic() + timeout
+        with self.changed:
+            while len(self.sent) >= ACK_WINDOW:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    self.sent.pop(0)  # treat the oldest as received
+                    return
+                self.changed.wait(left)
+
+    def sending(self, seq):
+        with self.changed:
+            self.sent.append(seq)
+
+
+FLOWS = {}
+FLOWS_LOCK = threading.Lock()
+
+
+def ack(sid, seq):
+    if not isinstance(sid, str) or type(seq) is not int:
+        raise ValueError('Invalid acknowledgement.')
+    with FLOWS_LOCK:
+        flow = FLOWS.get(sid)
+    if flow:
+        flow.ack(seq)
+    return {'ok': True}
+POST_NAMES = {'ack', 'new', 'close', 'navigate', 'history', 'input', 'device', 'agents', 'agents/setup', 'ask/dismiss',
               'signed/allow', 'signed/deny', 'signed/end', 'signed/dismiss'}
 
 
@@ -49,6 +99,8 @@ def get(handler, the_browser=None, the_proxy=None, the_setup=None, signed_browse
             handler.respond(200, _tag(state, browser_id))
         elif name == 'stream':
             css = {'css_size': (_int(query, 'cssw', 0), _int(query, 'cssh', 0))} if 'cssw' in query or 'cssh' in query else {}
+            if 'sid' in query:
+                css['sid'] = query['sid'][0]
             stream(handler, the_browser, query.get('tab', [''])[0], _int(query, 'w', 1280), _int(query, 'h', 800), browser_id, **css)
         else:
             handler.respond(404, _tag({'error': 'Not found'}, browser_id))
@@ -83,6 +135,9 @@ def post(handler, the_browser=None, the_proxy=None, the_setup=None, signed_brows
             return
         _user_only(browser_id, name)
         tab = body.get('tab')
+        if name == 'ack':
+            handler.respond(200, ack(body.get('sid'), body.get('seq')))
+            return
         if name.startswith('signed/'):
             proxy = the_proxy or browser_cdp.PROXY
             access = proxy.signed_access if proxy else _signed_access(the_browser, the_proxy)
@@ -200,8 +255,11 @@ def _agent_state(proxy, the_setup=None, state=None):
     return result
 
 
-def stream(handler, the_browser, target, width, height, browser_id='test', css_size=None):
+def stream(handler, the_browser, target, width, height, browser_id='test', css_size=None, sid=None):
     """Server-sent events for one tab: `frame` (JPEG), `tabs` (tab list and back/forward state), `closed`."""
+    if sid is not None and not SID.fullmatch(sid):
+        raise ValueError('Invalid stream id.')
+    flow = None
     tab = the_browser.watch(target, width, height, css_size) if css_size is not None else the_browser.watch(target, width, height)
     try:
         handler.send_response(200)
@@ -213,6 +271,10 @@ def stream(handler, the_browser, target, width, height, browser_id='test', css_s
         handler.end_headers()
         handler.close_connection = True
         handler.wfile.write(b'retry: 1500\n\n')
+        if sid is not None:
+            flow = Flow()
+            with FLOWS_LOCK:
+                FLOWS[sid] = flow
         started = wrote = time.monotonic()
         seen, version = 0, None
         first = True
@@ -221,6 +283,8 @@ def stream(handler, the_browser, target, width, height, browser_id='test', css_s
         while time.monotonic() - started < STREAM_LIFETIME:
             # Pace before taking the slot, so a slow write or a sleep never leaves an old frame queued for output.
             time.sleep(max(0.0, next_frame - time.monotonic()))
+            if flow:
+                flow.wait_room(ACK_WAIT)
             if time.monotonic() - checked >= 1.0:
                 checked = time.monotonic()
                 the_browser.refresh(tab)
@@ -244,6 +308,8 @@ def stream(handler, the_browser, target, width, height, browser_id='test', css_s
                 seen = frame[0]  # a frame at the wrong size would map clicks wrongly; the next one fits
             elif frame is not None:
                 next_frame = time.monotonic() + FRAME_INTERVAL
+                if flow:
+                    flow.sending(frame[0])
                 handler.wfile.write(browser.frame_event(frame, browser_id))
                 handler.wfile.flush()
                 seen, wrote = frame[0], time.monotonic()
@@ -259,6 +325,10 @@ def stream(handler, the_browser, target, width, height, browser_id='test', css_s
     except (BrokenPipeError, ConnectionResetError, TimeoutError):
         return
     finally:
+        if flow:
+            with FLOWS_LOCK:
+                if FLOWS.get(sid) is flow:
+                    del FLOWS[sid]
         the_browser.unwatch(tab, (width, height), css_size)
 
 

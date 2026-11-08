@@ -263,8 +263,16 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
     if (!active || !visible || !tabId || noting || !stage.width) return
     const gen = ++streamGen.current
     let again = 0
-    const source = new EventSource(`/mobile/api/browser/stream?tab=${encodeURIComponent(tabId)}&w=${streamWidth}&h=${streamHeight}&cssw=${Math.max(1, stage.width)}&cssh=${Math.max(1, stage.height)}${which === 'test' ? '' : `&browser=${which}`}`)
-    source.addEventListener('frame', event => { if (gen !== streamGen.current) return; pending.current = JSON.parse((event as MessageEvent).data); setLive(true); if (!decoding.current) void paint() })
+    // The server sends the next frame only after this panel confirms the previous ones, so frames never queue
+    // in the network and the picture stays close to the input.
+    const sid = Array.from(crypto.getRandomValues(new Uint8Array(12)), byte => byte.toString(16).padStart(2, '0')).join('')
+    const source = new EventSource(`/mobile/api/browser/stream?tab=${encodeURIComponent(tabId)}&w=${streamWidth}&h=${streamHeight}&cssw=${Math.max(1, stage.width)}&cssh=${Math.max(1, stage.height)}&sid=${sid}${which === 'test' ? '' : `&browser=${which}`}`)
+    source.addEventListener('frame', event => {
+      if (gen !== streamGen.current) return
+      const message = JSON.parse((event as MessageEvent).data)
+      if (typeof message.seq === 'number') api('browser/ack', { sid, seq: message.seq }, undefined, undefined, 5000).catch(() => {})
+      pending.current = message; setLive(true); if (!decoding.current) void paint()
+    })
     source.addEventListener('tabs', event => apply(JSON.parse((event as MessageEvent).data)))
     source.addEventListener('closed', () => void load())
     source.onopen = () => setLive(true)

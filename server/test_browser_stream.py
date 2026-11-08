@@ -1,6 +1,8 @@
 """Capture freshness and stream pacing. All CDP traffic uses FakeChrome."""
 import io
 import json
+import threading
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -286,3 +288,75 @@ class StreamTests(unittest.TestCase):
         self.assertTrue(all(b[0] - a[0] >= 1 / 30 - 1e-9 for a, b in zip(emitted, emitted[1:])))
         fake.ack.assert_not_called()  # CDP receipt owns acknowledgments
         fake.unwatch.assert_called_once_with(tab, (2560, 1600), None)
+
+
+class FlowTests(unittest.TestCase):
+    """A panel that sends `sid` gets at most ACK_WINDOW unconfirmed frames, so frames cannot queue in the network."""
+
+    def start(self, sid='abcdef123456'):
+        tab = SimpleNamespace(target='T1', last_input=0.0)
+        counter = [0]
+        def newest(*args):
+            time.sleep(0.005)
+            counter[0] += 1
+            return (counter[0], {}, 'x', 7)
+        fake = Mock(tabs={'T1': tab}, version=0, clock=time.monotonic)
+        fake.watch.return_value = tab
+        fake.first_frame.side_effect = newest
+        fake.wait_frame.side_effect = newest
+        fake.state.return_value = {}
+        fake.nav_state.return_value = {}
+        fake.heal.return_value = True
+        sent, stop = [], threading.Event()
+        class Sink(io.BytesIO):
+            def write(self, data):
+                if stop.is_set():
+                    raise BrokenPipeError()
+                if data.startswith(b'event: frame'):
+                    sent.append(json.loads(data.split(b'data: ')[1])['seq'])
+                return super().write(data)
+        thread = threading.Thread(target=browser_api.stream, args=(Mock(wfile=Sink()), fake, 'T1', 800, 600),
+                                  kwargs={'sid': sid}, daemon=True)
+        thread.start()
+        self.addCleanup(lambda: (stop.set(), thread.join(3)))
+        return sent
+
+    def test_unconfirmed_frames_wait_and_ack_releases_the_next(self):
+        with patch.object(browser_api, 'ACK_WAIT', 5):
+            sent = self.start()
+            time.sleep(0.4)
+            self.assertEqual(len(sent), browser_api.ACK_WINDOW, 'Only the window may be in flight without acks.')
+            browser_api.ack('abcdef123456', sent[0])
+            time.sleep(0.2)
+            self.assertEqual(len(sent), browser_api.ACK_WINDOW + 1)
+            browser_api.ack('abcdef123456', sent[-1])
+            time.sleep(0.2)
+            self.assertEqual(len(sent), browser_api.ACK_WINDOW + 3)
+
+    def test_lost_acks_slow_the_stream_but_never_stop_it(self):
+        with patch.object(browser_api, 'ACK_WAIT', 0.15):
+            sent = self.start()
+            time.sleep(0.7)
+            self.assertGreaterEqual(len(sent), browser_api.ACK_WINDOW + 2)
+            self.assertLess(len(sent), 10)
+
+    def test_ack_route_and_validation(self):
+        from test_browser import FakeHandler
+        handler = FakeHandler(browser_api.PREFIX + 'ack', {'sid': 'unknown-stream', 'seq': 3})
+        browser_api.post(handler, Mock())
+        self.assertEqual(handler.replies[0], (200, {'ok': True}))
+        handler = FakeHandler(browser_api.PREFIX + 'ack', {'sid': 'unknown-stream', 'seq': '3'})
+        browser_api.post(handler, Mock())
+        self.assertEqual(handler.replies[0][0], 400)
+        handler = FakeHandler(browser_api.PREFIX + 'stream?tab=T1&w=800&h=600&sid=bad!')
+        fake = Mock()
+        browser_api.get(handler, fake)
+        self.assertEqual(handler.replies[0][0], 400)
+        fake.watch.assert_not_called()
+
+    def test_stream_end_drops_its_flow(self):
+        sent = self.start('flow-to-drop')
+        time.sleep(0.1)
+        self.assertIn('flow-to-drop', browser_api.FLOWS)
+        self.doCleanups()
+        self.assertNotIn('flow-to-drop', browser_api.FLOWS)
