@@ -72,6 +72,19 @@ def folders(entries):
                                 if name and len(members) > 1]}, entries)
 
 
+def parse_output(output):
+    if not isinstance(output, str):
+        raise ValueError('Invalid model output.')
+    output = output.strip()
+    if output.startswith('```json'):
+        output = output[len('```json'):].lstrip()
+    start = output.find('{')
+    if start == -1:
+        raise ValueError('No JSON object.')
+    value, _ = json.JSONDecoder().raw_decode(output, start)
+    return value
+
+
 def suggest(body):
     entries = sessions(body)
     if not entries:
@@ -86,7 +99,7 @@ def suggest(body):
                                          headers={'Content-Type': 'application/json'}, method='POST')
         with urllib.request.urlopen(request, timeout=25) as response:
             output = json.loads(response.read())['choices'][0]['message']['content']
-        groups = validate(json.loads(output), entries)
+        groups = validate(parse_output(output), entries)
         return {'groups': groups, 'source': 'llm'}
     except (OSError, ValueError, KeyError, IndexError, TypeError, RecursionError):
         return {'groups': folders(entries), 'source': 'folder'}
