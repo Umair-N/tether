@@ -233,16 +233,60 @@ class ReviewLinksTests(unittest.TestCase):
 
     def test_new_review_delivery_clears_stalled_only_after_successful_send(self):
         self.stall_review()
+        link, = self.links()
+        link['send_reply'] = link['stalled_reply']
+        self.file.write_text(json.dumps([link]))
         self.send.side_effect = DraftError('Keep the draft.')
         self.request_review()
         self.assertIn('stalled', self.links()[0])
         self.assertIn('stalled_reply', self.links()[0])
+        self.assertIn('send_reply', self.links()[0])
         self.assertFalse(self.links()[0]['awaiting'])
         self.send.side_effect = None
         self.observe()
         self.assertNotIn('stalled', self.links()[0])
         self.assertNotIn('stalled_reply', self.links()[0])
+        self.assertNotIn('send_reply', self.links()[0])
         self.assertTrue(self.links()[0]['awaiting'])
+
+    def test_resume_stalled_latest_re_stalls_if_reply_changes_before_forwarding(self):
+        for working in (False, True):
+            with self.subTest(working=working):
+                self.add()
+                self.reply.return_value = 'The reply Mak saw.'
+                with patch.object(review_links.secrets, 'token_hex', return_value='a1b2c3d4'):
+                    request_id = self.stall_review()
+                review_links.resume_stalled('%13', '%12', request_id, 'latest',
+                                            last_reply=self.reply, reviewer_entry=self.reviewer)
+                self.alert.reset_mock()
+                if working:
+                    self.observe(**{'%12': 'Working'})
+                    self.send.assert_not_called()
+                    self.assertTrue(self.links()[0]['awaiting'])
+                self.reply.return_value = '  A newer reply.\nCheck this instead.  '
+                with patch.object(review_links.secrets, 'token_hex', return_value='b2c3d4e5'), \
+                        patch('review_links.sys.stderr', new_callable=io.StringIO):
+                    self.observe(**{'%12': 'Idle'})
+                self.send.assert_not_called()
+                link, = self.links()
+                self.assertFalse(link['awaiting'])
+                self.assertEqual(link['stalled'], 'b2c3d4e5')
+                self.assertNotIn('send_reply', link)
+                self.alert.assert_called_once_with('Review stalled',
+                    '“Fix the bug”: Tether could not find the reviewer reply. '
+                    'Ask the reviewer again, or send its latest reply. '
+                    'Latest reply: “A newer reply. Check this instead.”', '%13',
+                    review={'worker': '%13', 'reviewer': '%12', 'id': 'b2c3d4e5'})
+                before = self.file.read_bytes()
+                for action in ('resend', 'latest'):
+                    with self.assertRaisesRegex(ValueError, '^This review is no longer stalled\\.$'):
+                        review_links.resume_stalled('%13', '%12', request_id, action,
+                                                    last_reply=self.reply, reviewer_entry=self.reviewer)
+                    self.assertEqual(self.file.read_bytes(), before)
+                updated = review_links.resume_stalled('%13', '%12', 'b2c3d4e5', 'latest',
+                                                      last_reply=self.reply, reviewer_entry=self.reviewer)
+                self.assertTrue(updated['awaiting'])
+                self.send.assert_not_called()
 
     def test_resume_stalled_latest_forwards_approval_or_feedback_with_existing_round_rules(self):
         cases = [('APPROVED fine', 1, False), ('Fix the regression.', 1, False),
@@ -263,6 +307,7 @@ class ReviewLinksTests(unittest.TestCase):
                 self.assertNotIn('stalled_reply', updated)
                 self.assertNotIn('request_id', updated)
                 self.assertTrue(updated['awaiting'])
+                self.assertEqual(updated['send_reply'], link['stalled_reply'])
                 self.assertTrue(updated['reviewer_seen_working'])
                 self.assertEqual(updated['idle_ticks'], 0)
                 self.send.assert_not_called()
@@ -274,6 +319,7 @@ class ReviewLinksTests(unittest.TestCase):
                 self.review_reply.assert_not_called()
                 self.reply.assert_any_call(self.reviewer)
                 self.assertFalse(self.links()[0]['awaiting'])
+                self.assertNotIn('send_reply', self.links()[0])
                 if pauses:
                     self.send.assert_not_called()
                     self.assertTrue(self.links()[0]['paused'])
