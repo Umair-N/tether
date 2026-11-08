@@ -54,14 +54,15 @@ export class FridayAgent {
     this.voice = new DeviceVoice({
       onStart: turn => { this.send('spoken', { turn, state: 'start' }); this.setTurn('speaking'); this.gate(this.voice.kind === 'system') },
       onEnd: turn => { this.gate(false); this.send('spoken', { turn, state: 'end' }); this.setTurn('listening') },
-      onFail: reason => { console.warn('Friday device voice failed', reason); this.gate(false); this.voice.close(); this.mode(null) },
+      // The reply so far was never heard: the server voice speaks it, and speaks the rest of the turn itself.
+      onFail: reason => { console.warn('Friday device voice failed', reason); this.gate(false); this.voice.close(); this.mode(null, this.bot) },
       onKind: kind => this.mode(kind),
     })
   }
 
   /** Tell the server who speaks: this device (client) or Pocket (server). */
-  private mode(kind: VoiceKind | null) {
-    this.send('voice', { mode: kind ? 'client' : 'server' })
+  private mode(kind: VoiceKind | null, replay = '') {
+    this.send('voice', { mode: kind ? 'client' : 'server', ...(!kind && replay.trim() ? { replay: replay.trim() } : {}) })
     this.events.onVoice?.(kind)
   }
 
