@@ -31,6 +31,8 @@ interface Props {
   onPaneActions: (id: string, at?: Anchor) => void
   onSplit: (direction: 'right') => void
   onReorder: (ids: string[]) => void
+  /** Desktop: a tab dropped on a group in the group row ([data-group-drop]) moves into it. */
+  onDropGroup?: (pane: string, group: string) => void
   api: Api
   onUpdate: () => void
   micOk: boolean
@@ -88,7 +90,7 @@ const HOLD_MS = 350
 
 // Tabs for the panes of one session. Reorder: long-press a tab, then drag it (a mouse drags at once).
 // A long press without a drag opens the pane actions, as before. Only Tether's order changes; tmux panes stay put.
-export const PaneTabs = forwardRef<HTMLDivElement, Props>(function PaneTabs({ session, pane, onOpenPane, onPaneActions, onSplit, onReorder, api, onUpdate, micOk, chime, onNotice }, ref) {
+export const PaneTabs = forwardRef<HTMLDivElement, Props>(function PaneTabs({ session, pane, onOpenPane, onPaneActions, onSplit, onReorder, onDropGroup, api, onUpdate, micOk, chime, onNotice }, ref) {
   const strip = useRef<HTMLDivElement>(null)
   const words = useWords()
   useImperativeHandle(ref, () => strip.current!)
@@ -165,8 +167,8 @@ export const PaneTabs = forwardRef<HTMLDivElement, Props>(function PaneTabs({ se
       cancelAnimationFrame(scrollTween.get(box) ?? 0)
     }
   }, [session.id, pane.id, order])
-  const latest = useRef({ ids, onReorder, onPaneActions })
-  latest.current = { ids, onReorder, onPaneActions }
+  const latest = useRef({ ids, onReorder, onPaneActions, onDropGroup })
+  latest.current = { ids, onReorder, onPaneActions, onDropGroup }
 
   useEffect(() => {
     const box = strip.current
@@ -234,14 +236,26 @@ export const PaneTabs = forwardRef<HTMLDivElement, Props>(function PaneTabs({ se
       if (!tab || event.button !== 0) return
       drag.current = { id: tab.dataset.pane!, startX: event.clientX, startY: event.clientY, lifted: false, moved: false, touch: false, timer: 0, centers: [] }
     }
+    // A group in the group row under the pointer, while a tab is dragged (desktop only).
+    const dropAt = (x: number, y: number) => latest.current.onDropGroup ? document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-group-drop]') ?? null : null
+    let over: HTMLElement | null = null
+    const hover = (target: HTMLElement | null) => { if (over === target) return; over?.classList.remove('drop-over'); over = target; over?.classList.add('drop-over') }
     const mouseMove = (event: MouseEvent) => {
       const state = drag.current
       if (!state || state.touch) return
       if (!state.lifted) { if (Math.abs(event.clientX - state.startX) < 6) return; lift(state) }
       state.moved = true
+      hover(dropAt(event.clientX, event.clientY))
       move(state, event.clientX)
     }
-    const mouseUp = () => { if (drag.current && !drag.current.touch) finish(true) }
+    const mouseUp = (event: MouseEvent) => {
+      const state = drag.current
+      if (!state || state.touch) return
+      const target = state.lifted ? dropAt(event.clientX, event.clientY) : null
+      hover(null)
+      if (target) { finish(false); latest.current.onDropGroup?.(state.id, target.dataset.groupDrop ?? '') }
+      else finish(true)
+    }
     box.addEventListener('touchstart', touchStart, { passive: true })
     box.addEventListener('touchmove', touchMove, { passive: false })
     box.addEventListener('touchend', touchEnd, { passive: false })

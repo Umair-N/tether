@@ -217,7 +217,23 @@ class WorktreeDiscovery(unittest.TestCase):
                           entries[1]['position'], entries[1]['cwd'], entries[1]['pane_named_at']),
                          ('feature/foo', 'New tab', 'code', '2.0', '/work-wt/feature-foo', 456))
         self.assertEqual(len(entries[2]['worktree']), 200)
-        self.assertIn('#{@chat_icon}\t#{@worktree}\t#{@zoom_for}', run.call_args.args[0][-1])
+        self.assertIn('#{@chat_icon}\t#{@worktree}\t#{@group}\t#{@zoom_for}', run.call_args.args[0][-1])
+
+    def test_group_field_is_read_and_old_lines_have_none(self):
+        with tempfile.TemporaryDirectory() as folder:
+            lines = '\n'.join([
+                '%1\t$1\trepo\t1.0\t101\t/work\t123\tTab\tterminal\tfeature/foo\tg1a2b3c4d\t',
+                '%2\t$1\trepo\t2.0\t102\t/work\t\t\t\tfeature/bar\t',
+                '%3\t$1\trepo\t3.0\t103\t/work\t\t\t\t\tg1a2b3c4d\t%1'])
+            run = Mock(return_value=subprocess.CompletedProcess([], 0, lines, ''))
+            with patch.object(agents, 'HOME', Path(folder)), \
+                    patch.object(agents.pane_view, 'zoom_repair_all'), \
+                    patch.object(agents.procinfo, 'table', return_value={}), \
+                    patch.object(agents, 'process_start', return_value='1'), \
+                    patch.object(agents, 'codex_database'):
+                entries = agents.discover({}, run)
+        self.assertEqual([(e['id'], e['group'], e['worktree'], e['pane_icon']) for e in entries],
+                         [('%1', 'g1a2b3c4d', 'feature/foo', 'terminal'), ('%2', '', 'feature/bar', '')])
 
     def test_session_row_copies_worktree(self):
         with patch.object(server, 'shared_status', return_value={}), \

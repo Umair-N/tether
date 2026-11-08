@@ -4,7 +4,7 @@ import { ContinueWith } from './ContinueWith'
 import { shellCommand } from './shellCommand'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useWords } from './words'
-import { ArrowDown, ArrowLeftRight, Blocks, GitFork, Check, ChevronDown, ChevronRight, Clock3, Columns2, CornerDownRight, Gauge, Info, Layers, Maximize2, Menu, MessageSquare, Minimize2, MoreHorizontal, PanelTop, Pencil, Pin, PinOff, RefreshCw, RotateCcw, Rows2, Search, Settings2, Shield, ShieldAlert, SquareTerminal, Target, Terminal, WifiOff, X } from 'lucide-react'
+import { ArrowDown, Plus, ArrowLeftRight, Blocks, GitFork, Check, ChevronDown, ChevronRight, Clock3, Columns2, CornerDownRight, Gauge, Info, Layers, Maximize2, Menu, MessageSquare, Minimize2, MoreHorizontal, PanelTop, Pencil, Pin, PinOff, RefreshCw, RotateCcw, Rows2, Search, Settings2, Shield, ShieldAlert, SquareTerminal, Target, Terminal, WifiOff, X } from 'lucide-react'
 import { MineBar, MINE_BAR_SPACE, startedLabel } from './MineBar'
 import { AssistantRuntimeProvider, ThreadPrimitive, useExternalStoreRuntime } from '@assistant-ui/react'
 import { ApiError, canFork, creditsLabel, errorText, goalStatusLabel } from './api'
@@ -13,6 +13,9 @@ import { usePolling } from './hooks'
 import { useBackStep } from './backNav'
 import type { Anchor } from './hooks'
 import { AgentIcon, PlanUsage, agentNames, chatTitle } from './Sidebar'
+import { GroupBar } from './Groups'
+import type { GroupHooks } from './Groups'
+import { groupOf, groupPanes, placeName } from './groups'
 import { profileName } from './provider'
 import { FoundryTag } from './CodexProvider'
 import type { Session } from './Sidebar'
@@ -46,7 +49,7 @@ import { agentBrowserItems, useAgentBrowser } from './AgentBrowser'
 import { codexRunItems, useCodexRuns } from './CodexRuns'
 
 
-interface ChatProps { liveReplyPreview: boolean; pane: Pane; session: Session | undefined; api: Api; onMenu: () => void; onUpdate: () => void; draft: string; setDraft: (text: string) => void; onOpenPane: (pane: Pane) => void; onSessionActions: (at?: Anchor) => void; onPaneActions: (pane: string, at?: Anchor) => void; onSplit: (direction: 'right' | 'down') => void; onFork: () => void; onContinued: (id: string) => void; onReorder: (ids: string[]) => void; micOk: boolean; chime: boolean; readAloud: boolean; handsFree: boolean; slot?: SlotControls; running?: number; sidePin?: SidePinControls; allPanes: Pane[] }
+interface ChatProps { liveReplyPreview: boolean; pane: Pane; session: Session | undefined; api: Api; onMenu: () => void; onUpdate: () => void; draft: string; setDraft: (text: string) => void; onOpenPane: (pane: Pane) => void; onSessionActions: (at?: Anchor) => void; onPaneActions: (pane: string, at?: Anchor) => void; onSplit: (direction: 'right' | 'down') => void; onFork: () => void; onContinued: (id: string) => void; onReorder: (ids: string[]) => void; micOk: boolean; chime: boolean; readAloud: boolean; handsFree: boolean; slot?: SlotControls; running?: number; sidePin?: SidePinControls; allPanes: Pane[]; groupHooks?: GroupHooks; onDropGroup?: (pane: string, group: string) => void }
 /** Desktop workspace controls for a Chat shown in a slot next to other slots. */
 export interface SlotControls { index: number; zoomed: boolean; onZoom: () => void; onClose?: () => void; onPick?: () => void; onDragStart?: (event: React.DragEvent) => void }
 export interface SidePinControls { pinned: boolean; index: number; total: number; note: string; onToggle(): void; onNote(text: string): void; onStep(dir: 1 | -1): void }
@@ -204,7 +207,7 @@ function useSteadyPreview(text: string | undefined) {
   return text && wait <= 0 ? text : undefined
 }
 
-export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, draft, setDraft, onOpenPane, onSessionActions, onPaneActions, onSplit, onFork, onContinued, onReorder, micOk, chime, readAloud, handsFree, slot, running = 0, sidePin, allPanes }: ChatProps) {
+export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, draft, setDraft, onOpenPane, onSessionActions, onPaneActions, onSplit, onFork, onContinued, onReorder, micOk, chime, readAloud, handsFree, slot, running = 0, sidePin, allPanes, groupHooks, onDropGroup }: ChatProps) {
   const agentBrowser = useAgentBrowser(api)
   const words = useWords()
   const browserAsk = agentBrowser?.asks.find(item => item.pane === pane.id) ?? null
@@ -255,14 +258,18 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
   const [opening, setOpening] = useState(true)
   useEffect(() => { const timer = setTimeout(() => setOpening(false), 400); return () => clearTimeout(timer) }, [])
   useEffect(() => () => { if (leaving.current) clearTimeout(leaving.current) }, [])
-  const panes = session?.panes ?? []
+  // In a session with groups, the strip, the swipe and the prefetch use the open tab's group only.
+  const view = useMemo(() => session?.groups?.length ? { ...session, panes: groupPanes(session.panes, session.groups, pane) } : session, [session, pane])
+  const grouped = !!session?.groups?.length
+  const groupName = grouped ? placeName(groupOf(pane, session?.groups), session?.groups) : ''
+  const panes = view?.panes ?? []
   const ready = data !== undefined
   const [, setPrefetched] = useState(0)
   const peekNext = useRef<HTMLDivElement>(null), peekPrevious = useRef<HTMLDivElement>(null)
   const paneIndex = panes.findIndex(item => item.id === pane.id)
   const nextPane = paneIndex >= 0 ? panes[paneIndex + 1] : undefined, previousPane = paneIndex > 0 ? panes[paneIndex - 1] : undefined
   useEffect(() => {
-    const list = session?.panes ?? []
+    const list = view?.panes ?? []
     if (!ready) return
     const index = list.findIndex(item => item.id === pane.id)
     for (const near of [list[index + 1], list[index - 1]]) {
@@ -277,7 +284,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
       const query = `session=${encodeURIComponent(near.id)}&limit=${scrollByPane.get(near.id)?.limit ?? 40}&preview=${liveReplyPreview ? 1 : 0}${near.agent === 'shell' ? '&mode=shell' : ''}`
       api<ChatData>(`chat?${query}`).then(result => { if (!chatCache.has(near.id)) { cacheChat(near.id, result); setPrefetched(count => count + 1) } }).catch(() => {}).finally(() => prefetching.delete(near.id))
     }
-  }, [ready, pane.id, session?.panes, api, liveReplyPreview])
+  }, [ready, pane.id, view?.panes, api, liveReplyPreview])
   // Swipe left or right on the chat to go to the next or previous pane. A swipe that starts on something that scrolls
   // sideways (a wide table or code block) scrolls it instead, and a swipe from the screen edge stays Android's back gesture.
   const swipeStart = (event: React.TouchEvent) => {
@@ -772,7 +779,8 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
       if (!start || !end || !sidePin) return
       const dx = end.clientX - start.x, dy = end.clientY - start.y
       if (Math.abs(dx) >= 50 && Math.abs(dy) < 0.6 * Math.abs(dx)) sidePin.onStep(dx < 0 ? 1 : -1)
-    }} onTouchCancel={() => { headerTouch.current = null }}><button className="icon-button mobile-menu" onClick={onMenu} aria-label={running ? `Open sessions. ${running} agents running or waiting` : 'Open sessions'}><Menu />{running > 0 && <span className="menu-count" aria-hidden="true">{running}</span>}</button>{slot && <kbd className="slot-badge" title={`Focus this slot: Alt+${slot.index + 1}`}>⌥{slot.index + 1}</kbd>}<button type="button" className="chat-title" aria-label="Session details" onClick={() => setInfo(true)}><h1>{chatTitle(pane, session)}</h1><div><AgentIcon agent={activePane.agent} icon={activePane.pane_icon} /><span className="agent-word">{agentNames[activePane.agent]}</span>{activePane.agent === 'codex' && pane.codex_profile && <span className="provider-badge" title={`Runs on codex -p ${pane.codex_profile}`}>{profileName(pane.codex_profile)}</span>}<span className="header-separator agent-word">·</span><State state={state} />{context && <><span className="header-separator">·</span><span className={Number(context) >= 80 ? 'context-high' : ''}>{context}%<span className="context-word"> context</span></span></>}{activePane.worktree && <><span className="header-separator">·</span><WorktreeMark branch={activePane.worktree} /></>}{activePane.dir && !activePane.worktree && <><span className="header-separator">·</span><bdi className="header-folder" dir="ltr" title={activePane.dir} aria-label={`Directory: ${activePane.dir}`}>{activePane.dir.split('/').filter(Boolean).pop() || '/'}</bdi></>}{started && <span className="header-started" title={`Chat started ${started}`} aria-label={`Started ${started}`}><Clock3 size={12} aria-hidden="true" />{started}</span>}{sidePin?.pinned && <PinMark pin={sidePin} />}</div></button>
+    }} onTouchCancel={() => { headerTouch.current = null }}><button className="icon-button mobile-menu" onClick={onMenu} aria-label={running ? `Open sessions. ${running} agents running or waiting` : 'Open sessions'}><Menu />{running > 0 && <span className="menu-count" aria-hidden="true">{running}</span>}</button>{slot && <kbd className="slot-badge" title={`Focus this slot: Alt+${slot.index + 1}`}>⌥{slot.index + 1}</kbd>}<button type="button" className="chat-title" aria-label="Session details" onClick={() => setInfo(true)}><h1>{chatTitle(pane, session)}</h1><div>{grouped && session && <><bdi className="group-crumb" title={`${session.name} › ${groupName}`}>{session.name} › {groupName}</bdi><span className="header-separator">·</span></>}<AgentIcon agent={activePane.agent} icon={activePane.pane_icon} /><span className="agent-word">{agentNames[activePane.agent]}</span>{activePane.agent === 'codex' && pane.codex_profile && <span className="provider-badge" title={`Runs on codex -p ${pane.codex_profile}`}>{profileName(pane.codex_profile)}</span>}<span className="header-separator agent-word">·</span><State state={state} />{context && <><span className="header-separator">·</span><span className={Number(context) >= 80 ? 'context-high' : ''}>{context}%<span className="context-word"> context</span></span></>}{activePane.worktree && <><span className="header-separator">·</span><WorktreeMark branch={activePane.worktree} /></>}{activePane.dir && !activePane.worktree && <><span className="header-separator">·</span><bdi className="header-folder" dir="ltr" title={activePane.dir} aria-label={`Directory: ${activePane.dir}`}>{activePane.dir.split('/').filter(Boolean).pop() || '/'}</bdi></>}{started && <span className="header-started" title={`Chat started ${started}`} aria-label={`Started ${started}`}><Clock3 size={12} aria-hidden="true" />{started}</span>}{sidePin?.pinned && <PinMark pin={sidePin} />}</div></button>
+      {grouped && panes.length <= 1 && <button type="button" className="icon-button group-new-tab" aria-label={`New tab in ${groupName}`} title={`New tab in ${groupName}`} onClick={() => onSplit('right')}><Plus size={20} /></button>}
       <ReviewLinks api={api} pane={pane} panes={allPanes} onOpen={onOpenPane} onChanged={onUpdate} onToast={setToast} />
       {sidePin && activePane.agent !== 'shell' && <button type="button" className="icon-button side-pin-toggle" aria-pressed={sidePin.pinned} aria-label={sidePin.pinned ? 'Unpin from side tab' : 'Pin to side tab'} title={sidePin.pinned ? 'Unpin from side tab' : 'Pin to side tab'} onClick={sidePin.onToggle}>{sidePin.pinned ? <PinOff size={20} /> : <Pin size={20} />}</button>}
       <button type="button" className="icon-button search-toggle" aria-label="Search this chat" title="Search this chat" disabled={!data} onClick={() => setSearching(true)}><Search size={20} /></button>
@@ -781,7 +789,11 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
       {slot && <button type="button" className="icon-button slot-button" aria-label={slot.zoomed ? 'Show all slots (Alt+Z)' : 'Zoom this slot (Alt+Z)'} title={slot.zoomed ? 'Show all slots (Alt+Z)' : 'Zoom this slot (Alt+Z)'} onClick={slot.onZoom}>{slot.zoomed ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button>}
       {slot?.onClose && <button type="button" className="icon-button slot-button" aria-label="Close this slot (Alt+X)" title="Close this slot (Alt+X)" onClick={slot.onClose}><X size={16} /></button>}
     </header>
-    {session && <PaneTabs ref={tabs} session={session} pane={pane} onOpenPane={onOpenPane} onPaneActions={onPaneActions} onSplit={onSplit} onReorder={onReorder} api={api} onUpdate={onUpdate} micOk={micOk} chime={chime} onNotice={setToast} />}
+    {session && view && (grouped && groupHooks
+      ? <GroupBar api={api} session={session} pane={pane} hooks={groupHooks} onOpenPane={onOpenPane} onUpdate={onUpdate}>
+          {panes.length > 1 && <PaneTabs ref={tabs} session={view} pane={pane} onOpenPane={onOpenPane} onPaneActions={onPaneActions} onSplit={onSplit} onReorder={onReorder} onDropGroup={onDropGroup} api={api} onUpdate={onUpdate} micOk={micOk} chime={chime} onNotice={setToast} />}
+        </GroupBar>
+      : <PaneTabs ref={tabs} session={session} pane={pane} onOpenPane={onOpenPane} onPaneActions={onPaneActions} onSplit={onSplit} onReorder={onReorder} onDropGroup={onDropGroup} api={api} onUpdate={onUpdate} micOk={micOk} chime={chime} onNotice={setToast} />)}
     {term && data?.attention?.askBridge && <AskBar agent={agentNames[activePane.agent]} disabled={!writable || acting} onOpen={() => setTerm(false)} onTerminal={() => askAnswer(data.attention!.askBridge!, null)} />}
     {term ? <LiveTerminal paneId={activePane.id} onChat={() => setTerm(false)} /> : <>
     {(offline || (error && data)) && <div className="reconnect-banner" role="status"><WifiOff size={15} /><span>{offline ? 'You are offline. Tether reconnects when the network is back.' : `Cannot reach ${host}. Reconnecting…`}</span><button type="button" onClick={() => void refresh()}>Retry now</button></div>}

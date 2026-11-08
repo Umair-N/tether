@@ -23,7 +23,7 @@ class ForkTests(unittest.TestCase):
 
     def run_fork(self, **extra):
         def result(command, **kwargs):
-            output = ('@3\t/source\n' if '#{window_id}\t#{pane_current_path}' in command
+            output = ('@3\t/source\n' if '#{window_id}\t#{pane_current_path}\t#{@group}' in command
                       else 'latest\t120\t40\n' if command[1] == 'display-message' else '%9\n')
             return subprocess.CompletedProcess(command, 0, stdout=output, stderr='')
         run = MagicMock(side_effect=result)
@@ -33,7 +33,7 @@ class ForkTests(unittest.TestCase):
     def test_claude_fork_opens_a_window_in_the_same_session(self):
         pane, name, calls = self.run_fork()
         self.assertEqual((pane, name), ('%9', 'docs-update 2'))
-        self.assertEqual(calls[0][1:], ['display-message', '-p', '-t', '%5', '#{window_id}\t#{pane_current_path}'])
+        self.assertEqual(calls[0][1:], ['display-message', '-p', '-t', '%5', '#{window_id}\t#{pane_current_path}\t#{@group}'])
         self.assertEqual(calls[2][1:], ['new-window', '-a', '-t', '@3', '-c', '/tmp', '-P', '-F', '#{pane_id}'])
         self.assertFalse(any('resize-window' in call for call in calls))
         self.assertIn(f"claude --resume {ID} --fork-session --name 'docs-update 2'", calls[4])

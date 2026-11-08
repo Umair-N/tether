@@ -17,6 +17,8 @@ import { KeepChoice, keepNeeded } from './Project'
 import type { Keep, ProjectMarks } from './Project'
 import { GlobalCodexLevel } from './CodexLevel'
 import { CopyNames } from './CopyNames'
+import { NewGroup, TabGroupPicker } from './Groups'
+import { placeName } from './groups'
 
 type PaneLevel = 'all' | 'important' | 'urgent' | 'off'
 type Delivery = 'sound' | 'silent' | 'off'
@@ -191,7 +193,7 @@ export function PaneActions({ api, session, tabCount, archived, pane, panes, at,
   api: Api; session: Session | undefined; tabCount: number; archived: boolean; pane: Pane; panes: Pane[]; at?: Anchor; place?: Place; targets: Session[]; onArchive: () => void; onFork?: () => void; onDone: (newPane?: string, direction?: 'right' | 'down') => void; onClose: () => void
 }) {
   const words = useWords()
-  const [mode, setMode] = useState<'menu' | 'rename' | 'icon' | 'close' | 'move' | 'review'>('menu')
+  const [mode, setMode] = useState<'menu' | 'rename' | 'icon' | 'close' | 'move' | 'review' | 'group' | 'new-group'>('menu')
   const [name, setName] = useState(pane.pane_name ?? '')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
@@ -223,6 +225,10 @@ export function PaneActions({ api, session, tabCount, archived, pane, panes, at,
           <p className="hint">{pane.agent === 'claude' || pane.agent === 'codex' ? `${agentNames[pane.agent]} gets the same name. ` : ''}{last ? 'The session takes it too. ' : ''}Leave it empty to show the agent name again.</p>
           <div className="sheet-buttons"><button type="button" className="secondary" disabled={pending} onClick={() => setMode('menu')}>Cancel</button><button className="primary" disabled={pending}>{pending ? 'Saving…' : 'Save'}</button></div>
         </form>
+      : mode === 'group' && session
+      ? <TabGroupPicker api={api} session={session} pane={pane} pending={pending} run={run} onNew={() => setMode('new-group')} onBack={() => setMode('menu')} />
+      : mode === 'new-group' && session
+      ? <NewGroup api={api} session={session} pane={pane} onClose={() => setMode('group')} onDone={() => onDone(undefined)} />
       : mode === 'review'
       ? <ReviewLinkPicker pane={pane} panes={panes} pending={pending} onBack={() => setMode('menu')} onPick={(worker, reviewer) => void run(async () => { await api('review-link', { worker, reviewer }); return undefined })} />
       : mode === 'icon'
@@ -238,6 +244,7 @@ export function PaneActions({ api, session, tabCount, archived, pane, panes, at,
           <CopyNames pane={pane} disabled={pending} onCopied={onClose} />
           <button disabled={pending} onClick={() => setMode('icon')}><Shapes size={18} />Change icon</button>
           <button disabled={pending} onClick={() => setMode('move')}><ArrowRightLeft size={18} />Move to session…</button>
+          {session && <button disabled={pending} onClick={() => setMode('group')}><FolderInput size={18} />Move to group…{!!session.groups?.length && <small>{placeName(pane.group ?? '', session.groups)}</small>}</button>}
           {(pane.agent === 'claude' || pane.agent === 'codex') && <button disabled={pending} onClick={() => setMode('review')}><Eye size={18} />Link a review…</button>}
           <hr />
           <PlaceItems place={place} pending={pending} onClose={onClose} />

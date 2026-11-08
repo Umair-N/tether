@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
+import { groupOf, placeName } from './groups'
 import type { FocusEvent as ReactFocusEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 import { Check, Menu, Plus, Terminal } from 'lucide-react'
 import type { Api, Pane } from './api'
@@ -40,7 +41,10 @@ function cardNames(card: HomeCard) {
   const session = card.session?.name ?? sessionName(pane)
   const name = chatTitle(pane, { name: session })
   const title = [name, (card.session?.panes.length ?? 1) > 1 ? shownIndex(pane) : ''].filter(Boolean).join(' ')
-  return { title, session: session === name ? '' : session }
+  // In a session with groups, the card names the tab's group too: "Session › Group".
+  const groups = card.session?.groups
+  const where = groups?.length ? `${session} › ${placeName(groupOf(pane, groups), groups)}` : session === name ? '' : session
+  return { title, session: where }
 }
 
 function Card({ api, card, group, waiting, error, onOpen, onAnswer, onFail, onKey, onMarkRead }: {

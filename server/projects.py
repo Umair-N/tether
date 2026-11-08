@@ -329,10 +329,37 @@ def _fit(parts, budget):
     return ''.join(out)
 
 
-def render(pid, agent='claude', home=None):
+def _group_parts(group, home):
+    """A group's context in three tiers, most important first: (main part, notes list, note excerpts)."""
+    gpid, name = group['pid'], group['name']
+    text = instructions(gpid).strip()
+    pinned = pins(gpid, home)
+    found = notes(gpid)
+    folder = bundle(gpid)
+    main = (f'\n## Group: {name}\nThis tab is in the group "{name}" of this tmux session. '
+            + ('The user wrote this guidance for agents in the group. Follow it.\n' if text or pinned else '\n')
+            + f'Group folder: {folder}\n'
+            + f'Save a fact that only this group needs as a Markdown note in {folder}/notes/ (same rules as project notes). '
+            'Facts for the whole session go in the project notes folder.\n')
+    if text:
+        main += f'\n### Group instructions\n{text}\n'
+    if pinned:
+        lines = '\n'.join(f'- {item["name"]}: {item["path"]}{" (gone)" if item["missing"] else ""}' for item in pinned)
+        main += f'\n### Group pinned files\nRead a file when the task needs it.\n{lines}\n'
+    listing = ('\n### Group notes\n' + ''.join(f'- {item["name"]}: {item["title"]}\n' for item in found)) if found else ''
+    excerpts = []
+    for item in found[:NEWEST]:
+        body = _read(folder / 'notes' / item['name'], EXCERPT + 1).strip()
+        excerpts.append(f'\n#### {item["name"]}\n{body[:EXCERPT]}{" …" if len(body) > EXCERPT else ""}\n')
+    return main, listing, excerpts
+
+
+def render(pid, agent='claude', home=None, group=None):
     """The text an agent gets. An empty project still gets the Notes part: without it no agent knows the notes folder,
     so no note is ever written. Claude keeps its own auto memory where it is: Tether does not move it, so Claude's
-    notes from before stay in reach. Both agents get the same text. Reading never makes the bundle folder."""
+    notes from before stay in reach. Both agents get the same text. Reading never makes the bundle folder.
+    group: {'pid', 'name'} for a tab in a group (groups.py). Its part comes after the session parts of the same
+    tier, so _fit cuts note excerpts first, then note lists, and the group's own guidance last."""
     data = meta(pid)
     text = instructions(pid).strip()
     pinned = pins(pid, home)
@@ -356,7 +383,7 @@ def render(pid, agent='claude', home=None):
     cli = Path(__file__).resolve().with_name('agent_tab_cli.py')
     parts.append(f'\n## New tabs and reviewers\nTo start a new tab or session, or a reviewer, run `{sys.executable} {cli} start ...`, not raw tmux. '
                  'It opens a tab Tether can track. Options: `--review-it` (this tab reviews each turn of the new tab), `--reviews-me` (the new tab reviews this tab), '
-                 '`--agent claude|codex`, `--name NAME`, `--cwd DIR`, `--worktree BRANCH` (new branch and folder; refused with `--reviews-me`), `--context`. '
+                 '`--agent claude|codex`, `--name NAME`, `--cwd DIR`, `--worktree BRANCH` (new branch and folder; refused with `--reviews-me`), `--context`, `--group NAME` (made if missing). '
                  '`stop --worker %N [--reviewer %N]` ends a review; `list` shows this tab\'s links. '
                  '`link --worker %N --reviewer %N` makes one open tab review another. '
                  'Start your review reply with APPROVED when nothing is wrong. '
@@ -367,12 +394,19 @@ def render(pid, agent='claude', home=None):
                  'then run `close --pane %N`. Busy tabs stay open.\n')
     parts.append(f'\n## Notes\nSave a project fact that other agents in this session need as a Markdown file in {folder}/notes/ '
                  '(one topic per file, a "# Title" first line). Keep your own memory as before. The user reviews notes in Tether.\n')
+    listing, excerpts = [], []
     if found:
-        parts.append(''.join(f'- {item["name"]}: {item["title"]}\n' for item in found))
+        listing.append(''.join(f'- {item["name"]}: {item["title"]}\n' for item in found))
         for item in found[:NEWEST]:
             body = _read(folder / 'notes' / item['name'], EXCERPT + 1).strip()
-            parts.append(f'\n### {item["name"]}\n{body[:EXCERPT]}{" …" if len(body) > EXCERPT else ""}\n')
-    return _fit(parts, data['budget'])
+            excerpts.append(f'\n### {item["name"]}\n{body[:EXCERPT]}{" …" if len(body) > EXCERPT else ""}\n')
+    if group:
+        main, group_listing, group_excerpts = _group_parts(group, home)
+        parts.append(main)
+        listing = ['\n### Project notes\n' + listing[0]] if listing else []  # not under the group heading
+        listing += [group_listing] if group_listing else []
+        excerpts += group_excerpts
+    return _fit(parts + listing + excerpts, data['budget'])
 
 
 def state(pid, home=None):
@@ -394,22 +428,32 @@ def has_context(pid, home=None):
 def marks(run=subprocess.run, home=None):
     """For the sidebar: {session id: {project, context, revision, stale: [pane ids]}}. Read only: a session with no
     @project yet is left out. A pane is stale when its agent started with an older revision or another project
-    (@project_rev, set by project_launch.py). A pane with no @project_rev did not start through Tether."""
-    shown = run([paths.TMUX, 'list-panes', '-a', '-f', '#{==:#{@zoom_for},}', '-F', '#{session_id}\t#{@project}\t#{pane_id}\t#{@project_rev}'],
+    (@project_rev, set by project_launch.py). A pane with no @project_rev did not start through Tether.
+    A pane in a group (groups.py) started with "pid:rev+gpid:grev"; it is stale when either part changed."""
+    import groups  # groups imports this module
+    shown = run([paths.TMUX, 'list-panes', '-a', '-f', '#{==:#{@zoom_for},}', '-F',
+                 '#{session_id}\t#{@project}\t#{pane_id}\t#{@project_rev}\t#{@group}\t#{@groups}'],
                 capture_output=True, text=True, timeout=5)
     if shown.returncode:
         return {}
-    out = {}
+    out, revisions = {}, {}
     for line in shown.stdout.splitlines():
-        fields = line.split('\t')
-        if len(fields) != 4 or not ID.fullmatch(fields[1]):
+        fields = line.split('\t', 5)
+        if len(fields) not in (4, 6) or not ID.fullmatch(fields[1]):
             continue
-        session_id, pid, pane, started = fields
+        session_id, pid, pane, started = fields[:4]
+        label, raw = fields[4:] if len(fields) == 6 else ('', '')
         if session_id not in out:
             data = meta(pid)
             out[session_id] = {'project': pid, 'revision': data['revision'], 'stale': [], 'context': has_context(pid, home)}
         mark = out[session_id]
-        if started and started != f'{pid}:{mark["revision"]}':
+        expected = f'{pid}:{mark["revision"]}'
+        gpid = next((g['project'] for g in groups.parse(raw) if g['id'] == label), '') if label else ''
+        if gpid:
+            if gpid not in revisions:
+                revisions[gpid] = meta(gpid)['revision']
+            expected += f'+{gpid}:{revisions[gpid]}'
+        if started and started != expected:
             mark['stale'].append(pane)
     return out
 

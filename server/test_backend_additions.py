@@ -162,14 +162,14 @@ class BackendTests(unittest.TestCase):
             self.run.reset_mock()
             def run(command, **kwargs):
                 self.assertTrue(server.SEND_LOCK.locked())
-                output = ('@7\t/a folder\n' if '#{window_id}\t#{pane_current_path}' in command
+                output = ('@7\t/a folder\n' if '#{window_id}\t#{pane_current_path}\t#{@group}' in command
                           else 'manual\t160\t48\n' if '#{window-size}\t#{window_width}\t#{window_height}' in command
                           else '%13\n')
                 return subprocess.CompletedProcess(command, 0, stdout=output, stderr='')
             self.run.side_effect = run
             self.assertEqual(self.request('/mobile/api/split', {'session': '%12', 'direction': direction}), (201, {'pane': '%13'}))
             self.assertEqual([call.args[0] for call in self.run.call_args_list], [
-                [paths.TMUX, 'display-message', '-p', '-t', '%12', '#{window_id}\t#{pane_current_path}'],
+                [paths.TMUX, 'display-message', '-p', '-t', '%12', '#{window_id}\t#{pane_current_path}\t#{@group}'],
                 [paths.TMUX, 'display-message', '-p', '-t', '@7', '#{window-size}\t#{window_width}\t#{window_height}'],
                 [paths.TMUX, 'new-window', '-a', '-t', '@7', '-c', '/a folder', '-P', '-F', '#{pane_id}'],
                 [paths.TMUX, 'resize-window', '-t', '%13', '-x', '160', '-y', '48'],
@@ -797,7 +797,7 @@ class BackendTests(unittest.TestCase):
             self.assertEqual(self.request('/mobile/api/resume', {'id': CHAT, 'agent': 'codex', 'after': '%12'}),
                              (201, {'session': '$7', 'pane': '%13', 'name': title[:60]}))
         self.assertEqual(commands[:4], [
-            [paths.TMUX, 'display-message', '-p', '-t', '%12', '#{window_id}\t#{pane_current_path}'],
+            [paths.TMUX, 'display-message', '-p', '-t', '%12', '#{window_id}\t#{pane_current_path}\t#{@group}'],
             [paths.TMUX, 'display-message', '-p', '-t', '@7', '#{window-size}\t#{window_width}\t#{window_height}'],
             [paths.TMUX, 'new-window', '-a', '-t', '@7', '-c', str(self.root), '-P', '-F', '#{pane_id}'],
             [paths.TMUX, 'resize-window', '-t', '%13', '-x', '120', '-y', '40']])

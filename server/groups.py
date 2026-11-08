@@ -1,0 +1,329 @@
+"""Groups: named sets of tabs (tmux panes) inside one tmux session, each with its own agent context.
+
+The session option @groups holds the list, in order, empty groups included:
+  [{"id": "g1a2b3c4d", "name": "Home dashboard", "project": "<12-hex projects.py id or empty>"}]
+The pane option @group holds a group id. A pane with no @group, or with an id that is not in @groups, is in Main.
+A group's context is a projects.py bundle, made on first use. Removing a group archives the bundle; nothing is deleted.
+This module is the store and its rules. groups_api.py is the HTTP part."""
+import json
+import re
+import secrets
+import subprocess
+import threading
+import unicodedata
+
+import paths
+import projects
+
+GROUP = re.compile(r'g[0-9a-f]{8}')
+SESSION = re.compile(r'\$[0-9]+')
+PANE = re.compile(r'%[0-9]+')
+NAME_LIMIT = 40
+MAIN = 'Main'
+LOCK = threading.RLock()  # read-modify-write of @groups
+GONE_TAB = 'That tab has ended.'
+GONE_GROUP = 'That group no longer exists.'
+GONE_SESSION = 'That session has ended.'
+
+
+class GroupError(ValueError):
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status = status
+
+
+def _tmux(run, *args):
+    return run([paths.TMUX, *args], capture_output=True, text=True, timeout=5)
+
+
+def _check(result, message='Could not save the group.'):
+    if result.returncode:
+        raise GroupError(500, result.stderr.strip() or message)
+
+
+def clean_name(value):
+    """A trimmed group name, or GroupError(400). Main is checked by the callers that make or rename a group."""
+    if not isinstance(value, str):
+        raise GroupError(400, 'Enter a group name.')
+    name = value.strip()
+    if not 1 <= len(name) <= NAME_LIMIT:
+        raise GroupError(400, f'Use 1 to {NAME_LIMIT} characters for the group name.')
+    if any(unicodedata.category(char)[0] == 'C' for char in name):
+        raise GroupError(400, 'The group name cannot have control characters.')
+    return name
+
+
+def _valid(item):
+    if not isinstance(item, dict) or not isinstance(item.get('id'), str) or not GROUP.fullmatch(item['id']):
+        return None
+    try:
+        name = clean_name(item.get('name'))
+    except GroupError:
+        return None
+    project = item.get('project')
+    return {'id': item['id'], 'name': name,
+            'project': project if isinstance(project, str) and projects.ID.fullmatch(project) else ''}
+
+
+def parse(text):
+    """The @groups value as a list. Bad JSON reads as []; bad entries and repeated ids are dropped."""
+    try:
+        data = json.loads(text) if text else []
+    except ValueError:
+        return []
+    found, seen = [], set()
+    for item in data if isinstance(data, list) else []:
+        group = _valid(item)
+        if group and group['id'] not in seen:
+            seen.add(group['id'])
+            found.append(group)
+    return found
+
+
+def _session(session_id, run):
+    """(session name, groups) of a live session, or GroupError(404)."""
+    if not isinstance(session_id, str) or not SESSION.fullmatch(session_id):
+        raise GroupError(400, 'Choose a session.')
+    shown = _tmux(run, 'display-message', '-p', '-t', session_id + ':', '#{session_id}\t#{session_name}\t#{@groups}')
+    found, _, rest = shown.stdout.rstrip('\n').partition('\t')
+    if shown.returncode or found != session_id or '\t' not in rest:
+        raise GroupError(404, GONE_SESSION)
+    name, _, raw = rest.rpartition('\t')
+    return name, parse(raw)
+
+
+def read(session_id, run=subprocess.run):
+    return _session(session_id, run)[1]
+
+
+def session_name(session_id, run=subprocess.run):
+    return _session(session_id, run)[0]
+
+
+def write(session_id, groups, run=subprocess.run):
+    """Save the list. An empty list unsets @groups, so the session looks as it did before groups."""
+    if groups:
+        value = json.dumps([{'id': g['id'], 'name': g['name'], 'project': g.get('project') or ''} for g in groups])
+        _check(_tmux(run, 'set-option', '-t', session_id, '@groups', value))
+    else:
+        _check(_tmux(run, 'set-option', '-u', '-t', session_id, '@groups'))
+
+
+def all_groups(run=subprocess.run):
+    """{session id: [groups]} for every session that has groups, from one tmux call."""
+    shown = _tmux(run, 'list-sessions', '-F', '#{session_id}\t#{@groups}')
+    if shown.returncode:
+        return {}
+    out = {}
+    for line in shown.stdout.splitlines():
+        session_id, _, raw = line.partition('\t')
+        found = parse(raw)
+        if SESSION.fullmatch(session_id) and found:
+            out[session_id] = found
+    return out
+
+
+def _find(groups, group_id):
+    if not isinstance(group_id, str) or not GROUP.fullmatch(group_id):
+        raise GroupError(400, 'Choose a group.')
+    group = next((g for g in groups if g['id'] == group_id), None)
+    if group is None:
+        raise GroupError(404, GONE_GROUP)
+    return group
+
+
+def _free_name(groups, name, keep=None):
+    if name.lower() == MAIN.lower():
+        raise GroupError(400, 'Main holds the tabs that are in no group. Choose another name.')
+    if any(g['name'].lower() == name.lower() and g['id'] != keep for g in groups):
+        raise GroupError(409, 'A group with that name exists.')
+
+
+def _new_id(taken):
+    while True:
+        group_id = 'g' + secrets.token_hex(4)
+        if group_id not in taken:
+            return group_id
+
+
+def _pane(pane, run):
+    """(session id, @group) of a live pane, or GroupError(404)."""
+    if not isinstance(pane, str) or not PANE.fullmatch(pane):
+        raise GroupError(400, 'Choose a tab.')
+    shown = _tmux(run, 'display-message', '-p', '-t', pane, '#{pane_id}\t#{session_id}\t#{@group}')
+    fields = shown.stdout.rstrip('\n').split('\t')
+    if shown.returncode or len(fields) != 3 or fields[0] != pane:
+        raise GroupError(404, GONE_TAB)
+    return fields[1], fields[2]
+
+
+def _label(pane, group_id, run):
+    if group_id:
+        _check(_tmux(run, 'set-option', '-p', '-t', pane, '@group', group_id), 'Could not move the tab. It may have closed.')
+    else:
+        _check(_tmux(run, 'set-option', '-p', '-u', '-t', pane, '@group'), 'Could not move the tab. It may have closed.')
+
+
+def _pane_in(session_id, pane, run):
+    if _pane(pane, run)[0] != session_id:
+        raise GroupError(404, 'That tab is in another session. Refresh the list and try again.')
+
+
+def create(session_id, name, run=subprocess.run, pane=None):
+    """Add a group at the end of the list. With pane, move that tab into it."""
+    name = clean_name(name)
+    with LOCK:
+        groups = read(session_id, run)
+        _free_name(groups, name)
+        if pane is not None:
+            _pane_in(session_id, pane, run)
+        group = {'id': _new_id({g['id'] for g in groups}), 'name': name, 'project': ''}
+        write(session_id, groups + [group], run)
+        if pane is not None:
+            _label(pane, group['id'], run)
+    return group
+
+
+def rename(session_id, group_id, name, run=subprocess.run):
+    name = clean_name(name)
+    with LOCK:
+        groups = read(session_id, run)
+        group = _find(groups, group_id)
+        _free_name(groups, name, keep=group_id)
+        group['name'] = name
+        write(session_id, groups, run)
+    if group['project']:
+        projects.set_name(group['project'], name)  # the name an archive shows
+    return group
+
+
+def move(session_id, pane, group_id, run=subprocess.run):
+    """Put a tab in a group of its session. None or '' puts it in Main."""
+    with LOCK:
+        groups = read(session_id, run)
+        if group_id:
+            _find(groups, group_id)
+        _pane_in(session_id, pane, run)
+        _label(pane, group_id or '', run)
+
+
+def _labelled(session_id, group_id, run):
+    shown = _tmux(run, 'list-panes', '-s', '-t', session_id + ':', '-F', '#{pane_id}\t#{@group}')
+    _check(shown, GONE_SESSION)
+    return [pane for pane, _, label in (line.partition('\t') for line in shown.stdout.splitlines()) if label == group_id]
+
+
+def _archive(group):
+    if group['project']:
+        projects.archive(group['project'])
+
+
+def ungroup(session_id, group_id, run=subprocess.run):
+    """Move the group's tabs to Main and drop the group. No agent stops. Its context bundle goes to the archive."""
+    with LOCK:
+        groups = read(session_id, run)
+        group = _find(groups, group_id)
+        for pane in _labelled(session_id, group_id, run):
+            _label(pane, '', run)
+        write(session_id, [g for g in groups if g['id'] != group_id], run)
+    _archive(group)
+
+
+def remove(session_id, group_id, run=subprocess.run):
+    """Drop an empty group. Its context bundle goes to the archive."""
+    with LOCK:
+        groups = read(session_id, run)
+        group = _find(groups, group_id)
+        if _labelled(session_id, group_id, run):
+            raise GroupError(409, 'The group still has tabs. Move or close them first.')
+        write(session_id, [g for g in groups if g['id'] != group_id], run)
+    _archive(group)
+
+
+def find_or_create(session_id, name, run=subprocess.run):
+    """For agent_tab_cli.py --group NAME: the group with that name (any case), made when missing. Main gives None."""
+    name = clean_name(name)
+    if name.lower() == MAIN.lower():
+        return None
+    with LOCK:
+        found = next((g for g in read(session_id, run) if g['name'].lower() == name.lower()), None)
+        return found or create(session_id, name, run)
+
+
+def group_of_pane(pane, run=subprocess.run):
+    """(session id, group dict or None) of a live pane."""
+    session_id, label = _pane(pane, run)
+    if not label:
+        return session_id, None
+    return session_id, next((g for g in read(session_id, run) if g['id'] == label), None)
+
+
+def find_in_session_of(pane, group_id, run=subprocess.run):
+    """The group with that id in the live pane's session, or GroupError (400 bad id, 404 gone)."""
+    session_id = _pane(pane, run)[0]
+    return _find(read(session_id, run), group_id)
+
+
+def context(session_id, group_id, run=subprocess.run):
+    """The group's context bundle id. The first call makes the bundle (with its notes folder) and saves the id."""
+    with LOCK:
+        groups = read(session_id, run)
+        group = _find(groups, group_id)
+        if not group['project']:
+            group['project'] = secrets.token_hex(6)
+            write(session_id, groups, run)
+    pid = group['project']
+    (projects.bundle(pid) / 'notes').mkdir(mode=0o700, parents=True, exist_ok=True)
+    projects.set_name(pid, group['name'])
+    return pid
+
+
+def merged(target, source):
+    """Target groups, then source groups. A source name that a target group has (any case) gets a number:
+    "Name 2", "Name 3", the first free one. A source id that the target has gets a new id.
+    Returns (groups, {old source id: new id})."""
+    out = [dict(g) for g in target]
+    names = {g['name'].lower() for g in out}
+    ids = {g['id'] for g in out}
+    remap = {}
+    for group in source:
+        name, number = group['name'], 2
+        while name.lower() in names:
+            suffix = f' {number}'
+            name = group['name'][:NAME_LIMIT - len(suffix)].rstrip() + suffix
+            number += 1
+        group_id = group['id'] if group['id'] not in ids else _new_id(ids | {g['id'] for g in source})
+        remap[group['id']] = group_id
+        names.add(name.lower())
+        ids.add(group_id)
+        out.append({'id': group_id, 'name': name, 'project': group['project']})
+    return out, remap
+
+
+def merge_into(source, target, run=subprocess.run):
+    """tmux_merge.merge_session, before the windows move: the target gets the source groups (merged), and source panes
+    get the ids their groups have in the target. A source label with no source group is cleared, so no pane points
+    to a group it was never in."""
+    with LOCK:
+        theirs, ours = read(target, run), read(source, run)
+        labels = _tmux(run, 'list-panes', '-s', '-t', source + ':', '-F', '#{pane_id}\t#{@group}')
+        _check(labels, GONE_SESSION)
+        combined, remap = merged(theirs, ours)
+        if ours:
+            write(target, combined, run)
+        for pane, _, label in (line.partition('\t') for line in labels.stdout.splitlines()):
+            if label and remap.get(label) != label:
+                _label(pane, remap.get(label, ''), run)
+
+
+def restore(session_id, text, run=subprocess.run):
+    """Auto-resume: add saved groups that the session does not have (by id). A saved name that is taken is skipped."""
+    saved = parse(text)
+    if not saved:
+        return
+    with LOCK:
+        groups = read(session_id, run)
+        ids, names = {g['id'] for g in groups}, {g['name'].lower() for g in groups}
+        added = [g for g in saved if g['id'] not in ids and g['name'].lower() not in names]
+        if added:
+            write(session_id, groups + added, run)

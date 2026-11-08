@@ -77,6 +77,8 @@ import tmux_names
 import auto_resume
 import window_size
 import projects_api
+import groups
+import groups_api
 import codex_level
 import codex_runs
 import browser_api
@@ -277,7 +279,7 @@ def sessions():
 # so a page that refreshes right away sees the new pane (or no longer sees the closed one).
 TMUX_WRITES = {'/mobile/api/split', '/mobile/api/fork', '/mobile/api/delegate', '/mobile/api/agent-tab', '/mobile/api/continue', '/mobile/api/review-link', '/mobile/api/resume', '/mobile/api/shell', '/mobile/api/session',
                '/mobile/api/tmux-sessions', '/mobile/api/rename', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/side-shell',
-               '/mobile/api/side-shell/end', '/mobile/api/start', '/mobile/api/merge', '/mobile/api/auto-resume', '/mobile/api/review-stalled'}
+               '/mobile/api/side-shell/end', '/mobile/api/start', '/mobile/api/merge', '/mobile/api/auto-resume', '/mobile/api/review-stalled'} | groups_api.WRITES
 
 
 def forget_sessions():
@@ -288,7 +290,7 @@ def forget_sessions():
 def session_row(entry):
     """One pane in the session list. `needs` is a one-line summary when the pane waits on the user (the desktop "Needs you" list)."""
     status = shared_status(entry)
-    return dict({key: entry.get(key) for key in ('id', 'tmux_session', 'label', 'agent', 'thread', 'writable', 'pane_name', 'tmux_pane_name', 'pane_icon', 'agent_name', 'codex_profile', 'worktree')},
+    return dict({key: entry.get(key) for key in ('id', 'tmux_session', 'label', 'agent', 'thread', 'writable', 'pane_name', 'tmux_pane_name', 'pane_icon', 'agent_name', 'codex_profile', 'worktree', 'group')},
                 dir=home_path(tab_folder(entry)), **status, **timeline(entry['id']), needs=needs.summary(status))
 
 
@@ -1480,6 +1482,8 @@ class Handler(BaseHTTPRequestHandler):
                 browser_api.get(self)
             elif projects_api.handles(path):
                 projects_api.get(self)
+            elif groups_api.handles(path):
+                groups_api.get(self)
             elif codex_level.handles(path):
                 codex_level.get(self)
             elif codex_runs.handles(path):
@@ -1506,6 +1510,12 @@ class Handler(BaseHTTPRequestHandler):
                         row['reviewers'] = links[row['id']]
                     row['reviewers_paused'] = paused.get(row['id'], [])
                 listing = {'sessions': rows, 'default_thread': settings()['thread']}
+                try:
+                    found_groups = groups.all_groups()
+                except Exception:  # a group read error must not hide the session list
+                    found_groups = {}
+                if found_groups:
+                    listing['groups'] = found_groups
                 resume_notice = auto_resume.notice()
                 if resume_notice['failed']:
                     listing['auto_resume'] = resume_notice
@@ -1542,7 +1552,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.respond(403, {'error': 'Reload the page and try again.'})
             return
         if self.path not in ('/mobile/api/update', '/mobile/api/history/hide', '/mobile/api/file-check', '/mobile/api/ask-hook', '/mobile/api/ask-answer', '/mobile/api/ask-engage', '/mobile/api/message', '/mobile/api/broadcast', '/mobile/api/approval', '/mobile/api/menu', '/mobile/api/prompt-action', '/mobile/api/start', '/mobile/api/session', '/mobile/api/tmux-sessions', '/mobile/api/key', '/mobile/api/clear-draft', '/mobile/api/unqueue', '/mobile/api/mode', '/mobile/api/type',
-                         '/mobile/api/push/subscribe', '/mobile/api/push/unsubscribe', '/mobile/api/push/test', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/shortcuts', '/mobile/api/prefs', '/mobile/api/codex-provider', '/mobile/api/model-options', '/mobile/api/model', '/mobile/api/rename', '/mobile/api/merge', suggest_groups.PATH, '/mobile/api/shell', '/mobile/api/upload', '/mobile/api/transcribe', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/delegate', '/mobile/api/agent-tab', '/mobile/api/continue-preview', '/mobile/api/continue', '/mobile/api/review-stop', '/mobile/api/review-stalled', '/mobile/api/review-link', '/mobile/api/resume', '/mobile/api/auto-resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/refresh', '/mobile/api/accounts/switch') and not browser_api.handles(self.path) and not projects_api.handles(self.path) and not codex_level.handles(self.path) and not tts.handles(self.path) and not friday_proxy.handles(self.path) and not live_mode.handles(self.path):
+                         '/mobile/api/push/subscribe', '/mobile/api/push/unsubscribe', '/mobile/api/push/test', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/shortcuts', '/mobile/api/prefs', '/mobile/api/codex-provider', '/mobile/api/model-options', '/mobile/api/model', '/mobile/api/rename', '/mobile/api/merge', suggest_groups.PATH, '/mobile/api/shell', '/mobile/api/upload', '/mobile/api/transcribe', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/delegate', '/mobile/api/agent-tab', '/mobile/api/continue-preview', '/mobile/api/continue', '/mobile/api/review-stop', '/mobile/api/review-stalled', '/mobile/api/review-link', '/mobile/api/resume', '/mobile/api/auto-resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/refresh', '/mobile/api/accounts/switch') and not browser_api.handles(self.path) and not projects_api.handles(self.path) and not groups_api.handles(self.path) and not codex_level.handles(self.path) and not tts.handles(self.path) and not friday_proxy.handles(self.path) and not live_mode.handles(self.path):
             self.respond(404, {'error': 'Not found'})
             return
         # Reject unauthenticated and cross-origin submissions.
@@ -1558,6 +1568,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if projects_api.handles(self.path):
             projects_api.post(self)
+            return
+        if groups_api.handles(self.path):
+            groups_api.post(self)
             return
         if codex_level.handles(self.path):
             codex_level.post(self)
@@ -1819,8 +1832,16 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(pane, str) or not re.fullmatch(r'%[0-9]+', pane) or direction not in ('right', 'down'):
                     raise ValueError('Select a pane and split right or down.')
                 choose(pane)
+                group = body.get('group')  # "+" in a group: "" = Main, or a group id of the pane's session
+                if group is not None:
+                    try:
+                        if group != '':
+                            groups.find_in_session_of(pane, group)
+                    except groups.GroupError as exc:
+                        self.respond(exc.status, {'error': str(exc)})
+                        return
                 with SEND_LOCK:
-                    new_pane = new_window_after(pane, subprocess.run)
+                    new_pane = new_window_after(pane, subprocess.run, group=group)
                 self.respond(201, {'pane': new_pane})
                 return
             if self.path == '/mobile/api/review-link':
