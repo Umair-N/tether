@@ -106,6 +106,8 @@ def resume_stalled(worker, reviewer, request_id, action, *, last_reply=None, rev
         if action == 'latest' and (last_reply is None or reviewer_entry is None
                                    or _digest(last_reply(reviewer_entry)) != link.get('stalled_reply')):
             raise ValueError('The reviewer replied again. Open the tab.')
+        if action == 'latest':
+            link['send_reply'] = link['stalled_reply']
         link.pop('stalled')
         link.pop('stalled_reply', None)
         if action == 'resend':
@@ -222,30 +224,38 @@ def _step(link, entries, status, send, last_reply, awaiting, clear, feedback_sen
                     stalled_replies[link['worker'], link['reviewer']] = latest
                 link['awaiting'] = False
         elif reviewer_state == 'Idle':
-            reply = (reply if anchored else last_reply(reviewer)).strip()
-            if reply.upper().startswith('APPROVED'):
-                text = (f"[Tether review] Approved by the reviewer tab ({link['reviewer']}):\n\n"
-                        f'{_bounded_reply(reply, reviewer)}\n\nThe review is complete. Do the next step your instructions give '
-                        'for an approved review, then stop.')
-                if _send_worker(link, worker, text, state, send, clear, feedback_sent):
-                    link.pop('rounds', None)
-                    link.pop('empty_rounds', None)
-                    link.pop('paused', None)
-                    link['awaiting'] = False
-                    link['approved_turn'] = True
-                    link['approved_before'] = _digest(last_reply(worker))
-            elif _at_round_limit(link):
-                link['paused'] = True
+            raw = reply if anchored else last_reply(reviewer)
+            if not anchored and 'send_reply' in link and _digest(raw) != link['send_reply']:
+                link['stalled'] = secrets.token_hex(4)
+                link['stalled_reply'] = _digest(raw)
+                stalled_replies[link['worker'], link['reviewer']] = raw
                 link['awaiting'] = False
             else:
-                text = (f"[Tether review] Feedback from the reviewer tab ({link['reviewer']}):\n\n"
-                        f'{_bounded_reply(reply, reviewer)}\n\nFix what it raises, then stop and wait.')
-                if _send_worker(link, worker, text, state, send, clear, feedback_sent):
-                    key = 'empty_rounds' if link.pop('empty_turn', False) else 'rounds'
-                    link[key] = link.get(key, 0) + 1
+                reply = raw.strip()
+                if reply.upper().startswith('APPROVED'):
+                    text = (f"[Tether review] Approved by the reviewer tab ({link['reviewer']}):\n\n"
+                            f'{_bounded_reply(reply, reviewer)}\n\nThe review is complete. Do the next step your instructions give '
+                            'for an approved review, then stop.')
+                    if _send_worker(link, worker, text, state, send, clear, feedback_sent):
+                        link.pop('rounds', None)
+                        link.pop('empty_rounds', None)
+                        link.pop('paused', None)
+                        link['awaiting'] = False
+                        link['approved_turn'] = True
+                        link['approved_before'] = _digest(last_reply(worker))
+                elif _at_round_limit(link):
+                    link['paused'] = True
                     link['awaiting'] = False
+                else:
+                    text = (f"[Tether review] Feedback from the reviewer tab ({link['reviewer']}):\n\n"
+                            f'{_bounded_reply(reply, reviewer)}\n\nFix what it raises, then stop and wait.')
+                    if _send_worker(link, worker, text, state, send, clear, feedback_sent):
+                        key = 'empty_rounds' if link.pop('empty_turn', False) else 'rounds'
+                        link[key] = link.get(key, 0) + 1
+                        link['awaiting'] = False
         if not link['awaiting']:
-            for key in ('wait_ticks', 'idle_ticks', 'reviewer_before', 'reviewer_seen_working', 'retries', 'request_id'):
+            for key in ('wait_ticks', 'idle_ticks', 'reviewer_before', 'reviewer_seen_working',
+                        'retries', 'request_id', 'send_reply'):
                 link.pop(key, None)
         return link
     if state == 'Working':
@@ -288,6 +298,7 @@ def _step(link, entries, status, send, last_reply, awaiting, clear, feedback_sen
         if delivered:
             link.pop('stalled', None)
             link.pop('stalled_reply', None)
+            link.pop('send_reply', None)
             link['request_id'] = request_id
             if mark is not None and mark == link.get('work_mark'):
                 link['empty_turn'] = True
