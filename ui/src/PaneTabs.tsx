@@ -152,6 +152,7 @@ export const PaneTabs = forwardRef<HTMLDivElement, Props>(function PaneTabs({ se
     if (closing && !tabIds.includes(before.active)) box.querySelector<HTMLElement>('[aria-selected="true"]')?.focus({ preventScroll: true })
     scrollBySession.set(session.id, box.scrollLeft)
     const observer = new ResizeObserver(place)
+    observer.observe(box)  // A layout change can move the tabs (Zed centres them) without resizing any of them.
     for (const tab of box.querySelectorAll('[role="tab"]')) observer.observe(tab)
     box.addEventListener('scroll', save, { passive: true })
     return () => {

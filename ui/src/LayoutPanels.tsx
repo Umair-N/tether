@@ -16,8 +16,9 @@ const focusWaiting = (id: string) => document.querySelector<HTMLButtonElement>(`
 export function WaitingPanel({ api, cards, edge, asks, onOpen, onUpdate }: { api: Api; cards: HomeCard[]; edge?: boolean; asks?: ReactNode; onOpen: (pane: Pane) => void; onUpdate: () => void }) {
   const { busy, errors, answer, fail, onAnswerKey } = useAnswers({ api, items: cards, active: true, onUpdate, focusRow: focusWaiting })
   const onKey = (event: ReactKeyboardEvent<HTMLLIElement>, card: HomeCard) => { if (card.kind !== 'working' && card.kind !== 'done') onAnswerKey(event, card) }
-  return <section className="l-panel l-waiting" data-edge={edge ? '' : undefined} aria-labelledby="l-waiting-title">
-    <h2 id="l-waiting-title" className="l-panel-title"><span className="state-dot approval" aria-hidden="true" />Needs you<span className="l-count">{cards.length}</span></h2>
+  // With Attention mode on, the "Waiting on you" box (asks) has its own title and count; a second "Needs you 0" above it read as a contradiction.
+  return <section className="l-panel l-waiting" data-edge={edge ? '' : undefined} {...asks ? { 'aria-label': 'Waiting on you' } : { 'aria-labelledby': 'l-waiting-title' }}>
+    {!asks && <h2 id="l-waiting-title" className="l-panel-title"><span className="state-dot approval" aria-hidden="true" />Needs you<span className="l-count">{cards.length}</span></h2>}
     {asks}
     {cards.length ? <ul className="l-waiting-list">{cards.map(card => <Card key={`${card.pane.id}:${card.kind}${card.ask ?? ''}`} api={api} card={card} group="needs" waiting={busy === card.pane.id} error={errors[card.pane.id]}
       onOpen={onOpen} onAnswer={answer} onFail={fail} onKey={event => onKey(event, card)} onMarkRead={() => undefined} />)}</ul>

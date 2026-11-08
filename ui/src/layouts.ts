@@ -156,7 +156,7 @@ export function useCustomLayouts(api: Api, active = true) {
   useEffect(() => {
     if (!active) return
     const controller = new AbortController()
-    api<{ folder?: unknown; layouts?: unknown; errors?: unknown }>('/mobile/api/layouts', undefined, controller.signal).then(data => {
+    api<{ folder?: unknown; layouts?: unknown; errors?: unknown }>('layouts', undefined, controller.signal).then(data => {
       const errors = Array.isArray(data.errors) ? data.errors.filter(isObject).map(item => ({ file: String(item.file ?? ''), reason: String(item.reason ?? '') })) : []
       const layouts: Layout[] = []
       for (const raw of Array.isArray(data.layouts) ? data.layouts : []) {
