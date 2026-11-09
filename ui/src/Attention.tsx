@@ -14,25 +14,28 @@ import './attention.css'
 
 const seenText = (ask: Ask) => ask.opened ? 'Opened, not answered' : 'Not opened'
 
-/** The tabs that wait on you, oldest first. limit: rows before "+N more" (0 shows all). No asks: no box. */
-export function WaitingBox({ items, sessions, selected, limit = 3, onOpen }: { items: Waiting[]; sessions: Session[]; selected?: string; limit?: number; onOpen: (pane: Pane) => void }) {
+/** The tabs that wait on you, oldest first. limit: rows before "+N more" (0 shows all). No asks: no box.
+ *  variant "list": the sidebar form, a plain section inside the session list's scroll area, one line of text per row. */
+export function WaitingBox({ items, sessions, selected, limit = 3, variant = 'box', onOpen }: { items: Waiting[]; sessions: Session[]; selected?: string; limit?: number; variant?: 'box' | 'list'; onOpen: (pane: Pane) => void }) {
   const now = useNow()
   const id = useId()
   const [all, setAll] = useState(false)
   if (!items.length) return null
+  const list = variant === 'list'
   const shown = limit && !all ? items.slice(0, limit) : items
-  return <section className="waiting-box" aria-labelledby={id}>
-    <h2 className="waiting-title" id={id}><Hand size={14} aria-hidden="true" />Waiting on you<span className="waiting-count">{items.length}</span></h2>
+  return <section className={list ? 'waiting-box waiting-list' : 'waiting-box'} aria-labelledby={id}>
+    <h2 className="waiting-title" id={id}><Hand size={list ? 13 : 14} aria-hidden="true" />Waiting on you<span className="waiting-count">{list ? '· ' : ''}{items.length}</span></h2>
     {shown.map(({ pane, ask }) => {
       const session = sessions.find(item => item.id === pane.tmux_session)
       const name = chatTitle(pane, session), waited = age(ask.since, now)
-      return <button key={pane.id} type="button" className="waiting-row" aria-current={selected === pane.id ? 'page' : undefined}
+      const seen = `${session && session.name !== name ? `${session.name} · ` : ''}${seenText(ask)}`
+      return <button key={pane.id} type="button" className="waiting-row" aria-current={selected === pane.id ? 'page' : undefined} title={list ? seen : undefined}
         aria-label={`${name}, waited ${waited}, ${seenText(ask).toLowerCase()}`} onClick={() => onOpen(pane)}>
-        <span className="waiting-dot" aria-hidden="true" />
+        <span className={ask.opened ? 'waiting-dot opened' : 'waiting-dot'} aria-hidden="true" />
         <span className="waiting-name">{name}</span>
         <span className={now - ask.since >= LATE ? 'waiting-age late' : 'waiting-age'}>{waited}</span>
         {ask.next && <span className="waiting-next">{ask.next}</span>}
-        <span className="waiting-seen">{session && session.name !== name ? `${session.name} · ` : ''}{seenText(ask)}</span>
+        {!list && <span className="waiting-seen">{seen}</span>}
       </button>
     })}
     {!!limit && items.length > limit && <button type="button" className="waiting-more" aria-expanded={all} onClick={() => setAll(!all)}>{all ? 'Show fewer' : `+${items.length - limit} more`}</button>}

@@ -71,6 +71,12 @@
 .home-card .inbox-actions { padding: 0 12px 11px; }
 .home-card .inbox-error { padding: 0 12px 11px; }
 
+/* Waiting on you (Attention mode): the agent asked you something in its last reply. Same card shape as Needs you, with the hand mark and a two-line ask. */
+.home-group-head h2 svg, .home-asks-mark { flex: none; color: var(--attention); }
+.home-card.asks { border-color: color-mix(in srgb, var(--attention) 20%, var(--surface)); }
+.home-card.asks .home-time.late { color: var(--attention); font-weight: 600; }
+.home-card.asks .home-status { color: var(--text); font-size: 12.5px; white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
+
 /* Done: a flat row with no surface, because nothing more happens here. Its text lines up with the group's name. The mark-read button sits at the row's end, under the time. With a pointer it shows on hover or focus only. */
 .home-group.done ul { gap: 2px; }
 .home-card.done { margin-inline: -13px; border-color: transparent; background: none; box-shadow: none; }
@@ -118,8 +124,8 @@
   .home-empty { padding-inline: 13px; }
   .home-card.done { margin-inline: 0; }
   .home-card.needs { background: var(--surface); }
-  .home-group.needs { grid-column: 1 / -1; }
-  .home-group.needs ul { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .home-group:is(.needs, .asks) { grid-column: 1 / -1; }
+  .home-group:is(.needs, .asks) ul { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 /* Wide page: three lanes that scroll on their own, so a long Working list cannot push Needs you away. All three show, so the head states scope instead of offering jumps. Needs you is wider only when it has cards to answer. */
@@ -130,8 +136,10 @@
   .home-board { flex: 1; min-height: 0; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: minmax(0, 1fr); padding-bottom: 16px; }
   .home-board:has(.home-group.needs .home-card) { grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) minmax(0, 1fr); }
   .home-group { display: flex; flex-direction: column; min-height: 0; padding-bottom: 0; }
-  .home-group.needs { grid-column: auto; }
-  .home-group.needs ul { display: flex; }
+  .home-group:is(.needs, .asks) { grid-column: auto; }
+  .home-group:is(.needs, .asks) ul { display: flex; }
+  .home-board:has(.home-group.asks) { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1fr); }
+  .home-board:has(.home-group.asks):not(:has(.home-group.needs .home-card)) { grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr); }
   .home-group-head { position: static; flex: none; }
   .home-group ul { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; padding: 2px 2px 12px; margin-inline: -2px; }
 }

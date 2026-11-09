@@ -11,7 +11,23 @@
 .waiting-age.late { color: var(--attention); font-weight: 700; }
 .waiting-next { display: -webkit-box; grid-column: 2 / 4; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; color: var(--muted); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
 .waiting-seen { grid-column: 2 / 4; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.waiting-dot.opened { background: none; box-shadow: inset 0 0 0 1.5px var(--attention); }
 .waiting-more { min-height: 32px; padding: 0 6px; border: 0; background: none; color: var(--attention); font: inherit; font-size: 12px; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+
+/* Sidebar form: a section of the session list, like Pinned or Terminals. No card or wash; the dot and the late age carry the colour. */
+.waiting-box.waiting-list { margin: 0 0 8px; padding: 0; border: 0; border-radius: 0; background: none; }
+.waiting-list .waiting-title { padding: 4px 10px 6px; color: var(--muted); font-size: 12px; font-weight: 400; }
+.waiting-list .waiting-title svg { color: var(--attention); }
+.waiting-list .waiting-count { margin-left: 0; }
+.waiting-list .waiting-row { gap: 1px 10px; min-height: 0; padding: 6px 10px; border-radius: var(--radius); }
+.waiting-list .waiting-row:hover { background: var(--hover); }
+.waiting-list .waiting-row[aria-current='page'] { background: var(--hover); }
+.waiting-list .waiting-name { font-size: 13px; }
+.waiting-list .waiting-age { font-size: 11.5px; }
+.waiting-list .waiting-next { display: block; -webkit-line-clamp: unset; line-clamp: none; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.waiting-list .waiting-more { padding: 0 10px; color: var(--muted); text-decoration: none; }
+.waiting-list .waiting-more:hover { color: var(--text); }
+@media (pointer: coarse) { .waiting-list .waiting-row { min-height: 44px; } }
 
 .oldest-button { display: inline-flex; flex: none; align-items: center; gap: 8px; min-height: 36px; padding: 0 12px; border: 0; border-radius: 999px; background: var(--attention); color: var(--bg); font: inherit; font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer; }
 .oldest-button:hover { filter: brightness(1.08); }

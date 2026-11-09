@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import { groupOf, placeName } from './groups'
 import type { FocusEvent as ReactFocusEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
-import { Check, Menu, Plus, Terminal } from 'lucide-react'
+import { Check, Hand, Menu, Plus, Terminal } from 'lucide-react'
 import type { Api, Pane } from './api'
 import { AnswerActions } from './answers'
 import { useAnswers } from './useAnswers'
@@ -10,6 +10,10 @@ import { cardTime } from './homeGroups'
 import type { HomeCard, HomeGroups } from './homeGroups'
 import { KIND_LABEL } from './needs'
 import { WorktreeMark } from './Worktree'
+import { LATE, useNow } from './attention'
+import type { Waiting } from './attention'
+import { age } from './needs'
+import type { Session } from './Sidebar'
 import { AgentIcon, agentNames, chatTitle, sessionName, shownIndex } from './Sidebar'
 import './Home.css'
 
@@ -24,7 +28,7 @@ const GROUPS: { key: GroupKey; label: string; dot: string; empty: string }[] = [
   { key: 'done', label: 'Done', dot: 'done', empty: 'You saw every finished turn.' },
 ]
 
-const headline = (count: number) => count ? `${count} agent${count === 1 ? ' needs' : 's need'} you` : 'Nothing needs you'
+const headline = (count: number, asks: number) => count ? `${count} agent${count === 1 ? ' needs' : 's need'} you` : asks ? `${asks} tab${asks === 1 ? ' waits' : 's wait'} on you` : 'Nothing needs you'
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
 const groupId = (key: GroupKey) => `home-group-${key}`
 const focusRow = (id: string) => document.querySelector<HTMLButtonElement>(`.home [data-pane="${CSS.escape(id)}"] .home-open`)?.focus()
@@ -78,6 +82,35 @@ export function Card({ api, card, group, waiting, error, onOpen, onAnswer, onFai
   </li>
 }
 
+/** Attention mode: the tabs whose last reply asks you something, oldest first. Each card opens the tab. */
+function AsksGroup({ items, sessions, onOpen }: { items: Waiting[]; sessions: Session[]; onOpen: (pane: Pane) => void }) {
+  const now = useNow()
+  return <section id="home-group-asks" className="home-group asks" aria-labelledby="home-group-asks-title">
+    <div className="home-group-head">
+      <h2 id="home-group-asks-title"><Hand size={14} aria-hidden="true" />Waiting on you</h2>
+      <span className="home-count">{items.length}</span>
+    </div>
+    <ul>{items.map(({ pane, ask }) => {
+      const session = sessions.find(item => item.id === pane.tmux_session)
+      const title = chatTitle(pane, session)
+      const source = [agentNames[pane.agent], session && session.name !== title ? session.name : ''].filter(Boolean).join(' · ')
+      const seen = ask.opened ? 'Opened, not answered' : 'Not opened'
+      return <li key={`${pane.id}:${ask.since}`} className="home-card asks" data-pane={pane.id}>
+        <button type="button" className="home-open" onClick={() => onOpen(pane)} aria-label={`${title}, waited ${age(ask.since, now)}, ${seen.toLowerCase()}`}>
+          <span className="home-card-top">
+            <span className="home-icon"><AgentIcon agent={pane.agent} icon={pane.pane_icon} size={14} /></span>
+            <span className="home-source">{source}</span>
+            <span className={now - ask.since >= LATE ? 'home-time late' : 'home-time'}>{age(ask.since, now)}</span>
+          </span>
+          <span className="home-title" title={title}>{title}</span>
+          {ask.next && <span className="home-status" title={ask.next}>{ask.next}</span>}
+          <span className="home-meta">{seen}</span>
+        </button>
+      </li>
+    })}</ul>
+  </section>
+}
+
 function Blank({ title, text, children, onMenu }: { title: string; text: string; children?: ReactNode; onMenu: () => void }) {
   return <section className="home home-blank">
     <button type="button" className="icon-button mobile-menu" aria-label="Open sessions" onClick={onMenu}><Menu /></button>
@@ -85,11 +118,14 @@ function Blank({ title, text, children, onMenu }: { title: string; text: string;
   </section>
 }
 
-export function Home({ api, groups, hasAgents, loaded, loading, error, onRetry, onOpen, onMarkRead, onUpdate, onNew, onMenu }: {
-  api: Api; groups: HomeGroups; hasAgents: boolean; loaded: boolean; loading: boolean; error: string
+export function Home({ api, groups: all, asks = [], sessions = [], hasAgents, loaded, loading, error, onRetry, onOpen, onMarkRead, onUpdate, onNew, onMenu }: {
+  api: Api; groups: HomeGroups; asks?: Waiting[]; sessions?: Session[]; hasAgents: boolean; loaded: boolean; loading: boolean; error: string
   onRetry: () => void; onOpen: (pane: Pane) => void; onMarkRead: (panes: string[]) => void; onUpdate: () => void; onNew: () => void; onMenu: () => void
 }) {
   const root = useRef<HTMLElement>(null)
+  // A tab that waits on you shows in Waiting on you only, not again in Done.
+  const asking = new Set(asks.map(item => item.pane.id))
+  const groups = asking.size ? { ...all, done: all.done.filter(card => !asking.has(card.pane.id)) } : all
   const cards = [...groups.needs, ...groups.working, ...groups.done]
   const sessionCount = new Set(cards.map(card => card.session?.id ?? card.pane.id)).size
   const rows = () => [...(root.current?.querySelectorAll<HTMLButtonElement>('.home-open') ?? [])]
@@ -144,10 +180,11 @@ export function Home({ api, groups, hasAgents, loaded, loading, error, onRetry, 
     <div className="home-inner">
       <header className="home-head">
         <button type="button" className="icon-button mobile-menu" aria-label="Open sessions" onClick={onMenu}><Menu /></button>
-        <h1 tabIndex={-1} aria-live="polite">{loaded ? headline(groups.needs.length) : 'Finding your agents…'}</h1>
+        <h1 tabIndex={-1} aria-live="polite">{loaded ? headline(groups.needs.length, asks.length) : 'Finding your agents…'}</h1>
         {loaded && <button type="button" className="secondary home-new" onClick={onNew} aria-label="New session" title="New session"><Plus size={16} /><span>New session</span></button>}
         {loaded && cards.length > 0 && <p className="home-scope">{plural(cards.length, 'active agent')} across {plural(sessionCount, 'session')}</p>}
         {loaded && <div className="home-summary" role="group" aria-label="Jump to a group">
+          {asks.length > 0 && <button type="button" onClick={() => document.getElementById('home-group-asks')?.scrollIntoView({ block: 'start' })}><Hand size={13} aria-hidden="true" className="home-asks-mark" /><b>{asks.length}</b> Waiting on you</button>}
           {GROUPS.map(group => <button key={group.key} type="button" onClick={() => document.getElementById(groupId(group.key))?.scrollIntoView({ block: 'start' })}>
             <span className={`state-dot ${group.dot}`} aria-hidden="true" /><b>{groups[group.key].length}</b> {group.label}
           </button>)}
@@ -155,6 +192,7 @@ export function Home({ api, groups, hasAgents, loaded, loading, error, onRetry, 
       </header>
       {error && loaded && <p className="home-stale" role="alert"><span>Tether cannot refresh this list. {error}</span><button type="button" className="ghost sm" onClick={onRetry}>Try again</button></p>}
       <div className={`home-board${loaded ? '' : ' loading'}`} aria-busy={!loaded}>
+        {loaded && asks.length > 0 && <AsksGroup items={asks} sessions={sessions} onOpen={onOpen} />}
         {GROUPS.map(group => {
           const items = groups[group.key]
           return <section key={group.key} id={groupId(group.key)} className={`home-group ${group.key}`} aria-labelledby={`${groupId(group.key)}-title`}>
