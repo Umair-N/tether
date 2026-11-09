@@ -42,7 +42,7 @@ import { PANELS, TOOLBAR_PANELS, extraPanels, togglePanelKind } from './panels'
 import type { PanelKind, SetPanels } from './panels'
 import type { Side } from './workspace'
 import { withoutShells } from './sideShells'
-import type { DesktopLayout, SidePin } from './prefs'
+import type { DesktopLayout, SidePin, WaitOrder } from './prefs'
 import { CommandMenu } from './CommandMenu'
 import type { Command } from './CommandMenu'
 import { Shortcuts } from './Shortcuts'
@@ -253,6 +253,7 @@ function App() {
   const groups = useMemo(() => homeGroups(panes, sessions, prefs.seen, openId, asks), [panes, sessions, prefs.seen, openId, asks])
   // Attention mode: the tabs whose ask waits on you (oldest first). The Home badge counts them with the open prompts.
   const now = useNow()
+  const waitSort = { order: prefs.waitingOrder ?? 'oldest', onOrder: (waitingOrder: WaitOrder) => update(() => ({ waitingOrder })) }
   const waiting = useMemo(() => prefs.attention ? waitingAsks(panes, now) : [], [prefs.attention, panes, now])
   const waitingCount = new Set([...groups.needs.map(item => item.pane.id), ...waiting.map(item => item.pane.id)]).size
   const stacked = !!desk.stack && slotPanes.length === 2
@@ -711,7 +712,7 @@ function App() {
       onContext: group => setProject({ session: owner.id, group: group.id }),
     } : undefined
     const onDropGroup = owner ? (id: string, group: string) => { api('groups/move', { session: owner.id, pane: id, group: group || null }).then(() => refresh(), error => setNotice(errorText(error))) } : undefined
-    return <Chat headerExtra={view ? undefined : <OldestButton compact items={waiting} sessions={sessions} selected={openId} onOpen={openPane} />}
+    return <Chat headerExtra={view ? undefined : <OldestButton compact sort={waitSort} items={waiting} sessions={sessions} selected={openId} onOpen={openPane} />}
       groupHooks={groupHooks} onDropGroup={onDropGroup} askBar={ask && target.writable ? <AskChips api={api} pane={target} ask={ask} onDone={setNotice} onUpdate={() => void refresh()} /> : undefined} allPanes={panes} sidePin={sidePin} liveReplyPreview={prefs.liveReplyPreview} key={target.id} pane={target} session={owner} api={api} onMenu={() => setDrawer(true)} onUpdate={() => void refresh()} draft={prefs.drafts[target.id]?.text ?? ''} setDraft={text => setDraft(target.id, text)} onOpenPane={openPane} onSessionActions={at => { if (owner) { setMenuAt(view ? at : undefined); setActionsDelete(false); setActions(owner.id) } }} onPaneActions={(id, at) => { setMenuAt(view ? at : undefined); setPaneActions(id) }} onSplit={direction => void split(direction, target)} onFork={() => void fork(target)} onContinued={id => void openNewPane(id).catch(error => setNotice(errorText(error)))} onReorder={ids => { if (owner) update(current => ({ paneOrder: { ...current.paneOrder, [owner.id]: reorderPanes(groupSessions(panes).find(item => item.id === owner.id)!.panes, current.paneOrder[owner.id], ids) } })) }} micOk={!prefs.voiceOff} chime={prefs.voiceSound} readAloud={prefs.readAloud} handsFree={prefs.handsFree} slot={slot} running={running} />
   }
   // Layouts (layouts.ts, layouts.css): the grid shows on the wide workspace screen only. Home, Files, Share and the
@@ -745,9 +746,9 @@ function App() {
       panelTools={<PanelTools desk={desk} pane={pane} setPanels={setPanels} onSideChat={() => void sideChat()} />}
       panels={<PanelColumn api={api} desk={desk} pane={pane} setPanels={setPanels} renderChat={id => { const target = panes.find(item => item.id === id); return target ? chatFor(target) : null }} />} /> : chatFor(pane)) : null}
     {pane && view && wide && <BrowserFloat api={api} pane={pane} onDock={() => { if (!hasPanel(panelCols(desk), 'browser')) togglePanelKind(setPanels, 'browser') }} onClose={() => { if (hasPanel(panelCols(desk), 'browser')) togglePanelKind(setPanels, 'browser') }} />}
-    {lookGrid && layoutHas(lookShown, 'waiting') && <WaitingPanel api={api} cards={groups.needs} asks={prefs.attention && waiting.length ? <WaitingBox items={waiting} sessions={sessions} selected={openId} limit={0} onOpen={openPane} /> : undefined} edge={lookShown.grid.columns.some(column => (column.top === 'waiting' || column.bottom === 'waiting') && (column.main !== 'sessions' || desk.sidebar))} onOpen={openPane} onUpdate={() => void refresh()} />}
+    {lookGrid && layoutHas(lookShown, 'waiting') && <WaitingPanel api={api} cards={groups.needs} asks={prefs.attention && waiting.length ? <WaitingBox items={waiting} sessions={sessions} selected={openId} limit={0} sort={waitSort} onOpen={openPane} /> : undefined} edge={lookShown.grid.columns.some(column => (column.top === 'waiting' || column.bottom === 'waiting') && (column.main !== 'sessions' || desk.sidebar))} onOpen={openPane} onUpdate={() => void refresh()} />}
     {lookGrid && layoutHas(lookShown, 'status') && <StatusColumn groups={groups} panes={panes} sessions={sessions} selected={openId} onOpen={openPane} />}
-    {home && <Home api={api} groups={groups} asks={waiting} sessions={sessions} hasAgents={hasAgents(panes)} loaded={!!data} loading={loading} error={error} onRetry={() => void refresh()} onOpen={openPane} onMarkRead={markRead} onUpdate={() => void refresh()} onNew={() => setNewSession(true)} onMenu={() => setDrawer(true)} />}
+    {home && <Home api={api} groups={groups} asks={waiting} sessions={sessions} sort={waitSort} hasAgents={hasAgents(panes)} loaded={!!data} loading={loading} error={error} onRetry={() => void refresh()} onOpen={openPane} onMarkRead={markRead} onUpdate={() => void refresh()} onNew={() => setNewSession(true)} onMenu={() => setDrawer(true)} />}
     {files && <Explorer api={api} panes={panes} pane={pane} target={filesTarget} onTarget={() => setFilesTarget(null)} onAddToMessage={addToMessage} onTerminalHere={terminalHere} onPin={pinTarget} />}
     {share && <Share wide={wide} onAddToMessage={wide ? addToMessage : pane ? paths => {
       const before = prefs.drafts[pane.id]?.text ?? ''

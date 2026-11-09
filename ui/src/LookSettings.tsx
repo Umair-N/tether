@@ -21,7 +21,7 @@ function SaveLook({ next, onSave, onSkip, onCancel }: { next: Layout; onSave: ()
     <div className="look-swatches" aria-hidden="true">{colours.map((colour, at) => <span key={SWATCHES[at]} style={{ background: colour }} />)}</div>
     <div className="sheet-buttons look-save-buttons">
       <button type="button" className="secondary" onClick={onCancel}>Cancel</button>
-      <button type="button" className="secondary" onClick={onSkip}>Apply without saving</button>
+      <button type="button" className="secondary" onClick={onSkip}>Don’t save</button>
       <button type="button" className="primary" onClick={onSave}>Save as “My look”, then apply</button>
     </div>
   </dialog>

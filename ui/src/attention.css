@@ -29,6 +29,13 @@
 .waiting-list .waiting-more:hover { color: var(--text); }
 @media (pointer: coarse) { .waiting-list .waiting-row { min-height: 44px; } }
 
+.waiting-sort { width: 28px; height: 28px; min-height: 0; margin: -6px -4px -6px 0; color: var(--muted); }
+.waiting-sort:hover { color: var(--text); }
+.waiting-list .waiting-title .waiting-sort { margin-left: auto; }
+.waiting-box:not(.waiting-list) .waiting-sort { color: var(--attention); }
+.home-sort { margin-left: auto; }
+@media (pointer: coarse) { .waiting-sort { width: 40px; height: 40px; margin-block: -10px; } }
+
 .oldest-button { display: inline-flex; flex: none; align-items: center; gap: 8px; min-height: 36px; padding: 0 12px; border: 0; border-radius: 999px; background: var(--attention); color: var(--bg); font: inherit; font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer; }
 .oldest-button:hover { filter: brightness(1.08); }
 .oldest-button.compact { gap: 5px; min-width: 44px; min-height: 36px; padding: 0 10px; }

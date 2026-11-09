@@ -11,6 +11,8 @@ import type { HomeCard, HomeGroups } from './homeGroups'
 import { KIND_LABEL } from './needs'
 import { WorktreeMark } from './Worktree'
 import { LATE, useNow } from './attention'
+import { OldestButton, SortButton, ordered } from './Attention'
+import type { WaitSort } from './Attention'
 import type { Waiting } from './attention'
 import { age } from './needs'
 import type { Session } from './Sidebar'
@@ -83,14 +85,15 @@ export function Card({ api, card, group, waiting, error, onOpen, onAnswer, onFai
 }
 
 /** Attention mode: the tabs whose last reply asks you something, oldest first. Each card opens the tab. */
-function AsksGroup({ items, sessions, onOpen }: { items: Waiting[]; sessions: Session[]; onOpen: (pane: Pane) => void }) {
+function AsksGroup({ items, sessions, sort, onOpen }: { items: Waiting[]; sessions: Session[]; sort?: WaitSort; onOpen: (pane: Pane) => void }) {
   const now = useNow()
   return <section id="home-group-asks" className="home-group asks" aria-labelledby="home-group-asks-title">
     <div className="home-group-head">
       <h2 id="home-group-asks-title"><Hand size={14} aria-hidden="true" />Waiting on you</h2>
       <span className="home-count">{items.length}</span>
+      {sort && <SortButton {...sort} className="home-sort" />}
     </div>
-    <ul>{items.map(({ pane, ask }) => {
+    <ul>{ordered(items, sort?.order).map(({ pane, ask }) => {
       const session = sessions.find(item => item.id === pane.tmux_session)
       const title = chatTitle(pane, session)
       const source = [agentNames[pane.agent], session && session.name !== title ? session.name : ''].filter(Boolean).join(' · ')
@@ -118,8 +121,8 @@ function Blank({ title, text, children, onMenu }: { title: string; text: string;
   </section>
 }
 
-export function Home({ api, groups: all, asks = [], sessions = [], hasAgents, loaded, loading, error, onRetry, onOpen, onMarkRead, onUpdate, onNew, onMenu }: {
-  api: Api; groups: HomeGroups; asks?: Waiting[]; sessions?: Session[]; hasAgents: boolean; loaded: boolean; loading: boolean; error: string
+export function Home({ api, groups: all, asks = [], sessions = [], sort, hasAgents, loaded, loading, error, onRetry, onOpen, onMarkRead, onUpdate, onNew, onMenu }: {
+  api: Api; groups: HomeGroups; asks?: Waiting[]; sessions?: Session[]; sort?: WaitSort; hasAgents: boolean; loaded: boolean; loading: boolean; error: string
   onRetry: () => void; onOpen: (pane: Pane) => void; onMarkRead: (panes: string[]) => void; onUpdate: () => void; onNew: () => void; onMenu: () => void
 }) {
   const root = useRef<HTMLElement>(null)
@@ -181,6 +184,7 @@ export function Home({ api, groups: all, asks = [], sessions = [], hasAgents, lo
       <header className="home-head">
         <button type="button" className="icon-button mobile-menu" aria-label="Open sessions" onClick={onMenu}><Menu /></button>
         <h1 tabIndex={-1} aria-live="polite">{loaded ? headline(groups.needs.length, asks.length) : 'Finding your agents…'}</h1>
+        {loaded && asks.length > 0 && <OldestButton items={asks} sessions={sessions} onOpen={onOpen} />}
         {loaded && <button type="button" className="secondary home-new" onClick={onNew} aria-label="New session" title="New session"><Plus size={16} /><span>New session</span></button>}
         {loaded && cards.length > 0 && <p className="home-scope">{plural(cards.length, 'active agent')} across {plural(sessionCount, 'session')}</p>}
         {loaded && <div className="home-summary" role="group" aria-label="Jump to a group">
@@ -192,7 +196,7 @@ export function Home({ api, groups: all, asks = [], sessions = [], hasAgents, lo
       </header>
       {error && loaded && <p className="home-stale" role="alert"><span>Tether cannot refresh this list. {error}</span><button type="button" className="ghost sm" onClick={onRetry}>Try again</button></p>}
       <div className={`home-board${loaded ? '' : ' loading'}`} aria-busy={!loaded}>
-        {loaded && asks.length > 0 && <AsksGroup items={asks} sessions={sessions} onOpen={onOpen} />}
+        {loaded && asks.length > 0 && <AsksGroup items={asks} sessions={sessions} sort={sort} onOpen={onOpen} />}
         {GROUPS.map(group => {
           const items = groups[group.key]
           return <section key={group.key} id={groupId(group.key)} className={`home-group ${group.key}`} aria-labelledby={`${groupId(group.key)}-title`}>

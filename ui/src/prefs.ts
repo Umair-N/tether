@@ -8,6 +8,7 @@ import type { Look, SavedLook } from './layouts'
 // SYNCED choices are shared by every device through the server (/mobile/api/prefs). The rest stay in this browser:
 // the open pane, the last pane per session, text size and expanded rows depend on the device.
 // Sessions are keyed by their tmux id ("$6"), so a rename keeps pins and order.
+export type WaitOrder = 'oldest' | 'newest'
 export interface Prefs {
   autoResume: boolean
   pinned: string[]
@@ -41,6 +42,7 @@ export interface Prefs {
   groupOf: Record<string, string>
   groupBy: GroupBy
   attention: boolean  // Attention mode: the "Waiting on you" box, header button and reply chips
+  waitingOrder: WaitOrder  // the Waiting on you lists: oldest first (default) or newest first
   seen: Record<string, number>
   // Tether's own order of the pane tabs, per session id. tmux pane order does not change.
   paneOrder: Record<string, string[]>
@@ -75,7 +77,7 @@ export interface ArchivedTab { thread: string | null; dir: string }
 export interface SidePin { pane: string; note?: string }
 const KEY = 'tmux-chat.prefs.v1'
 const CLEARED_KEEP = 2 * 86400  // Match CLEARED_KEEP in server/prefs_sync.py (seconds).
-const DEFAULTS: Prefs = { autoResume: true, pinned: [], sidePins: [], order: [], collapsed: { past: true }, expanded: {}, selected: null, lastPane: {}, voiceOff: false, voiceSound: true, readAloud: false, handsFree: false, agentBubble: true, liveReplyPreview: true, theme: 'system', scheme: 'claude', textSize: 'default', showPaths: false, tmuxWords: false, sort: 'smart', colors: {}, groups: [], groupOf: {}, groupBy: 'agent', attention: true, seen: {}, paneOrder: {}, drafts: {}, archived: {}, archivedTabs: {}, hosts: [], layout: {}, look: DEFAULT_LOOK, myLook: null }
+const DEFAULTS: Prefs = { autoResume: true, pinned: [], sidePins: [], order: [], collapsed: { past: true }, expanded: {}, selected: null, lastPane: {}, voiceOff: false, voiceSound: true, readAloud: false, handsFree: false, agentBubble: true, liveReplyPreview: true, theme: 'system', scheme: 'claude', textSize: 'default', showPaths: false, tmuxWords: false, sort: 'smart', colors: {}, groups: [], groupOf: {}, groupBy: 'agent', attention: true, waitingOrder: 'oldest', seen: {}, paneOrder: {}, drafts: {}, archived: {}, archivedTabs: {}, hosts: [], layout: {}, look: DEFAULT_LOOK, myLook: null }
 
 function keptDrafts(drafts: Record<string, Draft>) {
   const now = Date.now() / 1000
@@ -99,7 +101,7 @@ function load(): Prefs {
   return { ...prefs, drafts: keptDrafts(prefs.drafts) }
 }
 
-const SYNCED = ['pinned', 'sidePins', 'order', 'paneOrder', 'sort', 'colors', 'groups', 'groupOf', 'groupBy', 'seen', 'collapsed', 'showPaths', 'tmuxWords', 'liveReplyPreview', 'voiceOff', 'voiceSound', 'theme', 'scheme', 'drafts', 'archived', 'archivedTabs', 'hosts', 'layout', 'autoResume', 'attention'] as const
+const SYNCED = ['pinned', 'sidePins', 'order', 'paneOrder', 'sort', 'colors', 'groups', 'groupOf', 'groupBy', 'seen', 'collapsed', 'showPaths', 'tmuxWords', 'liveReplyPreview', 'voiceOff', 'voiceSound', 'theme', 'scheme', 'drafts', 'archived', 'archivedTabs', 'hosts', 'layout', 'autoResume', 'attention', 'waitingOrder'] as const
 type Shared = Partial<Pick<Prefs, typeof SYNCED[number]>>
 interface Stored { prefs: Shared; version: number }
 const PULL_MS = 20000
