@@ -39,7 +39,7 @@ function setup({ failConnect = false } = {}) {
   runInNewContext(ts.transpileModule(readFileSync('src/fridayAgent.ts', 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
   }).outputText, {
-    exports, window, Headers, Audio: class {},
+    exports, window, Headers, Audio: class {}, setTimeout, clearTimeout,
     require: name => {
       if (name === './deviceVoice') return { DeviceVoice }
       if (name === '@pipecat-ai/client-js') return { PipecatClient }

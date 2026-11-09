@@ -4,6 +4,16 @@ import { DeviceVoice, type VoiceKind } from './deviceVoice'
 const fridayPeerConnections = new Set<RTCPeerConnection>()
 const statsCounters = ['packetsLost', 'packetsReceived', 'concealedSamples', 'totalSamplesReceived', 'concealmentEvents'] as const
 
+function withTimeout<T>(work: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms)
+    work.then(
+      value => { clearTimeout(timer); resolve(value) },
+      failure => { clearTimeout(timer); reject(failure) },
+    )
+  })
+}
+
 // Friday agent: one WebRTC call to the local voice worker (server/friday_agent.py, through /mobile/api/live/offer).
 // The worker listens, thinks and speaks; this side plays its voice, runs the tools it asks for, and sends it chat events.
 // Client messages are {t, d}: state (chats), event (chat news to speak), say (exact words), note (silent context).
@@ -97,7 +107,10 @@ export class FridayAgent {
 
   /** Connect the call. Mic denial stays a DOMException. */
   async open() {
-    const [{ PipecatClient }, { SmallWebRTCTransport }] = await Promise.all([import('@pipecat-ai/client-js'), import('@pipecat-ai/small-webrtc-transport')])
+    const [{ PipecatClient }, { SmallWebRTCTransport }] = await withTimeout(
+      Promise.all([import('@pipecat-ai/client-js'), import('@pipecat-ai/small-webrtc-transport')]),
+      15000, 'The voice files did not load.',
+    )
     if (this.closed) return
     const headers = new Headers({ 'X-Codex-Mobile': '1' })
     const client = new PipecatClient({
@@ -146,24 +159,30 @@ export class FridayAgent {
       })
     }
     void this.voice.open().catch(failure => console.warn('Friday device voice unavailable', failure))
-    await client.initDevices()
-    if (this.closed) return
-    const OriginalPeerConnection = window.RTCPeerConnection
-    const peers = this.peers
-    window.RTCPeerConnection = class extends OriginalPeerConnection {
-      constructor(configuration?: RTCConfiguration) {
-        super(configuration)
-        fridayPeerConnections.add(this)
-        peers.add(this)
-      }
-    }
     try {
-      await client.connect()
+      await withTimeout(client.initDevices(), 10000, 'The microphone did not open. Close other apps that use it, then try again.')
+      if (this.closed) return
+      const OriginalPeerConnection = window.RTCPeerConnection
+      const peers = this.peers
+      window.RTCPeerConnection = class extends OriginalPeerConnection {
+        constructor(configuration?: RTCConfiguration) {
+          super(configuration)
+          fridayPeerConnections.add(this)
+          peers.add(this)
+        }
+      }
+      try {
+        await withTimeout(client.connect(), 20000, 'Friday did not answer.')
+      } finally {
+        window.RTCPeerConnection = OriginalPeerConnection
+      }
     } catch (failure) {
       void this.stopStats()
+      try {
+        for (const track of Object.values(client.tracks().local)) track?.stop()
+      } catch { /* Tracks may be unavailable before device initialization finishes. */ }
+      try { void client.disconnect().catch(() => {}) } catch { /* Preserve the startup failure. */ }
       throw failure
-    } finally {
-      window.RTCPeerConnection = OriginalPeerConnection
     }
     if (!this.closed && !this.statsStop) this.statsTimer = setInterval(() => { void this.reportStats() }, 5000)
   }
