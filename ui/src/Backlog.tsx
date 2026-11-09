@@ -36,7 +36,7 @@ function SourceTag({ source, links, verb = 'Added by' }: { source: Source; links
   const tab = tabOf(source, links.panes)
   if (tab && links.onOpenPane) {
     const open = links.onOpenPane
-    return <button type="button" className="backlog-tag live" title={`${full}. Open this tab.`} aria-label={`${verb} ${source.agent}: open ${tabName(tab)}`} onClick={() => open(tab)}>{source.agent} · {tabName(tab)}</button>
+    return <button type="button" className="backlog-tag backlog-tag-open" title={`${full}. Open this tab.`} aria-label={`${verb} ${source.agent}: open ${tabName(tab)}`} onClick={() => open(tab)}>{source.agent} · {tabName(tab)}</button>
   }
   const label = `${source.agent}${short ? ` · ${short}` : ''}`
   if (!source.chat) return <span className="backlog-tag" title={full}>{label}</span>
@@ -133,13 +133,13 @@ function ItemRow({ item, actions, links, sending, locked, editing, setEditing, t
         {detail.done === undefined ? <span>{detail.text}</span>
           : <label className={`backlog-sub${detail.done ? ' done' : ''}`}><input type="checkbox" checked={detail.done} disabled={locked} onChange={event => actions.onDone(detail.raw, detail.line, event.target.checked)} /><span>{detail.text}</span></label>}
       </li>)}</ul>}
-      {sending}
     </div>
     {!editing && <span className="backlog-actions">
       {!item.done && actions.onSend && <button type="button" className="icon-button" aria-label={`Send ${item.text} to an agent`} title="Send to an agent" disabled={locked || !item.ref} onClick={() => actions.onSend!(item)}><Send size={15} /></button>}
       {!item.done && <button type="button" className="icon-button" aria-label={`Reword ${item.text}`} title="Reword" disabled={locked} onClick={() => { setWording(item.text); setEditing(item.id) }}><Pencil size={15} /></button>}
       <button type="button" className="icon-button" aria-label={`Delete ${item.text}`} title="Delete" disabled={locked} onClick={() => actions.onDelete(item)}><Trash2 size={15} /></button>
     </span>}
+    {sending}
   </li>
 }
 

@@ -29,6 +29,7 @@
 .home-summary b { font-weight: 600; color: var(--text); }
 .home-stale { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 12px 16px 0; padding: 6px 6px 6px 12px; border-radius: var(--radius); background: color-mix(in srgb, var(--error) 10%, transparent); color: var(--error); font-size: 13px; line-height: 1.4; }
 .home-stale span { flex: 1; min-width: 200px; }
+.home-backlog { margin: 12px 16px 0; }
 
 /* Board: stacked on a narrow page. Needs you is always first. */
 .home-board { flex: none; display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; padding: 12px 16px max(24px, env(safe-area-inset-bottom)); }
@@ -116,7 +117,7 @@
 /* Medium page: each group becomes a lane. Needs you runs across the top in two columns, Working and Done sit side by side below it. */
 @container home (min-width: 640px) {
   .home-head { padding-inline: 24px; }
-  .home-stale { margin-inline: 24px; }
+  .home-stale, .home-backlog { margin-inline: 24px; }
   .home-board { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; padding-inline: 24px; padding-top: 16px; }
   .home-group { --lane: var(--home-lane); padding: 4px 8px 8px; border-radius: var(--radius-xl); background: var(--lane); }
   .home-group:has(.home-card.needs) { --lane: color-mix(in srgb, var(--text) 8%, var(--bg)); }
@@ -143,7 +144,7 @@
   .home-group-head { position: static; flex: none; }
   .home-group ul { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; padding: 2px 2px 12px; margin-inline: -2px; }
 }
-.home-backlog { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 12px 16px 0; padding: 8px 8px 8px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); font-size: 13px; line-height: 1.4; }
+.home-backlog { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 8px 8px 8px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); font-size: 13px; line-height: 1.4; }
 .home-backlog > svg { flex: none; color: var(--muted); }
 .home-backlog-title { flex: 1; min-width: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
 .home-backlog ul { order: 3; flex-basis: 100%; display: grid; gap: 2px; margin: 0; padding: 0 0 0 25px; list-style: none; }
