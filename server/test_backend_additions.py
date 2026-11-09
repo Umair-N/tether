@@ -316,7 +316,8 @@ class BackendTests(unittest.TestCase):
             'five_hour': {'used_percentage': 12, 'resets_at': 200}, 'seven_day': {'used_percentage': 40, 'resets_at': 50}}}))
         rates = self.root / 'codex_rates.json'
         rates.write_text(json.dumps({'windows': [{'label': '168h', 'percent': 48.0, 'resets_at': 300}], 'reported_at': 'T'}))
-        with patch.object(agents, 'METRICS', metrics), patch.object(server, 'RATES_FILE', rates):
+        with patch.object(agents, 'METRICS', metrics), patch.object(server, 'RATES_FILE', rates), \
+                patch.object(server.saved_accounts, 'switched_at', return_value=0):  # not this machine's account switches
             report = server.usage_summary(now=100)
         self.assertEqual(report['claude'], {'reported_at': 50, 'windows': [
             {'label': '5h', 'percent': 12, 'resets_at': 200}, {'label': '7d', 'percent': 0, 'resets_at': None}]})
