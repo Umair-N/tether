@@ -182,6 +182,18 @@ class BacklogTests(unittest.TestCase):
         projects_api.post(bad)
         self.assertEqual(bad.status, 400)
 
+    def test_friday_adds_and_starts_without_a_version(self):
+        added = Handler('/mobile/api/projects/backlog-add', {'text': 'Try the dark theme'})
+        projects_api.post(added)
+        self.assertEqual((added.status, added.body), (200, {'line': '- [ ] Try the dark theme #B1', 'ref': 'B1'}))
+        started = Handler('/mobile/api/projects/backlog-start', {'item': 'B1', 'who': 'claude · pane %4'})
+        projects_api.post(started)
+        self.assertEqual(started.status, 200)
+        self.assertEqual(self.text(), '- [ ] Try the dark theme #B1\n  - Doing: claude · pane %4\n')
+        empty = Handler('/mobile/api/projects/backlog-add', {'text': ' '})
+        projects_api.post(empty)
+        self.assertEqual(empty.status, 400)
+
     def test_agents_learn_the_commands_not_the_file(self):
         text = projects.render('a1b2c3d4e5f6')
         for part in ('agent_backlog_cli.py`', '`list`', '`add "text"`', '`start B12`', '`done B12 "result"`', 'never by editing'):

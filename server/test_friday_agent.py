@@ -171,11 +171,20 @@ class FridayRulesTests(unittest.TestCase):
         self.assertEqual(friday.vad_stop({'TETHER_FRIDAY_VAD_STOP': '0.65'}, False), 0.8)
 
     def test_event_tools(self):
-        for name in ('send_to_chat', 'answer_approval', 'new_chat', 'switch_chat'):
+        for name in ('send_to_chat', 'answer_approval', 'new_chat', 'switch_chat', 'backlog_add', 'backlog_send'):
             with self.subTest(name=name):
                 self.assertIsNotNone(friday.check_tool(name, {}, 'event', 'yes', set()))
-        for name in ('read_last_reply', 'list_chats', 'open_panel'):
+        for name in ('read_last_reply', 'list_chats', 'open_panel', 'backlog_list'):
             self.assertIsNone(friday.check_tool(name, {}, 'event', 'yes', set()))
+
+    def test_backlog_send_needs_a_send_word_or_a_confirmed_readback(self):
+        args = {'item': 'B12', 'chat': 'api'}
+        self.assertIsNone(friday.check_tool('backlog_send', args, 'speech', 'send B 12 to api', set()))
+        self.assertIsNotNone(friday.check_tool('backlog_send', args, 'speech', 'B12 for api', set()))
+        self.assertIsNone(friday.check_tool('backlog_send', args, 'speech', 'yes', set(), 'Send B12 to api?'))
+        self.assertIsNotNone(friday.check_tool('backlog_send', args, 'speech', 'send it', {'backlog_send'}))
+        self.assertIsNone(friday.check_tool('backlog_add', {'text': 'x'}, 'speech', 'add x to the backlog', set()))
+        self.assertIsNotNone(friday.check_tool('backlog_add', {'text': 'x'}, 'tool', 'add x', set()))
 
     def test_one_action_per_speech_turn(self):
         for name, args in [('send_to_chat', {'prompt': 'Fix the login bug'}),
@@ -399,7 +408,10 @@ class FridayRulesTests(unittest.TestCase):
     def test_fixed_tools_and_prompt_contract(self):
         schemas = friday.tool_schemas()
         tools = {t['function']['name']: t['function']['parameters'] for t in schemas}
-        self.assertEqual(set(tools), {'list_chats', 'send_to_chat', 'answer_approval', 'read_last_reply', 'new_chat', 'switch_chat', 'open_panel'})
+        self.assertEqual(set(tools), {'list_chats', 'send_to_chat', 'answer_approval', 'read_last_reply', 'new_chat', 'switch_chat', 'open_panel',
+                                      'backlog_list', 'backlog_add', 'backlog_send'})
+        self.assertIn('backlog', tools['open_panel']['properties']['panel']['enum'])
+        self.assertEqual(tools['backlog_send']['required'], ['item', 'chat'])
         self.assertEqual(tools['list_chats']['required'], [])
         self.assertEqual(tools['list_chats']['properties'], {'session': {'type': 'string'}})
         self.assertEqual(tools['new_chat']['required'], ['name', 'agent'])

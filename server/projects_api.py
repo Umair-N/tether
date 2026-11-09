@@ -60,6 +60,12 @@ def post(handler, home=None):
             raise ValueError('Invalid request.')
         if name == 'backlog':  # one list for the app, with no project id or revision
             return backlog.save(body.get('text'), body.get('version'))
+        if name == 'backlog-add':  # Friday: one item to the inbox, with no version to race on
+            line = backlog.add(body.get('text'))
+            found = backlog.ID.search(line)
+            return {'line': line, 'ref': f'B{found[1]}' if found else ''}
+        if name == 'backlog-start':  # Friday sent an item to a chat: mark who works on it
+            return {'line': backlog.start(body.get('item'), body.get('who'))}
         pid = body.get('project')
         projects.bundle(pid)  # checks the id
         revision = body.get('revision')

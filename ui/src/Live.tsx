@@ -11,6 +11,9 @@ import { useBackStep } from './backNav'
 import { useFloatingWindow, type Edge, type FloatMode, type Point, type Rect } from './floatingWindow'
 import { bloomFromBubble, foldToBubble, openFrom, popBubble, settle, snapBubble } from './liveMotion'
 import { speakable } from './speech'
+import { BACKLOG_PATH } from './backlogNews'
+import { parseBacklog, type Item } from './backlogItems'
+import { itemPrompt } from './backlogSend'
 import './Live.css'
 
 // Live mode: talk to the agents hands-free. The orb listens, the words go to the target pane,
@@ -27,7 +30,7 @@ interface Watch { lastId: string | null; since: number; name: string }
 interface Brief { speech: string }
 
 const STATUS: Record<Phase, string> = { starting: 'Starting', idle: 'Tap to talk', paused: 'Paused', listening: 'Listening', converting: 'Converting', thinking: 'Thinking', sending: 'Sending', speaking: 'Speaking' }
-const PANELS: Record<string, string> = { preview: 'browser', browser: 'browser', terminal: 'terminal', changes: 'changes', diff: 'changes', file: 'files', files: 'files', sidebar: 'sidebar' }
+const PANELS: Record<string, string> = { preview: 'browser', browser: 'browser', terminal: 'terminal', changes: 'changes', diff: 'changes', file: 'files', files: 'files', sidebar: 'sidebar', backlog: 'backlog' }
 
 const approvalOf = (pane: Pane) => {
   const approval = pane.approval as Approval | null
@@ -68,7 +71,7 @@ const sessionChoice = (agents: Pane[], wanted: string) => {
 const chatState = (pane: Pane) => approvalOf(pane) ? 'needs approval' : pane.needs ? `needs ${pane.needs.kind}` : pane.state.toLowerCase()
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
-export function Live({ api, panes, selected, commands, onClose, reveal = 0, from = null }: { api: Api; panes: Pane[]; selected?: Pane; commands: Command[]; onClose: () => void; reveal?: number; from?: DOMRect | null }) {
+export function Live({ api, panes, selected, commands, onClose, onBacklog, reveal = 0, from = null }: { api: Api; panes: Pane[]; selected?: Pane; commands: Command[]; onClose: () => void; onBacklog?: () => void; reveal?: number; from?: DOMRect | null }) {
   const { mode, setMode, moving, bubble, windowStyle, bubbleStyle, move, resize, bubbleHandlers } = useFloatingWindow('tether.live-window.v1', { minW: 300, minH: 360, bubble: BUBBLE, initial: firstRect, initialMode: 'window' })
   const root = useRef<HTMLDivElement>(null)
   const bubbleButton = useRef<HTMLButtonElement>(null)
@@ -135,8 +138,8 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
   const queue = useRef<{ who: string; text: string }[]>([])
   const watches = useRef(new Map<string, Watch>())
   const announced = useRef(new Set<string>())
-  const live = useRef({ agents, panes, target, approval, approvalPane, commands, api, onClose })
-  useEffect(() => { live.current = { agents, panes, target, approval, approvalPane, commands, api, onClose } })
+  const live = useRef({ agents, panes, target, approval, approvalPane, commands, api, onClose, onBacklog })
+  useEffect(() => { live.current = { agents, panes, target, approval, approvalPane, commands, api, onClose, onBacklog } })
   const go = (next: Phase) => { phaseNow.current = next; setPhase(next) }
 
   // Every step reads the latest panes and commands through `live`, so the voice callbacks never go stale.
@@ -211,7 +214,7 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
         await flow.current.choose(approvalPane, approval, options.find(option => /^no\b/i.test(option.text)) ?? options[options.length - 1], 'Denied.')
         return
       }
-      const panel = words.match(/\b(open|show|close|hide)\b.*?\b(preview|browser|terminal|changes|diff|files?|sidebar)\b/)
+      const panel = words.match(/\b(open|show|close|hide)\b.*?\b(preview|browser|terminal|changes|diff|files?|sidebar|backlog)\b/)
       if (panel) { flow.current.panel(panel[1], PANELS[panel[2]]); return }
       const pick = words.match(/^(switch|talk|go|change|send it) to (.+)$/)
       if (pick) {
@@ -259,7 +262,13 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
     },
     /** Show or hide a panel. Returns what happened, in words. */
     toggle(open: boolean, kind: string) {
-      const { commands } = live.current
+      const { commands, onBacklog: showBacklog } = live.current
+      if (kind === 'backlog') {
+        if (!open) return { ok: false, words: 'Close the backlog on the screen, so no typing is lost.' }
+        if (!showBacklog) return { ok: false, words: 'The backlog cannot open here.' }
+        showBacklog()
+        return { ok: true, words: 'Opened the backlog.' }
+      }
       if (!commands.length) return { ok: false, words: 'Panels work on the desktop only.' }
       const label = kind === 'sidebar' ? 'the sidebar' : `the ${kind === 'browser' ? 'browser' : kind}`
       const command = commands.find(item => item.label.toLowerCase().includes(label) && item.label.startsWith(open ? 'Show' : 'Hide'))
@@ -368,7 +377,39 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
       const done = flow.current.toggle(open !== false, kind)
       return done.ok ? { ok: true } : { error: done.words }
     },
+    backlog_list: async () => {
+      const open = await openItems()
+      return { count: open.length, items: open.slice(0, 10).map(item => `${item.ref ?? ''} ${shortText(item.text, 140)}${item.status?.kind === 'doing' ? ' (in progress)' : ''}`.trim()) }
+    },
+    backlog_add: async ({ text }) => {
+      if (!String(text ?? '').trim()) return { error: 'The item is empty.' }
+      const made = await live.current.api<{ ref: string }>(`${BACKLOG_PATH}-add`, { text: String(text) })
+      return { ok: true, id: made.ref }
+    },
+    backlog_send: async ({ item: wanted, chat }) => {
+      const choice = sessionChoice(live.current.agents, String(chat ?? ''))
+      if (choice) return choice
+      const pane = findPane(live.current.agents, String(chat ?? ''))
+      if (!pane || (pane.agent !== 'claude' && pane.agent !== 'codex')) return { error: `No Claude or Codex chat called ${chat}.` }
+      const data = await live.current.api<{ text: string; command?: string }>(BACKLOG_PATH)
+      const open = parseBacklog(data.text).filter((row): row is Item => row.kind === 'item' && !row.done)
+      const words = String(wanted ?? '').trim()
+      const ref = /^#?b\s*(\d+)$/i.exec(words)
+      const found = ref ? open.filter(item => item.ref === `B${ref[1]}`) : open.filter(item => item.text.toLowerCase().includes(words.toLowerCase()))
+      if (!words || !found.length) return { error: `No open backlog item matches ${wanted}.` }
+      if (found.length > 1) return { error: `Several items match: ${found.slice(0, 3).map(item => item.ref).join(', ')}. Ask which one.` }
+      const item = found[0]
+      await flow.current.deliver(pane, itemPrompt(item, data.command))
+      const who = [pane.agent, `pane ${pane.id}`, pane.thread && `chat ${pane.thread}`].filter(Boolean).join(' · ')
+      await live.current.api(`${BACKLOG_PATH}-start`, { item: item.ref, who }).catch(() => null)
+      return { ok: true, item: item.ref, chat: paneTitle(pane) }
+    },
   })
+  /** The open backlog items, in list order. */
+  async function openItems() {
+    const data = await live.current.api<{ text: string }>(BACKLOG_PATH)
+    return parseBacklog(data.text).filter((row): row is Item => row.kind === 'item' && !row.done)
+  }
   /** The chats as Friday sees them: name, agent, state, and what each needs from you. */
   function needsOf(pane: Pane) { return pane.needs?.text ?? (approvalOf(pane) ? shortText(approvalOf(pane)!.text, 140) : '') }
   /** Prompt state: only what matters now. Names of idle chats come from list_chats. */
