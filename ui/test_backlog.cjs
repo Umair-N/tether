@@ -59,4 +59,22 @@ assert.equal(b.moveItem('- [ ] A', 0, '- [ ] Z', 3, false)('- [ ] A\n\n## x\n- [
 
 const groups = plain(b.openGroups(b.parseBacklog('- [ ] In\n\n## a\n- [x] Done\n\n## b\n- [ ] Open\n')))
 assert.deepEqual(groups.map(group => group.heading && group.heading.text), [null, 'b'], 'A group with nothing open is hidden')
-console.log('Backlog: parsing, add, tick, reword, delete, undo, move and groups passed')
+// IDs and status: the same rules as server/backlog.py (test_backlog.py uses the same text).
+const unnumbered = '- [ ] One #B7\n- [ ] Two\n  - [ ] sub step\n\n## p\n* [x] Three\n'
+const numbered = '- [ ] One #B7\n- [ ] Two #B8\n  - [ ] sub step\n\n## p\n* [x] Three #B9\n'
+assert.equal(b.withIds(unnumbered), numbered)
+assert.equal(b.withIds(numbered), numbered, 'IDs stay')
+assert.equal(b.withIds('- [ ] A  \n'), '- [ ] A #B1\n')
+const tracked = '- [ ] Fix (codex · pane %12 · chat 019a) #B12\n  - Doing: claude · tmux $3 · pane %40 · chat abcd\n  - why\n- [x] Old #B7\n  - Done: fixed in 1234abc (claude · chat ef)\n'
+const [open, old] = plain(b.parseBacklog(tracked))
+assert.equal(open.text, 'Fix')
+assert.equal(open.ref, 'B12')
+assert.deepEqual(open.source, { agent: 'codex', pane: '%12', chat: '019a' })
+assert.deepEqual([open.status.kind, open.status.source], ['doing', { agent: 'claude', tmux: '$3', pane: '%40', chat: 'abcd' }])
+assert.deepEqual(open.details.map(detail => detail.text), ['why'], 'A status line is not a detail')
+assert.deepEqual([old.ref, old.status.kind, old.status.text, old.status.source], ['B7', 'done', 'fixed in 1234abc', { agent: 'claude', chat: 'ef' }])
+assert.equal(plain(b.parseBacklog('- [ ] #B5'))[0].ref, undefined, 'A bare ID is the text')
+assert.equal(b.rewordItem(open, 'Fix it')(tracked), tracked.replace('- [ ] Fix (', '- [ ] Fix it ('), 'Rewording keeps the ID')
+assert.equal(b.startItem(open.raw, 0, 'claude · pane %41')(tracked), tracked.replace('pane %40 · chat abcd', 'pane %41').replace('claude · tmux $3 · ', 'claude · '), 'A new send replaces the old')
+assert.equal(b.startItem('- [x] Old #B7', 3, 'codex')(tracked), tracked.replace('  - Done: fixed in 1234abc (claude · chat ef)\n', '  - Doing: codex\n'))
+console.log('Backlog: parsing, add, tick, reword, delete, undo, move, groups, IDs and status passed')

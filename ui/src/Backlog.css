@@ -70,3 +70,25 @@ button.backlog-done-toggle:not(:disabled):hover { background: none; color: var(-
   button.backlog-tag { padding-block: 3px; }
 }
 @media (prefers-reduced-motion: reduce) { .backlog-done-toggle svg, .backlog-actions, .backlog-grip { transition: none; } }
+.backlog-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-width: 0; }
+.backlog-ref { flex: none; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; font-variant-numeric: tabular-nums; line-height: 1.5; }
+button.backlog-tag.live { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); color: var(--text); }
+.backlog-state { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-width: 0; font-size: 13px; }
+.backlog-pill { flex: none; padding: 0 6px; border-radius: 999px; font-size: 11px; font-weight: 600; line-height: 18px; }
+.backlog-state.doing .backlog-pill { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.backlog-state.done .backlog-pill { background: var(--hover); color: var(--muted); }
+.backlog-result { min-width: 0; color: var(--text); overflow-wrap: anywhere; }
+.backlog-row.done .backlog-result { color: var(--muted); }
+.backlog-send { display: grid; gap: 6px; margin-top: 4px; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface, var(--bg)); }
+.backlog-send-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 12px; font-weight: 600; }
+.backlog-send-head .icon-button { width: 26px; height: 26px; min-width: 0; min-height: 0; }
+.backlog-list .backlog-send ul { gap: 2px; }
+.backlog-send li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 0; }
+.backlog-send li + li { border-top: 1px solid var(--line); }
+.backlog-send-name { display: grid; flex: 1 1 140px; min-width: 0; font-size: 13px; line-height: 1.35; }
+.backlog-send-name strong { overflow: hidden; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.backlog-send-name > span { overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.backlog-send li button { display: inline-flex; align-items: center; gap: 5px; min-height: 30px; padding: 0 10px; font-size: 13px; }
+.backlog-send-empty { margin: 0; color: var(--muted); font-size: 13px; }
+.sidebar-backlog-new { flex: none; padding: 0 6px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-size: 11px; font-weight: 600; line-height: 18px; font-variant-numeric: tabular-nums; }
+@media (pointer: coarse) { .backlog-send li button { min-height: 38px; } }

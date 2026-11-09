@@ -143,3 +143,10 @@
   .home-group-head { position: static; flex: none; }
   .home-group ul { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; padding: 2px 2px 12px; margin-inline: -2px; }
 }
+.home-backlog { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 12px 16px 0; padding: 8px 8px 8px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); font-size: 13px; line-height: 1.4; }
+.home-backlog > svg { flex: none; color: var(--muted); }
+.home-backlog-title { flex: 1; min-width: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.home-backlog ul { order: 3; flex-basis: 100%; display: grid; gap: 2px; margin: 0; padding: 0 0 0 25px; list-style: none; }
+.home-backlog li { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.home-backlog .backlog-ref { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+.home-backlog-text { min-width: 0; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }

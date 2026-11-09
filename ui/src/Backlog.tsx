@@ -1,33 +1,97 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import type { FormEvent, KeyboardEvent, PointerEvent as ReactPointerEvent, RefObject } from 'react'
-import { Check, ChevronRight, ClipboardList, FileText, GripVertical, ListChecks, Pencil, Trash2, X } from 'lucide-react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import type { FormEvent, KeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode, RefObject } from 'react'
+import { Check, ChevronRight, ClipboardList, FileText, GripVertical, ListChecks, Pencil, Plus, Send, Trash2, X } from 'lucide-react'
 import { ApiError, errorText } from './api'
-import type { Api } from './api'
-import { addItem, blockOf, moveItem, openGroups, parseBacklog, removeItem, restoreItem, rewordItem, setDone } from './backlogItems'
-import type { Change, Item, Note, Source } from './backlogItems'
+import type { Api, Pane } from './api'
+import { addItem, blockOf, moveItem, openGroups, parseBacklog, removeItem, restoreItem, rewordItem, setDone, startItem, withIds } from './backlogItems'
+import type { Change, Item, Note, Source, Status } from './backlogItems'
 import { copyText } from './clipboard'
-import { useModal, usePolling } from './hooks'
+import { useModal } from './hooks'
 import { usePanelPoll } from './panelProps'
+import { BACKLOG_PATH, highestRef, markSeen, useBacklogNews } from './backlogNews'
+import { agentTabs, itemPrompt, sendToTab, startTab } from './backlogSend'
 import './Backlog.css'
 
 // The app's one backlog (server: backlog.py). People use the checklist or the text; agents use a command. Every save
 // carries the version the person last saw. A checklist change applies itself again to a newer file, so only rewriting
 // the text ever asks which version to keep.
-interface Saved { text: string; version: string; limit: number }
+interface Saved { text: string; version: string; limit: number; command?: string }
 const POLL_MS = 3000, SAVE_MS = 800, UNDO_MS = 8000, RETRIES = 5
-const PATH = 'projects/backlog'
+const PATH = BACKLOG_PATH
 /** A refused save says why. Anything else means the server could not be reached. */
 const saveProblem = (failure: unknown) => failure instanceof ApiError ? errorText(failure) : failure instanceof Error && failure.message.startsWith('The backlog') ? failure.message : 'Cannot reach Tether.'
 
-/** Who added an item, short enough to scan. It copies the chat ID; the full IDs are in the title. */
-function SourceTag({ source }: { source: Source }) {
+/** How the sidebar names a tab. */
+const tabName = (pane: Pane) => pane.pane_name || pane.agent_name || pane.label || pane.id
+/** The open tab a source names: the same pane, still on the same chat when both are known. */
+const tabOf = (source: Source | undefined, panes: Pane[]) => source?.pane ? panes.find(pane => pane.id === source.pane && (!source.chat || !pane.thread || pane.thread === source.chat)) : undefined
+
+interface Links { panes: Pane[]; onOpenPane?: (pane: Pane) => void }
+
+/** Who added an item, or works on it, short enough to scan. An open tab opens; otherwise it copies the chat ID. The full IDs are in the title. */
+function SourceTag({ source, links, verb = 'Added by' }: { source: Source; links: Links; verb?: string }) {
   const [copied, setCopied] = useState(false)
   const short = source.chat?.slice(0, 8)
   const full = [source.tmux && `tmux ${source.tmux}`, source.pane && `pane ${source.pane}`, source.chat && `chat ${source.chat}`].filter(Boolean).join(' · ')
+  const tab = tabOf(source, links.panes)
+  if (tab && links.onOpenPane) {
+    const open = links.onOpenPane
+    return <button type="button" className="backlog-tag live" title={`${full}. Open this tab.`} aria-label={`${verb} ${source.agent}: open ${tabName(tab)}`} onClick={() => open(tab)}>{source.agent} · {tabName(tab)}</button>
+  }
   const label = `${source.agent}${short ? ` · ${short}` : ''}`
   if (!source.chat) return <span className="backlog-tag" title={full}>{label}</span>
-  return <button type="button" className="backlog-tag" title={`${full}. Click to copy the chat ID.`} aria-label={`Added by ${source.agent}. Copy chat ID ${short}`}
+  return <button type="button" className="backlog-tag" title={`${full}. Click to copy the chat ID.`} aria-label={`${verb} ${source.agent}. Copy chat ID ${short}`}
     onClick={() => { void copyText(source.chat!).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1500) }, () => {}) }}>{copied ? 'Copied' : label}</button>
+}
+
+/** Who works on the item now, or what came of it. */
+function StatusLine({ status, links }: { status: Status; links: Links }) {
+  return <div className={`backlog-state ${status.kind}`}>
+    <span className="backlog-pill">{status.kind === 'doing' ? 'Doing' : 'Done'}</span>
+    {status.text && <span className="backlog-result">{status.text}</span>}
+    {status.source && <SourceTag source={status.source} links={links} verb={status.kind === 'doing' ? 'In progress in' : 'Done by'} />}
+  </div>
+}
+
+const folderName = (dir: string) => dir.replace(/\/+$/, '').split('/').pop() || dir
+
+/** Pick a chat for an item: send it there, or start a new tab beside it. */
+function SendPanel({ item, api, links, command, onSent, onClose }: { item: Item; api: Api; links: Links; command?: string; onSent: (who: string, pane: Pane | null, name: string) => void; onClose: () => void }) {
+  const [busy, setBusy] = useState('')
+  const [error, setError] = useState('')
+  const tabs = agentTabs(links.panes)
+  const run = async (key: string, work: () => Promise<void>) => {
+    setBusy(key); setError('')
+    try { await work() } catch (failure) { setError(errorText(failure)); setBusy('') }
+  }
+  const message = itemPrompt(item, command)
+  return <div className="backlog-send" role="group" aria-label={`Send ${item.ref} to a chat`} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); onClose() } }}>
+    <div className="backlog-send-head"><span>Send {item.ref} to</span><button type="button" className="icon-button" aria-label="Close" onClick={onClose}><X size={14} /></button></div>
+    {!tabs.length ? <p className="backlog-send-empty">No Claude or Codex tab is open.</p>
+      : <ul>{tabs.map(pane => <li key={pane.id}>
+          <span className="backlog-send-name"><strong>{tabName(pane)}</strong><span>{pane.agent} · {folderName(pane.dir)}</span></span>
+          <button type="button" className="secondary" disabled={!!busy} autoFocus={pane === tabs[0]}
+            onClick={() => void run(`send ${pane.id}`, async () => { const thread = await sendToTab(api, pane, message); onSent(`${pane.agent} · pane ${pane.id}${thread ? ` · chat ${thread}` : ''}`, pane, tabName(pane)) })}>
+            <Send size={14} aria-hidden="true" />{busy === `send ${pane.id}` ? 'Sending…' : 'Send'}</button>
+          <button type="button" className="secondary" disabled={!!busy || !pane.thread} title={pane.thread ? `A new ${pane.agent} tab in ${folderName(pane.dir)}` : 'This tab has no chat yet'}
+            onClick={() => void run(`new ${pane.id}`, async () => { const made = await startTab(api, pane, message); onSent(`${pane.agent} · pane ${made.pane}`, null, made.name) })}>
+            <Plus size={14} aria-hidden="true" />{busy === `new ${pane.id}` ? 'Starting…' : 'New tab'}</button>
+        </li>)}</ul>}
+    {error && <p className="error" role="alert">{error}</p>}
+  </div>
+}
+
+/** Where a caret goes after the server adds IDs at the ends of lines: the same place in the same line. */
+function moveCaret(before: string, after: string, at: number) {
+  const old = before.split('\n'), now = after.split('\n')
+  if (old.length !== now.length) return Math.min(at, after.length)
+  let offset = 0
+  for (let line = 0; line < old.length; line += 1) {
+    if (at <= old[line].length) return offset + at
+    at -= old[line].length + 1
+    offset += now[line].length + 1
+  }
+  return after.length
 }
 
 interface RowActions {
@@ -36,9 +100,10 @@ interface RowActions {
   onReword: (item: Item, wording: string) => void
   onDragStart: (event: ReactPointerEvent, item: Item) => void
   onDragKey: (event: KeyboardEvent, item: Item) => void
+  onSend?: (item: Item) => void
 }
 
-function ItemRow({ item, actions, locked, editing, setEditing, typed, drop, dragged }: { item: Item; actions: RowActions; locked: boolean; editing: boolean; setEditing: (id: string | null) => void; typed: RefObject<string>; drop?: 'before' | 'after'; dragged: boolean }) {
+function ItemRow({ item, actions, links, sending, locked, editing, setEditing, typed, drop, dragged }: { item: Item; actions: RowActions; links: Links; sending?: ReactNode; locked: boolean; editing: boolean; setEditing: (id: string | null) => void; typed: RefObject<string>; drop?: 'before' | 'after'; dragged: boolean }) {
   const [wording, setWording] = useState(item.text)
   const ended = useRef(false)
   const finish = (keep: boolean) => {
@@ -59,13 +124,19 @@ function ItemRow({ item, actions, locked, editing, setEditing, typed, drop, drag
             onChange={event => { setWording(event.target.value); typed.current = event.target.value }} onBlur={() => finish(true)}
             onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); finish(true) } else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); finish(false) } }} />
         : <span className="backlog-text-line" onDoubleClick={() => { if (!locked && !item.done) { setWording(item.text); setEditing(item.id) } }}>{item.text}</span>}
-      {item.source && <SourceTag source={item.source} />}
+      {(item.ref || item.source) && <span className="backlog-meta">
+        {item.ref && <span className="backlog-ref" title="The ID agents use for this item">{item.ref}</span>}
+        {item.source && <SourceTag source={item.source} links={links} />}
+      </span>}
+      {item.status && (item.status.kind === 'done' ? item.done : !item.done) && <StatusLine status={item.status} links={links} />}
       {item.details.length > 0 && <ul className="backlog-details">{item.details.map(detail => <li key={detail.line}>
         {detail.done === undefined ? <span>{detail.text}</span>
           : <label className={`backlog-sub${detail.done ? ' done' : ''}`}><input type="checkbox" checked={detail.done} disabled={locked} onChange={event => actions.onDone(detail.raw, detail.line, event.target.checked)} /><span>{detail.text}</span></label>}
       </li>)}</ul>}
+      {sending}
     </div>
     {!editing && <span className="backlog-actions">
+      {!item.done && actions.onSend && <button type="button" className="icon-button" aria-label={`Send ${item.text} to an agent`} title="Send to an agent" disabled={locked || !item.ref} onClick={() => actions.onSend!(item)}><Send size={15} /></button>}
       {!item.done && <button type="button" className="icon-button" aria-label={`Reword ${item.text}`} title="Reword" disabled={locked} onClick={() => { setWording(item.text); setEditing(item.id) }}><Pencil size={15} /></button>}
       <button type="button" className="icon-button" aria-label={`Delete ${item.text}`} title="Delete" disabled={locked} onClick={() => actions.onDelete(item)}><Trash2 size={15} /></button>
     </span>}
@@ -80,7 +151,7 @@ interface Undo { label: string; change: Change }
 /** What a close has to ask about: text that would otherwise be lost. */
 export type BacklogGuard = RefObject<() => boolean>
 
-export function Backlog({ api, guard, active = true }: { api: Api; guard?: BacklogGuard; active?: boolean }) {
+export function Backlog({ api, guard, active = true, panes = [], onOpenPane }: { api: Api; guard?: BacklogGuard; active?: boolean; panes?: Pane[]; onOpenPane?: (pane: Pane) => void }) {
   const [saved, setSaved] = useState<Saved | null>(null)
   const [changes, setChanges] = useState<Change[]>([])  // made in the checklist, not saved yet
   const [draft, setDraft] = useState<string | null>(null)  // the text while the person edits it as text
@@ -93,6 +164,10 @@ export function Backlog({ api, guard, active = true }: { api: Api; guard?: Backl
   const [conflict, setConflict] = useState<Saved | null>(null)  // the newer file, while the person chooses
   const [undo, setUndo] = useState<Undo | null>(null)
   const [drag, setDrag] = useState<{ item: Item; target: string | null; after: boolean } | null>(null)
+  const [sendFor, setSendFor] = useState<string | null>(null)  // the row whose Send panel is open
+  const [sent, setSent] = useState<{ label: string; pane: Pane | null } | null>(null)
+  const textBox = useRef<HTMLTextAreaElement>(null)
+  const caret = useRef<number | null>(null)
   const typedRow = useRef('')
   const addBox = useRef<HTMLInputElement>(null)
   const list = useRef<HTMLDivElement>(null)
@@ -171,8 +246,10 @@ export function Backlog({ api, guard, active = true }: { api: Api; guard?: Backl
   usePanelPoll(load, POLL_MS, active)
 
   /** Show a checklist change now and save it in order. false: it cannot be made, and nothing changed. */
-  const change = useCallback((next: Change, offer?: Undo) => {
+  const change = useCallback((made: Change, offer?: Undo) => {
     if (!current.current) return false
+    // The server numbers new items. Numbering here too shows the saved lines, so a later change finds them.
+    const next: Change = text => { const value = made(text); return value === null ? null : withIds(value) }
     const text = queue.current.reduce((value, queued) => queued(value) ?? value, current.current.text)
     const value = next(text)
     if (value === null) { setError('That item was changed elsewhere. Check the list and try again.'); return false }
@@ -192,6 +269,12 @@ export function Backlog({ api, guard, active = true }: { api: Api; guard?: Backl
       const next = await api<Saved>(PATH, { text: value, version: over.version })
       saves.current += 1
       remember(next); setConflict(null)
+      // The server numbered new items. Show the numbers, and keep the cursor on its line.
+      if (latest.current.draft === value && next.text !== value) {
+        const box = textBox.current
+        if (box && document.activeElement === box) caret.current = moveCaret(value, next.text, box.selectionStart)
+        setDraft(next.text)
+      }
       return true
     } catch (failure) {
       if (failure instanceof ApiError && failure.status === 409) {
@@ -206,6 +289,12 @@ export function Backlog({ api, guard, active = true }: { api: Api; guard?: Backl
     const timer = window.setTimeout(() => void saveDraft(saved, draft!), SAVE_MS)
     return () => window.clearTimeout(timer)
   }, [saved, dirty, tooLong, saving, conflict, failed, draft, saveDraft])
+
+  useLayoutEffect(() => {
+    if (caret.current === null || !textBox.current) return
+    textBox.current.setSelectionRange(caret.current, caret.current)
+    caret.current = null
+  }, [draft])
 
   useEffect(() => {
     if (!undo) return
@@ -256,6 +345,8 @@ export function Backlog({ api, guard, active = true }: { api: Api; guard?: Backl
   const rows = parseBacklog(shown)
   const done = rows.filter((row): row is Item => row.kind === 'item' && row.done)
   const groups = openGroups(rows)
+  const highest = highestRef(rows.filter((row): row is Item => row.kind === 'item'))
+  useEffect(() => { if (active && highest) markSeen(highest) }, [active, highest])
   const hasHeadings = groups.some(group => group.heading)
   const openItems = groups.flatMap(group => group.rows.filter((row): row is Item => row.kind === 'item'))
   const locked = !saved || !!conflict
@@ -272,6 +363,7 @@ export function Backlog({ api, guard, active = true }: { api: Api; guard?: Backl
       if (removed) change(removeItem(target.raw, target.line), { label: `Deleted: ${short(target.text)}`, change: restoreItem(removed) })
     },
     onReword: (target, wording) => { change(rewordItem(target, wording)) },
+    onSend: target => { setSent(null); setSendFor(now => now === target.id ? null : target.id) },
     onDragStart: (event, target) => {
       if (event.button !== 0) return
       event.preventDefault()
@@ -319,9 +411,12 @@ export function Backlog({ api, guard, active = true }: { api: Api; guard?: Backl
       change(moveItem(target.raw, target.line, next.raw, next.line, !up))
     },
   }
+  const links: Links = { panes, onOpenPane }
   const showRow = (row: Item | Note) => row.kind === 'note'
     ? <NoteRow key={row.id} note={row} />
-    : <ItemRow key={row.id} item={row} actions={actions} locked={locked} editing={editingRow === row.id} setEditing={setEditingRow} typed={typedRow} dragged={drag?.item.id === row.id}
+    : <ItemRow key={row.id} item={row} actions={actions} links={links} locked={locked}
+        sending={sendFor === row.id && !row.done ? <SendPanel item={row} api={api} links={links} command={saved?.command} onClose={() => setSendFor(null)}
+          onSent={(who, pane, name) => { setSendFor(null); change(startItem(row.raw, row.line, who)); setSent({ label: `Sent ${row.ref} to ${name}`, pane }) }} /> : undefined} editing={editingRow === row.id} setEditing={setEditingRow} typed={typedRow} dragged={drag?.item.id === row.id}
         drop={drag?.target === row.id && drag.item.id !== row.id ? (drag.after ? 'after' : 'before') : undefined} />
   const clearDone = () => {
     const blocks = done.map(row => blockOf(shown, row.raw, row.line)).filter(block => block !== null).sort((a, b) => a.line - b.line)
@@ -361,7 +456,7 @@ export function Backlog({ api, guard, active = true }: { api: Api; guard?: Backl
         onClick={() => { if (inText) void leaveText(); else { setUndo(null); setDraft(shown) } }}>{inText ? <ListChecks size={17} /> : <FileText size={16} />}</button>
     </div>
     {inText
-      ? <textarea aria-label="Backlog text" className="backlog-text" value={draft} readOnly={!!conflict} spellCheck onChange={event => setDraft(event.target.value)} />
+      ? <textarea ref={textBox} aria-label="Backlog text" className="backlog-text" value={draft} readOnly={!!conflict} spellCheck onChange={event => setDraft(event.target.value)} />
       : <div className="backlog-list" ref={list}>
           {saved && !rows.length && <div className="backlog-empty"><ClipboardList size={26} aria-hidden="true" /><p><strong>Nothing here yet</strong></p><p>Add what you want to remember. Agents add follow-ups they find, and fill in items you point them to.</p></div>}
           {saved && !!rows.length && !openItems.length && <p className="backlog-clear"><Check size={16} aria-hidden="true" />All done.</p>}
@@ -377,6 +472,7 @@ export function Backlog({ api, guard, active = true }: { api: Api; guard?: Backl
             {showDone && <ul>{done.map(showRow)}</ul>}
           </div>}
         </div>}
+    {sent && !undo && !inText && <div className="backlog-undo" role="status"><span>{sent.label}</span>{sent.pane && onOpenPane && <button type="button" className="link-button" onClick={() => onOpenPane(sent.pane!)}>Open</button>}<button type="button" className="icon-button" aria-label="Dismiss" onClick={() => setSent(null)}><X size={14} /></button></div>}
     {undo && !inText && <div className="backlog-undo" role="status"><span>{undo.label}</span><button type="button" className="link-button" onClick={() => { const back = undo.change; setUndo(null); change(back) }}>Undo</button><button type="button" className="icon-button" aria-label="Dismiss" onClick={() => setUndo(null)}><X size={14} /></button></div>}
     {conflict ? <div className="confirm-box" role="alertdialog" aria-labelledby="backlog-conflict">
       <p id="backlog-conflict"><strong>The backlog changed while you were editing.</strong> An agent or another tab saved a newer version.</p>
@@ -392,7 +488,7 @@ export function Backlog({ api, guard, active = true }: { api: Api; guard?: Backl
 }
 
 /** The sheet the sidebar opens. Closing asks first only when text would be lost. */
-export function BacklogSheet({ api, onClose }: { api: Api; onClose: () => void }) {
+export function BacklogSheet({ api, onClose, panes, onOpenPane }: { api: Api; onClose: () => void; panes?: Pane[]; onOpenPane?: (pane: Pane) => void }) {
   const guard = useRef<() => boolean>(() => false)
   const [asking, setAsking] = useState(false)
   const close = () => { if (guard.current()) setAsking(true); else onClose() }
@@ -403,7 +499,7 @@ export function BacklogSheet({ api, onClose }: { api: Api; onClose: () => void }
       <button type="button" className="icon-button" aria-label="Close" onClick={close}><X /></button>
     </div>
     <p className="sheet-sub">One list for all your sessions</p>
-    <Backlog api={api} guard={guard} />
+    <Backlog api={api} guard={guard} panes={panes} onOpenPane={onOpenPane && (pane => { if (!guard.current()) onClose(); onOpenPane(pane) })} />
     {asking && <div className="confirm-box backlog-leave" role="alertdialog" aria-labelledby="backlog-leave">
       <p id="backlog-leave"><strong>Some text is not saved.</strong> Close and lose it?</p>
       <div className="sheet-buttons">
@@ -414,13 +510,26 @@ export function BacklogSheet({ api, onClose }: { api: Api; onClose: () => void }
   </dialog>
 }
 
-interface Count { text: string }
-/** The sidebar's way in, with how many items are open. */
+/** The sidebar's way in: how many items are open, and how many agents added since you last looked. */
 export function BacklogButton({ api, onOpen }: { api: Api; onOpen: () => void }) {
-  const fetcher = useCallback((signal: AbortSignal) => api<Count>(PATH, undefined, signal), [api])
-  const { data } = usePolling(fetcher, 30000)
-  const open = data ? parseBacklog(data.text).filter(row => row.kind === 'item' && !row.done).length : 0
-  return <button type="button" className="sidebar-backlog" aria-label={open ? `Backlog, ${open} open` : 'Backlog'} onClick={onOpen}>
-    <ClipboardList size={16} aria-hidden="true" /><span>Backlog</span>{open > 0 && <span className="sidebar-backlog-count">{open}</span>}
+  const { open, fresh } = useBacklogNews(api)
+  const label = ['Backlog', open && `${open} open`, fresh.length && `${fresh.length} new from agents`].filter(Boolean).join(', ')
+  return <button type="button" className="sidebar-backlog" aria-label={label} onClick={onOpen}>
+    <ClipboardList size={16} aria-hidden="true" /><span>Backlog</span>
+    {fresh.length > 0 && <span className="sidebar-backlog-new" title={`${fresh.length} new from agents`}>{fresh.length} new</span>}
+    {open > 0 && <span className="sidebar-backlog-count">{open}</span>}
   </button>
+}
+
+/** Home's line about items agents added since you last looked. Nothing new: no line. */
+export function BacklogNews({ api, onOpen }: { api: Api; onOpen: () => void }) {
+  const { fresh } = useBacklogNews(api)
+  if (!fresh.length) return null
+  const shown = fresh.slice(-3).reverse()
+  return <section className="home-backlog" aria-label="New backlog items">
+    <ClipboardList size={15} aria-hidden="true" />
+    <span className="home-backlog-title">{fresh.length} new in backlog</span>
+    <ul>{shown.map(item => <li key={item.id}><span className="backlog-ref">{item.ref}</span><span className="home-backlog-text" title={item.text}>{item.text}</span></li>)}</ul>
+    <button type="button" className="ghost sm" onClick={onOpen}>Open backlog</button>
+  </section>
 }

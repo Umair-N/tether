@@ -3,7 +3,10 @@
 // moved it since the person clicked.
 export interface Source { agent: 'claude' | 'codex'; tmux?: string; pane?: string; chat?: string }
 export interface Detail { line: number; text: string; done?: boolean; raw: string }
-export interface Item { kind: 'item'; id: string; line: number; raw: string; done: boolean; text: string; source?: Source; details: Detail[] }
+/** Who works on an item now ("Doing"), or what came of it ("Done"). Agents write these lines (server: backlog.py). */
+export interface Status { kind: 'doing' | 'done'; text: string; source?: Source; line: number; raw: string }
+/** ref: the item's ID, like B12, that agents and people use to name it. */
+export interface Item { kind: 'item'; id: string; line: number; raw: string; done: boolean; text: string; ref?: string; source?: Source; status?: Status; details: Detail[] }
 export interface Note { kind: 'note'; id: string; line: number; raw: string; text: string; heading: boolean }
 export type Row = Item | Note
 /** A change to the text. null: the line it needs is gone. */
@@ -12,17 +15,51 @@ export type Change = (text: string) => string | null
 const CHECK = /^(\s*)[-*] \[([ xX])\] (.*)$/
 const SOURCE = /\s*\((claude|codex)((?: · [^()·]+)*)\)\s*$/
 const HEADING = /^#{1,6}\s+/
+const ID = /\s+#B([0-9]+)\s*$/
+const TOP = /^[-*] \[[ xX]\] /
+const STATUS = /^\s+- (Doing|Done): (.*)$/
 const indented = (line: string | undefined) => !!line && line.trim() !== '' && /^\s/.test(line)
+
+/** "codex · tmux $3 · pane %12 · chat 019a" without its brackets. */
+function sourceOf(agent: string, rest: string): Source {
+  const source: Source = { agent: agent as Source['agent'] }
+  for (const part of rest.split(' · ').slice(1)) {
+    const [key, value] = part.trim().split(/\s+/, 2)
+    if (value && (key === 'tmux' || key === 'pane' || key === 'chat')) source[key] = value
+  }
+  return source
+}
 
 function parseSource(text: string): { text: string; source?: Source } {
   const found = SOURCE.exec(text)
   if (!found || found.index === 0) return { text }
-  const source: Source = { agent: found[1] as Source['agent'] }
-  for (const part of found[2].split(' · ').slice(1)) {
-    const [key, value] = part.trim().split(/\s+/, 2)
-    if (value && (key === 'tmux' || key === 'pane' || key === 'chat')) source[key] = value
-  }
-  return { text: text.slice(0, found.index), source }
+  return { text: text.slice(0, found.index), source: sourceOf(found[1], found[2]) }
+}
+
+/** The ID goes last, after who added the item. */
+function parseItem(text: string): { text: string; ref?: string; source?: Source } {
+  const id = ID.exec(text)
+  const rest = id && id.index > 0 ? text.slice(0, id.index) : text
+  return { ...parseSource(rest), ...(id && id.index > 0 ? { ref: `B${id[1]}` } : {}) }
+}
+
+function parseStatus(raw: string, line: number): Status | null {
+  const found = STATUS.exec(raw)
+  if (!found) return null
+  const kind = found[1] === 'Doing' ? 'doing' : 'done'
+  const plain = /^(claude|codex)((?: · [^()·]+)*)$/.exec(found[2].trim())
+  if (kind === 'doing' && plain) return { kind, text: '', source: sourceOf(plain[1], plain[2]), line, raw }
+  const { text, source } = parseSource(found[2])
+  return { kind, text: text.trim(), source, line, raw }
+}
+
+/** Give each item line without an ID the next free one, in file order. The server does the same (backlog.py with_ids),
+ * so a change shows the IDs it will be saved with, and a later change still finds its line. */
+export function withIds(text: string): string {
+  const lines = text.split('\n')
+  let next = 1
+  for (const line of lines) { const id = TOP.test(line) ? ID.exec(line) : null; if (id) next = Math.max(next, Number(id[1]) + 1) }
+  return lines.map(line => TOP.test(line) && !ID.test(line) ? `${line.trimEnd()} #B${next++}` : line).join('\n')
 }
 
 export function parseBacklog(text: string): Row[] {
@@ -33,6 +70,8 @@ export function parseBacklog(text: string): Row[] {
     if (!raw.trim()) return
     const check = CHECK.exec(raw)
     if (item && indented(raw)) {
+      const status = parseStatus(raw, line)
+      if (status) { item.status = status; return }
       item.details.push(check ? { line, raw, text: check[3], done: check[2] !== ' ' } : { line, raw, text: raw.trim().replace(/^[-*] /, '') })
       return
     }
@@ -40,7 +79,7 @@ export function parseBacklog(text: string): Row[] {
     seen.set(raw, count + 1)
     const id = `${raw}\n${count}`
     if (check && !check[1]) {
-      item = { kind: 'item', id, line, raw, done: check[2] !== ' ', ...parseSource(check[3]), details: [] }
+      item = { kind: 'item', id, line, raw, done: check[2] !== ' ', ...parseItem(check[3]), details: [] }
       rows.push(item)
     } else {
       item = null
@@ -92,6 +131,18 @@ export function rewordItem(item: Item, wording: string): Change {
     const lines = text.split('\n'), at = find(lines, item.raw, item.line)
     if (at < 0) return null
     lines[at] = line
+    return lines.join('\n')
+  }
+}
+
+/** Mark an item as sent to a chat. A second send replaces the first. */
+export function startItem(raw: string, near: number, who: string): Change {
+  return text => {
+    const lines = text.split('\n'), at = find(lines, raw, near)
+    if (at < 0) return null
+    const end = blockEnd(lines, at)
+    const kept = lines.slice(at + 1, end).filter(line => !STATUS.test(line))
+    lines.splice(at + 1, end - at - 1, `  - Doing: ${who}`, ...kept)
     return lines.join('\n')
   }
 }

@@ -17,6 +17,7 @@ import type { Waiting } from './attention'
 import { age } from './needs'
 import type { Session } from './Sidebar'
 import { AgentIcon, agentNames, chatTitle, sessionName, shownIndex } from './Sidebar'
+import { BacklogNews } from './Backlog'
 import './Home.css'
 
 // Home answers one question: what do my agents need, across every session? Needs you, Working and Done.
@@ -121,9 +122,9 @@ function Blank({ title, text, children, onMenu }: { title: string; text: string;
   </section>
 }
 
-export function Home({ api, groups: all, asks = [], sessions = [], sort, hasAgents, loaded, loading, error, onRetry, onOpen, onMarkRead, onUpdate, onNew, onMenu }: {
+export function Home({ api, groups: all, asks = [], sessions = [], sort, hasAgents, loaded, loading, error, onRetry, onOpen, onMarkRead, onUpdate, onNew, onMenu, onBacklog }: {
   api: Api; groups: HomeGroups; asks?: Waiting[]; sessions?: Session[]; sort?: WaitSort; hasAgents: boolean; loaded: boolean; loading: boolean; error: string
-  onRetry: () => void; onOpen: (pane: Pane) => void; onMarkRead: (panes: string[]) => void; onUpdate: () => void; onNew: () => void; onMenu: () => void
+  onRetry: () => void; onOpen: (pane: Pane) => void; onMarkRead: (panes: string[]) => void; onUpdate: () => void; onNew: () => void; onMenu: () => void; onBacklog?: () => void
 }) {
   const root = useRef<HTMLElement>(null)
   // A tab that waits on you shows in Waiting on you only, not again in Done.
@@ -194,6 +195,7 @@ export function Home({ api, groups: all, asks = [], sessions = [], sort, hasAgen
           </button>)}
         </div>}
       </header>
+      {loaded && onBacklog && <BacklogNews api={api} onOpen={onBacklog} />}
       {error && loaded && <p className="home-stale" role="alert"><span>Tether cannot refresh this list. {error}</span><button type="button" className="ghost sm" onClick={onRetry}>Try again</button></p>}
       <div className={`home-board${loaded ? '' : ' loading'}`} aria-busy={!loaded}>
         {loaded && asks.length > 0 && <AsksGroup items={asks} sessions={sessions} sort={sort} onOpen={onOpen} />}

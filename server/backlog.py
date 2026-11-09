@@ -104,6 +104,20 @@ def with_ids(text):
     return '\n'.join(lines)
 
 
+def numbered():
+    """read(), after giving IDs to items that have none: a list from before IDs, or an item typed into the file."""
+    state = read()
+    if with_ids(state['text']) == state['text']:
+        return state
+    try:
+        with _locked():
+            current = read()['text']
+            fixed = with_ids(current)
+            return _replace(current, fixed) if fixed != current else _state(current)
+    except ProjectError:  # too full for the IDs: show it as it is
+        return read()
+
+
 def save(text, version):
     """Save only over the version the person last saw. Items written as text get their IDs here."""
     if not isinstance(text, str):
@@ -283,7 +297,7 @@ def _open_block(lines, start, end):
 
 def list_open(project=''):
     """What an agent sees: the inbox and its own project. Other projects stay out."""
-    lines = _lines(read()['text'])
+    lines = _lines(numbered()['text'])
     parts = []
     inbox = _open_block(lines, *_section(lines, ''))
     if inbox:
@@ -299,7 +313,7 @@ def list_open(project=''):
 def summary(project, limit=5):
     """Open items for an agent's start text: the inbox, then its own project, in list order. Returns (first items, count)."""
     try:
-        lines = _lines(read()['text'])
+        lines = _lines(numbered()['text'])
     except (ProjectError, OSError):
         return [], 0
     items = []

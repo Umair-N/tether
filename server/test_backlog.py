@@ -206,6 +206,16 @@ class BacklogTests(unittest.TestCase):
         self.assertEqual(backlog.with_ids(saved['text']), saved['text'])
         self.assertEqual(backlog.add('Four'), '- [ ] Four #B10')
 
+    def test_a_list_from_before_ids_gets_them_when_read(self):
+        backlog.folder().mkdir(parents=True)
+        (backlog.folder() / 'BACKLOG.md').write_text('- [ ] Old one\n- [x] Older\n')
+        self.assertEqual(backlog.read()['text'], '- [ ] Old one\n- [x] Older\n')
+        self.assertEqual(backlog.list_open(), 'Inbox:\n- [ ] Old one #B1')
+        self.assertEqual(backlog.numbered()['text'], '- [ ] Old one #B1\n- [x] Older #B2\n')
+        got = Handler('/mobile/api/projects/backlog')
+        projects_api.get(got)
+        self.assertTrue(got.body['command'].endswith('agent_backlog_cli.py'))
+
     def test_an_id_finds_any_item_and_words_still_work(self):
         backlog.save('- [ ] Fix login\n\n## other\n- [ ] Fix secret\n- [x] Old\n', backlog.read()['version'])
         backlog.add_detail('#b2', 'why', 'tether')
