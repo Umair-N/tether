@@ -5,6 +5,7 @@ import type { Command } from './CommandMenu'
 import { agentNames, groupSessions, paneTitle } from './Sidebar'
 import { agentReady, FridayAgent, type AgentChats, type AgentEvent, type ToolHandler } from './fridayAgent'
 import { fridayChatList } from './fridaySessions'
+import { fridayChatFolder } from './fridayFolders'
 import { LiveVoice, sentences } from './liveVoice'
 import { useBackStep } from './backNav'
 import { useFloatingWindow, type Edge, type FloatMode, type Point, type Rect } from './floatingWindow'
@@ -272,16 +273,18 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
       void flow.current.say(ASSISTANT, flow.current.toggle(verb === 'open' || verb === 'show', kind).words)
     },
     /** A new tab in the "Friday chats" session with an agent in it; the first prompt goes in when the agent is up. */
-    async create(wanted: string, kind: 'claude' | 'codex', prompt: string) {
+    async create(wanted: string, kind: 'claude' | 'codex', prompt: string, project?: string) {
+      const folder = fridayChatFolder(live.current.panes, live.current.target, project, FRIDAY_SESSION)
+      if ('error' in folder) throw new Error(folder.error)
       const { api } = live.current
       const clean = wanted.replace(/[^A-Za-z0-9 _-]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40).replace(/[ ]+$/, '') || `${kind} ${new Date().toTimeString().slice(0, 5).replace(':', '')}`
       if (!SESSION_NAME.test(clean)) throw new Error('Use letters, numbers, spaces or hyphens for the chat name.')
       // Friday's chats live together in one tmux session, one tab each. Other sessions stay as they are.
       const home = (await api<SessionsData>('sessions')).sessions.find(item => item.tmux_session === FRIDAY_SESSION)
       let id: string
-      if (home) id = (await api<{ pane: string }>('split', { session: home.id, direction: 'right' })).pane
+      if (home) id = (await api<{ pane: string }>('split', { session: home.id, direction: 'right', cwd: folder.dir })).pane
       else {
-        const made = await api<{ session: string; name: string }>('tmux-sessions', { name: FRIDAY_SESSION })
+        const made = await api<{ session: string; name: string }>('tmux-sessions', { name: FRIDAY_SESSION, cwd: folder.dir })
         let first: Pane | undefined
         for (let tries = 0; tries < 20 && !first; tries++) {
           first = (await api<SessionsData>('sessions')).sessions.find(item => item.label === made.name)
@@ -303,7 +306,7 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
         flow.current.announce(ASSISTANT, `${made.name} did not start in time, so the prompt was not sent.`, { id: `new-${id}`, kind: 'error', priority: 'idle' })
       })()
       setTargetId(id)
-      return made.name
+      return { chat: made.name, folder: folder.dir }
     },
     async brief() {
       const { agents } = live.current
@@ -347,9 +350,9 @@ export function Live({ api, panes, selected, commands, onClose, reveal = 0, from
       const message = lastReply(data)
       return { chat: paneTitle(pane), text: message ? shortText(message.text, 1500) : 'No reply yet.' }
     },
-    new_chat: async ({ name: wanted, agent: kind, prompt }) => {
-      const made = await flow.current.create(String(wanted ?? ''), kind === 'codex' ? 'codex' : 'claude', String(prompt ?? ''))
-      return { ok: true, chat: made }
+    new_chat: async ({ name: wanted, agent: kind, prompt, project }) => {
+      const made = await flow.current.create(String(wanted ?? ''), kind === 'codex' ? 'codex' : 'claude', String(prompt ?? ''), String(project ?? ''))
+      return { ok: true, chat: made.chat, folder: made.folder }
     },
     switch_chat: async ({ chat }) => {
       const choice = sessionChoice(live.current.agents, String(chat ?? ''))

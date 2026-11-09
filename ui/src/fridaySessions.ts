@@ -3,9 +3,9 @@ import type { AgentChatList } from './fridayAgent'
 interface Session { id: string; name: string }
 interface Chat { session: string; chat: string; agent: string; state: string; busy: boolean }
 
-const normalize = (name: string) => name.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
+export const normalize = (name: string) => name.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
 
-function distance(left: string, right: string): number {
+export function distance(left: string, right: string): number {
   let row = Array.from({ length: right.length + 1 }, (_, index) => index)
   for (let i = 0; i < left.length; i++) {
     const next = [i + 1]

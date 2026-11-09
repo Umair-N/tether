@@ -156,6 +156,56 @@ class BackendTests(unittest.TestCase):
             self.assertEqual(press(), ['Escape'])
             log.assert_called_once()
 
+    def test_chat_folder_validates_and_resolves(self):
+        self.assertEqual(server.chat_folder('~'), str(self.root.resolve()))
+        self.assertEqual(server.chat_folder('~/projects/project'), str(self.project.resolve()))
+        link = self.root / 'link'
+        link.symlink_to(self.project, target_is_directory=True)
+        self.assertEqual(server.chat_folder(str(link)), str(self.project.resolve()))
+        file = self.root / 'file'
+        file.touch()
+        for value in (None, 7, '', 'projects/project', '~someone', '~/missing',
+                      str(file), '/' + 'a' * 1024, '~/projects/\nproject',
+                      '~/projects/\x00project', '~/projects/\x7fproject', '~/projects/\x85project'):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, '^Folder not found[.]$'):
+                server.chat_folder(value)
+
+    def test_split_passes_explicit_cwd(self):
+        with patch.object(server, 'new_window_after', return_value='%13') as new_window:
+            self.assertEqual(self.request('/mobile/api/split', {
+                'session': '%12', 'direction': 'right', 'cwd': '~/projects/project',
+            }), (201, {'pane': '%13'}))
+        new_window.assert_called_once_with('%12', self.run, cwd=str(self.project.resolve()), group=None)
+
+    def test_tmux_session_passes_explicit_cwd(self):
+        with patch.object(server, 'create_session', return_value='%13') as create:
+            status, _ = self.request('/mobile/api/tmux-sessions', {
+                'name': 'Friday chats', 'cwd': '~/projects/project',
+            })
+        self.assertEqual(status, 201)
+        create.assert_called_once_with('Friday chats', str(self.project.resolve()))
+
+    def test_tmux_session_without_cwd_keeps_session_folder(self):
+        with patch.object(server, 'create_session', return_value='%13') as create:
+            with patch.object(server.prefs_sync, 'session_folder', return_value=str(self.project)):
+                status, _ = self.request('/mobile/api/tmux-sessions', {'name': 'Friday chats'})
+        self.assertEqual(status, 201)
+        create.assert_called_once_with('Friday chats', str(self.project))
+
+    def test_cwd_routes_reject_invalid_folders_before_tmux(self):
+        for route, body in (('/mobile/api/split', {'session': '%12', 'direction': 'right'}),
+                            ('/mobile/api/tmux-sessions', {'name': 'Friday chats'})):
+            for cwd in (None, 'relative', '~/missing', '~\n'):
+                with self.subTest(route=route, cwd=cwd):
+                    self.run.reset_mock()
+                    self.assertEqual(self.request(route, {**body, 'cwd': cwd}),
+                                     (400, {'error': 'Folder not found.'}))
+                    self.run.assert_not_called()
+        self.assertEqual(self.request('/mobile/api/tmux-sessions', {
+            'name': 'Friday chats', 'cwd': '~', 'worktree': 'branch',
+        }), (400, {'error': 'Use cwd or worktree, not both.'}))
+        self.run.assert_not_called()
+
     def test_split_directions_do_not_require_thread_or_writable(self):
         self.entries.return_value = [{'id': '%12', 'thread': CHAT, 'writable': False}]
         for direction in ('right', 'down'):

@@ -101,6 +101,24 @@ WATCHED = {}
 WATCHING_LOCK = threading.Lock()
 
 
+def chat_folder(value):
+    """Validate an explicit working folder before a tmux write."""
+    if (not isinstance(value, str) or len(value) > 1024
+            or any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in value)):
+        raise ValueError('Folder not found.')
+    if value == '~' or value.startswith('~/'):
+        value = str(paths.HOME) + value[1:]
+    if not os.path.isabs(value):
+        raise ValueError('Folder not found.')
+    try:
+        folder = os.path.realpath(value)
+        if os.path.isdir(folder):
+            return folder
+    except (OSError, ValueError):
+        pass
+    raise ValueError('Folder not found.')
+
+
 def watching(session):
     with WATCHING_LOCK:
         return WATCHING.get(session, 0) > 0 or time.monotonic() - WATCHED.get(session, float('-inf')) < 10
@@ -1746,7 +1764,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if self.path in ('/mobile/api/session', '/mobile/api/tmux-sessions'):
                 try:
-                    session_folder = prefs_sync.session_folder()
+                    if self.path == '/mobile/api/tmux-sessions' and 'cwd' in body:
+                        if 'worktree' in body:
+                            raise ValueError('Use cwd or worktree, not both.')
+                        session_folder = chat_folder(body['cwd'])
+                    else:
+                        session_folder = prefs_sync.session_folder()
                 except ValueError as exc:
                     self.respond(400, {'error': str(exc)})
                     return
@@ -1852,6 +1875,7 @@ class Handler(BaseHTTPRequestHandler):
                 pane, direction = body.get('session'), body.get('direction')
                 if not isinstance(pane, str) or not re.fullmatch(r'%[0-9]+', pane) or direction not in ('right', 'down'):
                     raise ValueError('Select a pane and split right or down.')
+                cwd = chat_folder(body['cwd']) if 'cwd' in body else None
                 choose(pane)
                 group = body.get('group')  # "+" in a group: "" = Unstacked, or a group id of the pane's session
                 if group is not None:
@@ -1862,7 +1886,8 @@ class Handler(BaseHTTPRequestHandler):
                         self.respond(exc.status, {'error': str(exc)})
                         return
                 with SEND_LOCK:
-                    new_pane = new_window_after(pane, subprocess.run, group=group)
+                    new_pane = new_window_after(pane, subprocess.run, group=group,
+                                                **({'cwd': cwd} if cwd is not None else {}))
                 self.respond(201, {'pane': new_pane})
                 return
             if self.path == '/mobile/api/review-link':

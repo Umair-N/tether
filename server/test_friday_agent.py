@@ -403,6 +403,8 @@ class FridayRulesTests(unittest.TestCase):
         self.assertEqual(tools['list_chats']['required'], [])
         self.assertEqual(tools['list_chats']['properties'], {'session': {'type': 'string'}})
         self.assertEqual(tools['new_chat']['required'], ['name', 'agent'])
+        self.assertEqual(tools['new_chat']['properties']['project']['type'], 'string')
+        self.assertIn('Which project?', tools['new_chat']['properties']['project']['description'])
         self.assertEqual(tools['new_chat']['properties']['agent']['enum'], ['claude', 'codex'])
         self.assertEqual(tools['answer_approval']['properties']['decision']['enum'], ['approve', 'deny'])
         self.assertEqual(tools['open_panel']['properties']['open']['type'], 'boolean')
