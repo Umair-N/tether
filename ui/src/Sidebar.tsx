@@ -1,3 +1,4 @@
+import { BacklogButton } from './Backlog'
 import { needsYou, isDone } from './paneState'
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
 import { Archive, ArchiveRestore, Asterisk, BarChart3, BookMarked, BookOpen, Bug, Cpu, Database, FileText, FlaskConical, GitBranch, Globe, LayoutDashboard, MessageSquare, MessagesSquare, Mic, Palette, Rocket, Server, Shield, Sparkles, Wrench, Zap, ChevronRight, Code2, GripVertical, Layers, Pin, PinOff, Plus, RefreshCw, Search, Settings, SlidersHorizontal, Terminal, Trash2, X } from 'lucide-react'
@@ -221,6 +222,7 @@ interface Props {
   onRestoreTab: (pane: Pane) => void
   onPastChat: (chat: PastChat) => void
   onSettings: () => void
+  onBacklog: () => void
   onClose?: () => void
   // Panes shown in the desktop workspace, in slot order: their rows show the slot key (⌥1 to ⌥4).
   slots?: string[]
@@ -241,7 +243,7 @@ interface Props {
   onAddPane?: (session: Session) => void
 }
 
-export function Sidebar({ api, sessions, selected, prefs, update, loading, error, onRetry, onOpen, onNew, onActions, onPaneActions, onPastChat, onSettings, onClose, slots, drag, onCommandMenu, onMessageAll, marks, onMarks, onOpenShell, onShellsEnded, onAddPane, archivedTabs, onRestoreTab }: Props) {
+export function Sidebar({ api, sessions, selected, prefs, update, loading, error, onRetry, onOpen, onNew, onActions, onPaneActions, onPastChat, onSettings, onBacklog, onClose, slots, drag, onCommandMenu, onMessageAll, marks, onMarks, onOpenShell, onShellsEnded, onAddPane, archivedTabs, onRestoreTab }: Props) {
   const host = useHost()
   const [query, setQuery] = useState('')
   const [reorder, setReorder] = useState<Section | null>(null)
@@ -391,6 +393,7 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
     <div className="sidebar-search-row"><label className="sidebar-search"><Search size={16} aria-hidden="true" /><input type="search" placeholder="Search" aria-label="Search sessions" aria-keyshortcuts={onCommandMenu ? undefined : 'Control+K Meta+K'} value={query} onChange={event => setQuery(event.target.value)} onKeyDown={searchKeys} />{onCommandMenu
       ? <button type="button" className="search-key" aria-label="Command menu" aria-keyshortcuts="Control+K Meta+K" title="Go to a pane or run a command" onClick={onCommandMenu}>{shortcutLabel}</button>
       : <kbd className="search-key" aria-hidden="true">{shortcutLabel}</kbd>}</label><button type="button" className="icon-button organize-button" aria-label="Organize sessions" title="Group and sort" aria-haspopup="dialog" onClick={event => setOrganizing({ at: matchMedia('(hover: hover)').matches ? anchorOf(event) : undefined })}><SlidersHorizontal size={17} /></button></div>
+    <BacklogButton api={api} onOpen={onBacklog} />
     {organizing && <OrganizeMenu api={api} sessions={sessions.filter(session => !isArchived(session, prefs.archived))} prefs={prefs} update={update} at={organizing.at} onClose={() => setOrganizing(null)} />}
     <nav className="session-groups" aria-label="Sessions">
       {prefs.attention && !search && <WaitingBox variant="list" sort={{ order: prefs.waitingOrder ?? 'oldest', onOrder: waitingOrder => update(() => ({ waitingOrder })) }} items={waitingAsks(sessions.flatMap(item => item.panes), Date.now() / 1000)} sessions={sessions} selected={selected} onOpen={onOpen} />}

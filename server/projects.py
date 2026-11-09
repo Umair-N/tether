@@ -392,6 +392,11 @@ def render(pid, agent='claude', home=None, group=None):
                  'Exit: 0 finished, 3 timeout (still working), 4 gone, 5 needs_input (with prompt), 6 no_turn (none in 60 s; message may be lost). '
                  'When a tab you started or review is done, save a note in notes/ (what it did, outcome, findings), '
                  'then run `close --pane %N`. Busy tabs stay open.\n')
+    backlog = f'{sys.executable} {Path(__file__).resolve().with_name("agent_backlog_cli.py")}'
+    parts.append(f'\n## Backlog\nThe user keeps one backlog across all sessions. Change it only with this command, never by editing its file: '
+                 f'`{backlog} list`, `add --agent claude|codex "text"`, `detail "part of item" "text"`, `done "part of item"`. '
+                 '`list` shows the user\'s inbox and this project\'s open items. Add real follow-up work outside your task without asking. '
+                 'Fill in or work on an item only when the user points you to it.\n')
     parts.append(f'\n## Notes\nSave a project fact that other agents in this session need as a Markdown file in {folder}/notes/ '
                  '(one topic per file, a "# Title" first line). Keep your own memory as before. The user reviews notes in Tether.\n')
     listing, excerpts = [], []
