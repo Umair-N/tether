@@ -1853,7 +1853,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(pane, str) or not re.fullmatch(r'%[0-9]+', pane) or direction not in ('right', 'down'):
                     raise ValueError('Select a pane and split right or down.')
                 choose(pane)
-                group = body.get('group')  # "+" in a group: "" = Main, or a group id of the pane's session
+                group = body.get('group')  # "+" in a group: "" = Unstacked, or a group id of the pane's session
                 if group is not None:
                     try:
                         if group != '':

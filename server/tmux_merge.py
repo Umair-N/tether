@@ -167,7 +167,7 @@ def move_pane(pane, target, run=subprocess.run):
 
 
 def _ungroup(run, pane):
-    """A pane that leaves its session goes to Main: groups belong to one session (groups.py)."""
+    """A pane that leaves its session goes to Unstacked: groups belong to one session (groups.py)."""
     _tmux(run, 'set-option', '-p', '-u', '-t', pane, '@group')
 
 

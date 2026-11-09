@@ -16,7 +16,7 @@ export interface GroupHooks {
   selected?: string
   /** Archived tabs of the session. The strip leaves them out, but they are still in their group. */
   hidden: Pane[]
-  /** Start a new tab in a group ('' = Main), next to `from`. */
+  /** Start a new tab in a group ('' = Unstacked), next to `from`. */
   onStart: (group: string, from: Pane) => void
   /** Open the group's context in the project editor. */
   onContext: (group: GroupInfo) => void
@@ -27,7 +27,7 @@ const STATE_WORD = { needs: 'needs you', done: 'done', working: 'working', idle:
 
 /**
  * The group row above the tab strip (wide screens) and the group switcher left of it (phones).
- * It shows only when the session has two or more places (Main while it holds a tab, and each group).
+ * It shows only when the session has two or more places (Unstacked while it holds a tab, and each group).
  * `children` is the tab strip; it shows as before when the row does not.
  */
 export function GroupBar({ api, session, pane, hooks, onOpenPane, onUpdate, children }: {
@@ -161,12 +161,12 @@ function GroupMenu({ api, session, place, at, from, hooks, onClose, onDone }: {
           <button disabled={pending} onClick={() => setMode('rename')}><Pencil size={18} />Rename stack</button>
           <button disabled={pending} onClick={() => { onClose(); hooks.onContext(group) }}><ScrollText size={18} />Stack context</button>
           <hr />
-          {count > 0 && <button disabled={pending} title={`Move ${tabs} to Main. No agent stops.`} onClick={() => void run(() => api('groups/ungroup', { session: session.id, group: group.id }))}><FolderOutput size={18} />Unstack<small>{tabs} to Main</small></button>}
+          {count > 0 && <button disabled={pending} title={`Move ${tabs} to Unstacked. No agent stops.`} onClick={() => void run(() => api('groups/ungroup', { session: session.id, group: group.id }))}><FolderOutput size={18} />Unstack<small>{tabs} to Unstacked</small></button>}
           {count > 0
             ? <button className="danger-item" disabled={pending} onClick={() => setMode('close')}><Trash2 size={18} />Close all tabs…</button>
             : <button className="danger-item" disabled={pending} onClick={() => void run(() => api('groups/remove', { session: session.id, group: group.id }))}><Trash2 size={18} />Remove stack</button>}
         </div>}
-    {mode === 'menu' && <p className="hint">{count ? 'Unstack moves the tabs to Main and stops no agent. ' : ''}The stack context is kept in the project archive.</p>}
+    {mode === 'menu' && <p className="hint">{count ? 'Unstack moves the tabs to Unstacked and stops no agent. ' : ''}The stack context is kept in the project archive.</p>}
     {error && <p className="error" role="alert">{error}</p>}
   </dialog>
 }
@@ -199,12 +199,12 @@ export function NewGroup({ api, session, pane, onClose, onDone }: { api: Api; se
   </dialog>
 }
 
-/** The tab menu's "Move to stack…": Main, each group, or a new group with this tab. */
+/** The tab menu's "Move to stack…": Unstacked, each group, or a new group with this tab. */
 export function TabGroupPicker({ api, session, pane, pending, run, onNew, onBack }: {
   api: Api; session: Session; pane: Pane; pending: boolean; run: (action: () => Promise<string | undefined>) => Promise<void>; onNew: () => void; onBack: () => void
 }) {
   const current = groupOf(pane, session.groups)
-  const places: { id: string; name: string }[] = [{ id: '', name: 'Main' }, ...(session.groups ?? [])]
+  const places: { id: string; name: string }[] = [{ id: '', name: 'Unstacked' }, ...(session.groups ?? [])]
   const move = (group: string) => void run(async () => { await api('groups/move', { session: session.id, pane: pane.id, group: group || null }); return undefined })
   return <div className="action-list">
     {places.map(place => <button key={place.id || 'main'} type="button" disabled={pending || place.id === current} aria-current={place.id === current ? 'true' : undefined} onClick={() => move(place.id)}>

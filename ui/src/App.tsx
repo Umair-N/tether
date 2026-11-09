@@ -635,7 +635,7 @@ function App() {
     setZoomed(false)
     update(current => ({ selected: id, layout: withDesk(current.layout, deskKey, { ...deskFor(current.layout, deskKey), ...next }) }))
   }
-  // `group` puts the new tab in that group ('' = Main); without it the tab joins the group of `target`.
+  // `group` puts the new tab in that group ('' = Unstacked); without it the tab joins the group of `target`.
   async function split(direction: 'right' | 'down', target = pane, group?: string) {
     if (!target) return
     try { await openNewPane((await api<{ pane: string }>('split', { session: target.id, direction, ...(group !== undefined ? { group } : {}) })).pane, direction) } catch (error) { setNotice(errorText(error)) }

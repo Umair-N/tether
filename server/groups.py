@@ -2,7 +2,7 @@
 
 The session option @groups holds the list, in order, empty groups included:
   [{"id": "g1a2b3c4d", "name": "Home dashboard", "project": "<12-hex projects.py id or empty>"}]
-The pane option @group holds a group id. A pane with no @group, or with an id that is not in @groups, is in Main.
+The pane option @group holds a group id. A pane with no @group, or with an id that is not in @groups, is in Unstacked.
 A group's context is a projects.py bundle, made on first use. Removing a group archives the bundle; nothing is deleted.
 This module is the store and its rules. groups_api.py is the HTTP part."""
 import contextlib
@@ -25,7 +25,8 @@ GROUP = re.compile(r'g[0-9a-f]{8}')
 SESSION = re.compile(r'\$[0-9]+')
 PANE = re.compile(r'%[0-9]+')
 NAME_LIMIT = 40
-MAIN = 'Main'
+MAIN = 'Unstacked'
+RESERVED = {'unstacked', 'main'}  # names for the tabs in no stack; Main is the old name
 _THREADS = threading.RLock()
 _depth = 0
 
@@ -77,7 +78,7 @@ def _check(result, message='Could not save the stack.'):
 
 
 def clean_name(value):
-    """A trimmed group name, or GroupError(400). Main is checked by the callers that make or rename a group."""
+    """A trimmed group name, or GroupError(400). Unstacked is checked by the callers that make or rename a group."""
     if not isinstance(value, str):
         raise GroupError(400, 'Enter a stack name.')
     name = value.strip()
@@ -168,8 +169,8 @@ def _find(groups, group_id):
 
 
 def _free_name(groups, name, keep=None):
-    if name.lower() == MAIN.lower():
-        raise GroupError(400, 'Main holds the tabs that are in no stack. Choose another name.')
+    if name.lower() in RESERVED:
+        raise GroupError(400, 'Unstacked and Main are kept for the tabs in no stack. Choose another name.')
     if any(g['name'].lower() == name.lower() and g['id'] != keep for g in groups):
         raise GroupError(409, 'A stack with that name exists.')
 
@@ -234,7 +235,7 @@ def rename(session_id, group_id, name, run=subprocess.run):
 
 
 def move(session_id, pane, group_id, run=subprocess.run):
-    """Put a tab in a group of its session. None or '' puts it in Main."""
+    """Put a tab in a group of its session. None or '' puts it in Unstacked."""
     with LOCK():
         groups = read(session_id, run)
         if group_id:
@@ -255,7 +256,7 @@ def _archive(group):
 
 
 def ungroup(session_id, group_id, run=subprocess.run):
-    """Move the group's tabs to Main and drop the group. No agent stops. Its context bundle goes to the archive."""
+    """Move the group's tabs to Unstacked and drop the group. No agent stops. Its context bundle goes to the archive."""
     with LOCK():
         groups = read(session_id, run)
         group = _find(groups, group_id)
@@ -277,9 +278,9 @@ def remove(session_id, group_id, run=subprocess.run):
 
 
 def find_or_create(session_id, name, run=subprocess.run):
-    """For agent_tab_cli.py --group NAME: the group with that name (any case), made when missing. Main gives None."""
+    """For agent_tab_cli.py --group NAME: the group with that name (any case), made when missing. Unstacked gives None."""
     name = clean_name(name)
-    if name.lower() == MAIN.lower():
+    if name.lower() in RESERVED:
         return None
     with LOCK():
         found = next((g for g in read(session_id, run) if g['name'].lower() == name.lower()), None)

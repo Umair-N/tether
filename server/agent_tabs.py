@@ -79,7 +79,7 @@ def close_tab(body, caller, entries, run, status):
 
 
 def _start_group(body, caller, run):
-    """`start --group NAME`: the id of that group in the caller's session, made when missing ("" for Main).
+    """`start --group NAME`: the id of that group in the caller's session, made when missing ("" for Unstacked).
     None without --group: the new tab then joins the caller's group (terminal_input.new_window_after)."""
     if 'group' not in body:
         return None

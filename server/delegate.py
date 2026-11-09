@@ -165,7 +165,7 @@ def launch_command(entry, agent, path, name, *, context=False, profile=None):
 
 def start(entry, body, folder, run=subprocess.run, recent=lambda: [], *, cwd=None, worktree=None, owner=None, group=None):
     """recent: returns source messages when context or a new reviewer needs them.
-    group: None = the source tab's group; "" = Main; a group id = that group (set before the launch command)."""
+    group: None = the source tab's group; "" = Unstacked; a group id = that group (set before the launch command)."""
     # Call after validate, under the server's send lock. Only the new pane receives input.
     agent = body['agent']
     review = normalize_review(body.get('review', False))

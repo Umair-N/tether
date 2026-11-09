@@ -2,27 +2,27 @@ import type { GroupInfo, Pane } from './api'
 import { isDone, needsYou } from './paneState'
 
 // Groups: named sets of tabs inside one tmux session (server/groups.py). A tab's `group` is a group id;
-// a tab with no id, or an id the session does not list, is in Main. Sessions with no groups do not change.
+// a tab with no id, or an id the session does not list, is in Unstacked. Sessions with no groups do not change.
 
-/** A place to switch between: Main (id '') or a group. */
+/** A place to switch between: Unstacked (id '') or a group. */
 export interface Place { id: string; name: string; panes: Pane[] }
 export type GroupState = 'needs' | 'done' | 'working' | 'idle'
 
-/** The group id of a tab in its session: '' for Main. */
+/** The group id of a tab in its session: '' for Unstacked. */
 export function groupOf(pane: Pane, groups: GroupInfo[] | undefined): string {
   return pane.group && groups?.some(group => group.id === pane.group) ? pane.group : ''
 }
 
-/** Main (only while it holds a tab) and every group, in order. Empty for a session with no groups. */
+/** Unstacked (only while it holds a tab) and every group, in order. Empty for a session with no groups. */
 export function placesOf(panes: Pane[], groups: GroupInfo[] | undefined): Place[] {
   if (!groups?.length) return []
   const main = panes.filter(pane => !groupOf(pane, groups))
-  return [...(main.length ? [{ id: '', name: 'Main', panes: main }] : []),
+  return [...(main.length ? [{ id: '', name: 'Unstacked', panes: main }] : []),
     ...groups.map(group => ({ id: group.id, name: group.name, panes: panes.filter(pane => pane.group === group.id) }))]
 }
 
 export function placeName(id: string, groups: GroupInfo[] | undefined) {
-  return id ? groups?.find(group => group.id === id)?.name ?? 'Main' : 'Main'
+  return id ? groups?.find(group => group.id === id)?.name ?? 'Unstacked' : 'Unstacked'
 }
 
 /** The tabs a chat's strip and swipe use: the open tab's group, or the whole session when it has no groups. */
@@ -52,14 +52,14 @@ export function stepPlace(places: Place[], current: string, dir: 1 | -1): Place 
   return places[(at + dir + places.length) % places.length]
 }
 
-/** The checks the server makes (server/groups.py): trimmed, 1 to 40 characters, no control characters, not "Main". */
+/** The checks the server makes (server/groups.py): trimmed, 1 to 40 characters, no control characters, not "Unstacked" or "Main". */
 export function groupNameError(name: string, groups: GroupInfo[] | undefined, except?: string): string {
   const value = name.trim()
   if (!value) return 'Type a name.'
   if (value.length > 40) return 'Use 40 characters or fewer.'
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f-\u009f]/.test(value)) return 'Use letters, numbers and spaces.'
-  if (value.toLowerCase() === 'main') return 'Main is the name for tabs with no stack.'
+  if (['unstacked', 'main'].includes(value.toLowerCase())) return 'Unstacked and Main are kept for the tabs in no stack.'
   if (groups?.some(group => group.id !== except && group.name.toLowerCase() === value.toLowerCase())) return 'A stack with that name exists.'
   return ''
 }

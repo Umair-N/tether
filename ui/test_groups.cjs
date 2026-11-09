@@ -29,8 +29,8 @@ assert.equal(g.groupOf(b, groups), 'g00000001')
 
 // Places: Main only while it holds a tab, then each group in order, empty groups kept.
 const places = g.placesOf([a, b, c, stray], groups)
-assert.deepEqual(plain(places.map(place => [place.id, place.name, ids(place.panes)])), [['', 'Main', ['%1', '%4']], ['g00000001', 'Home dashboard', ['%2', '%3']], ['g00000002', 'Empty', []]])
-assert.deepEqual(plain(g.placesOf([b, c], groups).map(place => place.name)), ['Home dashboard', 'Empty'], 'Main hides while empty')
+assert.deepEqual(plain(places.map(place => [place.id, place.name, ids(place.panes)])), [['', 'Unstacked', ['%1', '%4']], ['g00000001', 'Home dashboard', ['%2', '%3']], ['g00000002', 'Empty', []]])
+assert.deepEqual(plain(g.placesOf([b, c], groups).map(place => place.name)), ['Home dashboard', 'Empty'], 'Unstacked hides while empty')
 
 // The strip and the swipe use the open tab's group only, so a swipe stops at its last tab.
 assert.deepEqual(ids(g.groupPanes([a, b, c, stray], groups, c)), ['%2', '%3'])
@@ -55,7 +55,8 @@ assert.equal(g.groupNameError('  ', groups), 'Type a name.')
 assert.equal(g.groupNameError('x'.repeat(41), groups), 'Use 40 characters or fewer.')
 assert.equal(g.groupNameError('x'.repeat(40), groups), '')
 assert.equal(g.groupNameError('bad\u0007name', groups), 'Use letters, numbers and spaces.')
-assert.equal(g.groupNameError('main', groups), 'Main is the name for tabs with no stack.')
+assert.equal(g.groupNameError('main', groups), 'Unstacked and Main are kept for the tabs in no stack.')
+assert.equal(g.groupNameError(' Unstacked', groups), 'Unstacked and Main are kept for the tabs in no stack.')
 assert.equal(g.groupNameError(' home DASHBOARD ', groups), 'A stack with that name exists.')
 assert.equal(g.groupNameError('Home dashboard', groups, 'g00000001'), '', 'A rename may keep its own name')
 

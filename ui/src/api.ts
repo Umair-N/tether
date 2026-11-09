@@ -80,7 +80,7 @@ export interface Pane {
   approval: unknown
   pane_name?: string
   tmux_pane_name?: string  // the raw tmux name (@chat_name); pane_name is empty when a newer /rename wins
-  group?: string  // the group id (tmux option @group, server/groups.py); empty or unknown = Main
+  group?: string  // the group id (tmux option @group, server/groups.py); empty or unknown = Unstacked
   worktree?: string  // the branch, when Tether started this tab in a new worktree (tmux option @worktree)
   pane_icon?: string  // tmux option @chat_icon: a lucide icon name, or svg-<name> for an icon Claude drew (Sidebar.tsx AgentIcon)
   agent_name?: string  // the Claude or Codex session name (/rename); shown when the pane has no Tether name

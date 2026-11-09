@@ -92,7 +92,7 @@ def fork_name(entry, entries):
 
 def new_window_after(pane, run=subprocess.run, *, cwd=None, group=None):
     """Open after the source window, preserving its directory and manual size. The new pane joins the source pane's
-    group (@group, groups.py), unless group is given: "" puts it in Main, a group id in that group."""
+    group (@group, groups.py), unless group is given: "" puts it in Unstacked, a group id in that group."""
     source = run([paths.TMUX, 'display-message', '-p', '-t', pane, '#{window_id}\t#{pane_current_path}\t#{@group}'],
                  capture_output=True, text=True, timeout=5)
     fields = source.stdout.rstrip('\n').split('\t', 1)

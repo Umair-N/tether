@@ -237,6 +237,7 @@ class TmuxTests(Bundles):
         api = groups.create(self.a, 'API', run)
         self.assertEqual(self.status(lambda: groups.create(self.a, 'DOCS', run)), 409)
         self.assertEqual(self.status(lambda: groups.create(self.a, 'main', run)), 400)
+        self.assertEqual(self.status(lambda: groups.create(self.a, 'Unstacked', run)), 400)
         self.assertEqual(self.status(lambda: groups.rename(self.a, api['id'], 'docs', run)), 409)
         self.assertEqual(self.status(lambda: groups.rename(self.a, api['id'], ' Main ', run)), 400)
         self.assertEqual(groups.rename(self.a, docs['id'], 'docs', run)['name'], 'docs')  # its own name, new case
@@ -340,6 +341,7 @@ class TmuxTests(Bundles):
         self.assertEqual([(g['id'], g['name']) for g in groups.read(self.a, run)], [(made, 'Docs')])
         self.assertEqual(agent_tabs._start_group({'group': 'docs'}, caller, run), made)
         self.assertEqual(agent_tabs._start_group({'group': 'Main'}, caller, run), '')
+        self.assertEqual(agent_tabs._start_group({'group': 'unstacked'}, caller, run), '')
         self.assertEqual(self.status(lambda: agent_tabs._start_group({'group': ''}, caller, run)), 400)
 
     def test_merge_appends_numbered_groups_and_relabels_clashing_ids(self):

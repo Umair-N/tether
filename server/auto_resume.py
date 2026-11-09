@@ -324,7 +324,7 @@ def _options(tab, pane, session_id, *, run):
         try:  # before the labels, so @group points to a real group
             groups.restore(session_id, tab['session_options']['@groups'], run)
         except (ValueError, OSError, subprocess.SubprocessError):
-            pass  # the tab still resumes; it shows in Main
+            pass  # the tab still resumes; it shows in Unstacked
     for opt in OPTIONS[1:]:
         if options.get(opt):
             _tmux(run, 'set-option', '-p', '-t', pane, opt, options[opt], check=True)
