@@ -648,6 +648,8 @@ dialog::backdrop { background: #11110e66; }
 .selection-copy .copy-chip, .selection-copy .icon-button { flex: none; white-space: nowrap; background: var(--surface); box-shadow: 0 2px 10px rgb(0 0 0 / .18); }
 .selection-copy .icon-button { border: 1px solid var(--line); border-radius: 50%; }
 .thread:has(.jump-button) .selection-copy { bottom: 66px; }
+/* With a mouse: one button by the end of the selected text. */
+.selection-backlog { position: fixed; z-index: 30; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; background: var(--surface); box-shadow: 0 2px 10px rgb(0 0 0 / .18); -webkit-user-select: none; user-select: none; }
 .pull-note { display: flex; align-items: flex-end; justify-content: center; margin: 0; padding-bottom: 8px; overflow: hidden; font-size: 13px; color: var(--muted); }
 
 /* Mode menu above the mode pill; session details; reply times; model list refresh. */

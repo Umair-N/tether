@@ -2,7 +2,7 @@ import { terminalText } from './terminalText'
 import { shellCommand } from './shellCommand'
 import { copyText } from './clipboard'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Blocks, Clock3, Layers, Check, Copy, Share2, ChevronRight, X, MessageSquare, Info, ShieldAlert, Square, Volume2, Eye } from 'lucide-react'
+import { Blocks, Clock3, Layers, Check, Copy, Share2, ChevronRight, X, MessageSquare, Info, ShieldAlert, Square, Volume2, Eye, ClipboardPlus } from 'lucide-react'
 import { MessagePrimitive } from '@assistant-ui/react'
 import type { ThreadMessageLike } from '@assistant-ui/react'
 import { MarkdownTextPrimitive } from '@assistant-ui/react-markdown'
@@ -153,12 +153,16 @@ function ReviewCard({ id, review }: { id: string; review: Review }) {
 // One piece of a message that a long press can copy without any drag of the selection handles.
 const COPY_BLOCK = 'p, li, td, th, pre, h1, h2, h3, h4, h5, h6'
 // On a touch screen, a long press selects text in place. While a selection is in a message, this offers its paragraph and the whole message.
-export function SelectionCopy({ messages }: { messages: { id: string; text: string }[] }) {
+// onBacklog adds the selected text to the backlog. With a mouse, its button shows by the selection once the drag ends.
+export function SelectionCopy({ messages, onBacklog }: { messages: { id: string; text: string }[]; onBacklog?: (text: string) => void }) {
   const [id, setId] = useState('')
   const [block, setBlock] = useState<HTMLElement | null>(null)
+  const [at, setAt] = useState<{ x: number; y: number } | null>(null)
+  const [coarse] = useState(() => window.matchMedia('(pointer: coarse)').matches)
+  const mouse = !coarse && !!onBacklog
   useEffect(() => {
-    if (!window.matchMedia('(pointer: coarse)').matches) return
-    let timer = 0
+    if (!coarse && !mouse) return
+    let timer = 0, down = false
     const elementOf = (node: Node | null | undefined) => node instanceof Element ? node : node?.parentElement
     const inMessage = (element: Element | null | undefined) => element?.closest('.assistant-message, .user-message, .peer-message')?.closest('[data-msg-id]')
     const selected = () => { const selection = window.getSelection(); return selection && !selection.isCollapsed ? selection : null }
@@ -167,6 +171,13 @@ export function SelectionCopy({ messages }: { messages: { id: string; text: stri
       const selection = selected()
       const anchor = elementOf(selection?.anchorNode)
       const next = inMessage(anchor)?.getAttribute('data-msg-id')
+      if (!coarse) {
+        // With a mouse, the button waits for the drag to end, and stays by the end of the selection.
+        if (!next || down || !selection?.toString().trim()) { setId(''); setAt(null); return }
+        const box = selection.getRangeAt(selection.rangeCount - 1).getBoundingClientRect()
+        setId(next); setAt({ x: box.right, y: box.bottom })
+        return
+      }
       // A tap on a button can clear the selection just before its click arrives, so the buttons stay a moment.
       if (!next) { timer = window.setTimeout(() => { setId(''); setBlock(null) }, 300); return }
       const found = anchor?.closest<HTMLElement>(COPY_BLOCK) ?? null
@@ -176,27 +187,46 @@ export function SelectionCopy({ messages }: { messages: { id: string; text: stri
     // A stray tap on the text keeps the selection. Links and buttons still work, and X clears it.
     const pressed = (event: MouseEvent) => {
       const target = event.target as Element
-      if (selected() && inMessage(target) && !target.closest('a, button, summary, input, textarea, label')) event.preventDefault()
+      if (coarse) { if (selected() && inMessage(target) && !target.closest('a, button, summary, input, textarea, label')) event.preventDefault(); return }
+      if (event.button === 0 && !target.closest('.selection-backlog')) down = true
     }
+    const released = () => { if (!down) return; down = false; timer = window.setTimeout(changed, 0) }
+    const scrolled = () => { if (!coarse && selected()) changed() }
     document.addEventListener('selectionchange', changed)
     document.addEventListener('mousedown', pressed, true)
-    return () => { clearTimeout(timer); document.removeEventListener('selectionchange', changed); document.removeEventListener('mousedown', pressed, true) }
-  }, [])
+    document.addEventListener('mouseup', released, true)
+    document.addEventListener('scroll', scrolled, true)
+    return () => {
+      clearTimeout(timer)
+      document.removeEventListener('selectionchange', changed); document.removeEventListener('mousedown', pressed, true)
+      document.removeEventListener('mouseup', released, true); document.removeEventListener('scroll', scrolled, true)
+    }
+  }, [coarse, mouse])
   const text = messages.find(message => message.id === id)?.text
   if (!text) return null
+  const addSelected = onBacklog && (() => { const chosen = window.getSelection()?.toString().trim(); setAt(null); if (chosen) onBacklog(chosen) })
+  if (!coarse) {
+    if (!at || !addSelected) return null
+    const style = { left: Math.max(8, Math.min(at.x - 70, window.innerWidth - 168)), top: Math.min(at.y + 8, window.innerHeight - 44) }
+    return <button type="button" className="selection-backlog copy-chip" style={style} onMouseDown={event => event.preventDefault()} onClick={addSelected}>
+      <ClipboardPlus size={15} aria-hidden="true" /><span>Add to backlog</span>
+    </button>
+  }
   return <div className="selection-copy" role="group" aria-label="Copy selected message" onMouseDown={event => event.preventDefault()}>
-    {block?.isConnected && <CopyButton text={() => visibleText(block)} label="Copy paragraph" className="copy-chip" wide />}
-    <CopyButton text={text} label="Copy message" className="copy-chip" wide />
+    {/* Three chips and X must fit a 360px phone: with Backlog there, the copy icon says "Copy". */}
+    {block?.isConnected && <CopyButton text={() => visibleText(block)} label="Copy paragraph" shown={addSelected && 'Paragraph'} className="copy-chip" wide />}
+    <CopyButton text={text} label="Copy message" shown={addSelected && 'Message'} className="copy-chip" wide />
+    {addSelected && <button type="button" className="copy-chip" title="Add the selected text to the backlog" onClick={addSelected}><ClipboardPlus size={16} aria-hidden="true" /><span>Backlog</span></button>}
     <button type="button" className="icon-button" aria-label="Clear selection" title="Clear selection" onClick={() => window.getSelection()?.removeAllRanges()}><X size={16} /></button>
   </div>
 }
 // Copy with a short "Copied" confirmation. The Clipboard API needs HTTPS, which Tailscale Serve gives us.
-export function CopyButton({ text, label, className = 'icon-button', wide = false }: { text: string | (() => string); label: string; className?: string; wide?: boolean }) {
+export function CopyButton({ text, label, className = 'icon-button', wide = false, shown }: { text: string | (() => string); label: string; className?: string; wide?: boolean; shown?: string }) {
   const [done, setDone] = useState<'' | 'ok' | 'fail'>('')
   useEffect(() => { if (!done) return; const timer = setTimeout(() => setDone(''), 1500); return () => clearTimeout(timer) }, [done])
   return <button type="button" className={className} aria-label={done === 'ok' ? 'Copied' : label} title={label}
     onClick={() => copyText(typeof text === 'string' ? text : text()).then(() => setDone('ok'), () => setDone('fail'))}>
-    {done === 'ok' ? <Check size={16} /> : <Copy size={16} />}{className !== 'icon-button' && <span>{done === 'ok' ? 'Copied' : done === 'fail' ? 'Failed' : wide ? label : 'Copy'}</span>}
+    {done === 'ok' ? <Check size={16} /> : <Copy size={16} />}{className !== 'icon-button' && <span>{done === 'ok' ? 'Copied' : done === 'fail' ? 'Failed' : wide ? shown ?? label : 'Copy'}</span>}
   </button>
 }
 // Time of the reply, as the CLI shows it: "9:36 PM" today, "Fri 9:36 PM" this week, else the date.

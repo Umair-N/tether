@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { FormEvent, KeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode, RefObject } from 'react'
+import type { CSSProperties, FormEvent, KeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode, RefObject } from 'react'
 import { Check, ChevronRight, ClipboardList, FileText, GripVertical, ListChecks, Pencil, Plus, Send, Trash2, X } from 'lucide-react'
 import { ApiError, errorText } from './api'
 import type { Api, Pane } from './api'
@@ -488,12 +488,87 @@ export function Backlog({ api, guard, active = true, panes = [], onOpenPane }: {
 }
 
 /** The sheet the sidebar opens. Closing asks first only when text would be lost. */
+// The sheet's size, kept per browser. A phone sheet sits on the bottom edge, so only its height changes. A wider screen
+// centres the sheet, so a drag of the corner grows it on both sides: twice the pointer's move keeps the corner under it.
+const SIZE_KEY = 'tether.backlogSize'
+const WIDE = '(min-width: 600px)'
+interface SheetSize { width?: number; height?: number; phoneHeight?: number }
+const clamp = (value: number, low: number, high: number) => Math.round(Math.max(low, Math.min(value, Math.max(low, high))))
+function readSize(): SheetSize {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SIZE_KEY) || '{}') as Record<string, unknown>
+    const size: SheetSize = {}
+    for (const key of ['width', 'height', 'phoneHeight'] as const) if (typeof saved[key] === 'number' && saved[key] > 0) size[key] = saved[key]
+    return size
+  } catch { return {} }
+}
+function useSheetSize() {
+  const [size, setSize] = useState(readSize)
+  const [wide, setWide] = useState(() => window.matchMedia(WIDE).matches)
+  useEffect(() => {
+    const query = window.matchMedia(WIDE), changed = () => setWide(query.matches)
+    query.addEventListener('change', changed)
+    return () => query.removeEventListener('change', changed)
+  }, [])
+  const save = (next: SheetSize) => { setSize(next); try { localStorage.setItem(SIZE_KEY, JSON.stringify(next)) } catch { /* private window: the size lasts until reload */ } }
+  const px = (value?: number) => value ? `${value}px` : undefined
+  const style = (wide ? { '--backlog-w': px(size.width), '--backlog-h': px(size.height) } : { '--backlog-h': px(size.phoneHeight) }) as unknown as CSSProperties
+  return { size, wide, style, save }
+}
+
+/** A grabber on the phone's top edge, or a grip in the wide sheet's corner. Arrow keys resize too; a double click resets. */
+function SheetResize({ sheet, sizing, resized }: { sheet: RefObject<HTMLDialogElement | null>; sizing: ReturnType<typeof useSheetSize>; resized: RefObject<number> }) {
+  const { size, wide, save } = sizing
+  const limits = () => ({ width: [360, window.innerWidth - 32], height: [wide ? 320 : 240, window.innerHeight - (wide ? 32 : 24)] }) as const
+  const fit = (width: number, height: number): SheetSize => {
+    const { width: w, height: h } = limits()
+    return wide ? { ...size, width: clamp(width, w[0], w[1]), height: clamp(height, h[0], h[1]) } : { ...size, phoneHeight: clamp(height, h[0], h[1]) }
+  }
+  const begin = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const box = sheet.current?.getBoundingClientRect()
+    if (!box || event.button !== 0) return
+    event.preventDefault()
+    const handle = event.currentTarget, from = { x: event.clientX, y: event.clientY, width: box.width, height: box.height }
+    handle.setPointerCapture(event.pointerId)
+    let last = size
+    const move = (moved: PointerEvent) => {
+      const dx = moved.clientX - from.x, dy = moved.clientY - from.y
+      last = wide ? fit(from.width + 2 * dx, from.height + 2 * dy) : fit(from.width, from.height - dy)
+      sizing.save(last)
+    }
+    const end = () => {
+      resized.current = Date.now()
+      handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', end); handle.removeEventListener('pointercancel', end)
+    }
+    handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', end); handle.addEventListener('pointercancel', end)
+  }
+  const key = (event: KeyboardEvent<HTMLButtonElement>) => {
+    const box = sheet.current?.getBoundingClientRect()
+    const step = { ArrowUp: [0, wide ? -24 : 24], ArrowDown: [0, wide ? 24 : -24], ArrowLeft: [-24, 0], ArrowRight: [24, 0] }[event.key]
+    if (!box || !step || (!wide && step[0])) return
+    event.preventDefault()
+    save(fit(box.width + step[0], box.height + step[1]))
+  }
+  const reset = () => save(wide ? { phoneHeight: size.phoneHeight } : { width: size.width, height: size.height })
+  // A drag down from the phone's grabber must not reach the sheet's swipe-to-close.
+  const stop = (event: React.TouchEvent) => event.stopPropagation()
+  return <button type="button" className={wide ? 'backlog-resize corner' : 'backlog-resize top'} aria-label="Resize the backlog"
+    title={wide ? 'Drag to resize. Double-click to reset.' : 'Drag to resize'} onPointerDown={begin} onKeyDown={key} onDoubleClick={reset} onTouchStart={stop} onTouchEnd={stop}>
+    {wide && <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M11 4 4 11M11 8 8 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>}
+  </button>
+}
+
 export function BacklogSheet({ api, onClose, panes, onOpenPane }: { api: Api; onClose: () => void; panes?: Pane[]; onOpenPane?: (pane: Pane) => void }) {
   const guard = useRef<() => boolean>(() => false)
   const [asking, setAsking] = useState(false)
   const close = () => { if (guard.current()) setAsking(true); else onClose() }
   const modal = useModal(true, close)
-  return <dialog {...modal} className="sheet settings-sheet backlog-sheet" aria-labelledby="backlog-title">
+  const sizing = useSheetSize()
+  const resized = useRef(0)
+  // A resize that ends outside the sheet sends its click to the backdrop. That click must not close the sheet.
+  const onClick = (event: React.MouseEvent<HTMLDialogElement>) => { if (Date.now() - resized.current > 300) modal.onClick(event) }
+  return <dialog {...modal} onClick={onClick} style={sizing.style} className="sheet settings-sheet backlog-sheet" aria-labelledby="backlog-title">
+    <SheetResize sheet={modal.ref} sizing={sizing} resized={resized} />
     <div className="sheet-heading">
       <h2 id="backlog-title">Backlog</h2>
       <button type="button" className="icon-button" aria-label="Close" onClick={close}><X /></button>

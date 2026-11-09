@@ -1,6 +1,7 @@
 """HTTP routes for session projects (/mobile/api/projects/...). server.py checks sign-in, Origin and the
 X-Codex-Mobile header before it calls these. The store is projects.py."""
 import json
+import re
 from pathlib import Path
 import sys
 import subprocess
@@ -11,6 +12,8 @@ import projects
 
 PREFIX = '/mobile/api/projects/'
 BODY_LIMIT = 262144
+# Who added an item from the browser: the chat where the text was selected (agent_backlog_cli.py source).
+SOURCE = re.compile(r"(claude|codex)(?: · (?:tmux \$[0-9]+|pane %[0-9]+|chat [A-Za-z0-9_-]{1,80}))*")
 
 
 def handles(path):
@@ -60,8 +63,13 @@ def post(handler, home=None):
             raise ValueError('Invalid request.')
         if name == 'backlog':  # one list for the app, with no project id or revision
             return backlog.save(body.get('text'), body.get('version'))
-        if name == 'backlog-add':  # Friday: one item to the inbox, with no version to race on
-            line = backlog.add(body.get('text'))
+        if name == 'backlog-add':  # Friday, or a selection in a chat: one item to the inbox, with no version to race on
+            source, details = body.get('source', ''), body.get('details', [])
+            if not isinstance(source, str) or source and not SOURCE.fullmatch(source):
+                raise ValueError('Invalid source.')
+            if not isinstance(details, list) or len(details) > 20 or not all(isinstance(text, str) for text in details):
+                raise ValueError('Invalid details.')
+            line = backlog.add(body.get('text'), source, details=details)
             found = backlog.ID.search(line)
             return {'line': line, 'ref': f'B{found[1]}' if found else ''}
         if name == 'backlog-start':  # Friday sent an item to a chat: mark who works on it

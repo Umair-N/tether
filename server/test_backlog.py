@@ -194,6 +194,19 @@ class BacklogTests(unittest.TestCase):
         projects_api.post(empty)
         self.assertEqual(empty.status, 400)
 
+    def test_a_selection_adds_an_item_with_details_and_its_chat(self):
+        added = Handler('/mobile/api/projects/backlog-add', {
+            'text': 'Make the\nsheet resizable', 'details': ['Drag the top edge on a phone', ' ', 'Keep  the size'],
+            'source': 'claude · tmux $3 · pane %12 · chat abc-1'})
+        projects_api.post(added)
+        self.assertEqual(added.status, 200)
+        self.assertEqual(self.text(), '- [ ] Make the sheet resizable (claude · tmux $3 · pane %12 · chat abc-1) #B1\n'
+                         '  - Drag the top edge on a phone\n  - Keep the size\n')
+        for body in ({'text': 'A', 'source': 'claude) #B9 (x'}, {'text': 'A', 'details': 'one'}, {'text': 'A', 'details': ['x'] * 21}):
+            bad = Handler('/mobile/api/projects/backlog-add', body)
+            projects_api.post(bad)
+            self.assertEqual(bad.status, 400, body)
+
     def test_agents_learn_the_commands_not_the_file(self):
         text = projects.render('a1b2c3d4e5f6')
         for part in ('agent_backlog_cli.py`', '`list`', '`add "text"`', '`start B12`', '`done B12 "result"`', 'never by editing'):

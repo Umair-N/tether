@@ -173,18 +173,19 @@ def _change(change):
     return result
 
 
-def add(item, source='', project=''):
-    """Add an open item to a project's section, or to the inbox with no project."""
+def add(item, source='', project='', details=()):
+    """Add an open item to a project's section, or to the inbox with no project. details: lines to put under it."""
     item = _one_line(item)
     if not item:
         raise invalid('Write the item text.')
+    below = [f'  - {text}' for text in map(_one_line, details) if text]
     def change(lines):
         line = with_ids('\n'.join(lines + [f'- [ ] {item}{f" ({source})" if source else ""}'])).split('\n')[-1]
         start, end = _section(lines, project)
         if start is None:
-            lines.extend([''] * bool(lines) + [f'## {project}', line])
+            lines.extend([''] * bool(lines) + [f'## {project}', line, *below])
         else:
-            _insert_at_end(lines, start, end, [line])
+            _insert_at_end(lines, start, end, [line, *below])
         return line
     return _change(change)
 
