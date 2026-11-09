@@ -95,10 +95,10 @@ class RenderTests(Bundles):
         text = projects.render(PID, 'claude', self.home, group={'pid': self.GPID, 'name': 'Home dashboard'})
         self.assertLessEqual(len(text), projects.meta(PID)['budget'])
         self.assertTrue(text.startswith('# Tether project'))
-        self.assertLess(text.index('Use pnpm.'), text.index('## Group: Home dashboard'))
-        self.assertLess(text.index('## Group: Home dashboard'), text.index('Only touch the dashboard.'))
+        self.assertLess(text.index('Use pnpm.'), text.index('## Stack: Home dashboard'))
+        self.assertLess(text.index('## Stack: Home dashboard'), text.index('Only touch the dashboard.'))
         self.assertIn(f'{projects.bundle(self.GPID)}/notes/', text)
-        self.assertLess(text.index('### Project notes\n- setup.md: Setup'), text.index('### Group notes\n- chart.md: Chart'))
+        self.assertLess(text.index('### Project notes\n- setup.md: Setup'), text.index('### Stack notes\n- chart.md: Chart'))
         self.assertIn('#### chart.md\n# Chart\nUse the bar chart.', text)
 
     def test_group_text_is_cut_to_the_session_budget_and_keeps_the_session_part(self):
@@ -117,10 +117,10 @@ class RenderTests(Bundles):
         projects.write_note(PID, 'setup.md', '# Setup\nRun make.')
         text = projects.render(PID, 'claude', self.home)
         self.assertEqual(projects.render(PID, 'claude', self.home, group=None), text)
-        self.assertNotIn('Group', text.replace('--group NAME', ''))
+        self.assertNotIn('Stack', text.replace('--stack NAME', ''))
         self.assertIn('\n## Notes\n', text)
         self.assertNotIn('### Project notes', text)
-        self.assertIn('`--group NAME` (made if missing)', text)
+        self.assertIn('`--stack NAME` (made if missing)', text)
 
     def test_marks_cover_the_group_revision(self):
         projects.set_instructions(PID, 'Use pnpm.', 0)
@@ -155,7 +155,7 @@ class LaunchTests(Bundles):
         self.assertEqual(args[:4], ['--add-dir', str(projects.bundle(PID)), str(projects.bundle(self.GPID)), '--settings'])
         self.tmux.assert_called_with('set-option', '-p', '-t', '%4', '@project_rev', f'{PID}:0+{self.GPID}:1')
         args = project_launch.codex_args(PID, [], self.group)
-        self.assertIn('## Group: Docs', args[1])
+        self.assertIn('## Stack: Docs', args[1])
         self.assertIn('Docs rule.', args[1])
         project_launch.claude_args(PID, ['task'])
         self.tmux.assert_called_with('set-option', '-p', '-t', '%4', '@project_rev', f'{PID}:0')
@@ -176,7 +176,7 @@ class LaunchTests(Bundles):
                 mock.patch('sys.stdin', io.StringIO('{}')), mock.patch('sys.stdout', output):
             project_launch.hook(PID)
         text = json.loads(output.getvalue())['hookSpecificOutput']['additionalContext']
-        self.assertIn('## Group: Docs', text)
+        self.assertIn('## Stack: Docs', text)
 
 
 @unittest.skipUnless(shutil.which(paths.TMUX) or os.path.exists(paths.TMUX), 'tmux is not installed')
@@ -409,6 +409,7 @@ class CliAndServerTests(unittest.TestCase):
         body = agent_tab_cli.arguments(['start', '--group', 'Docs', '--worktree', 'feature/x', 'do it'])
         self.assertEqual((body['group'], body['worktree']), ('Docs', 'feature/x'))
         self.assertNotIn('group', agent_tab_cli.arguments(['start', 'do it']))
+        self.assertEqual(agent_tab_cli.arguments(['start', '--stack', 'Docs', 'do it'])['group'], 'Docs')
 
     def request(self, route, body, headers=None):
         handler = object.__new__(server.Handler)

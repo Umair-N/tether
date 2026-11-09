@@ -24,7 +24,7 @@ def _answer(handler, work):
     except (ValueError, UnicodeError) as exc:
         handler.respond(400, {'error': str(exc) or 'Invalid request.'})
     except OSError:
-        handler.respond(500, {'error': 'Tether could not read or write the group folder.'})
+        handler.respond(500, {'error': 'Tether could not read or write the stack folder.'})
 
 
 def _id(value, pattern, message):
@@ -38,7 +38,7 @@ def _session(value):
 
 
 def _group(value):
-    return _id(value, groups.GROUP, 'Choose a group.')
+    return _id(value, groups.GROUP, 'Choose a stack.')
 
 
 def _pane(value):

@@ -55,8 +55,8 @@ assert.equal(g.groupNameError('  ', groups), 'Type a name.')
 assert.equal(g.groupNameError('x'.repeat(41), groups), 'Use 40 characters or fewer.')
 assert.equal(g.groupNameError('x'.repeat(40), groups), '')
 assert.equal(g.groupNameError('bad\u0007name', groups), 'Use letters, numbers and spaces.')
-assert.equal(g.groupNameError('main', groups), 'Main is the name for tabs with no group.')
-assert.equal(g.groupNameError(' home DASHBOARD ', groups), 'A group with that name exists.')
+assert.equal(g.groupNameError('main', groups), 'Main is the name for tabs with no stack.')
+assert.equal(g.groupNameError(' home DASHBOARD ', groups), 'A stack with that name exists.')
 assert.equal(g.groupNameError('Home dashboard', groups, 'g00000001'), '', 'A rename may keep its own name')
 
 // Each group remembers its last tab on this device; a closed tab falls back to the first.

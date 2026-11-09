@@ -38,7 +38,7 @@ def arguments(argv):
     start.add_argument('--name')
     start.add_argument('--cwd')
     start.add_argument('--worktree', metavar='BRANCH')
-    start.add_argument('--group', metavar='NAME', help='put the new tab in this group of the session, made if missing (Main = no group)')
+    start.add_argument('--stack', '--group', dest='group', metavar='NAME', help='put the new tab in this stack of the session, made if missing (Main = no stack); --group is the old name')
     start.add_argument('task', nargs='?', default='')
     stop = actions.add_parser('stop')
     stop.add_argument('--worker', required=True)

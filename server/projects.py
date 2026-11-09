@@ -336,17 +336,17 @@ def _group_parts(group, home):
     pinned = pins(gpid, home)
     found = notes(gpid)
     folder = bundle(gpid)
-    main = (f'\n## Group: {name}\nThis tab is in the group "{name}" of this tmux session. '
-            + ('The user wrote this guidance for agents in the group. Follow it.\n' if text or pinned else '\n')
-            + f'Group folder: {folder}\n'
-            + f'Save a fact that only this group needs as a Markdown note in {folder}/notes/ (same rules as project notes). '
+    main = (f'\n## Stack: {name}\nThis tab is in the stack "{name}" of this tmux session. '
+            + ('The user wrote this guidance for agents in the stack. Follow it.\n' if text or pinned else '\n')
+            + f'Stack folder: {folder}\n'
+            + f'Save a fact that only this stack needs as a Markdown note in {folder}/notes/ (same rules as project notes). '
             'Facts for the whole session go in the project notes folder.\n')
     if text:
-        main += f'\n### Group instructions\n{text}\n'
+        main += f'\n### Stack instructions\n{text}\n'
     if pinned:
         lines = '\n'.join(f'- {item["name"]}: {item["path"]}{" (gone)" if item["missing"] else ""}' for item in pinned)
-        main += f'\n### Group pinned files\nRead a file when the task needs it.\n{lines}\n'
-    listing = ('\n### Group notes\n' + ''.join(f'- {item["name"]}: {item["title"]}\n' for item in found)) if found else ''
+        main += f'\n### Stack pinned files\nRead a file when the task needs it.\n{lines}\n'
+    listing = ('\n### Stack notes\n' + ''.join(f'- {item["name"]}: {item["title"]}\n' for item in found)) if found else ''
     excerpts = []
     for item in found[:NEWEST]:
         body = _read(folder / 'notes' / item['name'], EXCERPT + 1).strip()
@@ -383,7 +383,7 @@ def render(pid, agent='claude', home=None, group=None):
     cli = Path(__file__).resolve().with_name('agent_tab_cli.py')
     parts.append(f'\n## New tabs and reviewers\nTo start a new tab or session, or a reviewer, run `{sys.executable} {cli} start ...`, not raw tmux. '
                  'It opens a tab Tether can track. Options: `--review-it` (this tab reviews each turn of the new tab), `--reviews-me` (the new tab reviews this tab), '
-                 '`--agent claude|codex`, `--name NAME`, `--cwd DIR`, `--worktree BRANCH` (new branch and folder; refused with `--reviews-me`), `--context`, `--group NAME` (made if missing). '
+                 '`--agent claude|codex`, `--name NAME`, `--cwd DIR`, `--worktree BRANCH` (new branch and folder; refused with `--reviews-me`), `--context`, `--stack NAME` (made if missing). '
                  '`stop --worker %N [--reviewer %N]` ends a review; `list` shows this tab\'s links. '
                  '`link --worker %N --reviewer %N` makes one open tab review another. '
                  'Start your review reply with APPROVED when nothing is wrong. '

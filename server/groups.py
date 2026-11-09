@@ -57,7 +57,7 @@ def _locked():
 
 LOCK = _locked
 GONE_TAB = 'That tab has ended.'
-GONE_GROUP = 'That group no longer exists.'
+GONE_GROUP = 'That stack no longer exists.'
 GONE_SESSION = 'That session has ended.'
 
 
@@ -71,7 +71,7 @@ def _tmux(run, *args):
     return run([paths.TMUX, *args], capture_output=True, text=True, timeout=5)
 
 
-def _check(result, message='Could not save the group.'):
+def _check(result, message='Could not save the stack.'):
     if result.returncode:
         raise GroupError(500, result.stderr.strip() or message)
 
@@ -79,12 +79,12 @@ def _check(result, message='Could not save the group.'):
 def clean_name(value):
     """A trimmed group name, or GroupError(400). Main is checked by the callers that make or rename a group."""
     if not isinstance(value, str):
-        raise GroupError(400, 'Enter a group name.')
+        raise GroupError(400, 'Enter a stack name.')
     name = value.strip()
     if not 1 <= len(name) <= NAME_LIMIT:
-        raise GroupError(400, f'Use 1 to {NAME_LIMIT} characters for the group name.')
+        raise GroupError(400, f'Use 1 to {NAME_LIMIT} characters for the stack name.')
     if any(unicodedata.category(char)[0] == 'C' for char in name):
-        raise GroupError(400, 'The group name cannot have control characters.')
+        raise GroupError(400, 'The stack name cannot have control characters.')
     return name
 
 
@@ -160,7 +160,7 @@ def all_groups(run=subprocess.run):
 
 def _find(groups, group_id):
     if not isinstance(group_id, str) or not GROUP.fullmatch(group_id):
-        raise GroupError(400, 'Choose a group.')
+        raise GroupError(400, 'Choose a stack.')
     group = next((g for g in groups if g['id'] == group_id), None)
     if group is None:
         raise GroupError(404, GONE_GROUP)
@@ -169,9 +169,9 @@ def _find(groups, group_id):
 
 def _free_name(groups, name, keep=None):
     if name.lower() == MAIN.lower():
-        raise GroupError(400, 'Main holds the tabs that are in no group. Choose another name.')
+        raise GroupError(400, 'Main holds the tabs that are in no stack. Choose another name.')
     if any(g['name'].lower() == name.lower() and g['id'] != keep for g in groups):
-        raise GroupError(409, 'A group with that name exists.')
+        raise GroupError(409, 'A stack with that name exists.')
 
 
 def _new_id(taken):
@@ -271,7 +271,7 @@ def remove(session_id, group_id, run=subprocess.run):
         groups = read(session_id, run)
         group = _find(groups, group_id)
         if _labelled(session_id, group_id, run):
-            raise GroupError(409, 'The group still has tabs. Move or close them first.')
+            raise GroupError(409, 'The stack still has tabs. Move or close them first.')
         write(session_id, [g for g in groups if g['id'] != group_id], run)
     _archive(group)
 

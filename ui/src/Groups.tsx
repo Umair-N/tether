@@ -51,14 +51,14 @@ export function GroupBar({ api, session, pane, hooks, onOpenPane, onUpdate, chil
   }
   const waiting = waitingElsewhere(places, current)
   return <>
-    <nav className="group-row" aria-label={`Groups of ${session.name}`}>
+    <nav className="group-row" aria-label={`Stacks of ${session.name}`}>
       {places.map(place => {
         const state = topState(place.panes, hooks.seen, hooks.selected)
         const word = STATE_WORD[state]
         return <button key={place.id || 'main'} type="button" data-group-drop={place.id} aria-current={place.id === here.id ? 'true' : undefined}
           className={place.id === here.id ? 'group-tab active' : 'group-tab'}
           aria-label={`${place.name}, ${place.panes.length} ${place.panes.length === 1 ? 'tab' : 'tabs'}${word ? `, ${word}` : ''}`}
-          title={place.id ? `${place.name}. Right-click for group actions.` : 'Tabs that are in no group'}
+          title={place.id ? `${place.name}. Right-click for stack actions.` : 'Tabs that are in no stack'}
           onClick={event => go(place, anchorOf(event))}
           onContextMenu={event => { if (!place.id) return; event.preventDefault(); setMenu({ place, at: anchorOf(event) }) }}>
           <span className={`state-dot ${STATE_DOT[state]}`} aria-hidden="true" />
@@ -70,7 +70,7 @@ export function GroupBar({ api, session, pane, hooks, onOpenPane, onUpdate, chil
     </nav>
     <div className="group-strip">
       <button type="button" className="group-switch" aria-haspopup="dialog" onClick={() => setPicking(true)}
-        aria-label={`Group: ${here.name}. Change group${waiting ? `. ${waiting} ${waiting === 1 ? 'tab needs' : 'tabs need'} you in other groups` : ''}`}>
+        aria-label={`Stack: ${here.name}. Change stack${waiting ? `. ${waiting} ${waiting === 1 ? 'tab needs' : 'tabs need'} you in other stacks` : ''}`}>
         <span className="group-name">{here.name}</span>
         {waiting > 0 && <span className="group-badge" aria-hidden="true">{waiting}</span>}
         <ChevronDown size={14} aria-hidden="true" />
@@ -91,7 +91,7 @@ function GroupSwitcher({ session, places, current, hooks, onPick, onMenu, onNew,
 }) {
   const modal = useModal(true, onClose)
   return <dialog {...modal} className="sheet" aria-labelledby="group-switch-title">
-    <div className="sheet-heading"><h2 id="group-switch-title">Groups</h2><button type="button" className="icon-button" aria-label="Close" onClick={onClose}><X /></button></div>
+    <div className="sheet-heading"><h2 id="group-switch-title">Stacks</h2><button type="button" className="icon-button" aria-label="Close" onClick={onClose}><X /></button></div>
     <p className="sheet-sub">{session.name}</p>
     <div className="action-list group-list">
       {places.map(place => {
@@ -107,7 +107,7 @@ function GroupSwitcher({ session, places, current, hooks, onPick, onMenu, onNew,
         </div>
       })}
       <hr />
-      <button type="button" onClick={onNew}><Plus size={18} />New group</button>
+      <button type="button" onClick={onNew}><Plus size={18} />New stack</button>
     </div>
   </dialog>
 }
@@ -143,30 +143,30 @@ function GroupMenu({ api, session, place, at, from, hooks, onClose, onDone }: {
   }
   return <dialog {...dialog} aria-labelledby="group-menu-title">
     <div className="sheet-heading"><h2 id="group-menu-title">{group.name}</h2>{!at && <button type="button" className="icon-button" aria-label="Close" disabled={pending} onClick={onClose}><X /></button>}</div>
-    <p className="sheet-sub">Group in {session.name} · {count ? tabs : 'no tabs'}</p>
+    <p className="sheet-sub">Stack in {session.name} · {count ? tabs : 'no tabs'}</p>
     {mode === 'rename'
       ? <form className="rename-form" onSubmit={event => { event.preventDefault(); if (!nameError) void run(() => api('groups/rename', { session: session.id, group: group.id, name: name.trim() })) }}>
-          <label htmlFor="group-name-input">Group name</label>
+          <label htmlFor="group-name-input">Stack name</label>
           <input id="group-name-input" autoFocus value={name} maxLength={40} disabled={pending} autoComplete="off" aria-invalid={!!nameError && name !== place.name} onChange={event => setName(event.target.value)} />
           {nameError && name !== place.name && <p className="hint">{nameError}</p>}
           <div className="sheet-buttons"><button type="button" className="secondary" disabled={pending} onClick={() => setMode('menu')}>Cancel</button><button className="primary" disabled={pending || !!nameError}>{pending ? 'Saving…' : 'Save'}</button></div>
         </form>
       : mode === 'close'
       ? <div className="confirm-box" role="alertdialog" aria-labelledby="group-close-title">
-          <p id="group-close-title"><strong>{count === 1 ? 'Close the tab' : `Close all ${tabs}`} in {group.name}?</strong> {archived.length ? `${archived.length === 1 ? '1 of them is' : `${archived.length} of them are`} archived. ` : ''}{busy.length ? `This stops ${busy.map(item => `${chatTitle(item)} (${needsYou(item.state) ? 'needs you' : 'working'})`).join(', ')}. ` : ''}{endsSession ? `${count === 1 ? 'It is the last tab' : 'They are the last tabs'}, so this also ends the session ${session.name}. ` : 'Then the empty group is removed. '}You cannot undo this.</p>
+          <p id="group-close-title"><strong>{count === 1 ? 'Close the tab' : `Close all ${tabs}`} in {group.name}?</strong> {archived.length ? `${archived.length === 1 ? '1 of them is' : `${archived.length} of them are`} archived. ` : ''}{busy.length ? `This stops ${busy.map(item => `${chatTitle(item)} (${needsYou(item.state) ? 'needs you' : 'working'})`).join(', ')}. ` : ''}{endsSession ? `${count === 1 ? 'It is the last tab' : 'They are the last tabs'}, so this also ends the session ${session.name}. ` : 'Then the empty stack is removed. '}You cannot undo this.</p>
           <div className="sheet-buttons"><button type="button" className="secondary" disabled={pending} onClick={() => setMode('menu')}>Cancel</button><button type="button" className="danger" disabled={pending} onClick={() => void run(closeAll)}>{pending ? 'Closing…' : `Close ${tabs}`}</button></div>
         </div>
       : <div className="action-list">
           {!count && <button disabled={pending} onClick={() => { onClose(); hooks.onStart(group.id, from) }}><Plus size={18} />Start a tab here</button>}
-          <button disabled={pending} onClick={() => setMode('rename')}><Pencil size={18} />Rename group</button>
-          <button disabled={pending} onClick={() => { onClose(); hooks.onContext(group) }}><ScrollText size={18} />Group context</button>
+          <button disabled={pending} onClick={() => setMode('rename')}><Pencil size={18} />Rename stack</button>
+          <button disabled={pending} onClick={() => { onClose(); hooks.onContext(group) }}><ScrollText size={18} />Stack context</button>
           <hr />
-          {count > 0 && <button disabled={pending} title={`Move ${tabs} to Main. No agent stops.`} onClick={() => void run(() => api('groups/ungroup', { session: session.id, group: group.id }))}><FolderOutput size={18} />Ungroup<small>{tabs} to Main</small></button>}
+          {count > 0 && <button disabled={pending} title={`Move ${tabs} to Main. No agent stops.`} onClick={() => void run(() => api('groups/ungroup', { session: session.id, group: group.id }))}><FolderOutput size={18} />Unstack<small>{tabs} to Main</small></button>}
           {count > 0
             ? <button className="danger-item" disabled={pending} onClick={() => setMode('close')}><Trash2 size={18} />Close all tabs…</button>
-            : <button className="danger-item" disabled={pending} onClick={() => void run(() => api('groups/remove', { session: session.id, group: group.id }))}><Trash2 size={18} />Remove group</button>}
+            : <button className="danger-item" disabled={pending} onClick={() => void run(() => api('groups/remove', { session: session.id, group: group.id }))}><Trash2 size={18} />Remove stack</button>}
         </div>}
-    {mode === 'menu' && <p className="hint">{count ? 'Ungroup moves the tabs to Main and stops no agent. ' : ''}The group context is kept in the project archive.</p>}
+    {mode === 'menu' && <p className="hint">{count ? 'Unstack moves the tabs to Main and stops no agent. ' : ''}The stack context is kept in the project archive.</p>}
     {error && <p className="error" role="alert">{error}</p>}
   </dialog>
 }
@@ -188,18 +188,18 @@ export function NewGroup({ api, session, pane, onClose, onDone }: { api: Api; se
   }
   return <dialog {...modal} className="sheet" aria-labelledby="new-group-title">
     <form onSubmit={create}>
-      <div className="sheet-heading"><h2 id="new-group-title">New group</h2><button type="button" className="icon-button" aria-label="Close" disabled={pending} onClick={onClose}><X /></button></div>
+      <div className="sheet-heading"><h2 id="new-group-title">New stack</h2><button type="button" className="icon-button" aria-label="Close" disabled={pending} onClick={onClose}><X /></button></div>
       <p className="sheet-sub">{pane ? `${chatTitle(pane, session)} moves into it` : `In ${session.name}`}</p>
-      <label htmlFor="new-group-name">Group name</label>
+      <label htmlFor="new-group-name">Stack name</label>
       <input id="new-group-name" autoFocus value={name} maxLength={40} disabled={pending} autoComplete="off" aria-invalid={tried && !!problem} onChange={event => setName(event.target.value)} />
-      <p className="hint">{tried && problem ? problem : 'A group has its own tabs and its own agent context.'}</p>
+      <p className="hint">{tried && problem ? problem : 'A stack has its own tabs and its own agent context.'}</p>
       {error && <p className="error" role="alert">{error}</p>}
-      <button className="primary create-button" disabled={pending}>{pending ? 'Making…' : 'Make group'}</button>
+      <button className="primary create-button" disabled={pending}>{pending ? 'Making…' : 'Make stack'}</button>
     </form>
   </dialog>
 }
 
-/** The tab menu's "Move to group…": Main, each group, or a new group with this tab. */
+/** The tab menu's "Move to stack…": Main, each group, or a new group with this tab. */
 export function TabGroupPicker({ api, session, pane, pending, run, onNew, onBack }: {
   api: Api; session: Session; pane: Pane; pending: boolean; run: (action: () => Promise<string | undefined>) => Promise<void>; onNew: () => void; onBack: () => void
 }) {
@@ -211,7 +211,7 @@ export function TabGroupPicker({ api, session, pane, pending, run, onNew, onBack
       <FolderInput size={18} />{place.name}{place.id === current && <small>Here now</small>}
     </button>)}
     <hr />
-    <button type="button" disabled={pending} onClick={onNew}><Plus size={18} />New group with this tab</button>
+    <button type="button" disabled={pending} onClick={onNew}><Plus size={18} />New stack with this tab</button>
     <div className="sheet-buttons"><button type="button" className="secondary" disabled={pending} onClick={onBack}>Back</button></div>
   </div>
 }

@@ -689,7 +689,7 @@ function App() {
     { label: 'Terminal view of the focused pane', key: '⌥T', run: toggleTerminal },
     ...(pane ? [...TOOLBAR_PANELS.map(({ kind, key }) => ({ label: `${hasPanel(panelCols(desk), kind) ? 'Hide' : 'Show'} the ${PANELS[kind].title.toLowerCase()} panel`, key, run: () => togglePanelKind(setPanels, kind) })),
       ...extraPanels(desk, pane).map(({ kind, key, open }) => ({ label: open ? `Hide the ${PANELS[kind].title.toLowerCase()} panel` : kind === 'chat' ? 'Side chat: fork this chat beside it' : `Show ${PANELS[kind].title.toLowerCase()}`, key, run: () => kind === 'chat' ? void sideChat() : togglePanelKind(setPanels, kind) }))] : []),
-    ...(pane && placesOf(sessions.find(item => item.id === pane.tmux_session)?.panes ?? [], sessions.find(item => item.id === pane.tmux_session)?.groups).filter(place => place.panes.length).length > 1 ? [{ label: 'Next group', key: '⌥⇧]', run: () => stepGroup(1) }, { label: 'Previous group', key: '⌥⇧[', run: () => stepGroup(-1) }] : []),
+    ...(pane && placesOf(sessions.find(item => item.id === pane.tmux_session)?.panes ?? [], sessions.find(item => item.id === pane.tmux_session)?.groups).filter(place => place.panes.length).length > 1 ? [{ label: 'Next stack', key: '⌥⇧]', run: () => stepGroup(1) }, { label: 'Previous stack', key: '⌥⇧[', run: () => stepGroup(-1) }] : []),
     ...(livePins.length > 1 ? [{ label: 'Next pinned chat', key: '⌥]', run: () => stepPin(1) }, { label: 'Previous pinned chat', key: '⌥[', run: () => stepPin(-1) }] : []),
     { label: 'New session', key: '⌥N', run: () => setNewSession(true) },
     { label: desk.sidebar ? 'Hide the sidebar' : 'Show the sidebar', key: '⌘B', run: () => setDesk({ sidebar: !desk.sidebar }) },

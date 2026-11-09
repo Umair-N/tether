@@ -59,8 +59,8 @@ export function groupNameError(name: string, groups: GroupInfo[] | undefined, ex
   if (value.length > 40) return 'Use 40 characters or fewer.'
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f-\u009f]/.test(value)) return 'Use letters, numbers and spaces.'
-  if (value.toLowerCase() === 'main') return 'Main is the name for tabs with no group.'
-  if (groups?.some(group => group.id !== except && group.name.toLowerCase() === value.toLowerCase())) return 'A group with that name exists.'
+  if (value.toLowerCase() === 'main') return 'Main is the name for tabs with no stack.'
+  if (groups?.some(group => group.id !== except && group.name.toLowerCase() === value.toLowerCase())) return 'A stack with that name exists.'
   return ''
 }
 

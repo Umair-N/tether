@@ -244,7 +244,7 @@ export function PaneActions({ api, session, tabCount, archived, pane, panes, at,
           <CopyNames pane={pane} disabled={pending} onCopied={onClose} />
           <button disabled={pending} onClick={() => setMode('icon')}><Shapes size={18} />Change icon</button>
           <button disabled={pending} onClick={() => setMode('move')}><ArrowRightLeft size={18} />Move to session…</button>
-          {session && <button disabled={pending} onClick={() => setMode('group')}><FolderInput size={18} />Move to group…{!!session.groups?.length && <small>{placeName(pane.group ?? '', session.groups)}</small>}</button>}
+          {session && <button disabled={pending} onClick={() => setMode('group')}><FolderInput size={18} />Move to stack…{!!session.groups?.length && <small>{placeName(pane.group ?? '', session.groups)}</small>}</button>}
           {(pane.agent === 'claude' || pane.agent === 'codex') && <button disabled={pending} onClick={() => setMode('review')}><Eye size={18} />Link a review…</button>}
           <hr />
           <PlaceItems place={place} pending={pending} onClose={onClose} />

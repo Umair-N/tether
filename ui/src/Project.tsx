@@ -107,7 +107,7 @@ export function ProjectSheet({ api, session, group, mark, pin, onChanged, onClos
 
   return <dialog {...modal} className="sheet settings-sheet project-sheet" aria-labelledby="project-title">
     <div className="sheet-heading">
-      <h2 id="project-title">{note ? note.name : group ? 'Group context' : 'Project'}</h2>
+      <h2 id="project-title">{note ? note.name : group ? 'Stack context' : 'Project'}</h2>
       <button type="button" className="icon-button" aria-label="Close" disabled={pending} onClick={onClose}><X /></button>
     </div>
     <p className="sheet-sub">{group ? `${session.name} › ${group.name}` : session.name}{project && ` · ${project.chars.toLocaleString()} / ${project.budget.toLocaleString()} characters`}</p>
@@ -129,7 +129,7 @@ export function ProjectSheet({ api, session, group, mark, pin, onChanged, onClos
     </section>
 
     : project && <>
-      {staleCount > 0 && <p className="project-stale" role="status">{staleCount === 1 ? '1 agent' : `${staleCount} agents`} in this {group ? 'group' : 'session'} started with an older version. Restart them to apply the change. In Claude, <code>/clear</code> also applies it.</p>}
+      {staleCount > 0 && <p className="project-stale" role="status">{staleCount === 1 ? '1 agent' : `${staleCount} agents`} in this {group ? 'stack' : 'session'} started with an older version. Restart them to apply the change. In Claude, <code>/clear</code> also applies it.</p>}
       {pinPath && <div className="confirm-box project-pin" role="alertdialog" aria-labelledby="project-pin-title">
         <p id="project-pin-title"><strong>Pin {pinName}?</strong> A link always shows the current file. A copy keeps this version (1 MB at most).</p>
         <div className="sheet-buttons"><button type="button" className="secondary" disabled={pending} onClick={() => setPinPath(undefined)}>Cancel</button>
@@ -139,7 +139,7 @@ export function ProjectSheet({ api, session, group, mark, pin, onChanged, onClos
       {!project.instructions.trim() && !project.pins.length && !project.notes.length && !pinPath && <p className="hint">Agents here get only a short line about the notes folder. Add instructions or pin a file to give them more.</p>}
 
       <section className="settings-group" aria-labelledby="project-instructions"><h3 id="project-instructions">Instructions</h3>
-        <label htmlFor="project-text" className="visually-hidden">Instructions for every agent in this {group ? 'group' : 'session'}</label>
+        <label htmlFor="project-text" className="visually-hidden">Instructions for every agent in this {group ? 'stack' : 'session'}</label>
         <textarea id="project-text" className="project-text" value={text} rows={6} disabled={pending} placeholder="For example: Use pnpm. Run the tests before you say done." onChange={event => setText(event.target.value)} />
         <div className="sheet-buttons project-row-end">
           {dirty && <button type="button" className="secondary" disabled={pending} onClick={() => setText(project.instructions.replace(/\n$/, ''))}>Undo</button>}
