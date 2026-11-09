@@ -1,6 +1,8 @@
 """HTTP routes for session projects (/mobile/api/projects/...). server.py checks sign-in, Origin and the
 X-Codex-Mobile header before it calls these. The store is projects.py."""
 import json
+from pathlib import Path
+import sys
 import subprocess
 from urllib.parse import parse_qs, urlsplit
 
@@ -40,8 +42,8 @@ def get(handler, run=subprocess.run, home=None):
             return projects.marks(run, home)
         if name == 'note':
             return projects.read_note(query.get('project'), query.get('name'))
-        if name == 'backlog':
-            return backlog.read()
+        if name == 'backlog':  # command: what an agent runs, for the prompt the UI sends with an item
+            return dict(backlog.read(), command=f'{sys.executable} {Path(__file__).resolve().with_name("agent_backlog_cli.py")}')
         raise projects.ProjectError(404, 'Not found')
     _answer(handler, work)
 

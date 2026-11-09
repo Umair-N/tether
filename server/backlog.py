@@ -13,6 +13,7 @@ import hashlib
 import os
 import re
 import time
+from pathlib import Path
 
 import paths
 from projects import ProjectError, _read, _write, invalid
@@ -23,6 +24,10 @@ VERSIONS = 50
 HEADING = re.compile(r'#{1,6}\s+(.*?)\s*$')
 ITEM = re.compile(r'[-*] \[([ xX])\] (.*)$')
 SOURCE = re.compile(r'\s*\((?:claude|codex)(?: · [^()·]+)*\)\s*$')
+ID = re.compile(r'\s+#B([0-9]+)\s*$')  # every item ends with its ID, like #B12. The UI gives IDs the same way (backlogItems.ts).
+ID_QUERY = re.compile(r'#?[Bb]([0-9]+)')
+STATUS = re.compile(r'\s+- (?:Doing|Done):')
+WORKTREE = re.compile(r'gitdir:\s*(.+?)/\.git/worktrees/')
 
 
 def folder():
@@ -87,8 +92,20 @@ def _replace(current, text):
     return _state(text)
 
 
+def with_ids(text):
+    """Give each item without an ID the next free one, in file order. Text that already has IDs stays the same."""
+    lines = text.split('\n')
+    taken = [int(found[1]) for line in lines if ITEM.fullmatch(line) and (found := ID.search(line))]
+    next_id = max(taken, default=0) + 1
+    for at, line in enumerate(lines):
+        if ITEM.fullmatch(line) and not ID.search(line):
+            lines[at] = f'{line.rstrip()} #B{next_id}'
+            next_id += 1
+    return '\n'.join(lines)
+
+
 def save(text, version):
-    """Save only over the version the person last saw."""
+    """Save only over the version the person last saw. Items written as text get their IDs here."""
     if not isinstance(text, str):
         raise invalid('Invalid backlog text.')
     if not isinstance(version, str):
@@ -97,7 +114,7 @@ def save(text, version):
         current = read()
         if current['version'] != version:
             raise ProjectError(409, 'The backlog changed while you were editing.')
-        return _replace(current['text'], text)
+        return _replace(current['text'], with_ids(text))
 
 
 def _one_line(text):
@@ -138,7 +155,7 @@ def _change(change):
         current = read()['text']
         lines = _lines(current)
         result = change(lines)
-        _replace(current, '\n'.join(lines) + '\n')
+        _replace(current, with_ids('\n'.join(lines) + '\n'))
     return result
 
 
@@ -147,9 +164,8 @@ def add(item, source='', project=''):
     item = _one_line(item)
     if not item:
         raise invalid('Write the item text.')
-    line = f'- [ ] {item}{f" ({source})" if source else ""}'
-
     def change(lines):
+        line = with_ids('\n'.join(lines + [f'- [ ] {item}{f" ({source})" if source else ""}'])).split('\n')[-1]
         start, end = _section(lines, project)
         if start is None:
             lines.extend([''] * bool(lines) + [f'## {project}', line])
@@ -165,14 +181,34 @@ def _open_items(lines, project):
         for at in range(start or 0, end if start is not None else 0):
             found = ITEM.fullmatch(lines[at])
             if found and found[1] == ' ':
-                yield at, SOURCE.sub('', found[2])
+                yield at, _bare(found[2])
 
 
-def _match(lines, query, project):
-    """The one open item that the words name, in the inbox or this project. Never a guess between several."""
+def _bare(text):
+    """An item's words, without its ID and the record of who added it."""
+    return SOURCE.sub('', ID.sub('', text))
+
+
+def _by_id(lines, number, need_open):
+    for at, line in enumerate(lines):
+        found = ITEM.fullmatch(line)
+        id_found = found and ID.search(line)
+        if id_found and int(id_found[1]) == number:
+            if need_open and found[1] != ' ':
+                raise invalid(f'B{number} is already done.')
+            return at
+    raise invalid(f'No item B{number}. Run list to see the IDs.')
+
+
+def _match(lines, query, project, need_open=True):
+    """The one item that an ID names, anywhere in the list, or the one open item that the words name, in the inbox
+    or this project. Never a guess between several."""
     query = _one_line(query).casefold()
     if not query:
-        raise invalid('Write part of the item text.')
+        raise invalid('Write the item ID, like B12, or part of the item text.')
+    by_id = ID_QUERY.fullmatch(query)
+    if by_id:
+        return _by_id(lines, int(by_id[1]), need_open)
     items = list(_open_items(lines, project))
     found = [at for at, text in items if text.casefold() == query] or [at for at, text in items if query in text.casefold()]
     if not found:
@@ -189,17 +225,44 @@ def add_detail(query, text, project=''):
         raise invalid('Write the detail text.')
 
     def change(lines):
-        at = _match(lines, query, project) + 1
-        while at < len(lines) and lines[at].strip() and lines[at][0].isspace():
-            at += 1
+        at = _block_end(lines, _match(lines, query, project, need_open=False))
         lines.insert(at, f'  - {text}')
     _change(change)
 
 
-def mark_done(query, project=''):
+def _block_end(lines, at):
+    at += 1
+    while at < len(lines) and lines[at].strip() and lines[at][0].isspace():
+        at += 1
+    return at
+
+
+def _drop_status(lines, at):
+    """Remove the item's Doing and Done lines. Other details stay."""
+    end = _block_end(lines, at)
+    lines[at + 1:end] = [line for line in lines[at + 1:end] if not STATUS.match(line)]
+
+
+def start(query, who, project=''):
+    """Mark an open item as in progress, by whom. A second start replaces the first."""
+    def change(lines):
+        at = _match(lines, query, project)
+        _drop_status(lines, at)
+        lines.insert(at + 1, f'  - Doing: {_one_line(who) or "someone"}')
+        return lines[at]
+    return _change(change)
+
+
+def mark_done(query, project='', result='', who=''):
+    """Tick an open item. A result, and who did it, go in a Done line under it."""
+    result, who = _one_line(result), _one_line(who)
+
     def change(lines):
         at = _match(lines, query, project)
         lines[at] = lines[at].replace('[ ]', '[x]', 1)
+        _drop_status(lines, at)
+        if result or who:
+            lines.insert(_block_end(lines, at), f'  - Done: {result or "finished"}{f" ({who})" if who else ""}')
         return lines[at]
     return _change(change)
 
@@ -231,3 +294,44 @@ def list_open(project=''):
         if items:
             parts.append(f'{project}:\n' + '\n'.join(items))
     return '\n\n'.join(parts) or 'No open items.'
+
+
+def summary(project, limit=5):
+    """Open items for an agent's start text: the inbox, then its own project, in list order. Returns (first items, count)."""
+    try:
+        lines = _lines(read()['text'])
+    except (ProjectError, OSError):
+        return [], 0
+    items = []
+    for at, text in _open_items(lines, project):
+        found = ID.search(lines[at])
+        items.append(f'{"B" + found[1] + " " if found else ""}{text.strip()}'[:140])
+    return items[:limit], len(items)
+
+
+def _clean(name):
+    return re.sub(r'[^\w.\- ]+', '-', name).strip(' -')[:60]
+
+
+def project_name(start=None):
+    """The repository's folder name, the same from a subfolder or a worktree. No group for the home folder."""
+    try:
+        here = Path(start or os.getcwd()).resolve()
+    except OSError:
+        return ''
+    home = Path(paths.HOME).resolve()
+    if here == home:
+        return ''
+    for place in (here, *here.parents):
+        if place == home:
+            break
+        marker = place / '.git'
+        if marker.is_dir():
+            return _clean(place.name)
+        if marker.is_file():
+            try:
+                found = WORKTREE.match(marker.read_text(errors='replace'))
+            except OSError:
+                found = None
+            return _clean(Path(found[1]).name if found else place.name)
+    return _clean(here.name)

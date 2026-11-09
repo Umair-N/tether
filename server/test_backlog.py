@@ -2,6 +2,7 @@
 import json
 import multiprocessing
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -92,10 +93,10 @@ class BacklogTests(unittest.TestCase):
         backlog.add('App one', project='my-app')
         backlog.add('Tether two', project='TETHER')
         backlog.add('Inbox two')
-        self.assertEqual(self.text(), '- [ ] Inbox one\n- [ ] Inbox two\n\n## tether\n- [ ] Tether one (codex)\n- [ ] Tether two\n\n## my-app\n- [ ] App one\n')
+        self.assertEqual(self.text(), '- [ ] Inbox one #B2\n- [ ] Inbox two #B5\n\n## tether\n- [ ] Tether one (codex) #B1\n- [ ] Tether two #B4\n\n## my-app\n- [ ] App one #B3\n')
 
     def test_add_cleans_text_and_refuses_empty_or_full(self):
-        self.assertEqual(backlog.add(' Fix\n  this '), '- [ ] Fix this')
+        self.assertEqual(backlog.add(' Fix\n  this '), '- [ ] Fix this #B1')
         for bad in ('', '  \n', None):
             with self.assertRaises(projects.ProjectError):
                 backlog.add(bad)
@@ -107,9 +108,9 @@ class BacklogTests(unittest.TestCase):
     def test_list_shows_the_inbox_and_this_project_only(self):
         backlog.save('- [ ] Mine\n  - why\n- [x] Old\n  - old detail\n\n## tether\n- [ ] Here\n- [x] Gone\n\n## other\n- [ ] Secret\n', backlog.read()['version'])
         shown = backlog.list_open('tether')
-        self.assertEqual(shown, 'Inbox:\n- [ ] Mine\n  - why\n\ntether:\n- [ ] Here')
+        self.assertEqual(shown, 'Inbox:\n- [ ] Mine #B1\n  - why\n\ntether:\n- [ ] Here #B3')
         self.assertNotIn('Secret', backlog.list_open('tether'))
-        self.assertEqual(backlog.list_open('nothing'), 'Inbox:\n- [ ] Mine\n  - why')
+        self.assertEqual(backlog.list_open('nothing'), 'Inbox:\n- [ ] Mine #B1\n  - why')
 
     def test_list_with_nothing_open(self):
         self.assertEqual(backlog.list_open('tether'), 'No open items.')
@@ -123,21 +124,21 @@ class BacklogTests(unittest.TestCase):
             backlog.mark_done('secret', 'tether')
         backlog.add_detail('LOGIN', 'second', 'tether')
         backlog.mark_done('Fix login', 'tether')
-        self.assertEqual(self.text(), '- [x] Fix login (codex · chat a)\n  - first\n  - second\n- [ ] Fix upload\n\n## other\n- [ ] Fix secret\n')
+        self.assertEqual(self.text(), '- [x] Fix login (codex · chat a) #B1\n  - first\n  - second\n- [ ] Fix upload #B2\n\n## other\n- [ ] Fix secret #B3\n')
         with self.assertRaises(projects.ProjectError):
             backlog.mark_done('Fix login', 'tether')
 
     def test_an_exact_match_beats_a_longer_one(self):
         backlog.save('- [ ] Fix\n- [ ] Fix login\n', backlog.read()['version'])
         backlog.mark_done('fix')
-        self.assertEqual(self.text(), '- [x] Fix\n- [ ] Fix login\n')
+        self.assertEqual(self.text(), '- [x] Fix #B1\n- [ ] Fix login #B2\n')
 
     def test_versions_keep_a_direct_overwrite_and_stay_limited(self):
         state = backlog.save('- [ ] One\n', backlog.read()['version'])
         (backlog.folder() / 'BACKLOG.md').write_text('- [ ] An agent wrote over it\n')
         backlog.save('- [ ] Two\n', backlog.read()['version'])
         copies = [path.read_text() for path in sorted((backlog.folder() / 'versions').glob('*.md'))]
-        self.assertEqual(copies, ['- [ ] One\n', '- [ ] An agent wrote over it\n', '- [ ] Two\n'])
+        self.assertEqual(copies, ['- [ ] One #B1\n', '- [ ] An agent wrote over it\n', '- [ ] Two #B1\n'])
         self.assertTrue(state)
         with mock.patch.object(backlog, 'VERSIONS', 3):
             for at in range(5):
@@ -160,9 +161,11 @@ class BacklogTests(unittest.TestCase):
             worker.join(60)
             self.assertEqual(worker.exitcode, 0)
         text = self.text()
+        ids = re.findall(r'#B([0-9]+)$', text, re.M)
+        self.assertEqual(len(ids), len(set(ids)))
         for name in ('a', 'b', 'c', 'd'):
             for at in range(count):
-                self.assertIn(f'] {name} {at}\n', text)
+                self.assertRegex(text, rf'\] {name} {at} #B[0-9]+\n')
         self.assertFalse([name for name in os.listdir(backlog.folder()) if name.endswith('.tmp')])
 
     def test_routes(self):
@@ -171,7 +174,7 @@ class BacklogTests(unittest.TestCase):
         self.assertEqual((got.status, got.body['text']), (200, ''))
         saved = Handler('/mobile/api/projects/backlog', {'text': '- [ ] A\n', 'version': got.body['version']})
         projects_api.post(saved)
-        self.assertEqual((saved.status, saved.body['text']), (200, '- [ ] A\n'))
+        self.assertEqual((saved.status, saved.body['text']), (200, '- [ ] A #B1\n'))
         stale = Handler('/mobile/api/projects/backlog', {'text': 'B', 'version': got.body['version']})
         projects_api.post(stale)
         self.assertEqual(stale.status, 409)
@@ -181,13 +184,64 @@ class BacklogTests(unittest.TestCase):
 
     def test_agents_learn_the_commands_not_the_file(self):
         text = projects.render('a1b2c3d4e5f6')
-        for part in (' list`', 'add --agent claude|codex "text"', 'detail "part of item" "text"', 'done "part of item"', 'never by editing'):
+        for part in ('agent_backlog_cli.py`', '`list`', '`add "text"`', '`start B12`', '`done B12 "result"`', 'never by editing'):
             self.assertIn(part, text)
         self.assertNotIn('BACKLOG.md', text)
+
+    def test_a_tab_sees_its_open_items_and_the_preview_does_not(self):
+        backlog.save('- [ ] Mine\n\n## tether\n' + ''.join(f'- [ ] Item {at}\n' for at in range(6)) + '\n## other\n- [ ] Secret\n', backlog.read()['version'])
+        text = projects.render('a1b2c3d4e5f6', backlog_project='tether')
+        self.assertIn('### Open backlog items (7)\n- B1 Mine\n- B2 Item 0\n', text)
+        self.assertIn('2 more: run `list`.', text)
+        self.assertNotIn('Secret', text)
+        self.assertNotIn('Open backlog items', projects.render('a1b2c3d4e5f6'))
 
     def test_an_empty_backlog_gives_no_session_context(self):
         backlog.add('Global')
         self.assertFalse(projects.has_context('a1b2c3d4e5f6'))
+
+    def test_ids_are_given_once_in_file_order_and_kept(self):
+        saved = backlog.save('- [ ] One #B7\n- [ ] Two\n  - [ ] sub step\n\n## p\n* [x] Three\n', backlog.read()['version'])
+        self.assertEqual(saved['text'], '- [ ] One #B7\n- [ ] Two #B8\n  - [ ] sub step\n\n## p\n* [x] Three #B9\n')
+        self.assertEqual(backlog.with_ids(saved['text']), saved['text'])
+        self.assertEqual(backlog.add('Four'), '- [ ] Four #B10')
+
+    def test_an_id_finds_any_item_and_words_still_work(self):
+        backlog.save('- [ ] Fix login\n\n## other\n- [ ] Fix secret\n- [x] Old\n', backlog.read()['version'])
+        backlog.add_detail('#b2', 'why', 'tether')
+        self.assertIn('Fix secret #B2\n  - why\n', self.text())
+        backlog.add_detail('B3', 'note on a done item')
+        for bad, message in (('B3', 'already done'), ('B9', 'No item B9')):
+            with self.assertRaises(projects.ProjectError) as caught:
+                backlog.mark_done(bad)
+            self.assertIn(message, str(caught.exception))
+        self.assertEqual(backlog.mark_done('login'), '- [x] Fix login #B1')
+
+    def test_start_then_done_records_who_and_the_result(self):
+        backlog.save('- [ ] Fix login (codex · chat a)\n  - why\n', backlog.read()['version'])
+        backlog.start('B1', 'claude · pane %4 · chat x')
+        backlog.start('B1', 'claude · pane %5 · chat y')
+        self.assertEqual(self.text(), '- [ ] Fix login (codex · chat a) #B1\n  - Doing: claude · pane %5 · chat y\n  - why\n')
+        self.assertEqual(backlog.list_open(), 'Inbox:\n- [ ] Fix login (codex · chat a) #B1\n  - Doing: claude · pane %5 · chat y\n  - why')
+        backlog.mark_done('B1', result='fixed in 1234abc', who='claude · chat y')
+        self.assertEqual(self.text(), '- [x] Fix login (codex · chat a) #B1\n  - why\n  - Done: fixed in 1234abc (claude · chat y)\n')
+        with self.assertRaises(projects.ProjectError):
+            backlog.start('B1', 'claude')
+
+    def test_summary_names_the_first_open_items_and_counts_all(self):
+        self.assertEqual(backlog.summary('tether'), ([], 0))
+        backlog.save('- [ ] Mine\n- [x] Old\n\n## tether\n- [ ] A (codex · chat a)\n- [ ] B\n\n## other\n- [ ] C\n', backlog.read()['version'])
+        self.assertEqual(backlog.summary('tether', 2), (['B1 Mine', 'B3 A'], 3))
+
+    def test_the_cli_starts_and_finishes_an_item(self):
+        import agent_backlog_cli
+        backlog.add('Fix it', project='')
+        env = {'TMUX_PANE': '', 'CLAUDE_CODE_SESSION_ID': 'abc', 'CODEX_THREAD_ID': ''}
+        with mock.patch.dict(os.environ, env), mock.patch('sys.stdout'):
+            self.assertEqual(agent_backlog_cli.main(['start', 'B1']), 0)
+            self.assertIn('  - Doing: claude · chat abc', self.text())
+            self.assertEqual(agent_backlog_cli.main(['done', 'B1', 'shipped in PR 9']), 0)
+        self.assertEqual(self.text(), '- [x] Fix it #B1\n  - Done: shipped in PR 9 (claude · chat abc)\n')
 
 
 if __name__ == '__main__':

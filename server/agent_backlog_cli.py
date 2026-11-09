@@ -5,7 +5,6 @@ import os
 import re
 import subprocess
 import sys
-from pathlib import Path
 
 import backlog
 import paths
@@ -14,7 +13,6 @@ from projects import ProjectError
 CHAT_ENV = {'claude': 'CLAUDE_CODE_SESSION_ID', 'codex': 'CODEX_THREAD_ID'}
 CHAT = re.compile(r'[A-Za-z0-9_-]{1,80}')
 TMUX_ENV = re.compile(r'.*,[0-9]+,([0-9]+)')
-WORKTREE = re.compile(r'gitdir:\s*(.+?)/\.git/worktrees/')
 
 
 def tmux_session(pane):
@@ -45,32 +43,13 @@ def source(agent):
     return ' · '.join(parts)
 
 
-def _clean(name):
-    return re.sub(r'[^\w.\- ]+', '-', name).strip(' -')[:60]
-
-
 def project_name(start=None):
-    """The repository's folder name, the same from a subfolder or a worktree. No group for the home folder."""
-    try:
-        here = Path(start or os.getcwd()).resolve()
-    except OSError:
-        return ''
-    home = Path(paths.HOME).resolve()
-    if here == home:
-        return ''
-    for place in (here, *here.parents):
-        if place == home:
-            break
-        marker = place / '.git'
-        if marker.is_dir():
-            return _clean(place.name)
-        if marker.is_file():
-            try:
-                found = WORKTREE.match(marker.read_text(errors='replace'))
-            except OSError:
-                found = None
-            return _clean(Path(found[1]).name if found else place.name)
-    return _clean(here.name)
+    return backlog.project_name(start)
+
+
+def guess_agent():
+    """No command needs --agent: a Codex tab has its thread variable. A Claude tab never does."""
+    return 'codex' if CHAT.fullmatch(os.environ.get('CODEX_THREAD_ID', '')) else 'claude'
 
 
 def main(argv=None):
@@ -78,25 +57,33 @@ def main(argv=None):
     commands = parser.add_subparsers(dest='command', required=True)
     commands.add_parser('list', help="the inbox and this project's open items")
     add = commands.add_parser('add', help='add an open item to this project')
-    add.add_argument('--agent', required=True, choices=sorted(CHAT_ENV))
+    add.add_argument('--agent', choices=sorted(CHAT_ENV), help='who adds it; found from the tab when left out')
     add.add_argument('text')
-    detail = commands.add_parser('detail', help='add a line under an open item')
-    detail.add_argument('item', help='part of the item text')
+    detail = commands.add_parser('detail', help='add a line under an item')
+    detail.add_argument('item', help='the item ID, like B12, or part of the item text')
     detail.add_argument('text')
-    done = commands.add_parser('done', help='tick an open item')
-    done.add_argument('item', help='part of the item text')
+    begin = commands.add_parser('start', help='mark an open item as in progress by this tab')
+    begin.add_argument('item', help='the item ID, like B12, or part of the item text')
+    begin.add_argument('--agent', choices=sorted(CHAT_ENV))
+    done = commands.add_parser('done', help='tick an open item, with what was done')
+    done.add_argument('item', help='the item ID, like B12, or part of the item text')
+    done.add_argument('result', nargs='?', default='', help='what was done: the commit, PR, or outcome')
+    done.add_argument('--agent', choices=sorted(CHAT_ENV))
     args = parser.parse_args(argv)
     project = project_name()
     try:
         if args.command == 'list':
             print(backlog.list_open(project))
         elif args.command == 'add':
-            print(f'Added: {backlog.add(args.text, source(args.agent), project)}')
+            print(f'Added: {backlog.add(args.text, source(args.agent or guess_agent()), project)}')
         elif args.command == 'detail':
             backlog.add_detail(args.item, args.text, project)
             print('Added the detail.')
+        elif args.command == 'start':
+            print(f'Started: {backlog.start(args.item, source(args.agent or guess_agent()), project)}')
         else:
-            print(f'Done: {backlog.mark_done(args.item, project)}')
+            who = source(args.agent or guess_agent())
+            print(f'Done: {backlog.mark_done(args.item, project, args.result, who)}')
     except (ProjectError, OSError) as exc:
         print(f'Backlog error: {exc}', file=sys.stderr)
         return 1

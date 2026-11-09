@@ -44,8 +44,8 @@ class BacklogCliTests(unittest.TestCase):
     def test_each_agent_records_its_own_chat_under_the_repository(self):
         self.assertEqual(self.run_cli('add', '--agent', 'codex', 'One')[0], 0)
         self.assertEqual(self.run_cli('add', '--agent', 'claude', 'Two')[0], 0)
-        self.assertEqual(self.text(), '## tether\n- [ ] One (codex · tmux $7 · pane %12 · chat codex-thread)\n'
-                                      '- [ ] Two (claude · tmux $7 · pane %12 · chat claude-chat)\n')
+        self.assertEqual(self.text(), '## tether\n- [ ] One (codex · tmux $7 · pane %12 · chat codex-thread) #B1\n'
+                                      '- [ ] Two (claude · tmux $7 · pane %12 · chat claude-chat) #B2\n')
 
     def test_list_detail_and_done(self):
         self.run_cli('add', '--agent', 'codex', 'Fix login')

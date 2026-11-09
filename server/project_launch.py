@@ -124,7 +124,7 @@ def codex_args(pid, args, group=None):
     if pid:
         import backlog
         import projects
-        text = projects.render(pid, 'codex', group=group)
+        text = projects.render(pid, 'codex', group=group, backlog_project=backlog.project_name())
         record_revision(pid, group)
         backlog.folder().mkdir(mode=0o700, parents=True, exist_ok=True)
         folder_args = ['--add-dir', str(backlog.folder())]  # the sandbox blocks the backlog command's writes without it
@@ -190,9 +190,10 @@ def hook(pid):
         pass
     try:
         sys.path.insert(0, str(HERE))
+        import backlog
         import projects
         group = current_group()
-        text = projects.render(pid, 'claude', group=group)
+        text = projects.render(pid, 'claude', group=group, backlog_project=backlog.project_name())
         record_revision(pid, group)
     except Exception:  # noqa: BLE001 - a hook must never stop a session
         return

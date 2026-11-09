@@ -354,12 +354,14 @@ def _group_parts(group, home):
     return main, listing, excerpts
 
 
-def render(pid, agent='claude', home=None, group=None):
+def render(pid, agent='claude', home=None, group=None, backlog_project=None):
     """The text an agent gets. An empty project still gets the Notes part: without it no agent knows the notes folder,
     so no note is ever written. Claude keeps its own auto memory where it is: Tether does not move it, so Claude's
     notes from before stay in reach. Both agents get the same text. Reading never makes the bundle folder.
     group: {'pid', 'name'} for a tab in a group (groups.py). Its part comes after the session parts of the same
-    tier, so _fit cuts note excerpts first, then note lists, and the group's own guidance last."""
+    tier, so _fit cuts note excerpts first, then note lists, and the group's own guidance last.
+    backlog_project: the agent's repository name (backlog.project_name). With it, the open backlog items for the inbox
+    and that project are listed, cut before the note lists. The project preview has no tab, so it passes none."""
     data = meta(pid)
     text = instructions(pid).strip()
     pinned = pins(pid, home)
@@ -393,13 +395,21 @@ def render(pid, agent='claude', home=None, group=None):
                  'When a tab you started or review is done, save a note in notes/ (what it did, outcome, findings), '
                  'then run `close --pane %N`. Busy tabs stay open.\n')
     backlog = f'{sys.executable} {Path(__file__).resolve().with_name("agent_backlog_cli.py")}'
-    parts.append(f'\n## Backlog\nThe user keeps one backlog across all sessions. Change it only with this command, never by editing its file: '
-                 f'`{backlog} list`, `add --agent claude|codex "text"`, `detail "part of item" "text"`, `done "part of item"`. '
-                 '`list` shows the user\'s inbox and this project\'s open items. Add real follow-up work outside your task without asking. '
-                 'Fill in or work on an item only when the user points you to it.\n')
+    parts.append(f'\n## Backlog\nThe user keeps one backlog for all sessions. Change it only with `{backlog}`, never by editing its file. '
+                 'Commands: `list`, `add "text"`, `detail B12 "text"`, `start B12`, `done B12 "result"`. '
+                 '`list` shows the inbox and this project\'s open items, with their IDs.\n'
+                 '- Add an item without asking for real work outside your task that takes more than about 5 minutes. No style nits, no steps of your own task.\n'
+                 '- Work on an item only when the user points you to it. Run `start` first. When it is finished, run `done` with the commit, PR, or outcome.\n')
     parts.append(f'\n## Notes\nSave a project fact that other agents in this session need as a Markdown file in {folder}/notes/ '
                  '(one topic per file, a "# Title" first line). Keep your own memory as before. The user reviews notes in Tether.\n')
-    listing, excerpts = [], []
+    listing, excerpts, waiting = [], [], []
+    if backlog_project is not None:
+        import backlog as backlog_store  # backlog imports this module
+        items, count = backlog_store.summary(backlog_project)
+        if items:
+            shown = ''.join(f'- {item[:100]}\n' for item in items)
+            more = f'{count - len(items)} more: run `list`.\n' if count > len(items) else ''
+            waiting.append(f'\n### Open backlog items ({count})\n{shown}{more}')
     if found:
         listing.append(''.join(f'- {item["name"]}: {item["title"]}\n' for item in found))
         for item in found[:NEWEST]:
@@ -411,7 +421,7 @@ def render(pid, agent='claude', home=None, group=None):
         listing = ['\n### Project notes\n' + listing[0]] if listing else []  # not under the group heading
         listing += [group_listing] if group_listing else []
         excerpts += group_excerpts
-    return _fit(parts + listing + excerpts, data['budget'])
+    return _fit(parts + listing + waiting + excerpts, data['budget'])
 
 
 def state(pid, home=None):
