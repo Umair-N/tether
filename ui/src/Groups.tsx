@@ -66,7 +66,7 @@ export function GroupBar({ api, session, pane, hooks, onOpenPane, onUpdate, chil
           <span className="group-count" aria-hidden="true">{place.panes.length}</span>
         </button>
       })}
-      <button type="button" className="group-add" aria-label="New group" title="New group" onClick={() => setCreating(true)}><Plus size={16} /></button>
+      <button type="button" className="group-add" aria-label="New stack" title="New stack" onClick={() => setCreating(true)}><Plus size={16} /></button>
     </nav>
     <div className="group-strip">
       <button type="button" className="group-switch" aria-haspopup="dialog" onClick={() => setPicking(true)}
@@ -85,7 +85,7 @@ export function GroupBar({ api, session, pane, hooks, onOpenPane, onUpdate, chil
   </>
 }
 
-/** The phone sheet: every place with its state, then New group. */
+/** The phone sheet: every place with its state, then New stack. */
 function GroupSwitcher({ session, places, current, hooks, onPick, onMenu, onNew, onClose }: {
   session: Session; places: Place[]; current: string; hooks: GroupHooks; onPick: (place: Place) => void; onMenu: (place: Place) => void; onNew: () => void; onClose: () => void
 }) {
