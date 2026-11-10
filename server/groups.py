@@ -25,7 +25,6 @@ GROUP = re.compile(r'g[0-9a-f]{8}')
 SESSION = re.compile(r'\$[0-9]+')
 PANE = re.compile(r'%[0-9]+')
 NAME_LIMIT = 40
-MAIN = 'Unstacked'
 RESERVED = {'unstacked', 'main'}  # names for the tabs in no stack; Main is the old name
 _THREADS = threading.RLock()
 _depth = 0
