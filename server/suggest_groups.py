@@ -7,6 +7,8 @@ import urllib.request
 
 PATH = '/mobile/api/suggest-groups'
 BODY_LIMIT = 4 * 1024 * 1024
+# The local model runs on the CPU and needs about 30–45 s for 25 sessions.
+MODEL_TIMEOUT = 90
 PROMPT = """Return JSON only, with this shape: {"groups":[{"name":"Project name","sessions":["$1"]}]}.
 Make 2–8 groups by project or purpose. Use short names of 1–3 words.
 Put each supplied session id in exactly one group. Use only supplied ids.
@@ -97,7 +99,7 @@ def suggest(body):
                    'temperature': 0.2, 'max_tokens': 4096, 'chat_template_kwargs': {'enable_thinking': False}}
         request = urllib.request.Request(url + '/v1/chat/completions', data=json.dumps(payload).encode(),
                                          headers={'Content-Type': 'application/json'}, method='POST')
-        with urllib.request.urlopen(request, timeout=25) as response:
+        with urllib.request.urlopen(request, timeout=MODEL_TIMEOUT) as response:
             output = json.loads(response.read())['choices'][0]['message']['content']
         groups = validate(parse_output(output), entries)
         return {'groups': groups, 'source': 'llm'}

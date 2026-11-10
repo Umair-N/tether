@@ -44,7 +44,8 @@ class SuggestGroupsTests(unittest.TestCase):
         self.assertIn('2–8 groups', body['messages'][0]['content'])
         self.assertIn('JSON only', body['messages'][0]['content'])
         self.assertEqual(json.loads(body['messages'][1]['content']), {'sessions': self.entries})
-        self.assertEqual(self.urlopen.call_args.kwargs['timeout'], 25)
+        self.assertEqual(suggest_groups.MODEL_TIMEOUT, 90)
+        self.assertEqual(self.urlopen.call_args.kwargs['timeout'], suggest_groups.MODEL_TIMEOUT)
 
     def test_json_with_extra_text_uses_model_groups(self):
         groups = [{'name': 'Project', 'sessions': ['$6', '$9', '$12']}]
