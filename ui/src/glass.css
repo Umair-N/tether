@@ -111,3 +111,19 @@
 @media (prefers-reduced-transparency: reduce) {
   .app-shell[data-surface="glass"] > :is(.sidebar, .workspace, .inbox, .l-panel), .app-shell[data-surface="glass"]:not(.with-rail) .chat-panel, .app-shell[data-surface="glass"] .sheet { background: var(--g-solid); -webkit-backdrop-filter: none; backdrop-filter: none; }
 }
+
+/* Installed app, title bar hidden: Chrome paints one solid box behind its window controls, in the theme-color, and a
+   page cannot make it see-through. So each panel the controls reach into gets a soft patch of that same colour
+   (--g-wco) under them, and titlebar.ts sets the theme-color to it. The boxes melt into the glass; no full-width band.
+   titlebar.ts sets data-wco="l", "r" or "lr" (which side the controls reach in from). */
+.app-shell[data-surface="glass"] { --g-wco: color-mix(in srgb, var(--surface) 82%, var(--bg)); }
+/* The backdrop fades to the same colour along the top edge, under the panels, so the gaps around the boxes match. */
+.app-shell[data-surface="glass"]:has(> [data-wco]) { box-shadow: inset 0 calc(env(titlebar-area-height, 38px) + 28px) 40px -28px var(--g-wco); }
+.app-shell[data-surface="glass"] > [data-wco]:not(.panel-handles) { isolation: isolate; }
+.app-shell[data-surface="glass"] > [data-wco]:not(.panel-handles) { position: relative; }
+.app-shell[data-surface="glass"] > [data-wco*="l"]:not(.panel-handles)::before, .app-shell[data-surface="glass"] > [data-wco*="r"]:not(.panel-handles)::after {
+  content: ""; position: absolute; top: 0; z-index: -1; height: var(--wco-h); pointer-events: none;
+  background: var(--g-wco); box-shadow: 0 0 26px 16px var(--g-wco); border-radius: 0 0 14px 14px;
+}
+.app-shell[data-surface="glass"] > [data-wco*="l"]:not(.panel-handles)::before { left: 0; width: var(--wco-l); }
+.app-shell[data-surface="glass"] > [data-wco*="r"]:not(.panel-handles)::after { right: 0; width: var(--wco-r); }

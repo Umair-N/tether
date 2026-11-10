@@ -44,6 +44,18 @@ export function shownColour(panel: HTMLElement) {
   return '#' + [r, g, b].map(value => value.toString(16).padStart(2, '0')).join('')
 }
 
+// A computed colour as #rrggbb (the theme-color must be opaque).
+function solid(colour: string) {
+  paint ??= Object.assign(document.createElement('canvas'), { width: 1, height: 1 }).getContext('2d', { willReadFrequently: true })
+  if (!paint || !colour || colour === 'rgba(0, 0, 0, 0)') return null
+  paint.fillStyle = '#ffffff'
+  paint.fillRect(0, 0, 1, 1)
+  paint.fillStyle = colour
+  paint.fillRect(0, 0, 1, 1)
+  const [r, g, b] = paint.getImageData(0, 0, 1, 1).data
+  return '#' + [r, g, b].map(value => value.toString(16).padStart(2, '0')).join('')
+}
+
 type Overlay = EventTarget & { visible: boolean; getTitlebarAreaRect: () => DOMRect }
 
 export function useWindowControls(shown: boolean) {
@@ -64,7 +76,7 @@ export function useWindowControls(shown: boolean) {
           if (panel.hasAttribute('data-wco')) { panel.removeAttribute('data-wco'); for (const name of ['--wco-l', '--wco-r', '--wco-h']) panel.style.removeProperty(name) }
           continue
         }
-        panel.setAttribute('data-wco', '')
+        panel.setAttribute('data-wco', (inset.left ? 'l' : '') + (inset.right ? 'r' : ''))
         panel.style.setProperty('--wco-l', `${inset.left}px`)
         panel.style.setProperty('--wco-r', `${inset.right}px`)
         panel.style.setProperty('--wco-h', `${inset.height}px`)
@@ -74,7 +86,11 @@ export function useWindowControls(shown: boolean) {
         const x = Math.min(window.innerWidth - 2, (area.width > 0 ? area.x + area.width : window.innerWidth) + 8)
         under = document.elementFromPoint(x, area.height / 2)?.closest<HTMLElement>('.app-shell > *') ?? null
       }
-      const colour = visible && under && !themeColorHeld() ? shownColour(under) : null
+      // Glass: the panels draw a patch of --g-wco under the controls (glass.css), so the boxes take that colour.
+      const glass = root.getAttribute('data-surface') === 'glass'
+      const patch = glass ? panels().find(panel => panel.hasAttribute('data-wco') && !panel.classList.contains('panel-handles')) : undefined
+      const patchColour = patch ? solid(getComputedStyle(patch, patch.getAttribute('data-wco')!.includes('r') ? '::after' : '::before').backgroundColor) : null
+      const colour = visible && under && !themeColorHeld() ? patchColour ?? shownColour(under) : null
       if (colour) document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]').forEach(meta => { if (meta.content !== colour) meta.content = colour })
     }
     const later = () => { if (!frame) frame = requestAnimationFrame(measure) }
