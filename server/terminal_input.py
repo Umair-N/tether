@@ -395,6 +395,22 @@ def menu_lines(lines, limit=80):
 MENU_HINT_START = detection_rules.pattern('common', 'MENU_HINT_START')
 
 
+def claude_input_box(lines, row):
+    """Distinguish a ruled draft from a menu whose key hint follows its closing rule."""
+    if row < 0:
+        return False
+    above = next((line for line in reversed(lines[:row]) if line.strip()), '')
+    if not above or not RULE_LINE.match(above):
+        return False
+    for index in range(row + 1, len(lines)):
+        line = lines[index]
+        if INPUT_HINT.search(line) or MENU_HINT_START.match(line):
+            return False
+        if line.strip() and RULE_LINE.match(line):
+            return not any(INPUT_HINT.search(after) for after in lines[index + 1:])
+    return False
+
+
 def menu_question(lines):
     """Split a numbered terminal menu into its question and options so a phone can show it as a chat card, not a screen dump."""
     first = next((i for i, line in enumerate(lines) if NUMBERED_ITEM.match(line)), None)
@@ -569,6 +585,7 @@ def attention(entry, screen, working, now=None, login_screen=None, styled_screen
     picker = None
     link = login_link(login_screen.splitlines() if login_screen is not None else lines, entry['agent'])
     numbered = [line for line in tail if NUMBERED_ITEM.match(line)]
+    cursor_row = next((i for i in reversed(range(len(lines))) if CURSOR_ITEM.match(lines[i])), -1)
     tabs = next((index for index, line in enumerate(lines) if SETTINGS_TABS.match(line)), None) if entry['agent'] == 'claude' else None
     permissions = permissions_dialog.parse(screen, styled_screen) if entry['agent'] == 'claude' else None
     if link:
@@ -579,7 +596,8 @@ def attention(entry, screen, working, now=None, login_screen=None, styled_screen
     elif tabs is not None:
         # Claude's Settings dialog (/usage, /status ...) only shows facts. Show it from its tab row, without the chat above it.
         reason, tail = 'panel', lines[tabs:]
-    elif len(numbered) >= 2 and cursor_in_menu(tail, marker):
+    elif (len(numbered) >= 2 and cursor_in_menu(tail, marker)
+          and not (entry['agent'] == 'claude' and claude_input_box(lines, cursor_row))):
         reason = 'menu'
     elif ((entry['agent'] == 'claude' and (picker := cursor_picker(screen)))
           or (entry['agent'] == 'codex' and (picker := choice_state.cursor_picker(styled_screen or screen, 'codex')))):
@@ -954,8 +972,9 @@ def prompt_draft(entry, run=subprocess.run, *, _size_retry=True):
         raise RuntimeError(f'Cannot find the {name} input box on screen. '
                            'Open the pane in Terminals to see what it shows.')
     start = prompts[-1]
-    if (re.match(r'\s*\d+[.)]\s', lines[start][1:]) and menu_question(lines[start:])
-            or re.match(r'^[>❯›]\s+\S', lines[start]) and INPUT_HINT.search(joined_lines(lines[start + 1:]))):
+    if (not (entry['agent'] == 'claude' and claude_input_box(lines, start))
+            and (re.match(r'\s*\d+[.)]\s', lines[start][1:]) and menu_question(lines[start:])
+                 or re.match(r'^[>❯›]\s+\S', lines[start]) and INPUT_HINT.search(joined_lines(lines[start + 1:])))):
         # Codex marks the chosen row of a menu ("› 1. Review hooks") the same way as its input line.
         name = {'claude': 'Claude', 'codex': 'Codex', 'antigravity': 'Antigravity'}[entry['agent']]
         raise RuntimeError(f'{name} is asking you to pick an option. Answer it above, then send again.')

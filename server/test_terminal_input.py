@@ -17,6 +17,35 @@ def frame(name, suffix='txt'):
     return (FIXTURES / f'claude_permissions_{name}.{suffix}').read_text()
 
 
+class NumberedDraftTests(unittest.TestCase):
+    entry = {'id': '%1', 'agent': 'claude'}
+
+    def setUp(self):
+        self.enterContext(patch.dict(terminal._attention_seen, clear=True))
+        self.screen = (FIXTURES / 'claude_numbered_draft.txt').read_text()
+
+    def test_numbered_draft_does_not_show_a_menu_after_delay(self):
+        terminal.attention(self.entry, self.screen, False, now=0)
+        found = terminal.attention(self.entry, self.screen, False, now=100)
+        self.assertNotEqual((found or {}).get('reason'), 'menu')
+
+    def test_numbered_draft_returns_both_lines(self):
+        with patch.object(terminal, 'capture', return_value=self.screen):
+            self.assertEqual(terminal.prompt_draft(self.entry),
+                             ['1. waiiting on me inside the chat i guess', '2. yes'])
+
+    def test_chat_about_this_under_rule_stays_a_menu(self):
+        rule = '─' * 80
+        for closing in ('', rule):
+            with self.subTest(closing=closing):
+                terminal._attention_seen.clear()
+                screen = '\n'.join([rule, 'Pick one?', '  1. Red', '  2. Blue',
+                                    '  3. Type something.', rule, '❯ 4. Chat about this',
+                                    closing, 'Enter to select · ↑/↓ to navigate · Esc to cancel'])
+                terminal.attention(self.entry, screen, False, now=0)
+                self.assertEqual(terminal.attention(self.entry, screen, False, now=100)['reason'], 'menu')
+
+
 class PermissionsAttentionTests(unittest.TestCase):
     entry = {'id': '%permissions', 'agent': 'claude'}
 
