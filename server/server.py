@@ -65,6 +65,7 @@ import uploads
 import media_files
 import repo_panel
 import files
+import office_addon
 import auth
 import needs
 import select
@@ -1205,8 +1206,50 @@ class Handler(BaseHTTPRequestHandler):
                   if key.lower() not in ('cookie', 'connection') or (key.lower() == 'connection' and upgrading)]
         if not upgrading:
             lines.append('Connection: close')
+        self.pipe_upstream(upstream, lines)
+
+    def pipe_upstream(self, upstream, lines, body=False):
+        """Relay an HTTP request and then pipe bytes, including WebSocket frames."""
         with upstream:
             upstream.sendall(('\r\n'.join(lines) + '\r\n\r\n').encode())
+            if body:
+                # Headers may prefetch body bytes into rfile. Drain them before raw recv.
+                try:
+                    if self.headers.get('Transfer-Encoding', '').lower() == 'chunked':
+                        while True:
+                            line = self.rfile.readline(8192)
+                            size = int(line.split(b';', 1)[0], 16)
+                            if size < 0 or not line.endswith(b'\r\n'):
+                                return
+                            upstream.sendall(line)
+                            if size == 0:
+                                while True:
+                                    line = self.rfile.readline(8192)
+                                    if not line or not line.endswith(b'\r\n'):
+                                        return
+                                    upstream.sendall(line)
+                                    if line == b'\r\n':
+                                        break
+                                break
+                            left = size + 2
+                            while left:
+                                data = self.rfile.read(min(left, 65536))
+                                if not data:
+                                    return
+                                upstream.sendall(data)
+                                left -= len(data)
+                    else:
+                        left = int(self.headers.get('Content-Length', '0'))
+                        if left < 0:
+                            return
+                        while left:
+                            data = self.rfile.read(min(left, 65536))
+                            if not data:
+                                return
+                            upstream.sendall(data)
+                            left -= len(data)
+                except (ValueError, OSError):
+                    return
             upstream.settimeout(None)
             pair = {self.connection: upstream, upstream: self.connection}
             try:
@@ -1221,6 +1264,24 @@ class Handler(BaseHTTPRequestHandler):
                         pair[source].sendall(data)
             except OSError:
                 return
+
+    def proxy_office(self):
+        config = office_addon.load()
+        if config is None:
+            self.respond(404, {'error': 'The Office editor add-on is not installed.', 'code': 'office-off'})
+            return
+        origin = self.headers.get('Origin')
+        if origin and not auth.same_origin(origin, self.headers.get('Host', '')):
+            self.respond(403, {'error': 'Reload the page and try again.'})
+            return
+        target = urlsplit(config['url'])
+        try:
+            upstream = socket.create_connection((target.hostname, target.port), timeout=5)
+        except OSError:
+            self.respond(503, {'error': 'The Office editor is not running.'})
+            return
+        lines = office_addon.office_upstream_head(self.command, self.path, self.headers, self.client_address[0])
+        self.pipe_upstream(upstream, lines, body=True)
 
     def serve_chat_ui(self, path):
         """Serve the Tether UI from CHAT_UI_ROOT; API requests still need the sign-in cookie."""
@@ -1255,6 +1316,10 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith('/terminal/live/'):
             if not self.deny():
                 self.proxy_terminal()
+            return
+        if path.startswith('/office/'):
+            if not self.deny():
+                self.proxy_office()
             return
         if path == '/mobile/login':
             if auth.tailscale_signed_in(self.headers.get('Tailscale-User-Login'), self.client_address[0]):
@@ -1297,7 +1362,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(200, codex_provider.status())
             elif path == '/mobile/api/update': self.respond(200, updates.payload())
             elif path == '/mobile/api/host':
-                self.respond(200, {'name': socket.gethostname().split('.')[0], 'resources': host_stats.enabled(), 'terminal': TTYD_PORT > 0})
+                self.respond(200, {'name': socket.gethostname().split('.')[0], 'resources': host_stats.enabled(), 'terminal': TTYD_PORT > 0, 'office': office_addon.enabled()})
             elif path == '/mobile/api/host-stats':
                 result = host_stats.payload()
                 self.respond(200, result) if result is not None else self.respond(404, {'error': 'Host resources are disabled.'})
@@ -1579,6 +1644,43 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(503, {'error': 'The conversation is currently unavailable.'})
 
     def do_POST(self):
+        if self.path.startswith('/office/'):
+            if not self.deny():
+                self.proxy_office()
+            return
+        if self.path == '/mobile/api/office/open':
+            if self.deny():
+                return
+            if not auth.same_origin(self.headers.get('Origin', ''), self.headers.get('Host', '')) or self.headers.get('X-Codex-Mobile') != '1':
+                self.respond(403, {'error': 'Reload the page and try again.'})
+                return
+            if not office_addon.enabled():
+                self.respond(404, {'error': 'The Office editor add-on is not installed.', 'code': 'office-off'})
+                return
+            try:
+                size = int(self.headers.get('Content-Length', '0'))
+                if not 0 < size <= 65536:
+                    self.respond(413, {'error': 'Request is too large.'})
+                    return
+                body = json.loads(self.rfile.read(size))
+                if not isinstance(body, dict) or type(body.get('mobile', False)) is not bool:
+                    raise ValueError('Invalid request.')
+                # A chat names a file relative to the tab's folder, as /mobile/api/file reads it.
+                text = body.get('path')
+                if isinstance(text, str) and text and not text.startswith(('/', '~')):
+                    session = body.get('session')
+                    folder = tab_folder(choose(session if isinstance(session, str) else None)) or str(paths.HOME)
+                    text = os.path.join(folder, text)
+                self.respond(200, office_addon.open_document(text, os.environ.get('USER', ''), body.get('mobile', False),
+                                                           body.get('lang', 'en'), body.get('theme', 'dark')))
+            except files.FilesError as exc:
+                self.respond(exc.status, {'error': str(exc), 'code': exc.code})
+            except ValueError:
+                self.respond(400, {'error': 'Invalid request.'})
+            except OSError as exc:
+                error = files.disk_error(exc)
+                self.respond(error.status, {'error': str(error), 'code': error.code})
+            return
         if self.path == mac_browser.PREFIX + 'exchange':
             mac_browser.exchange(self)
             return
@@ -2180,6 +2282,13 @@ class Handler(BaseHTTPRequestHandler):
                                else 'Could not confirm delivery. Check the terminal before retrying.',
                                'draft': isinstance(exc, DraftError)})
 
+    def do_PUT(self):
+        if self.path.startswith('/office/'):
+            if not self.deny():
+                self.proxy_office()
+        else:
+            self.respond(404, {'error': 'Not found'})
+
     def do_upload(self):
         """A raw file body for one session; the path of the saved copy goes back so the page can put it in the message."""
         try:
@@ -2332,4 +2441,5 @@ if __name__ == '__main__':
         'on_change': forget_sessions,
     }, daemon=True).start()
     threading.Thread(target=window_size.watch, daemon=True).start()
+    office_addon.start_listener()
     ThreadingHTTPServer((host, port), Handler).serve_forever()

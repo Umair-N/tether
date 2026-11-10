@@ -150,6 +150,27 @@ The agent receives the file path. It may request permission to read that folder.
 The upload endpoint does not serve files back; authenticated file previews use separate checks for paths, types, and secrets.
 Those checks restrict previews to supported files under your home folder and exclude credential folders and secret-like names.
 
+## Office editor add-on (optional)
+
+The add-on edits docx, xlsx, and pptx files with ONLYOFFICE Docs Community Edition in a separate Docker container.
+It is off by default. The core server needs no Docker installation.
+ONLYOFFICE Docs Community Edition uses the AGPL license.
+See the [official Docker guide](https://helpcenter.onlyoffice.com/docs/installation/community/docker/installing/install) for Docker requirements.
+
+1. Install and start Docker.
+2. Run `python3 server/office_addon.py install` from your Tether checkout.
+3. Restart Tether with `systemctl --user restart tether.service` on Linux.
+
+On macOS, restart Tether through your LaunchAgent instead.
+Run `python3 server/office_addon.py status` to check the container and its health.
+Run `python3 server/office_addon.py remove` to remove the container and config.
+Restart Tether after removal.
+
+The config uses `TETHER_OFFICE_CONFIG`, or `office.json` in Tether's config folder.
+The editor uses Tether sign-in. Docker file downloads and saves require signed capabilities and JWTs.
+Tether blocks secret files and Share files. External edits go to a separate `(Tether edit)` copy.
+Phones get the desktop editor, because Community Edition opens its mobile editor for viewing only.
+
 ## Usage reports
 
 Claude Code and Antigravity supply usage through status-line hooks.

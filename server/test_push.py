@@ -32,9 +32,9 @@ class PushTests(unittest.TestCase):
         handler.headers = {}
         handler.client_address = ('127.0.0.1', 1234)
         handler.respond = Mock()
-        with patch.object(handler, 'deny', return_value=False), patch.object(server.socket, 'gethostname', return_value='box.example.net'), patch.object(server.host_stats, 'enabled', return_value=False), patch.object(server, 'TTYD_PORT', 0):
+        with patch.object(handler, 'deny', return_value=False), patch.object(server.socket, 'gethostname', return_value='box.example.net'), patch.object(server.host_stats, 'enabled', return_value=False), patch.object(server, 'TTYD_PORT', 0), patch.object(server.office_addon, 'enabled', return_value=False):
             handler.do_GET()
-        handler.respond.assert_called_once_with(200, {'name': 'box', 'resources': False, 'terminal': False})
+        handler.respond.assert_called_once_with(200, {'name': 'box', 'resources': False, 'terminal': False, 'office': False})
 
     def test_watch_poll_expires_and_regular_poll_does_not_refresh_it(self):
         self.poll(False)

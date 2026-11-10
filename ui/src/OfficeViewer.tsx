@@ -1,14 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Download, FolderOpen, X } from 'lucide-react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { Download, FolderOpen, Pencil, X } from 'lucide-react'
 import type { WorkBook } from 'xlsx'
+import { errorText, request } from './api'
 import { useModal } from './hooks'
-import { useHost } from './host'
+import { useHost, useOfficeEditing } from './host'
 
 export type OfficeFile = { path: string; url: string }
 /** Office files Tether shows in its own viewer: spreadsheets, Word documents and slide decks. */
 export const OFFICE_SUFFIXES = ['xlsx', 'xlsm', 'xls', 'ods', 'docx', 'pptx']
 const suffixOf = (path: string) => path.split('.').pop()?.toLowerCase() ?? ''
 export const isOffice = (path: string) => OFFICE_SUFFIXES.includes(suffixOf(path))
+/** Files the Office editor add-on can edit. */
+const EDITABLE = ['docx', 'xlsx', 'pptx']
 
 // The file is read in the browser: the libraries load only when a file of their type opens, and nothing leaves Tether.
 // External images and links in a file stay off, so opening a file never calls another site.
@@ -23,9 +26,14 @@ type Loaded = { url: string; error?: string; unreachable?: boolean; sheet?: Work
 export function OfficeViewer({ file, close, onShow }: { file: OfficeFile | null; close: () => void; onShow?: () => void }) {
   const host = useHost()
   const modal = useModal(!!file, close)
+  const editing = useOfficeEditing()
   const [state, setState] = useState<Loaded | null>(null)
+  // The file the editor has open. Leaving the editor loads the file again, because a save can change it.
+  const [edited, setEdited] = useState<string | null>(null)
+  const [round, setRound] = useState(0)
+  const editingNow = !!file && edited === file.url
   useEffect(() => {
-    if (!file) return
+    if (!file || editingNow) return
     const abort = new AbortController()
     const kind = suffixOf(file.path)
     const load = async () => {
@@ -43,23 +51,90 @@ export function OfficeViewer({ file, close, onShow }: { file: OfficeFile | null;
     load().then(result => setState({ url: file.url, ...result }),
       failure => { if (!abort.signal.aborted) setState({ url: file.url, ...(failure instanceof TypeError ? { unreachable: true } : { error: String(failure.message) }) }) })
     return () => abort.abort()
-  }, [file])
-  const current = file && state?.url === file.url ? state : null
+  }, [file, editingNow, round])
+  const current = file && state?.url === file.url && !editingNow ? state : null
   const name = file?.path.split('/').pop() || file?.path
   const kind = file ? suffixOf(file.path) : ''
   return <dialog {...modal} className="text-viewer office-viewer" aria-labelledby="office-viewer-title">{file && <>
     <div className="text-viewer-head">
-      <div className="text-viewer-title"><h2 id="office-viewer-title">{name}</h2><p title={file.path}><bdi>{file.path}</bdi></p></div>
-      {onShow && <button type="button" className="viewer-files" onClick={onShow}><FolderOpen size={15} aria-hidden="true" />Show in Files</button>}
+      <div className="text-viewer-title"><h2 id="office-viewer-title">{name}</h2>
+        {editingNow ? <p className="office-save-note">Saves when you press Save, or about 10 seconds after you close the editor.</p>
+          : <p title={file.path}><bdi>{file.path}</bdi></p>}</div>
+      {onShow && !editingNow && <button type="button" className="viewer-files" onClick={onShow}><FolderOpen size={15} aria-hidden="true" />Show in Files</button>}
+      {editing && EDITABLE.includes(kind) && (editingNow
+        ? <button type="button" className="viewer-files" onClick={() => { setEdited(null); setRound(value => value + 1); window.setTimeout(() => setRound(value => value + 1), 12000) }}>Done</button>
+        : <button type="button" className="viewer-files" onClick={() => setEdited(file.url)}><Pencil size={15} aria-hidden="true" />Edit</button>)}
       <a className="icon-button" href={file.url} download={name} aria-label={`Download ${name}`} title="Download"><Download size={19} /></a>
       <button type="button" className="icon-button" aria-label="Close" onClick={close}><X /></button>
     </div>
-    {current?.error || current?.unreachable ? <div className="text-viewer-body"><p className="text-viewer-note" role="alert">{current.unreachable ? `Cannot reach ${host}.` : current.error}</p></div>
+    {editingNow ? <OfficeEditor key={file.url} file={file} />
+      : current?.error || current?.unreachable ? <div className="text-viewer-body"><p className="text-viewer-note" role="alert">{current.unreachable ? `Cannot reach ${host}.` : current.error}</p></div>
       : !current ? <div className="text-viewer-body"><p className="text-viewer-note">Loading…</p></div>
       : current.sheet ? <Sheets key={current.url} book={current.sheet} name={name ?? ''} />
       : current.data && kind === 'docx' ? <WordDocument key={current.url} data={current.data} name={name ?? ''} />
       : current.data ? <Slides key={current.url} data={current.data} name={name ?? ''} /> : null}
   </>}</dialog>
+}
+
+type DocsEditor = { destroyEditor(): void }
+type DocsApi = { DocEditor: new (id: string, config: unknown) => DocsEditor }
+let apiScript: Promise<DocsApi> | null = null
+
+// ONLYOFFICE's api.js comes through Tether's /office/ proxy. It loads once per page.
+function loadDocsApi(src: string) {
+  const ready = () => (window as unknown as { DocsAPI?: DocsApi }).DocsAPI
+  const loaded = ready()
+  if (loaded) return Promise.resolve(loaded)
+  apiScript ??= new Promise<DocsApi>((resolve, reject) => {
+    const script = document.createElement('script')
+    script.src = src
+    script.async = true
+    script.onload = () => { const api = ready(); if (api) resolve(api); else { apiScript = null; reject(new Error('The Office editor did not start.')) } }
+    script.onerror = () => { apiScript = null; script.remove(); reject(new Error('Tether cannot reach the Office editor. Check that its container runs.')) }
+    document.head.append(script)
+  })
+  return apiScript
+}
+
+const darkPage = () => getComputedStyle(document.documentElement).colorScheme.includes('dark')
+  || matchMedia('(prefers-color-scheme: dark)').matches && document.documentElement.dataset.theme !== 'light'
+
+/** The ONLYOFFICE editor for one file. The server signs the editor settings and saves the file when the editor sends it back. */
+function OfficeEditor({ file }: { file: OfficeFile }) {
+  const holder = useRef<HTMLDivElement>(null)
+  const mountId = `office-editor-${useId().replace(/[^a-zA-Z0-9]/g, '')}`
+  const [error, setError] = useState('')
+  const [ready, setReady] = useState(false)
+  useEffect(() => {
+    const target = holder.current
+    if (!target) return
+    let live = true
+    let editor: DocsEditor | null = null
+    const session = new URL(file.url, location.href).searchParams.get('session') ?? undefined
+    // Phones get the desktop editor too: ONLYOFFICE Community opens its mobile editor for viewing only.
+    const body = { path: file.path, session, mobile: false, lang: navigator.language.split('-')[0], theme: darkPage() ? 'dark' : 'light' }
+    request<{ api: string; config: Record<string, unknown> }>('office/open', body, undefined, undefined, 20000)
+      .then(async ({ api, config }) => {
+        const docs = await loadDocsApi(api)
+        if (!live) return
+        const mount = document.createElement('div')
+        mount.id = mountId
+        target.replaceChildren(mount)
+        editor = new docs.DocEditor(mountId, {
+          ...config,
+          events: {
+            onAppReady: () => { if (live) setReady(true) },
+            onError: (event: { data?: { errorDescription?: string } }) => { if (live) setError(event.data?.errorDescription || 'The Office editor stopped with an error.') },
+          },
+        })
+      })
+      .catch(failure => { if (live) setError(errorText(failure)) })
+    return () => { live = false; editor?.destroyEditor(); target.replaceChildren() }
+  }, [file.path, file.url, mountId])
+  return <div className="text-viewer-body office-editor">
+    {error ? <p className="text-viewer-note" role="alert">{error}</p> : !ready && <p className="text-viewer-note office-editor-wait">Starting the editor…</p>}
+    <div ref={holder} className="office-editor-frame" hidden={!!error} />
+  </div>
 }
 
 function Sheets({ book, name }: { book: WorkBook; name: string }) {
