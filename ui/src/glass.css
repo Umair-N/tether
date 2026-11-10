@@ -75,7 +75,7 @@
 .app-shell[data-surface="glass"] {
   --hover: color-mix(in srgb, var(--text) 7%, transparent); --line: var(--g-line);
   --g-solid: var(--surface); --g-panel: color-mix(in srgb, var(--surface) var(--g-alpha, 55%), transparent);
-  --g-pop: color-mix(in srgb, var(--surface) 86%, transparent);
+  --g-pop: var(--surface); --g-sidebar: var(--sidebar); --g-bubble: var(--bubble);
 }
 /* Inside the panels, the flat fills become glass: cards (--surface), bubbles and chips (--bubble), side areas
    (--sidebar). They resolve here from the shell's own values, so panels and backdrops keep theirs. */
@@ -89,7 +89,11 @@
 /* Sticky strips (the status grip and rail) used --bg to cover what scrolls under them. */
 .app-shell[data-surface="glass"] :is(.status-grip, .status-rail) { background: transparent; }
 /* Settings and other sheets: one glass card. The side list and search sit on it, not in their own boxes. */
-.app-shell[data-surface="glass"] .sheet { background: var(--g-pop); }
+.app-shell[data-surface="glass"] .sheet { background: var(--g-solid); }
+/* Overlays (the phone drawer, dialogs, sheets, popovers) sit over content, not over the backdrop: they keep the
+   scheme's solid colours, so text behind them never shows through. */
+.app-shell[data-surface="glass"] :is(dialog, [popover], .drawer, .sheet) { --surface: var(--g-solid); --sidebar: var(--g-sidebar); --bubble: var(--g-bubble); }
+.app-shell[data-surface="glass"] .drawer { background: var(--g-sidebar); }
 .app-shell[data-surface="glass"] :is(.view-switch, .layout-switch) button[aria-pressed="true"], .app-shell[data-surface="glass"] .app-rail-button[aria-current="page"] { background: var(--g-fill-strong); box-shadow: 0 1px 0 var(--g-edge) inset, 0 0 0 1px var(--g-line); }
 .app-shell[data-surface="glass"] .sidebar-search { background: color-mix(in srgb, var(--text) 5%, transparent); border-color: var(--g-line); box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
 .app-shell[data-surface="glass"] .sidebar-search:focus-within { background: var(--g-fill-strong); border-color: var(--g-edge); }
