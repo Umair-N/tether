@@ -480,7 +480,6 @@ class MacBrowser(browser.Browser):
             tab = self.tabs.pop(target, None)
             if tab:
                 self.native_targets = {native: known for native, known in self.native_targets.items() if known != target}
-                self._cancel_motion(tab)
                 self.by_session.pop(tab.session, None)
                 self.order.remove(target)
                 for session, attached in list(self.conn.sessions.items()):
