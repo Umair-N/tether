@@ -280,6 +280,7 @@ def stream(handler, the_browser, target, width, height, browser_id='test', css_s
         first = True
         checked = started
         next_frame = started
+        last_frame = None
         while time.monotonic() - started < STREAM_LIFETIME:
             # Pace before taking the slot, so a slow write or a sleep never leaves an old frame queued for output.
             time.sleep(max(0.0, next_frame - time.monotonic()))
@@ -304,16 +305,20 @@ def stream(handler, the_browser, target, width, height, browser_id='test', css_s
             warm = the_browser.clock() - tab.last_input < WARM_AFTER_INPUT
             frame = the_browser.first_frame(tab) if first else the_browser.wait_frame(tab, seen, KEEP_WARM if warm else 1.0)
             first = False
-            if frame is not None and not the_browser.heal(tab, frame):
-                seen = frame[0]  # a frame at the wrong size would map clicks wrongly; the next one fits
-            elif frame is not None:
-                next_frame = time.monotonic() + FRAME_INTERVAL
-                if flow:
-                    flow.sending(frame[0])
-                handler.wfile.write(browser.frame_event(frame, browser_id))
-                handler.wfile.flush()
-                seen, wrote = frame[0], time.monotonic()
-            elif not warm and time.monotonic() - wrote >= KEEPALIVE:
+            if frame is not None:
+                seen = frame[0]  # skipped duplicates and wrong-size frames must not be fetched again
+                if the_browser.heal(tab, frame):
+                    metadata = frame[1] or {}
+                    picture = (frame[2], tuple(metadata.get(key) for key in (
+                        'deviceWidth', 'deviceHeight', 'offsetTop', 'scrollOffsetX', 'scrollOffsetY', 'pageScaleFactor')))
+                    if picture != last_frame:
+                        next_frame = time.monotonic() + FRAME_INTERVAL
+                        if flow:
+                            flow.sending(frame[0])
+                        handler.wfile.write(browser.frame_event(frame, browser_id))
+                        handler.wfile.flush()
+                        last_frame, wrote = picture, time.monotonic()
+            if not warm and time.monotonic() - wrote >= KEEPALIVE:
                 handler.wfile.write(('event: idle\ndata: ' + json.dumps(_tag({}, browser_id)) + '\n\n').encode())
                 wrote = time.monotonic()
             # tailscale serve's gVisor netstack resets cwnd after RTO idle; keep this connection warm.
