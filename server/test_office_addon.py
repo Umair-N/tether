@@ -359,6 +359,7 @@ class OfficeTests(unittest.TestCase):
     def test_save_external_change_during_write_makes_copy(self):
         self.enable()
         self.document()
+        self.assertIsNone(office.copy_for(self.cap['k']))
         write = files.write_all
         changed = False
 
@@ -373,7 +374,43 @@ class OfficeTests(unittest.TestCase):
             office.save(self.cap, b'editor bytes')
         self.assertEqual(self.path.read_bytes(), b'external during save')
         self.assertEqual((self.root / 'Report (Tether edit).docx').read_bytes(), b'editor bytes')
+        self.assertEqual(office.copy_for(self.cap['k']), '~/Report (Tether edit).docx')
         self.assertFalse(list(self.root.glob('.*.tether-*')))
+
+    def test_copy_for_refuses_malformed_keys(self):
+        for key in ('', 'bad', 't' + 'a' * 31, 't' + 'a' * 33, 't' + 'A' * 32,
+                    't' + 'g' * 32, 't' + 'a' * 32 + '\n', None, []):
+            with self.subTest(key=key), mock.patch.object(office, '_key_lock') as lock:
+                self.assertIsNone(office.copy_for(key))
+                lock.assert_not_called()
+
+    def test_copy_route(self):
+        key = 't' + 'a' * 32
+        copy = '~/Report (Tether edit).docx'
+        for enabled, denied, result in ((False, False, None), (True, False, copy),
+                                        (True, False, None), (True, True, None)):
+            with self.subTest(enabled=enabled, denied=denied, result=result):
+                handler = object.__new__(server.Handler)
+                handler.path = '/mobile/api/office/copy?key=' + key
+                handler.headers = {}
+                handler.client_address = ('127.0.0.1', 1234)
+                handler.respond = mock.Mock()
+                with mock.patch.object(handler, 'deny', return_value=denied) as deny, \
+                        mock.patch.object(office, 'enabled', return_value=enabled) as installed, \
+                        mock.patch.object(office, 'copy_for', return_value=result) as lookup:
+                    handler.do_GET()
+                deny.assert_called_once_with()
+                if denied:
+                    installed.assert_not_called()
+                    lookup.assert_not_called()
+                    handler.respond.assert_not_called()
+                elif not enabled:
+                    lookup.assert_not_called()
+                    handler.respond.assert_called_once_with(404, {
+                        'error': 'The Office editor add-on is not installed.', 'code': 'office-off'})
+                else:
+                    lookup.assert_called_once_with(key)
+                    handler.respond.assert_called_once_with(200, {'copy': result})
 
     def test_save_conflict_copy_is_reused(self):
         self.enable()

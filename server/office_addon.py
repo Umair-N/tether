@@ -247,6 +247,13 @@ def _key_lock(key):
         return _locks.setdefault(key, threading.Lock())
 
 
+def copy_for(key):
+    if not isinstance(key, str) or not re.fullmatch(r't[0-9a-f]{32}', key):
+        return None
+    with _key_lock(key):
+        return _copies.get(key)
+
+
 def _expected(cap, st):
     return _state(st) in ((cap['m'], cap['s']), _saved.get(cap['k']))
 

@@ -32,6 +32,24 @@ export function OfficeViewer({ file, close, onShow }: { file: OfficeFile | null;
   const [edited, setEdited] = useState<string | null>(null)
   const [round, setRound] = useState(0)
   const editingNow = !!file && edited === file.url
+  // When the file changed on disk during an edit, the server saves to a "(Tether edit)" copy. Ask for it while the editor
+  // is open and for 30 seconds after Done, because the last save comes about 10 seconds after the editor closes.
+  const [docKey, setDocKey] = useState<{ url: string; key: string } | null>(null)
+  const [watchUntil, setWatchUntil] = useState(0)
+  const [copy, setCopy] = useState<{ url: string; path: string } | null>(null)
+  const key = file && docKey?.url === file.url ? docKey.key : ''
+  const copyPath = file && copy?.url === file.url ? copy.path : ''
+  useEffect(() => {
+    if (!file || !key || copyPath || (!editingNow && !watchUntil)) return
+    let live = true
+    const check = () => request<{ copy: string | null }>(`office/copy?key=${encodeURIComponent(key)}`)
+      .then(result => { if (live && result.copy) setCopy({ url: file.url, path: result.copy }) }, () => {})
+    const timer = window.setInterval(() => {
+      if (!editingNow && Date.now() > watchUntil) { window.clearInterval(timer); return }
+      void check()
+    }, 4000)
+    return () => { live = false; window.clearInterval(timer) }
+  }, [file, key, copyPath, editingNow, watchUntil])
   useEffect(() => {
     if (!file || editingNow) return
     const abort = new AbortController()
@@ -62,12 +80,13 @@ export function OfficeViewer({ file, close, onShow }: { file: OfficeFile | null;
           : <p title={file.path}><bdi>{file.path}</bdi></p>}</div>
       {onShow && !editingNow && <button type="button" className="viewer-files" onClick={onShow}><FolderOpen size={15} aria-hidden="true" />Show in Files</button>}
       {editing && EDITABLE.includes(kind) && (editingNow
-        ? <button type="button" className="viewer-files" onClick={() => { setEdited(null); setRound(value => value + 1); window.setTimeout(() => setRound(value => value + 1), 12000) }}>Done</button>
+        ? <button type="button" className="viewer-files" onClick={() => { setEdited(null); setWatchUntil(Date.now() + 30000); setRound(value => value + 1); window.setTimeout(() => setRound(value => value + 1), 12000) }}>Done</button>
         : <button type="button" className="viewer-files" onClick={() => setEdited(file.url)}><Pencil size={15} aria-hidden="true" />Edit</button>)}
       <a className="icon-button" href={file.url} download={name} aria-label={`Download ${name}`} title="Download"><Download size={19} /></a>
       <button type="button" className="icon-button" aria-label="Close" onClick={close}><X /></button>
     </div>
-    {editingNow ? <OfficeEditor key={file.url} file={file} />
+    {copyPath && <p className="office-copy-note" role="status">The file changed on disk while you edited it. Tether saved your edits to a copy: <bdi title={copyPath}>{copyPath.split('/').pop()}</bdi></p>}
+    {editingNow ? <OfficeEditor key={file.url} file={file} onKey={value => setDocKey({ url: file.url, key: value })} />
       : current?.error || current?.unreachable ? <div className="text-viewer-body"><p className="text-viewer-note" role="alert">{current.unreachable ? `Cannot reach ${host}.` : current.error}</p></div>
       : !current ? <div className="text-viewer-body"><p className="text-viewer-note">Loading…</p></div>
       : current.sheet ? <Sheets key={current.url} book={current.sheet} name={name ?? ''} />
@@ -100,7 +119,7 @@ const darkPage = () => getComputedStyle(document.documentElement).colorScheme.in
   || matchMedia('(prefers-color-scheme: dark)').matches && document.documentElement.dataset.theme !== 'light'
 
 /** The ONLYOFFICE editor for one file. The server signs the editor settings and saves the file when the editor sends it back. */
-function OfficeEditor({ file }: { file: OfficeFile }) {
+function OfficeEditor({ file, onKey }: { file: OfficeFile; onKey: (key: string) => void }) {
   const holder = useRef<HTMLDivElement>(null)
   const mountId = `office-editor-${useId().replace(/[^a-zA-Z0-9]/g, '')}`
   const [error, setError] = useState('')
@@ -117,6 +136,8 @@ function OfficeEditor({ file }: { file: OfficeFile }) {
       .then(async ({ api, config }) => {
         const docs = await loadDocsApi(api)
         if (!live) return
+        const documentKey = (config.document as { key?: unknown } | undefined)?.key
+        if (typeof documentKey === 'string') onKey(documentKey)
         const mount = document.createElement('div')
         mount.id = mountId
         target.replaceChildren(mount)

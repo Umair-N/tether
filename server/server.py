@@ -1363,6 +1363,12 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/mobile/api/update': self.respond(200, updates.payload())
             elif path == '/mobile/api/host':
                 self.respond(200, {'name': socket.gethostname().split('.')[0], 'resources': host_stats.enabled(), 'terminal': TTYD_PORT > 0, 'office': office_addon.enabled()})
+            elif path == '/mobile/api/office/copy':
+                if not office_addon.enabled():
+                    self.respond(404, {'error': 'The Office editor add-on is not installed.', 'code': 'office-off'})
+                else:
+                    key = parse_qs(urlsplit(self.path).query).get('key', [''])[0]
+                    self.respond(200, {'copy': office_addon.copy_for(key)})
             elif path == '/mobile/api/host-stats':
                 result = host_stats.payload()
                 self.respond(200, result) if result is not None else self.respond(404, {'error': 'Host resources are disabled.'})
