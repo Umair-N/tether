@@ -49,9 +49,13 @@ export function applyScheme(id: string | undefined) {
 }
 
 /** Use one browser theme color until the returned function runs. For surfaces that fill the window, such as the media viewer. */
+let held = 0
 export function holdThemeColor(color: string) {
   const metas = [...document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')]
   const before = metas.map(meta => meta.content)
   metas.forEach(meta => { meta.content = color })
-  return () => metas.forEach((meta, at) => { meta.content = before[at] })
+  held++
+  return () => { held--; metas.forEach((meta, at) => { meta.content = before[at] }) }
 }
+/** True while a full-window surface holds the browser theme color. */
+export const themeColorHeld = () => held > 0

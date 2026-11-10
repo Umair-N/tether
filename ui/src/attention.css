@@ -52,6 +52,8 @@
 .ask-chip:hover:not(:disabled) { background: var(--hover); }
 .ask-chip:disabled { opacity: .6; cursor: default; }
 .ask-chip.primary { border-color: var(--attention); color: var(--attention); font-weight: 600; }
+/* Beat the shared button.primary hover (accent fill), which would put the attention text on the accent colour. */
+button.ask-chip.primary:not(:disabled):hover { background: color-mix(in srgb, var(--attention) 12%, var(--surface)); color: var(--attention); }
 .ask-state { flex-basis: 100%; color: var(--muted); font-size: 12px; }
 
 .attention-digest { margin-top: 16px; }
