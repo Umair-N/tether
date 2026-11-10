@@ -109,3 +109,146 @@
   box-shadow: 0 0 0 1px rgb(0 0 0 / .18), 0 2px 4px rgb(0 0 0 / .18), 0 10px 26px rgb(0 0 0 / .32);
 }
 .app-shell:is([data-grid], [data-surface="glass"]) > .agent-bubble.side-pin-bubble { border-color: color-mix(in srgb, var(--pin) 60%, var(--line)); }
+
+/* Layout studio (LookSettings.tsx): the maker, the draft with its device previews, the photo grid, tints and sliders. */
+.look-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.look-option-wrap { display: grid; gap: 4px; min-width: 0; align-content: start; }
+.look-actions { display: flex; flex-wrap: wrap; gap: 2px 12px; padding: 0 4px; font-size: 12.5px; }
+.look-row-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.look-confirm { color: var(--error); }
+button.look-confirm.primary, button.look-confirm.secondary { background: color-mix(in srgb, var(--error) 14%, var(--surface)); border-color: color-mix(in srgb, var(--error) 45%, var(--line)); color: var(--error); }
+.look-maker { display: grid; gap: 8px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.look-maker h4 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 14px; }
+.look-maker h4 kbd { font-weight: 500; }
+.look-maker .setting-note, .look-photos .setting-note { margin: 0; }
+.look-maker-form { display: grid; gap: 8px; }
+.look-textarea { width: 100%; min-height: 64px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm, 8px); background: var(--surface); color: var(--text); font: inherit; font-size: 14px; line-height: 1.45; resize: vertical; }
+.look-textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.look-maker-buttons { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.look-busy { display: inline-flex; align-items: center; gap: 8px; margin-right: auto; color: var(--muted); font-size: 13px; }
+.look-spinner { width: 14px; height: 14px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: look-spin .8s linear infinite; }
+@keyframes look-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .look-spinner { animation-duration: 2.4s; } }
+.look-draft { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--accent); border-radius: var(--radius-lg, 12px); background: var(--hover); }
+.look-draft-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.look-draft-head strong { font-size: 15px; }
+.look-draft-kind { color: var(--muted); font-size: 12.5px; }
+.look-draft-buttons { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.look-check { display: flex; align-items: flex-start; gap: 8px; font-size: 13.5px; line-height: 1.4; cursor: pointer; }
+.look-check input { flex: none; margin-top: 2px; accent-color: var(--accent); }
+
+/* Device previews (LayoutPreview.tsx): drawn to scale, in the layout's colours. */
+.lp-row-devices { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px; }
+.lp { display: grid; justify-items: center; gap: 6px; margin: 0; }
+.lp figcaption { color: var(--muted); font-size: 12px; }
+.lp-screen { --p-radius: 3px; position: relative; display: flex; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--p-bg); color: var(--p-text); box-shadow: 0 1px 2px rgb(0 0 0 / .08); }
+.lp[data-device="phone"] .lp-screen { border-radius: 10px; }
+.lp-screen.lp-glass { background: radial-gradient(70% 80% at 8% 0%, color-mix(in srgb, var(--p-accent) 45%, var(--p-bg)), transparent 62%), radial-gradient(60% 70% at 100% 100%, color-mix(in srgb, var(--p-attention) 25%, var(--p-bg)), transparent 60%), var(--p-bg); }
+.lp-grid { display: grid; flex: 1; min-width: 0; height: 100%; }
+.lp-column { display: flex; flex-direction: column; gap: inherit; min-width: 0; min-height: 0; }
+.lp-panel { display: flex; flex: 1; min-height: 0; overflow: hidden; border-radius: var(--p-radius); background: var(--p-surface); }
+.lp-grid[style*="gap: 0"] .lp-panel { border-radius: 0; border-right: 1px solid var(--p-line); }
+.lp-glass .lp-panel { background: color-mix(in srgb, var(--p-surface) 62%, transparent); box-shadow: 0 0 0 .5px color-mix(in srgb, var(--p-text) 14%, transparent); }
+.lp-sessions-panel, .lp-activity-panel { background: var(--p-sidebar, var(--p-surface)); }
+.lp-waiting-panel { flex: 0 0 22%; }
+.lp-line { display: block; height: 3px; margin: 2px 0; border-radius: 2px; background: color-mix(in srgb, var(--p-text) 45%, transparent); }
+.lp-faint { background: color-mix(in srgb, var(--p-muted) 45%, transparent); }
+.lp-sessions { display: grid; align-content: start; gap: 2px; width: 100%; padding: 4px 3px; }
+.lp-row { display: flex; align-items: center; gap: 3px; min-width: 0; padding: 2px 3px; border-radius: 2px; }
+.lp-row > span { flex: 1; min-width: 0; }
+.lp-row.on { background: color-mix(in srgb, var(--p-accent) 22%, transparent); }
+.lp-compact .lp-row { padding: 1px 3px; }
+.lp-avatars .lp-row { padding: 3px; }
+.lp-avatar { flex: none; width: 9px; height: 9px; border-radius: 50%; }
+.lp-chat { display: flex; flex: 1; flex-direction: column; min-width: 0; height: 100%; background: var(--p-surface); }
+.lp-head { padding: 4px 6px; border-bottom: 1px solid var(--p-line); }
+.lp-tabs { display: flex; gap: 3px; padding: 3px 6px; border-bottom: 1px solid var(--p-line); }
+.lp-tabs b { width: 22px; height: 6px; border-radius: 3px; background: color-mix(in srgb, var(--p-text) 12%, transparent); }
+.lp-tabs b.on { background: color-mix(in srgb, var(--p-accent) 55%, transparent); }
+.lp-tabs-underline b { border-radius: 0; background: transparent; }
+.lp-tabs-underline b.on { background: transparent; box-shadow: inset 0 -2px var(--p-accent); }
+.lp-tabs-square b { border-radius: 0; }
+.lp-messages { display: flex; flex: 1; flex-direction: column; gap: 5px; width: 100%; margin-inline: auto; padding: 6px; overflow: hidden; }
+.lp-bubble { max-width: 70%; padding: 3px 5px; border-radius: 5px; }
+.lp-them { align-self: flex-start; width: 62%; background: color-mix(in srgb, var(--p-text) 8%, var(--p-surface)); }
+.lp-me { align-self: flex-end; width: 36%; background: var(--p-bubble, color-mix(in srgb, var(--p-accent) 25%, var(--p-surface))); }
+.lp-plain { width: 85%; }
+.lp-composer { flex: none; height: 12%; max-height: 16px; min-height: 8px; margin: 0 6px 6px; border: 1px solid var(--p-line); border-radius: 4px; background: var(--p-bg); }
+.lp-activity { display: grid; align-content: start; justify-items: center; gap: 4px; width: 100%; padding: 4px 0; }
+.lp-activity b { width: 55%; aspect-ratio: 1; border-radius: 2px; background: color-mix(in srgb, var(--p-text) 18%, transparent); }
+.lp-activity b.on { background: var(--p-accent); }
+.lp-waiting { display: flex; gap: 4px; width: 100%; padding: 4px; }
+.lp-waiting b { flex: 1; border-radius: 2px; background: color-mix(in srgb, var(--p-attention) 30%, transparent); }
+.lp-status { display: grid; align-content: start; gap: 4px; width: 100%; padding: 5px 4px; }
+.lp-status span { display: flex; align-items: center; gap: 3px; }
+.lp-status span .lp-line { flex: 1; }
+.lp-status b { flex: none; width: 5px; height: 5px; border-radius: 50%; background: var(--p-done, var(--p-muted)); }
+.lp-status b.need { background: var(--p-attention); }
+.lp-screen[data-v-type="serif"] { font-family: ui-serif, Georgia, serif; }
+.lp-screen[data-v-density="compact"] .lp-messages { gap: 3px; padding: 4px; }
+
+/* Glass options. */
+.look-glass { display: grid; gap: 12px; margin-top: 12px; }
+.look-tints { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.look-tints label { position: relative; display: inline-flex; cursor: pointer; }
+.look-tints input[type="radio"] { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.look-tint { width: 28px; height: 28px; border: 2px solid var(--surface); border-radius: 50%; box-shadow: 0 0 0 1px var(--line); }
+.look-tint-none { background: linear-gradient(135deg, transparent 46%, var(--muted) 46% 54%, transparent 54%), var(--surface); }
+.look-tints input:checked + .look-tint { box-shadow: 0 0 0 2px var(--accent); }
+.look-tints input:focus-visible + .look-tint { outline: 2px solid var(--accent); outline-offset: 3px; }
+.look-tint-own input { width: 32px; height: 32px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: none; cursor: pointer; }
+.look-tint-own input::-webkit-color-swatch-wrapper { padding: 3px; }
+.look-tint-own input::-webkit-color-swatch { border: none; border-radius: 50%; }
+.look-tint-own input::-moz-color-swatch { border: none; border-radius: 50%; }
+.look-range { display: grid; gap: 4px; max-width: 360px; font-size: 13.5px; }
+.look-range span { display: flex; justify-content: space-between; }
+.look-range output { color: var(--muted); font-variant-numeric: tabular-nums; }
+.look-range input { width: 100%; accent-color: var(--accent); }
+.look-photos { display: grid; gap: 10px; }
+.look-photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 8px; }
+.look-photo { position: relative; aspect-ratio: 16 / 9; }
+.look-photo label { display: block; height: 100%; cursor: pointer; }
+.look-photo input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.look-photo img { display: block; width: 100%; height: 100%; object-fit: cover; border: 1px solid var(--line); border-radius: var(--radius-sm, 8px); }
+.look-photo input:checked + img { outline: 2px solid var(--accent); outline-offset: 2px; }
+.look-photo input:focus-visible + img { outline: 2px solid var(--accent); outline-offset: 2px; }
+.look-photo-delete { position: absolute; top: 4px; right: 4px; min-width: 24px; height: 24px; padding: 0 6px; border-radius: 12px; background: rgb(0 0 0 / .55); color: #fff; font-size: 13px; line-height: 1; }
+.look-photo-delete.look-confirm { background: var(--error); color: #fff; }
+@media (hover: hover) { .look-photo:not(:hover, :focus-within) .look-photo-delete:not(.look-confirm) { opacity: 0; } }
+.look-photo-add { aspect-ratio: 16 / 9; border: 1px dashed var(--line); border-radius: var(--radius-sm, 8px); color: var(--muted); font-size: 13px; }
+.look-photo-add:hover:not(:disabled) { border-color: var(--accent); color: var(--text); }
+
+/* The trial bar (TrialBar.tsx): over everything except dialogs, above the composer. */
+.look-trial { position: fixed; z-index: 60; left: 50%; bottom: max(84px, calc(env(safe-area-inset-bottom) + 84px)); display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 10px; width: max-content; max-width: calc(100vw - 32px); padding: 8px 8px 8px 14px; transform: translateX(-50%); border: 1px solid var(--line); border-radius: var(--radius-lg, 12px); background: var(--surface); color: var(--text); box-shadow: 0 10px 30px rgb(0 0 0 / .18); font-size: 14px; }
+.look-trial span { font-variant-numeric: tabular-nums; }
+
+/* Layout variants (manifest "variants"; App.tsx sets data-v-* on the app shell). The defaults add nothing. */
+.session-avatar { display: none; }
+.app-shell[data-v-sessions="avatars"] .session-avatar { display: grid; flex: none; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: hsl(var(--avatar, 210) 55% 52%); color: #fff; font-size: 13px; font-weight: 600; letter-spacing: .02em; }
+.app-shell[data-v-sessions="avatars"] :is(.session-main, .pane-children button) { min-height: 50px; }
+.app-shell[data-v-sessions="avatars"] .pane-children button { display: flex; align-items: center; gap: 10px; }
+.app-shell[data-v-sessions="avatars"] .pane-children button > .state-slot { order: 2; }
+.app-shell[data-v-sessions="avatars"] .session-main > .state-slot { order: 2; }
+.app-shell[data-v-sessions="avatars"] .session-title { font-size: 14.5px; font-weight: 500; }
+.app-shell[data-v-sessions="compact"] .session-main { min-height: 28px; gap: 8px; }
+.app-shell[data-v-sessions="compact"] .session-title { font-size: 13px; }
+.app-shell[data-v-chat="bubbles"] .assistant-message:not(.bang-run) { width: fit-content; max-width: min(92%, 760px); padding: 12px 16px; border-radius: 18px 18px 18px 5px; background: color-mix(in srgb, var(--text) 5%, var(--surface)); border: 1px solid var(--line); }
+/* Two attribute checks beat the Glass tab rule (glass.css), which loads later. */
+.app-shell[data-v-tabs="underline"][data-v-tabs] .pane-tabs :is(.pane-tab-pill, button.active) { border-color: transparent; border-radius: 0; background: transparent; box-shadow: inset 0 -2px var(--accent); }
+.app-shell[data-v-tabs="square"] :is(.pane-tab-pill, .pane-tabs button) { border-radius: 0; }
+.app-shell[data-v-tabs="square"][data-v-tabs] .pane-tabs :is(.pane-tab-pill, button.active) { box-shadow: inset 0 2px var(--accent), 0 0 0 1px var(--line); }
+.app-shell[data-v-density="compact"] { --control: 30px; }
+.app-shell[data-v-density="compact"] :is(.assistant-message) { margin: 14px 0 18px; line-height: 1.5; }
+.app-shell[data-v-density="compact"] .user-message { margin: 10px 0 16px auto; padding: 8px 14px; }
+.app-shell[data-v-type="serif"] { font-family: ui-serif, Georgia, serif; }
+.app-shell[data-v-type="mono"] :is(.assistant-message, .user-message, .session-title) { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .94em; }
+
+/* Controls follow the layout. Buttons, fields, tabs, chips, menus and alerts use the --radius tokens (controls.css)
+   and the colour tokens, which a layout theme already sets. Here the layout's panel radius sets the control radius,
+   so a square layout gets square controls and a round one gets round controls. New controls that use the tokens
+   follow every layout with no extra rule. */
+.app-shell[data-grid] {
+  --radius-sm: clamp(2px, calc(var(--l-radius, 8px) * .4), 8px);
+  --radius: clamp(2px, calc(var(--l-radius, 8px) * .6), 12px);
+  --radius-lg: clamp(3px, calc(var(--l-radius, 8px) * .85), 18px);
+}

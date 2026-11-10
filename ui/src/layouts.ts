@@ -15,7 +15,7 @@ const EDGE = PANEL_NAMES.filter(name => manifest.panels[name].placement === 'edg
 export interface GridColumn { top?: 'waiting'; main: Placed; bottom?: 'waiting'; width?: number }
 export interface LayoutGrid { columns: GridColumn[]; chatWidth?: number; sessionsClosed?: boolean }
 export type Surface = 'flat' | 'glass'
-export type Backdrop = 'ember' | 'graphite' | 'dusk' | 'photo'
+export type Backdrop = 'ember' | 'graphite' | 'dusk' | 'colour' | 'photo'
 export interface LayoutStyle { radius: number; gap: number; surface: Surface }
 const THEME_KEYS = Object.keys(manifest.theme.keys) as (keyof typeof manifest.theme.keys)[]
 const THEME_REQUIRED = manifest.theme.required
@@ -41,7 +41,10 @@ export interface Look {
 export interface SavedLook extends Look { scheme: string }
 
 export const DEFAULT_LOOK: Look = { layout: 'classic', surface: 'flat', backdrop: 'ember' }
+export const MANIFEST_VERSION = manifest.version
 export const CUSTOM_PREFIX = 'custom:'
+/** A Glass photo must be one of Tether's own backgrounds (server/backgrounds.py), so CSS never loads another URL. */
+export const PHOTO_URL = /^\/mobile\/api\/backgrounds\/[a-f0-9]{32}\.(png|jpg|webp)$/
 const MIN_CONTRAST = manifest.theme.minContrast
 const RESERVED = manifest.limits.reserved
 
@@ -172,7 +175,7 @@ export function validateLayout(data: unknown, fallbackId: string): Layout {
 export interface CustomLayouts { folder: string; layouts: Layout[]; errors: { file: string; reason: string }[] }
 
 /** Read the custom layouts from the server, and check each one again here. A refused one moves to errors. */
-export function useCustomLayouts(api: Api, active = true) {
+export function useCustomLayouts(api: Api, active = true, version = 0) {
   const [state, setState] = useState<CustomLayouts | null>(null)
   const [error, setError] = useState('')
   useEffect(() => {
@@ -193,7 +196,7 @@ export function useCustomLayouts(api: Api, active = true) {
       setError('')
     }).catch(failure => { if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : String(failure)) })
     return () => controller.abort()
-  }, [api, active])
+  }, [api, active, version])
   return { custom: state, error }
 }
 
@@ -264,7 +267,7 @@ export function gridStyle(layout: Layout, shown: GridShown) {
 export const hasPanel = (layout: Layout, name: PanelName) => layout.panels.includes(name)
 
 /** Only data fields go back to the server; file and stale describe the local scan. */
-function layoutData(layout: Layout) {
+export function layoutData(layout: Layout) {
   return Object.fromEntries(Object.entries(layout).filter(([key, value]) =>
     !['file', 'stale', 'themeName'].includes(key) && value !== undefined)) as unknown as Layout
 }

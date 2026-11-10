@@ -1,4 +1,4 @@
-/* The footer's host name and its list of other Tether servers. The list opens upward, over the session list. */
+/* The footer's host name and its list of other Tether servers. The list opens upward, over the session list, in a portal so a clipped sidebar cannot cut it. */
 .host-menu-root { position: relative; flex: 1 1 auto; min-width: 0; }
 .host-switch { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; min-height: var(--control); margin-left: -8px; padding: 0 8px; border-radius: var(--radius); color: var(--muted); font-size: 12px; }
 .host-switch:hover, .host-switch[aria-expanded="true"] { background: var(--hover); color: var(--text); }
@@ -6,7 +6,7 @@
 .host-switch-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .host-switch svg { flex: none; opacity: .7; }
 
-.host-menu { position: absolute; bottom: calc(100% + 6px); left: -10px; z-index: 20; width: min(300px, calc(100vw - 32px)); max-height: min(70vh, 480px); overflow-y: auto; padding: 6px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: 0 6px 24px #0000001f; color: var(--text); font-size: 14px; }
+.host-menu { position: fixed; z-index: 60; width: min(300px, calc(100vw - 32px)); max-height: min(70vh, 480px); overflow-y: auto; padding: 6px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: 0 6px 24px #0000001f; color: var(--text); font-size: 14px; }
 .host-row { display: flex; align-items: center; gap: 4px; border-radius: var(--radius); }
 .host-row.current { gap: 12px; min-height: 48px; padding: 0 12px; }
 .host-row.current > svg { flex: none; margin-left: auto; color: var(--accent); }

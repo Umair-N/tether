@@ -5,11 +5,13 @@ import { ApiError, canFork, errorText, request } from './api'
 import type { Api, Pane, PastChat, SessionsData } from './api'
 import { AutoResumeNotice } from './AutoResumeNotice'
 import { useModal, usePolling } from './hooks'
+import { startTrial } from './lookTrial'
+import { TrialBar } from './TrialBar'
 import type { Anchor } from './hooks'
 import { setPlace, setPlaceHandler } from './backNav'
 import { usePrefs } from './prefs'
 import { applyScheme } from './schemes'
-import { DEFAULT_LOOK, type PanelName, applyLayoutTheme, gridStyle, hasPanel as layoutHas, lookKey, lookLayout, themeMode, variantAttrs } from './layouts'
+import { DEFAULT_LOOK, PHOTO_URL, type Look, type PanelName, applyLayoutTheme, gridStyle, hasPanel as layoutHas, lookKey, lookLayout, themeMode, variantAttrs } from './layouts'
 import { StatusColumn, WaitingPanel } from './LayoutPanels'
 import './layouts.css'
 import './glass.css'
@@ -101,7 +103,7 @@ function App() {
   const [tabTask, setTabTask] = useState<{ pane: Pane; at: Anchor } | null>(null)
   const [resume, setResume] = useState<PastChat | null>(null)
   const [notice, setNotice] = useState('')
-  const [settings, setSettings] = useState(false)
+  const [settings, setSettings] = useState<boolean | 'layout-maker'>(false)
   const [backlog, setBacklog] = useState(false)
   const [backlogAdd, setBacklogAdd] = useState<{ text: string; pane: Pane } | null>(null)
   // The Project sheet for a tmux session, with a file from Files to pin when it came from there.
@@ -460,6 +462,15 @@ function App() {
     const now = Date.now() / 1000
     update(current => ({ seen: { ...current.seen, ...Object.fromEntries(watched.split('|').map(item => [item.split(' ')[0], now])) } }))
   }, [watched, update])
+  // Restore default: Classic, flat, at once, with Undo for 10 seconds (lookTrial.ts).
+  const restoreClassic = () => {
+    if (lookKey(lookShown) === 'classic' && look.surface !== 'glass') return setNotice('Classic is already on.')
+    startTrial(prefs.look ?? null, 'undo', 'Classic')
+    update(() => ({ look: DEFAULT_LOOK }))
+  }
+  const revertLook = useCallback((previous: Look | null) => update(() => ({ look: previous ?? DEFAULT_LOOK })), [update])
+  const lookKeys = useRef<{ maker: () => void; classic: () => void } | null>(null)
+  useEffect(() => { lookKeys.current = { maker: () => { setDrawer(false); setSettings('layout-maker') }, classic: restoreClassic } })
   // Desktop keys: Ctrl/Cmd+K searches sessions, Alt+Up/Down opens the session above or below,
   // and typing with nothing focused goes to the message box.
   useEffect(() => {
@@ -492,6 +503,13 @@ function App() {
         if (pinKeys.current(event.code === 'BracketRight' ? 1 : -1)) { event.preventDefault(); return }
       }
       // ⌥V turns voice input on or off, also while typing. Read event.code: Alt+V types √ on a Mac.
+      // ⌥L makes a layout (Settings › Appearance); ⌥⇧L goes back to Classic from anywhere, even from a broken layout.
+      if (event.altKey && !event.ctrlKey && !event.metaKey && event.code === 'KeyL' && !document.querySelector('dialog[open]')) {
+        event.preventDefault()
+        if (event.shiftKey) lookKeys.current?.classic()
+        else lookKeys.current?.maker()
+        return
+      }
       if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.code === 'KeyV' && !document.querySelector('dialog[open]')) {
         if (toggleVoice()) event.preventDefault()
         return
@@ -711,6 +729,8 @@ function App() {
     { label: 'New session', key: '⌥N', run: () => setNewSession(true) },
     { label: desk.sidebar ? 'Hide the sidebar' : 'Show the sidebar', key: '⌘B', run: () => setDesk({ sidebar: !desk.sidebar }) },
     { label: 'Keyboard shortcuts', key: '?', run: () => setMenu('shortcuts') },
+    { label: 'Make a layout', key: '⌥L', run: () => setSettings('layout-maker') },
+    { label: 'Restore the default layout', key: '⌥⇧L', run: restoreClassic },
     { label: 'Plan usage', run: () => setPlanSheet(true) },
     { label: 'Backlog', run: () => setBacklog(true) },
     { label: 'Agents page', run: () => setAgentsPage('list') },
@@ -744,6 +764,15 @@ function App() {
     '--l-radius': `${lookShown.style.radius}px`, '--l-gap': `${lookShown.style.gap}px`, ...lookShown.grid.chatWidth ? { '--l-chat': `${lookShown.grid.chatWidth}px` } : {}, ...panelSizes,
     ...lookGrid ? gridStyle(lookShown, { rail: wide, sessions: desk.sidebar && layoutHas(lookShown, 'sessions'), inbox: desk.inbox, closed: panelsClosed }) : {},
   } as CSSProperties
+  // Glass options (Settings › Style): only safe values reach CSS. The photo URL must be one of Tether's own backgrounds.
+  const glass = deviceLook.surface === 'glass'
+  const tint = glass && deviceLook.tint && /^#[0-9a-f]{6}$/i.test(deviceLook.tint) ? deviceLook.tint : undefined
+  const photo = glass && deviceLook.backdrop === 'photo' && deviceLook.photo && PHOTO_URL.test(deviceLook.photo.url) ? deviceLook.photo.url : undefined
+  const fill = glass && typeof deviceLook.fill === 'number' ? Math.min(0.9, Math.max(0.3, deviceLook.fill)) : undefined
+  const blur = glass && typeof deviceLook.blur === 'number' ? Math.min(40, Math.max(0, Math.round(deviceLook.blur))) : undefined
+  const glassVars = { ...tint ? { '--g-tint': tint } : {}, ...photo ? { '--g-photo': `url("${photo}")` } : {}, ...fill !== undefined ? { '--g-alpha': `${Math.round(fill * 100)}%` } : {}, ...blur !== undefined ? { '--g-blur': `${blur}px` } : {} }
+  const shellStyle = Object.keys(glassVars).length ? { ...lookStyle, ...glassVars } as CSSProperties : lookStyle
+  const backdrop = deviceLook.backdrop === 'photo' ? (photo ? 'photo' : 'ember') : ['graphite', 'dusk', 'colour'].includes(deviceLook.backdrop) ? deviceLook.backdrop : 'ember'
   const lookAttrs = {
     ...variantAttrs(lookKeep ? { ...lookShown, variants: undefined } : lookShown),
     'data-layout': lookShown.id === 'classic' || !wide ? undefined : lookId.startsWith('custom:') ? 'custom' : lookShown.id,
@@ -752,10 +781,11 @@ function App() {
     'data-activity': lookGrid && layoutHas(lookShown, 'activity') ? '' : undefined,
     'data-sessions': lookGrid && !layoutHas(lookShown, 'sessions') ? 'off' : undefined,
     'data-waiting': lookGrid && layoutHas(lookShown, 'waiting') ? '' : undefined,
-    'data-surface': deviceLook.surface === 'glass' ? 'glass' : undefined, 'data-backdrop': deviceLook.surface === 'glass' ? (['graphite', 'dusk'].includes(deviceLook.backdrop) ? deviceLook.backdrop : 'ember') : undefined,
+    'data-surface': deviceLook.surface === 'glass' ? 'glass' : undefined, 'data-backdrop': glass ? backdrop : undefined,
+    'data-tint': tint ? '' : undefined, 'data-fill': fill !== undefined ? '' : undefined,
   }
   if (unauthorized) return <main className="signin"><Terminal size={32} strokeWidth={1.4} /><h1>Sign in</h1><p>Sign in to access your terminal sessions.</p><a className="primary" href="/mobile/login?next=/chat/">Sign in</a></main>
-  return <WordsContext.Provider value={words}><main className={['app-shell', (view || (wide && home)) && !desk.sidebar && 'no-sidebar', wide && 'with-rail', files && 'screen-files', wide && share && 'screen-share', home && wide && 'screen-home', home && !wide && 'phone-home', !wide && 'phone-tabs', phoneFiles && 'phone-files', !wide && share && 'phone-share'].filter(Boolean).join(' ')} style={lookStyle} {...lookAttrs}>{wide && <Rail screen={home ? 'home' : screen} waiting={waitingCount} onScreen={chooseScreen} onLive={openLive} />}<aside className="sidebar"><Sidebar {...sidebarProps} /></aside><dialog {...drawerModal} className="drawer" aria-label="Sessions" onClick={event => { const box = event.currentTarget.getBoundingClientRect(); if (event.target === event.currentTarget && (event.clientX > box.right || event.clientX < box.left || event.clientY < box.top || event.clientY > box.bottom)) setDrawer(false) }} onClose={() => setDrawerPresent(false)}>{(drawer || drawerPresent) && <Sidebar {...sidebarProps} onClose={() => setDrawer(false)} />}</dialog>
+  return <WordsContext.Provider value={words}><main className={['app-shell', (view || (wide && home)) && !desk.sidebar && 'no-sidebar', wide && 'with-rail', files && 'screen-files', wide && share && 'screen-share', home && wide && 'screen-home', home && !wide && 'phone-home', !wide && 'phone-tabs', phoneFiles && 'phone-files', !wide && share && 'phone-share'].filter(Boolean).join(' ')} style={shellStyle} {...lookAttrs}>{wide && <Rail screen={home ? 'home' : screen} waiting={waitingCount} onScreen={chooseScreen} onLive={openLive} />}<aside className="sidebar"><Sidebar {...sidebarProps} /></aside><dialog {...drawerModal} className="drawer" aria-label="Sessions" onClick={event => { const box = event.currentTarget.getBoundingClientRect(); if (event.target === event.currentTarget && (event.clientX > box.right || event.clientX < box.left || event.clientY < box.top || event.clientY > box.bottom)) setDrawer(false) }} onClose={() => setDrawerPresent(false)}>{(drawer || drawerPresent) && <Sidebar {...sidebarProps} onClose={() => setDrawer(false)} />}</dialog>
     {pane ? (view ? <Workspace layout={desk} slots={slotPanes} focus={view.focus} zoomed={zoomed && multi} onCount={setCount} onFocus={focusSlot} onLayout={setDesk}
       renderSlot={(target, index, shown) => chatFor(target, shown > 1 || zoomed ? { index, zoomed, onZoom: toggleZoom, onClose: zoomed ? undefined : () => closeSlot(index), onPick: () => setPicking(index), onDragStart: event => { event.dataTransfer.setData(DRAG_SLOT, String(index)); event.dataTransfer.effectAllowed = 'move' } } : undefined)}
       onDropPane={dropPane} onDropSession={dropSession} onDropChat={dropChat} onSwap={swap}
@@ -805,7 +835,8 @@ function App() {
     {project && sessions.some(item => item.id === project.session && (!project.group || item.groups?.some(group => group.id === project.group))) && <ProjectSheet key={`${project.session}/${project.group ?? ''}`} api={api} session={sessions.find(item => item.id === project.session)!} group={project.group ? sessions.find(item => item.id === project.session)!.groups?.find(item => item.id === project.group) : undefined} mark={marks[project.session]} pin={project.pin} onChanged={loadMarks} onClose={() => setProject(null)} />}
     {backlog && <BacklogSheet api={api} panes={panes} onOpenPane={openPane} onClose={() => setBacklog(false)} />}
     {backlogAdd && <BacklogAddSheet key={backlogAdd.text} api={api} text={backlogAdd.text} pane={backlogAdd.pane} onClose={() => setBacklogAdd(null)} onAdded={setNotice} />}
-    {settings && <Settings api={api} prefs={prefs} update={update} onReload={reload} onClose={() => setSettings(false)} />}
+    {settings && <Settings api={api} prefs={prefs} update={update} onReload={reload} onClose={() => setSettings(false)} start={settings === 'layout-maker' ? 'layout-maker' : undefined} />}
+    {!settings && <TrialBar onRevert={revertLook} />}
     {tabTask && <NewTask api={api} pane={tabTask.pane} at={tabTask.at} micOk={!prefs.voiceOff} chime={prefs.voiceSound} onClose={() => setTabTask(null)}
       onEmpty={() => { const target = tabTask.pane; setTabTask(null); void split('right', target) }}
       onCreated={(_id, made) => { setTabTask(null); void refresh(); if (made) setNotice(worktreeNotice(made)) }}

@@ -25,6 +25,8 @@ const GROUPS = [
     ['Terminal panel', '⌘.'],
     ['Side chat', '⌘;'],
     ['New session', '⌥N'],
+    ['Make a layout', '⌥L'],
+    ['Restore the default layout', '⌥⇧L'],
   ] },
   { name: 'Act', items: [
     ['Send', '↵'],

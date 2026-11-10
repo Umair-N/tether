@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Check, ChevronsUpDown, Plus, X } from 'lucide-react'
 import type { Host } from './prefs'
 import './HostMenu.css'
@@ -47,13 +48,26 @@ export function HostMenu({ host, hosts, onChange }: { host: string; hosts: Host[
   const [status, setStatus] = useState<Record<string, Reach>>({})
   const root = useRef<HTMLDivElement>(null)
   const trigger = useRef<HTMLButtonElement>(null)
+  const menu = useRef<HTMLDivElement>(null)
   const menuId = useId()
+  // The menu opens in a portal: a layout can clip the sidebar (rounded or glass panels), which would cut the menu.
+  const [at, setAt] = useState<{ left: number; bottom: number } | null>(null)
+  useLayoutEffect(() => {
+    if (!open) return
+    const place = () => {
+      const box = trigger.current?.getBoundingClientRect()
+      if (box) setAt({ left: Math.max(8, Math.min(box.left - 2, window.innerWidth - 308)), bottom: window.innerHeight - box.top + 6 })
+    }
+    place()
+    window.addEventListener('resize', place)
+    return () => window.removeEventListener('resize', place)
+  }, [open])
 
   const close = (focus = false) => { setOpen(false); setAdding(false); setError(''); if (focus) trigger.current?.focus() }
 
   useEffect(() => {
     if (!open) return
-    const outside = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) close() }
+    const outside = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node) && !menu.current?.contains(event.target as Node)) close() }
     const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.stopPropagation(); close(true) } }
     document.addEventListener('pointerdown', outside)
     document.addEventListener('keydown', escape, true)
@@ -90,7 +104,7 @@ export function HostMenu({ host, hosts, onChange }: { host: string; hosts: Host[
     <button ref={trigger} type="button" className="host-switch" aria-expanded={open} aria-controls={open ? menuId : undefined} onClick={() => open ? close() : setOpen(true)}>
       <span className="state-dot" aria-hidden="true" /><span className="host-switch-name">{host}</span><ChevronsUpDown size={14} aria-hidden="true" />
     </button>
-    {open && <div className="host-menu" id={menuId} role="group" aria-label="Tether hosts">
+    {open && at && createPortal(<div ref={menu} className="host-menu" id={menuId} role="group" aria-label="Tether hosts" style={{ left: at.left, bottom: at.bottom }}>
       <div className="host-row current"><span className="state-dot done" aria-hidden="true" /><span className="host-text"><span className="host-name">{host}</span><span className="host-address">This Tether</span></span><Check size={16} aria-label="Open now" /></div>
       {hosts.map(item => <div className="host-row" key={item.url}>
         <a className="host-open" href={item.url + '/chat/'} target="_blank" rel="noopener noreferrer" onClick={() => close()}>
@@ -108,6 +122,6 @@ export function HostMenu({ host, hosts, onChange }: { host: string; hosts: Host[
           <div className="host-form-actions"><button type="button" className="ghost" onClick={() => { setAdding(false); setError('') }}>Cancel</button><button type="submit" className="primary">Add host</button></div>
         </form>
         : <button type="button" className="host-add" onClick={() => setAdding(true)}><Plus size={16} aria-hidden="true" />Add a host</button>}
-    </div>}
+    </div>, document.body)}
   </div>
 }
