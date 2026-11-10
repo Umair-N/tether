@@ -96,7 +96,7 @@ class OfficeTests(unittest.TestCase):
             patch.start()
             self.addCleanup(patch.stop)
         self.config = {'url': 'http://127.0.0.1:7695', 'secret': 's' * 43, 'listen_host': '127.0.0.1',
-                       'listen_port': 7696, 'public_host': 'host.docker.internal',
+                       'listen_port': 7696, 'editor_port': 7697, 'public_host': 'host.docker.internal',
                        'container': 'tether-office', 'image': 'onlyoffice/documentserver:10.0'}
 
     def serve(self, handler):
@@ -139,7 +139,7 @@ class OfficeTests(unittest.TestCase):
         return response.status, data
 
     def callback(self, status=2, header=False, **values):
-        claims = dict(key=self.cap['k'], status=status, url='https://untrusted.invalid/office/cache/files/result?download=1')
+        claims = dict(key=self.cap['k'], status=status, url='https://untrusted.invalid/cache/files/result?download=1')
         claims.update(values)
         headers = {}
         if header:
@@ -167,10 +167,13 @@ class OfficeTests(unittest.TestCase):
         self.assertEqual((error.exception.status, error.exception.code), (404, 'office-off'))
 
     def test_config_validation_and_cache(self):
-        invalid = ['{', '[]', '{}']
+        invalid = ['{', '[]', '{}', json.dumps({key: value for key, value in self.config.items() if key != 'editor_port'})]
         for key, value in [('secret', 3), ('listen_port', True), ('url', 'https://127.0.0.1:7695'),
                            ('url', 'http://evil.test:7695'), ('url', 'http://localhost:99999'),
-                           ('url', 'http://127.0.0.1:7695/path'), ('listen_host', 1), ('public_host', 'x/y')]:
+                           ('url', 'http://127.0.0.1:7695/path'), ('listen_host', 1), ('public_host', 'x/y'),
+                           ('editor_port', True), ('editor_port', '7697'), ('editor_port', None),
+                           ('editor_port', 0), ('editor_port', -1), ('editor_port', 65536),
+                           ('editor_port', 7695), ('editor_port', 7696)]:
             invalid.append(json.dumps(dict(self.config, **{key: value})))
         for text in invalid:
             self.config_path.write_text(text)
@@ -232,7 +235,11 @@ class OfficeTests(unittest.TestCase):
 
     def test_open_config_and_key(self):
         self.enable()
-        editor = self.document()['config']
+        result = self.document()
+        self.assertEqual(set(result), {'editorPort', 'apiPath', 'config'})
+        self.assertEqual(result['editorPort'], self.config['editor_port'])
+        self.assertEqual(result['apiPath'], '/web-apps/apps/api/documents/api.js')
+        editor = result['config']
         claims = office.verify(editor.pop('token'), self.config['secret'])
         self.assertEqual(claims, editor)
         self.assertEqual(editor['documentType'], 'word')
@@ -322,7 +329,11 @@ class OfficeTests(unittest.TestCase):
     def test_callback_download_restrictions(self):
         self.ready()
         for url in ['http://elsewhere.invalid/private', 'http://elsewhere.invalid/cache/files/../../private',
-                    'http://elsewhere.invalid/cache/files/%2e%2e/private']:
+                    'http://elsewhere.invalid/cache/files/%2e%2e/private',
+                    'http://elsewhere.invalid/cache/files/./private',
+                    'http://elsewhere.invalid/cache/files/%5cprivate',
+                    'http://elsewhere.invalid/cache/files/\\private',
+                    'http://elsewhere.invalid/office/cache/files/result']:
             self.assertEqual(self.callback(url=url), (200, {'error': 1}))
         self.assertEqual(self.upstream.requests, [])
         self.upstream.redirect = 'http://elsewhere.invalid/cache/files/redirect'
@@ -471,21 +482,23 @@ class OfficeTests(unittest.TestCase):
             self.assertFalse(thread.is_alive())
 
     def test_proxy_head(self):
-        headers = {'Host': 'tether.test', 'Cookie': 'private', 'X-Forwarded-Host': 'spoof',
+        headers = {'Host': 'tether.test:7697', 'Cookie': 'private', 'X-Forwarded-Host': 'spoof',
                    'X-Forwarded-Prefix': 'spoof', 'X-Forwarded-Proto': 'https',
                    'Tailscale-User-Login': 'private', 'Connection': 'keep-alive', 'Content-Length': '4'}
-        lines = office.office_upstream_head('POST', '/office/path?x=1', headers, '127.0.0.1')
+        lines = office.office_upstream_head('POST', '/path?x=1', headers, '127.0.0.1')
         self.assertEqual(lines[0], 'POST /path?x=1 HTTP/1.1')
         head = '\n'.join(lines)
         self.assertNotIn('private', head)
         self.assertNotIn('spoof', head)
-        self.assertIn('X-Forwarded-Host: tether.test/office', lines)
+        self.assertIn('X-Forwarded-Host: tether.test:7697', lines)
+        self.assertEqual(office.office_upstream_head('GET', '/office/path', headers, '127.0.0.1')[0],
+                         'GET /office/path HTTP/1.1')
         self.assertIn('X-Forwarded-Proto: https', lines)
         self.assertIn('Connection: close', lines)
         for ip in ('192.0.2.1', 'invalid'):
-            self.assertIn('X-Forwarded-Proto: http', office.office_upstream_head('GET', '/office/', headers, ip))
+            self.assertIn('X-Forwarded-Proto: http', office.office_upstream_head('GET', '/', headers, ip))
         headers.update(Connection='Upgrade', Upgrade='websocket')
-        self.assertIn('Connection: Upgrade', office.office_upstream_head('GET', '/office/ws', headers, '::1'))
+        self.assertIn('Connection: Upgrade', office.office_upstream_head('GET', '/ws', headers, '::1'))
 
     def test_cli_install_and_remove(self):
         def docker(argv, **kwargs):
@@ -495,12 +508,19 @@ class OfficeTests(unittest.TestCase):
 
         with mock.patch.object(subprocess, 'run', side_effect=docker) as run, \
                 mock.patch.object(office, '_healthy', return_value=True), \
-                mock.patch.object(office, '_free_port', side_effect=[17695, 17696]), \
-                mock.patch('sys.stdout', new_callable=io.StringIO):
+                mock.patch.object(office, '_free_port', side_effect=[17695, 17696, 17697]) as free_port, \
+                mock.patch('sys.stdout', new_callable=io.StringIO) as output:
             self.assertEqual(office.main(['install']), 0)
             config = json.loads(self.config_path.read_bytes())
             self.assertEqual(self.config_path.stat().st_mode & 0o777, 0o600)
             self.assertEqual(config['url'], 'http://127.0.0.1:17695')
+            self.assertEqual(config['editor_port'], 17697)
+            self.assertEqual(free_port.call_args_list, [mock.call('127.0.0.1', 7695, False),
+                                                       mock.call('127.0.0.1', 17696, False),
+                                                       mock.call('127.0.0.1', 7697, False)])
+            self.assertEqual(output.getvalue().splitlines()[-1],
+                             'If you reach Tether through tailscale serve, run: '
+                             'tailscale serve --bg --https=17697 http://127.0.0.1:17697')
             call = next(call for call in run.call_args_list if call.args[0][1] == 'run')
             argv = call.args[0]
             self.assertIn('JWT_SECRET', argv)
@@ -533,7 +553,7 @@ class OfficeTests(unittest.TestCase):
     def test_cli_timeout_and_macos(self):
         result = subprocess.CompletedProcess(['docker'], 0, '127.0.0.1\n', '')
         with mock.patch.object(subprocess, 'run', return_value=result) as run, \
-                mock.patch.object(office, '_free_port', side_effect=[17695, 17696]), \
+                mock.patch.object(office, '_free_port', side_effect=[17695, 17696, 17697]), \
                 mock.patch.object(office, '_healthy', return_value=False), \
                 mock.patch.object(office.time, 'monotonic', side_effect=[0, 181]), \
                 mock.patch('sys.stderr', new_callable=io.StringIO) as error:
@@ -541,13 +561,36 @@ class OfficeTests(unittest.TestCase):
             self.assertIn('180 seconds', error.getvalue())
             self.assertFalse(self.config_path.exists())
         with mock.patch.object(subprocess, 'run', return_value=result) as run, \
-                mock.patch.object(office, '_free_port', side_effect=[17695, 17696]), \
+                mock.patch.object(office, '_free_port', side_effect=[17695, 17696, 17697]), \
                 mock.patch.object(office, '_healthy', return_value=True), \
                 mock.patch.object(office.sys, 'platform', 'darwin'), \
                 mock.patch('sys.stdout', new_callable=io.StringIO):
             self.assertEqual(office.main(['install']), 0)
             self.assertEqual(office.load()['listen_host'], '127.0.0.1')
             self.assertFalse(any(call.args[0][1] == 'network' for call in run.call_args_list))
+
+    def test_cli_editor_port_validation(self):
+        for value in ('0', '-1', '65536'):
+            with self.subTest(port=value), mock.patch.object(office, '_docker') as docker, \
+                    mock.patch('sys.stderr', new_callable=io.StringIO):
+                self.assertEqual(office.main(['install', '--editor-port', value]), 1)
+                docker.assert_not_called()
+        for port in (17695, 17696):
+            with self.subTest(port=port), mock.patch.object(office.sys, 'platform', 'darwin'), \
+                    mock.patch.object(office, '_docker') as docker, \
+                    mock.patch.object(office, '_free_port', side_effect=[17695, 17696, port]) as free_port, \
+                    mock.patch('sys.stderr', new_callable=io.StringIO):
+                self.assertEqual(office.main(['install', '--editor-port', str(port)]), 1)
+                free_port.assert_called_with('127.0.0.1', port, True)
+                self.assertEqual(docker.call_args_list, [mock.call('info')])
+                self.assertFalse(self.config_path.exists())
+        with mock.patch.object(office.sys, 'platform', 'darwin'), mock.patch.object(office, '_docker'), \
+                mock.patch.object(office, '_free_port', side_effect=[17695, 17696, 18000]) as free_port, \
+                mock.patch.object(office, '_healthy', return_value=True), \
+                mock.patch('sys.stdout', new_callable=io.StringIO):
+            self.assertEqual(office.main(['install', '--editor-port', '18000']), 0)
+            free_port.assert_called_with('127.0.0.1', 18000, True)
+            self.assertEqual(office.load()['editor_port'], 18000)
 
     def test_free_port_skips_busy_port(self):
         with socket.socket() as sock:
@@ -562,10 +605,11 @@ class OfficeTests(unittest.TestCase):
         self.config['url'] = 'http://127.0.0.1:%d' % upstream.server_port
         self.enable()
         http = self.serve(server.Handler)
+        editor = self.serve(server.OfficeOriginHandler)
         with mock.patch.object(auth, 'signed_in', return_value=True), \
                 mock.patch.object(server, 'TTYD_PORT', upstream.server_port):
-            for route in ('/office/socket?x=1', '/terminal/live/socket?x=1'):
-                with socket.create_connection(('127.0.0.1', http.server_port), timeout=3) as connection:
+            for listener, route in ((editor, '/socket?x=1'), (http, '/terminal/live/socket?x=1')):
+                with socket.create_connection(('127.0.0.1', listener.server_port), timeout=3) as connection:
                     head = f'GET {route} HTTP/1.1\r\nHost: tether.test\r\nOrigin: http://tether.test\r\nCookie: private\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n'
                     connection.sendall(head.encode())
                     response = b''
@@ -577,7 +621,7 @@ class OfficeTests(unittest.TestCase):
                     connection.sendall(b'ping')
                     self.assertEqual(connection.recv(4), b'ping')
                 path, headers = upstream.received
-                self.assertEqual(path, route[len('/office'):] if route.startswith('/office/') else route)
+                self.assertEqual(path, route)
                 self.assertNotIn('Cookie', headers)
 
     def test_server_host_open_and_proxy_routes(self):
@@ -598,25 +642,100 @@ class OfficeTests(unittest.TestCase):
         self.assertTrue(json.loads(self.request(http, 'GET', '/mobile/api/host', headers=headers)[1])['office'])
         code, data = self.request(http, 'POST', '/mobile/api/office/open', body, headers)
         self.assertEqual(code, 200)
+        self.assertEqual(json.loads(data)['editorPort'], self.config['editor_port'])
+        self.assertEqual(json.loads(data)['apiPath'], '/web-apps/apps/api/documents/api.js')
         self.assertEqual(json.loads(data)['config']['type'], 'mobile')
         bad = dict(headers, Origin='http://other.test')
         self.assertEqual(self.request(http, 'POST', '/mobile/api/office/open', body, bad)[0], 403)
         self.assertEqual(self.request(http, 'POST', '/mobile/api/office/open', body, {'Host': 'tether.test'})[0], 403)
-        self.assertEqual(self.request(http, 'GET', '/office/test', headers=bad)[0], 403)
+        with mock.patch.object(server, 'socket', wraps=socket) as sockets:
+            for method in ('GET', 'POST', 'PUT'):
+                self.assertEqual(self.request(http, method, '/office/asset', headers=headers)[0], 404)
+            sockets.create_connection.assert_not_called()
+        self.assertEqual(self.upstream.requests, [])
+
+    def test_editor_origin_proxy_routes(self):
+        self.enable(upstream=True)
+        http = self.serve(server.OfficeOriginHandler)
+        patch = mock.patch.object(auth, 'signed_in', return_value=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+        headers = {'Host': 'tether.test:7697', 'Origin': 'http://tether.test:7697', 'Cookie': 'private'}
+        bad = dict(headers, Origin='http://tether.test')
+        with mock.patch.object(server, 'socket', wraps=socket) as sockets:
+            self.assertEqual(self.request(http, 'GET', '/asset', headers=bad)[0], 403)
+            sockets.create_connection.assert_not_called()
         for method in ('GET', 'POST', 'PUT'):
-            code, data = self.request(http, method, '/office/asset?query=1', b'buffered body' if method != 'GET' else None, headers)
+            code, data = self.request(http, method, '/asset?query=1', b'buffered body' if method != 'GET' else None, headers)
             self.assertEqual(code, 200)
             sent = self.upstream.requests[-1]
             self.assertEqual(sent[1], '/asset?query=1')
             self.assertNotIn('Cookie', sent[2])
-            self.assertEqual(sent[2]['X-Forwarded-Host'], 'tether.test/office')
+            self.assertEqual(sent[2]['X-Forwarded-Host'], 'tether.test:7697')
             if method != 'GET':
                 self.assertEqual(data, b'buffered body')
-        self.assertEqual(self.request(http, 'POST', '/office/chunks', [b'first', b'second'],
+        for path in ('/', '/chat/', '/mobile/login', '/mobile/api/host', '/mobile/api/office/open', '/office/asset'):
+            self.assertEqual(self.request(http, 'GET', path, headers=headers), (200, b'edited'))
+            self.assertEqual(self.upstream.requests[-1][1], path)
+        self.assertEqual(self.request(http, 'POST', '/chunks', [b'first', b'second'],
                                       dict(headers, **{'Transfer-Encoding': 'chunked'}), chunked=True), (200, b'firstsecond'))
-        with mock.patch.object(auth, 'signed_in', return_value=False), mock.patch.object(auth, 'tailscale_signed_in', return_value=False):
-            self.assertEqual(self.request(http, 'GET', '/office/asset')[0], 302)
-            self.assertEqual(self.request(http, 'POST', '/office/asset', b'')[0], 401)
+
+    def test_editor_origin_auth_for_all_methods(self):
+        self.enable(upstream=True)
+        http = self.serve(server.OfficeOriginHandler)
+        methods = ('GET', 'POST', 'PUT', 'HEAD', 'DELETE', 'OPTIONS', 'PATCH')
+        with mock.patch.object(auth, 'signed_in', return_value=False) as cookie, \
+                mock.patch.object(auth, 'tailscale_signed_in', return_value=False) as tailscale, \
+                mock.patch.object(server, 'socket', wraps=socket) as sockets:
+            for method in methods:
+                with self.subTest(method=method):
+                    code, data = self.request(http, method, '/mobile/login')
+                    self.assertEqual(code, 401)
+                    if method != 'HEAD':
+                        self.assertEqual(json.loads(data), {'error': 'Sign in required.'})
+            sockets.create_connection.assert_not_called()
+            cookie.assert_called_with(None)
+            tailscale.assert_called_with(None, '127.0.0.1')
+        for cookie_auth, tailscale_auth in ((True, False), (False, True)):
+            with mock.patch.object(auth, 'signed_in', return_value=cookie_auth) as cookie, \
+                    mock.patch.object(auth, 'tailscale_signed_in', return_value=tailscale_auth) as tailscale, \
+                    mock.patch.object(server.OfficeOriginHandler, 'proxy_office', autospec=True,
+                                      side_effect=lambda handler: handler.respond(200, b'')) as proxy:
+                for method in methods:
+                    with self.subTest(method=method, cookie=cookie_auth):
+                        self.assertEqual(self.request(http, method, '/mobile/api/host', headers={
+                            'Cookie': 'session-cookie', 'Tailscale-User-Login': 'owner@test.invalid'}), (200, b''))
+                self.assertEqual(proxy.call_count, len(methods))
+                cookie.assert_called_with('session-cookie')
+                if not cookie_auth:
+                    tailscale.assert_called_with('owner@test.invalid', '127.0.0.1')
+
+    def test_editor_origin_listener_start(self):
+        with mock.patch.object(server, 'ThreadingHTTPServer') as bind:
+            self.assertIsNone(server.start_office_origin('127.0.0.1'))
+            bind.assert_not_called()
+        self.enable()
+        with mock.patch.object(server, 'ThreadingHTTPServer', side_effect=OSError('busy')) as bind, \
+                self.assertLogs(server.__name__, level='WARNING'):
+            self.assertIsNone(server.start_office_origin('127.0.0.1'))
+            bind.assert_called_once_with(('127.0.0.1', self.config['editor_port']), server.OfficeOriginHandler)
+        with socket.socket() as sock:
+            sock.bind(('127.0.0.1', 0))
+            self.config['editor_port'] = sock.getsockname()[1]
+        office.write_config(self.config)
+        http = server.start_office_origin('127.0.0.1')
+        self.assertIsNotNone(http)
+        thread = next(thread for thread in threading.enumerate() if thread.name == 'office-origin-listener')
+        try:
+            self.assertTrue(thread.daemon)
+            with mock.patch.object(auth, 'signed_in', return_value=False), \
+                    mock.patch.object(auth, 'tailscale_signed_in', return_value=False):
+                self.assertEqual(self.request(http, 'GET', '/')[0], 401)
+        finally:
+            http.shutdown()
+            http.server_close()
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
 
 
 if __name__ == '__main__':

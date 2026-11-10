@@ -99,7 +99,8 @@ type DocsEditor = { destroyEditor(): void }
 type DocsApi = { DocEditor: new (id: string, config: unknown) => DocsEditor }
 let apiScript: Promise<DocsApi> | null = null
 
-// ONLYOFFICE's api.js comes through Tether's /office/ proxy. It loads once per page.
+// ONLYOFFICE's api.js comes from the editor's own port on this host, so the editor never runs with Tether's rights.
+// It loads once per page.
 function loadDocsApi(src: string) {
   const ready = () => (window as unknown as { DocsAPI?: DocsApi }).DocsAPI
   const loaded = ready()
@@ -132,9 +133,11 @@ function OfficeEditor({ file, onKey }: { file: OfficeFile; onKey: (key: string) 
     const session = new URL(file.url, location.href).searchParams.get('session') ?? undefined
     // Phones get the desktop editor too: ONLYOFFICE Community opens its mobile editor for viewing only.
     const body = { path: file.path, session, mobile: false, lang: navigator.language.split('-')[0], theme: darkPage() ? 'dark' : 'light' }
-    request<{ api: string; config: Record<string, unknown> }>('office/open', body, undefined, undefined, 20000)
-      .then(async ({ api, config }) => {
-        const docs = await loadDocsApi(api)
+    request<{ editorPort: number; apiPath: string; config: Record<string, unknown> }>('office/open', body, undefined, undefined, 20000)
+      .then(async ({ editorPort, apiPath, config }) => {
+        const src = new URL(apiPath, location.origin)
+        src.port = String(editorPort)
+        const docs = await loadDocsApi(src.href)
         if (!live) return
         const documentKey = (config.document as { key?: unknown } | undefined)?.key
         if (typeof documentKey === 'string') onKey(documentKey)

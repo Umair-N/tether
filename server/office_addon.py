@@ -53,10 +53,12 @@ def _valid_config(value):
     strings = ('url', 'secret', 'listen_host', 'public_host', 'container', 'image')
     if any(not isinstance(value.get(key), str) or not value[key] for key in strings):
         return False
-    if not _port(value.get('listen_port')) or len(value['secret'].encode()) < 32:
+    if not _port(value.get('listen_port')) or not _port(value.get('editor_port')) or len(value['secret'].encode()) < 32:
         return False
     match = re.fullmatch(r'http://(127\.0\.0\.1|localhost):([0-9]+)', value['url'])
     if not match or not _port(int(match[2])):
+        return False
+    if value['editor_port'] in (int(match[2]), value['listen_port']):
         return False
     try:
         ipaddress.IPv4Address(value['listen_host'])
@@ -237,7 +239,7 @@ def open_document(path_text, user_name='', mobile=False, lang='en', theme='dark'
                                   'help': False, 'feedback': False, 'goback': False, 'uiTheme': 'default-light' if theme == 'light' else 'default-dark'}},
             'type': 'mobile' if mobile else 'desktop', 'width': '100%', 'height': '100%'}
         editor['token'] = sign(editor, config['secret'])
-        return {'api': '/office/web-apps/apps/api/documents/api.js', 'config': editor}
+        return {'editorPort': config['editor_port'], 'apiPath': '/web-apps/apps/api/documents/api.js', 'config': editor}
     finally:
         item.close()
 
@@ -331,8 +333,6 @@ def download(url, config):
         raise ValueError('Missing Office result URL.')
     parsed = urlsplit(url)
     path = parsed.path
-    if path.startswith('/office/'):
-        path = path[len('/office'):]
     decoded = unquote(path)
     if (not path.startswith('/cache/files/') or '\\' in decoded
             or any(part in ('.', '..') for part in decoded.split('/'))):
@@ -480,10 +480,10 @@ def office_upstream_head(method, path, headers, client_ip):
     lower = {key.lower(): value for key, value in items}
     upgrading = 'upgrade' in lower.get('connection', '').lower()
     drop = {'cookie', 'connection', 'x-forwarded-host', 'x-forwarded-prefix', 'x-forwarded-proto'}
-    lines = [f'{method} {path[len("/office"):]} HTTP/1.1']
+    lines = [f'{method} {path} HTTP/1.1']
     lines += [f'{key}: {value}' for key, value in items if key.lower() not in drop and not key.lower().startswith('tailscale-')]
     lines.append('Connection: Upgrade' if upgrading else 'Connection: close')
-    lines.append('X-Forwarded-Host: ' + lower.get('host', '') + '/office')
+    lines.append('X-Forwarded-Host: ' + lower.get('host', ''))
     try:
         loopback = ipaddress.ip_address(client_ip).is_loopback
     except ValueError:
@@ -540,9 +540,12 @@ def install(args):
     listen_port = _free_port(host, args.listen_port or port + 1, bool(args.listen_port))
     if port == listen_port:
         raise ValueError('Use separate Office and listener ports.')
+    editor_port = _free_port('127.0.0.1', args.editor_port or 7697, bool(args.editor_port))
+    if editor_port in (port, listen_port):
+        raise ValueError('Use separate Office, listener and editor ports.')
     secret = secrets.token_urlsafe(32)
     config = {'url': f'http://127.0.0.1:{port}', 'secret': secret, 'listen_host': host,
-              'listen_port': listen_port, 'public_host': 'host.docker.internal',
+              'listen_port': listen_port, 'editor_port': editor_port, 'public_host': 'host.docker.internal',
               'container': 'tether-office', 'image': args.image}
     _docker('run', '-d', '--name', config['container'], '--restart', 'unless-stopped',
             '-p', f'127.0.0.1:{port}:80', '--add-host', 'host.docker.internal:host-gateway',
@@ -553,6 +556,7 @@ def install(args):
         if _healthy(config):
             write_config(config)
             print('The Office editor is ready. Restart Tether to turn it on:\nsystemctl --user restart tether.service')
+            print(f'If you reach Tether through tailscale serve, run: tailscale serve --bg --https={editor_port} http://127.0.0.1:{editor_port}')
             return
         time.sleep(2)
     raise ValueError('Office did not become healthy in 180 seconds. Check docker logs tether-office; remove the container before retrying.')
@@ -565,12 +569,13 @@ def main(argv=None):
     setup.add_argument('--image', default='onlyoffice/documentserver:10.0')
     setup.add_argument('--port', type=int)
     setup.add_argument('--listen-port', type=int)
+    setup.add_argument('--editor-port', type=int)
     commands.add_parser('status')
     commands.add_parser('remove')
     args = parser.parse_args(argv)
     try:
         if args.command == 'install':
-            if any(value is not None and not _port(value) for value in (args.port, args.listen_port)):
+            if any(value is not None and not _port(value) for value in (args.port, args.listen_port, args.editor_port)):
                 raise ValueError('Use ports from 1 to 65535.')
             install(args)
         elif args.command == 'remove':

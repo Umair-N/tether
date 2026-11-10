@@ -2,6 +2,7 @@
 from datetime import datetime
 import hashlib
 import json
+import logging
 import os
 import re
 import socket
@@ -1317,10 +1318,6 @@ class Handler(BaseHTTPRequestHandler):
             if not self.deny():
                 self.proxy_terminal()
             return
-        if path.startswith('/office/'):
-            if not self.deny():
-                self.proxy_office()
-            return
         if path == '/mobile/login':
             if auth.tailscale_signed_in(self.headers.get('Tailscale-User-Login'), self.client_address[0]):
                 self.send_response(302)  # already signed in by Tailscale: skip the token page
@@ -1650,10 +1647,6 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(503, {'error': 'The conversation is currently unavailable.'})
 
     def do_POST(self):
-        if self.path.startswith('/office/'):
-            if not self.deny():
-                self.proxy_office()
-            return
         if self.path == '/mobile/api/office/open':
             if self.deny():
                 return
@@ -2289,11 +2282,7 @@ class Handler(BaseHTTPRequestHandler):
                                'draft': isinstance(exc, DraftError)})
 
     def do_PUT(self):
-        if self.path.startswith('/office/'):
-            if not self.deny():
-                self.proxy_office()
-        else:
-            self.respond(404, {'error': 'Not found'})
+        self.respond(404, {'error': 'Not found'})
 
     def do_upload(self):
         """A raw file body for one session; the path of the saved copy goes back so the page can put it in the message."""
@@ -2416,6 +2405,32 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
 
+class OfficeOriginHandler(Handler):
+    """Only proxy the editor; never serve Tether pages or APIs on this origin."""
+
+    def do_GET(self):
+        if not (auth.signed_in(self.headers.get('Cookie'))
+                or auth.tailscale_signed_in(self.headers.get('Tailscale-User-Login'), self.client_address[0])):
+            self.respond(401, {'error': 'Sign in required.'})
+            return
+        self.proxy_office()
+
+    do_POST = do_PUT = do_HEAD = do_DELETE = do_OPTIONS = do_PATCH = do_GET
+
+
+def start_office_origin(host):
+    config = office_addon.load()
+    if config is None:
+        return None
+    try:
+        http = ThreadingHTTPServer((host, config['editor_port']), OfficeOriginHandler)
+    except OSError as exc:
+        logging.getLogger(__name__).warning('Office editor listener did not start: %s', type(exc).__name__)
+        return None
+    threading.Thread(target=http.serve_forever, name='office-origin-listener', daemon=True).start()
+    return http
+
+
 if __name__ == '__main__':
     import share_api
     share_api.get_store()  # Reconcile private storage before accepting requests.
@@ -2448,4 +2463,5 @@ if __name__ == '__main__':
     }, daemon=True).start()
     threading.Thread(target=window_size.watch, daemon=True).start()
     office_addon.start_listener()
+    start_office_origin(host)
     ThreadingHTTPServer((host, port), Handler).serve_forever()

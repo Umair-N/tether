@@ -154,12 +154,22 @@ Those checks restrict previews to supported files under your home folder and exc
 
 The add-on edits docx, xlsx, and pptx files with ONLYOFFICE Docs Community Edition in a separate Docker container.
 It is off by default. The core server needs no Docker installation.
+The editor runs on its own port to isolate it from Tether.
 ONLYOFFICE Docs Community Edition uses the AGPL license.
 See the [official Docker guide](https://helpcenter.onlyoffice.com/docs/installation/community/docker/installing/install) for Docker requirements.
 
 1. Install and start Docker.
 2. Run `python3 server/office_addon.py install` from your Tether checkout.
 3. Restart Tether with `systemctl --user restart tether.service` on Linux.
+
+If you reach Tether through Tailscale Serve, run the command that the installer prints:
+
+```sh
+tailscale serve --bg --https=<editor_port> http://127.0.0.1:<editor_port>
+```
+
+Replace `<editor_port>` with the configured editor port (7697 by default).
+See the [Tailscale Serve reference](https://tailscale.com/docs/reference/tailscale-cli/serve) for these options.
 
 On macOS, restart Tether through your LaunchAgent instead.
 Run `python3 server/office_addon.py status` to check the container and its health.
