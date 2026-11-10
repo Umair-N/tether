@@ -662,7 +662,7 @@ dialog::backdrop { background: #11110e66; opacity: calc(1 - var(--sheet-progress
 .thread:has(.jump-button) .selection-copy { bottom: 66px; }
 /* With a mouse: one button by the end of the selected text. */
 .selection-backlog { position: fixed; z-index: 30; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; background: var(--surface); box-shadow: 0 2px 10px rgb(0 0 0 / .18); -webkit-user-select: none; user-select: none; }
-.pull-note { display: flex; align-items: flex-end; justify-content: center; margin: 0; padding-bottom: 8px; overflow: hidden; font-size: 13px; color: var(--muted); }
+.pull-note { position: relative; z-index: 1; height: 40px; transform: translate3d(0, -40px, 0); opacity: 0; pointer-events: none; display: flex; align-items: flex-end; justify-content: center; margin: 0 0 -40px; padding-bottom: 8px; overflow: hidden; font-size: 13px; color: var(--muted); }
 
 /* Mode menu above the mode pill; session details; reply times; model list refresh. */
 .mode-container { position: relative; display: inline-flex; flex: none; }
@@ -927,6 +927,7 @@ button.live-chip:active { background: var(--line); }
 /* One disclosure and one scroll boundary keep chat visible on short phones. */
 .status-stack { flex: none; max-height: 50dvh; overflow-y: auto; overscroll-behavior: contain; margin: 0 12px 6px; }
 .status-grip { position: sticky; top: 0; z-index: 2; display: flex; justify-content: center; align-items: center; height: 20px; background: var(--bg); cursor: ns-resize; touch-action: none; }
+.status-grip::before { content: ""; position: absolute; left: 0; right: 0; top: -12px; height: 44px; }
 .status-grip + .status-rail { top: 20px; }
 .status-grip span { width: 40px; height: 4px; border-radius: 2px; background: var(--line); }
 .status-grip:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--radius-sm); }

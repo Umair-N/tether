@@ -536,13 +536,23 @@ function SheetResize({ sheet, sizing, resized }: { sheet: RefObject<HTMLDialogEl
     event.preventDefault()
     const handle = event.currentTarget, from = { x: event.clientX, y: event.clientY, width: box.width, height: box.height }
     handle.setPointerCapture(event.pointerId)
-    let last = size
+    let last = size, frame = 0
+    const paint = () => {
+      frame = 0
+      if (!sheet.current) return
+      if (wide) sheet.current.style.maxWidth = `${last.width ?? box.width}px`
+      sheet.current.style.height = `${(wide ? last.height : last.phoneHeight) ?? box.height}px`
+    }
     const move = (moved: PointerEvent) => {
       const dx = moved.clientX - from.x, dy = moved.clientY - from.y
       last = wide ? fit(from.width + 2 * dx, from.height + 2 * dy) : fit(from.width, from.height - dy)
-      sizing.save(last)
+      if (!frame) frame = requestAnimationFrame(paint)
     }
     const end = () => {
+      cancelAnimationFrame(frame)
+      save(last)
+      sheet.current?.style.removeProperty('max-width')
+      sheet.current?.style.removeProperty('height')
       resized.current = Date.now()
       handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', end); handle.removeEventListener('pointercancel', end)
     }
