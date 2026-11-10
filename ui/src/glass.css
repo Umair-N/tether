@@ -72,31 +72,42 @@
 
 /* Everything else inside glass uses the theme tokens. Redefine the ones that paint flat, opaque boxes, so every
    control (hover, lines, segmented groups, tabs, inputs) reads as part of the glass and not as the flat theme. */
-.app-shell[data-surface="glass"] { --hover: color-mix(in srgb, var(--text) 7%, transparent); --line: var(--g-line); }
+.app-shell[data-surface="glass"] {
+  --hover: color-mix(in srgb, var(--text) 7%, transparent); --line: var(--g-line);
+  --g-solid: var(--surface); --g-panel: color-mix(in srgb, var(--surface) var(--g-alpha, 55%), transparent);
+  --g-pop: color-mix(in srgb, var(--surface) 86%, transparent);
+}
+/* Inside the panels, the flat fills become glass: cards (--surface), bubbles and chips (--bubble), side areas
+   (--sidebar). They resolve here from the shell's own values, so panels and backdrops keep theirs. */
+.app-shell[data-surface="glass"] > * {
+  --surface: var(--g-fill-strong); --bubble: color-mix(in srgb, var(--text) 6%, transparent); --sidebar: color-mix(in srgb, var(--text) 3%, transparent);
+}
+/* Floating menus and popovers sit over other content: a stronger fill and their own blur keep them readable. */
+.app-shell[data-surface="glass"] :is(.agent-pop, .attach-menu, .keys-menu, .browser-menu, .sm-panel, .live-popover, .suggest, .selection-backlog, .jump-button, .update-banner, .resume-notice, .fx-uploads, .look-trial) {
+  background: var(--g-pop); border-color: var(--g-edge); -webkit-backdrop-filter: blur(20px) saturate(170%); backdrop-filter: blur(20px) saturate(170%);
+}
+/* Sticky strips (the status grip and rail) used --bg to cover what scrolls under them. */
+.app-shell[data-surface="glass"] :is(.status-grip, .status-rail) { background: transparent; }
+/* Settings and other sheets: one glass card. The side list and search sit on it, not in their own boxes. */
+.app-shell[data-surface="glass"] .sheet { background: var(--g-pop); }
 .app-shell[data-surface="glass"] :is(.view-switch, .layout-switch) button[aria-pressed="true"], .app-shell[data-surface="glass"] .app-rail-button[aria-current="page"] { background: var(--g-fill-strong); box-shadow: 0 1px 0 var(--g-edge) inset, 0 0 0 1px var(--g-line); }
 .app-shell[data-surface="glass"] .sidebar-search { background: color-mix(in srgb, var(--text) 5%, transparent); border-color: var(--g-line); box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
 .app-shell[data-surface="glass"] .sidebar-search:focus-within { background: var(--g-fill-strong); border-color: var(--g-edge); }
-/* Controls round to suit the 16px glass panels. Grid layouts take theirs from the layout radius (layouts.css). */
-.app-shell[data-surface="glass"]:not([data-grid]) { --radius-sm: 8px; --radius: 10px; --radius-lg: 14px; }
-
-/* Installed app with the title bar hidden: Chrome paints one solid box behind its window controls, in the page
-   theme-color. A see-through backdrop cannot match it, so glass puts a solid band of --bg across the top and starts
-   the panels below it. titlebar.ts sets the theme-color to the same --bg. */
-@media (display-mode: window-controls-overlay) {
-  .app-shell[data-surface="glass"].with-rail { padding-top: var(--titlebar-height); box-shadow: inset 0 var(--titlebar-height) 0 var(--bg); }
-  .app-shell[data-surface="glass"].with-rail > .app-rail { padding-top: 12px; }
-}
+/* Controls round to suit the glass panels, in every layout (this wins over the layout radius in layouts.css). */
+.app-shell[data-surface="glass"]:is([data-grid], :not([data-grid])) { --radius-xs: 5px; --radius-sm: 8px; --radius: 10px; --radius-lg: 14px; --radius-xl: 18px; }
+/* The notice stack tucks under a flat composer; the glass composer floats, so the stack is its own card. */
+.app-shell[data-surface="glass"] .notice-stack { margin-bottom: 6px; border-bottom: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--g-fill-strong); }
 
 /* Phone: no rail and no panel margins. The chat takes the fill from edge to edge. */
 .app-shell[data-surface="glass"]:not(.with-rail) .chat-panel { background: var(--g-fill); -webkit-backdrop-filter: blur(var(--g-blur, 24px)) saturate(170%); backdrop-filter: blur(var(--g-blur, 24px)) saturate(170%); }
 
 /* Panel fill (Settings › Style): how much of --surface the panels show. --g-alpha is a percentage. */
-.app-shell[data-surface="glass"][data-fill] > :is(.sidebar, .workspace, .inbox, .l-panel), .app-shell[data-surface="glass"][data-fill]:not(.with-rail) .chat-panel { background: color-mix(in srgb, var(--surface) var(--g-alpha), transparent); }
+.app-shell[data-surface="glass"][data-fill] > :is(.sidebar, .workspace, .inbox, .l-panel), .app-shell[data-surface="glass"][data-fill]:not(.with-rail) .chat-panel { background: var(--g-panel); }
 
 /* No blur, or the system asks for less transparency: solid panels. */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .app-shell[data-surface="glass"] > :is(.sidebar, .workspace, .inbox, .l-panel), .app-shell[data-surface="glass"]:not(.with-rail) .chat-panel { background: var(--surface); }
+  .app-shell[data-surface="glass"] > :is(.sidebar, .workspace, .inbox, .l-panel), .app-shell[data-surface="glass"]:not(.with-rail) .chat-panel { background: var(--g-solid); }
 }
 @media (prefers-reduced-transparency: reduce) {
-  .app-shell[data-surface="glass"] > :is(.sidebar, .workspace, .inbox, .l-panel), .app-shell[data-surface="glass"]:not(.with-rail) .chat-panel, .app-shell[data-surface="glass"] .sheet { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .app-shell[data-surface="glass"] > :is(.sidebar, .workspace, .inbox, .l-panel), .app-shell[data-surface="glass"]:not(.with-rail) .chat-panel, .app-shell[data-surface="glass"] .sheet { background: var(--g-solid); -webkit-backdrop-filter: none; backdrop-filter: none; }
 }

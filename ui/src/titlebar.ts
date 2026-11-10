@@ -44,18 +44,6 @@ export function shownColour(panel: HTMLElement) {
   return '#' + [r, g, b].map(value => value.toString(16).padStart(2, '0')).join('')
 }
 
-/** A CSS colour as #rrggbb, or null when it is not a solid colour. */
-export function solidColour(value: string) {
-  paint ??= Object.assign(document.createElement('canvas'), { width: 1, height: 1 }).getContext('2d', { willReadFrequently: true })
-  if (!paint || !value.trim()) return null
-  paint.clearRect(0, 0, 1, 1)
-  paint.fillStyle = '#000'
-  paint.fillStyle = value.trim()
-  paint.fillRect(0, 0, 1, 1)
-  const [r, g, b, a] = paint.getImageData(0, 0, 1, 1).data
-  return a < 255 ? null : '#' + [r, g, b].map(part => part.toString(16).padStart(2, '0')).join('')
-}
-
 type Overlay = EventTarget & { visible: boolean; getTitlebarAreaRect: () => DOMRect }
 
 export function useWindowControls(shown: boolean) {
@@ -86,9 +74,7 @@ export function useWindowControls(shown: boolean) {
         const x = Math.min(window.innerWidth - 2, (area.width > 0 ? area.x + area.width : window.innerWidth) + 8)
         under = document.elementFromPoint(x, area.height / 2)?.closest<HTMLElement>('.app-shell > *') ?? null
       }
-      // Glass draws a solid --bg band under the controls (glass.css): the theme-color takes that colour.
-      const band = root.matches('[data-surface="glass"].with-rail') ? solidColour(getComputedStyle(root).getPropertyValue('--bg')) : null
-      const colour = !visible || themeColorHeld() ? null : band ?? (under ? shownColour(under) : null)
+      const colour = visible && under && !themeColorHeld() ? shownColour(under) : null
       if (colour) document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]').forEach(meta => { if (meta.content !== colour) meta.content = colour })
     }
     const later = () => { if (!frame) frame = requestAnimationFrame(measure) }
@@ -96,7 +82,7 @@ export function useWindowControls(shown: boolean) {
     const watch = () => { sizes.disconnect(); for (const panel of panels()) sizes.observe(panel); later() }
     // Panels come and go (inbox, layout panels), and a layout change moves them without a resize of the window.
     const changes = new MutationObserver(watch)
-    changes.observe(root, { childList: true, attributes: true, attributeFilter: ['style', 'class', 'data-grid', 'data-layout', 'data-gap', 'data-surface', 'data-backdrop', 'data-fill'] })
+    changes.observe(root, { childList: true, attributes: true, attributeFilter: ['style', 'class', 'data-grid', 'data-layout', 'data-gap', 'data-backdrop', 'data-fill'] })
     // A scheme or layout theme rewrites its style element and resets the theme-color: measure again after it.
     const themes = new MutationObserver(later)
     themes.observe(document.head, { childList: true, subtree: true, characterData: true })
