@@ -3,17 +3,18 @@ import { fileChecks } from './fileChecks'
 import { useIsMarkdownCodeBlock } from '@assistant-ui/react-markdown'
 
 // Paths an agent names in a reply (`shots/row-menu.png`, [clip](out/demo.mp4), src/App.tsx:42) open on the phone through
-// GET /mobile/api/file. the server decides what may open: home folder only, no secrets. Media and text open in Tether;
-// any other file ('file': a spreadsheet, a document, an archive) downloads.
-export type Kind = 'image' | 'video' | 'audio' | 'pdf' | 'text' | 'file'
+// GET /mobile/api/file. the server decides what may open: home folder only, no secrets. Media, text and Office files open in Tether;
+// any other file ('file': an archive or an unsupported document) downloads.
+export type Kind = 'image' | 'video' | 'audio' | 'pdf' | 'text' | 'office' | 'file'
 const KINDS: Record<string, Kind> = {
   png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image',
-  mp4: 'video', webm: 'video', mov: 'video', m4v: 'video', mp3: 'audio', m4a: 'audio', wav: 'audio', ogg: 'audio', pdf: 'pdf' }
+  mp4: 'video', webm: 'video', mov: 'video', m4v: 'video', mp3: 'audio', m4a: 'audio', wav: 'audio', ogg: 'audio', pdf: 'pdf',
+  xlsx: 'office', xlsm: 'office', xls: 'office', ods: 'office', docx: 'office', pptx: 'office' }
 // Keep in step with TEXT_SUFFIXES and TEXT_NAMES in media_files.py.
 for (const suffix of ('txt md markdown log json jsonl csv tsv yml yaml toml ini cfg conf py js jsx mjs cjs ts tsx css scss html htm xml svg sh zsh bash '
   + 'sql go rs java kt swift c h cc cpp hpp rb php lua diff patch tf graphql proto vue svelte ipynb lock gitignore dockerignore editorconfig').split(' ')) KINDS[suffix] = 'text'
 const TEXT_NAMES = new Set(['Makefile', 'Dockerfile', 'README', 'LICENSE', 'Procfile', 'Gemfile', 'Justfile', 'CODEOWNERS'])
-// Other types download. A bare name needs one of these extensions, so "Node.js" or "e.g." is not a file; a path with a folder may have any.
+// A bare document or other file name needs one of these extensions, so "Node.js" or "e.g." is not a file; a path with a folder may have any.
 const DOCUMENTS = new Set(('xlsx xls xlsm ods docx doc odt rtf pptx ppt odp key numbers pages epub zip tar gz tgz bz2 xz 7z rar '
   + 'dmg pkg apk ipa heic avif tiff psd sketch fig').split(' '))
 

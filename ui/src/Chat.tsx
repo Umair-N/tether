@@ -30,6 +30,8 @@ import type { Kind } from './MediaLink'
 import { TextViewer } from './TextViewer'
 import { speak, stopSpeaking } from './speech'
 import type { TextFile } from './TextViewer'
+import { OfficeViewer } from './OfficeViewer'
+import type { OfficeFile } from './OfficeViewer'
 import type { ToolSummary } from './api'
 import { StatusStack } from './StatusStack'
 import { PaneTabs, movePill } from './PaneTabs'
@@ -639,6 +641,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
   // A media path the agent named in a reply. Ask the server first, so a refused or missing file shows its reason, not a broken image.
   const [opened, setOpened] = useState<Media | null>(null)
   const [textFile, setTextFile] = useState<TextFile | null>(null)
+  const [officeFile, setOfficeFile] = useState<OfficeFile | null>(null)
   const openMedia = useCallback(async (path: string, kind: Kind, line?: number) => {
     const url = `/mobile/api/file?session=${encodeURIComponent(activePane.id)}&path=${encodeURIComponent(path)}`
     const name = path.split('/').pop() || path
@@ -648,10 +651,11 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
       if (!check.ok) { const body = await check.json().catch(() => null) as { error?: string } | null; setOpened({ name, url, error: body?.error ?? 'Tether cannot open this file.' }); return }
       void check.body?.cancel()
     } catch { setOpened({ name, url, error: `Cannot reach ${host}.` }); return }
-    if (kind === 'file') saveFile(url, name)
+    if (kind === 'office') setOfficeFile({ path, url })
+    else if (kind === 'file') saveFile(url, name)
     else if (kind === 'pdf') window.open(url, '_blank', 'noopener')
     else setOpened({ name: path, url, kind })
-  }, [activePane.id, host, setTextFile, setOpened])
+  }, [activePane.id, host, setTextFile, setOfficeFile, setOpened])
   // Desktop: "Show in Files" opens the explorer at the file's folder with the file selected. A relative path is in the pane's folder.
   const showInFiles = (path: string | null, close: () => void) => {
     if (!path || typeof matchMedia !== 'function' || !matchMedia(WORKSPACE_QUERY).matches) return undefined
@@ -925,5 +929,6 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     </>}
     <ImageViewer image={opened} close={() => setOpened(null)} onShow={showInFiles(opened && !opened.error ? opened.name : null, () => setOpened(null))} />
     <TextViewer file={textFile} close={() => setTextFile(null)} onShow={showInFiles(textFile?.path ?? null, () => setTextFile(null))} />
+    <OfficeViewer file={officeFile} close={() => setOfficeFile(null)} onShow={showInFiles(officeFile?.path ?? null, () => setOfficeFile(null))} />
   </section></FilePane.Provider></MediaOpener.Provider></AssistantRuntimeProvider>
 }

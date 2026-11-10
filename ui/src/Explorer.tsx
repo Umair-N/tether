@@ -13,6 +13,8 @@ import { ImageViewer } from './ImageViewer'
 import type { Media } from './ImageViewer'
 import { TextViewer } from './TextViewer'
 import type { TextFile } from './TextViewer'
+import { OfficeViewer, isOffice } from './OfficeViewer'
+import type { OfficeFile } from './OfficeViewer'
 import { baseName, crumbs, filesUrl, formatModified, formatSize, fullDate, gitText, joinPath, kindLabel, parentOf, readSecrets, shapeOf } from './files'
 import type { FileEntry, FileList, FilePreview, FileSearch, FileStat, PlacesData, SecretsState, Shape, SortKey, ViewMode } from './files'
 import './Explorer.css'
@@ -101,7 +103,7 @@ export function Explorer({ api, panes, pane, target, onTarget, onAddToMessage, o
   const [focusPath, setFocusPath] = useState('')
   const [toast, setToast] = useState('')
   const [reloadTick, setReloadTick] = useState(0)
-  const [full, setFull] = useState<{ media?: Media; text?: TextFile } | null>(null)
+  const [full, setFull] = useState<{ media?: Media; text?: TextFile; office?: OfficeFile } | null>(null)
   const focusFirst = useRef(false)
   const listRef = useRef<HTMLDivElement>(null)
   useEffect(() => { if (!toast) return; const timer = setTimeout(() => setToast(''), 2600); return () => clearTimeout(timer) }, [toast])
@@ -265,7 +267,9 @@ export function Explorer({ api, panes, pane, target, onTarget, onAddToMessage, o
     if (row.dir) { go(row.full); return }
     const shape = shapeOf(row)
     const preview = shownDetail?.path === row.full ? shownDetail.preview : undefined
-    if (row.secret || preview?.kind === 'none') return
+    if (row.secret || shownDetail?.path === row.full && shownDetail.stat?.secret) return
+    if (isOffice(row.name)) { setFull({ office: { path: row.full, url: filesUrl.raw(row.full) } }); return }
+    if (preview?.kind === 'none') return
     if (shape === 'image' || row.kind === 'video' || row.kind === 'audio') setFull({ media: { name: row.name, url: filesUrl.raw(row.full), kind: row.kind === 'video' || row.kind === 'audio' ? row.kind : 'image' } })
     else if (row.kind === 'pdf') window.open(filesUrl.raw(row.full), '_blank', 'noopener')
     else if (preview?.kind === 'text' || row.kind === 'code' || row.kind === 'text') setFull({ text: { path: row.full, url: filesUrl.raw(row.full) } })
@@ -634,6 +638,7 @@ export function Explorer({ api, panes, pane, target, onTarget, onAddToMessage, o
     {toast && <div className="toast app-toast fx-toast" role="status">{toast}</div>}
     <ImageViewer image={full?.media ?? null} close={() => setFull(null)} />
     <TextViewer file={full?.text ?? null} close={() => setFull(null)} />
+    <OfficeViewer file={full?.office ?? null} close={() => setFull(null)} />
     <UploadPanel />
     {/* eslint-disable-next-line react-hooks/refs -- menuItems only stores event handlers; their focus and reveal refs are accessed after a user action. */}
     {menu && <ItemMenu at={menu.at} title={menu.row.name} items={menuItems(menu.row)} onClose={() => setMenu(null)} />}
@@ -670,8 +675,9 @@ function Details({ row, detail, onOpen, onCopy, add }: { row: Row; detail: { sta
   const size = row.dir ? stat?.items != null ? `${stat.items} ${stat.items === 1 ? 'item' : 'items'}` : 'Folder' : formatSize(stat?.size ?? row.size)
   const image = preview?.kind === 'image'
   const media = preview && (preview.kind === 'video' || preview.kind === 'audio' || preview.kind === 'pdf') ? preview : null
-  const canFull = !row.dir && !row.secret && (image || !!media || preview?.kind === 'text')
   const secret = row.secret || stat?.secret
+  const office = !row.dir && !secret && isOffice(row.name)
+  const canFull = !row.dir && !secret && (office || image || !!media || preview?.kind === 'text')
   const gitLine = stat ? stat.git ? gitText(stat.git.state) : 'Not in a repository' : row.git ? gitText(row.git) : '…'
   return <>
     <div className="fx-details-head">
@@ -688,6 +694,7 @@ function Details({ row, detail, onOpen, onCopy, add }: { row: Row; detail: { sta
       : media?.kind === 'video' ? <div className="fx-preview fx-image"><video src={media.url} controls preload="metadata" aria-label={`Preview of ${row.name}`} /></div>
       : media?.kind === 'audio' ? <div className="fx-preview fx-audio"><audio src={media.url} controls preload="metadata" aria-label={`Preview of ${row.name}`} /></div>
       : media ? <div className="fx-preview fx-preview-note">PDF file. Open it in full view to read it.</div>
+      : office ? <div className="fx-preview fx-preview-note">Open in full view to read it.</div>
       : preview.kind === 'none' && <div className="fx-preview fx-preview-note">{NO_PREVIEW[preview.reason] ?? preview.reason}</div>)}
     {detail?.error && <p className="fx-preview-note error" role="alert">{detail.error}</p>}
     <dl className="fx-facts">

@@ -1100,6 +1100,26 @@ button.live-chip:active { background: var(--line); }
 .view-switch button:hover { color: var(--text); }
 .view-switch button[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: 0 0 0 1px var(--line), 0 1px 2px #0000001f; }
 .view-switch button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* Office viewer: sheet tabs, a spreadsheet grid with sticky headers, Word pages and slides on the page background. */
+.office-viewer .text-viewer-head a.icon-button { color: inherit; }
+.office-tabs { display: flex; gap: 2px; padding: 6px 12px; overflow-x: auto; border-bottom: 1px solid var(--line); scrollbar-width: none; flex-shrink: 0; }
+.office-tabs button { height: var(--control-sm); padding: 0 12px; border-radius: var(--radius-sm); color: var(--muted); font-size: 13px; font-weight: 500; white-space: nowrap; }
+.office-tabs button:hover { color: var(--text); background: var(--hover); }
+.office-tabs button[aria-selected="true"] { background: var(--surface); color: var(--text); box-shadow: 0 0 0 1px var(--line); }
+.office-tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.office-sheet table { border-collapse: separate; border-spacing: 0; font-size: 13px; font-variant-numeric: tabular-nums; -webkit-user-select: text; user-select: text; }
+.office-sheet th, .office-sheet td { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 4px 8px; white-space: pre; max-width: 320px; overflow: hidden; text-overflow: ellipsis; text-align: left; vertical-align: top; }
+.office-sheet td { background: var(--surface); }
+.office-sheet thead th { position: sticky; top: 0; z-index: 2; background: var(--bg); color: var(--muted); font-weight: 500; text-align: center; }
+.office-sheet tbody th { position: sticky; left: 0; z-index: 1; background: var(--bg); color: var(--muted); font-weight: 400; text-align: right; min-width: 3ch; }
+.office-sheet thead th:first-child { left: 0; z-index: 3; }
+.office-doc { background: var(--bg); }
+.office-doc .docx-wrapper { background: transparent; padding: 24px 16px 48px; }
+.office-doc .docx-wrapper > section.docx { box-shadow: 0 1px 3px #00000026; margin-bottom: 24px; }
+.office-doc.narrow .docx-wrapper { padding: 12px 8px 32px; }
+.office-doc.narrow .docx-wrapper > section.docx { padding: 20px 16px !important; width: auto !important; min-height: 0 !important; }
+.office-slides { overflow-x: hidden; }
+.office-slides-stage { width: min(1100px, calc(100% - 32px)); margin: 16px auto; }
 .text-viewer-doc { max-width: 760px; margin: 0 auto; padding: 20px 20px 48px; font-family: ui-serif, Georgia, serif; font-size: 16px; line-height: 1.6; overflow-wrap: anywhere; -webkit-user-select: text; user-select: text; }
 .text-viewer-doc > :first-child { margin-top: 0; }
 .text-viewer-doc p { margin: 0 0 14px; }

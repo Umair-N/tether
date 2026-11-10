@@ -5,6 +5,8 @@ import type { Media } from './ImageViewer'
 import { mediaPath, saveFile } from './MediaLink'
 import { TextViewer } from './TextViewer'
 import type { TextFile } from './TextViewer'
+import { OfficeViewer } from './OfficeViewer'
+import type { OfficeFile } from './OfficeViewer'
 import { useHost } from './host'
 
 export type { PanelProps } from './panels'
@@ -36,11 +38,12 @@ export function usePanelPoll(load: (signal: AbortSignal) => Promise<void>, ms: n
 /** The query that names a panel's folder: the folder when the frame passes one, and the pane so the server can fall back to the tab's folder. */
 export const folderQuery = (pane: Pane, folder: string | null) => `session=${encodeURIComponent(pane.id)}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}`
 
-/** Open a file the way chat does: text in the text viewer, media in the media viewer, PDFs in a new tab. GET /mobile/api/file decides what may open. */
+/** Open a file the way chat does: text and Office files in their viewers, media in the media viewer, PDFs in a new tab. GET /mobile/api/file decides what may open. */
 export function useFileOpener(pane: Pane) {
   const host = useHost()
   const [media, setMedia] = useState<Media | null>(null)
   const [text, setText] = useState<TextFile | null>(null)
+  const [office, setOffice] = useState<OfficeFile | null>(null)
   const open = useCallback(async (path: string) => {
     const url = `/mobile/api/file?session=${encodeURIComponent(pane.id)}&path=${encodeURIComponent(path)}`
     const name = path.split('/').pop() || path
@@ -52,13 +55,15 @@ export function useFileOpener(pane: Pane) {
       if (!check.ok) { const body = await check.json().catch(() => null) as { error?: string } | null; setMedia({ name, url, error: body?.error ?? 'Tether cannot open this file.' }); return }
       void check.body?.cancel()
     } catch { setMedia({ name, url, error: `Cannot reach ${host}.` }); return }
-    if (kind === 'file') saveFile(url, name)
+    if (kind === 'office') setOffice({ path, url })
+    else if (kind === 'file') saveFile(url, name)
     else if (kind === 'pdf') window.open(url, '_blank', 'noopener')
     else setMedia({ name, url, kind })
   }, [pane.id, host])
   const viewers = <>
     <ImageViewer image={media} close={() => setMedia(null)} />
     <TextViewer file={text} close={() => setText(null)} />
+    <OfficeViewer file={office} close={() => setOffice(null)} />
   </>
   return [open, viewers] as const
 }

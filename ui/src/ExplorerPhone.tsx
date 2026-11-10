@@ -9,6 +9,8 @@ import type { FileEntry, FileList, FilePreview, FileSearch, SecretsState, Shape,
 import { clearUploads, setUploadDone, startUploads, stopUploads, useUploads } from './fileWrites'
 import './ExplorerPhone.css'
 import { useHost } from './host'
+import { OfficeViewer, isOffice } from './OfficeViewer'
+import type { OfficeFile } from './OfficeViewer'
 
 // The phone Files screen (slice 4). Layout from ExplorerPhone.dc.html: path chips, a sort cycle, search, Select mode with
 // an action bar, a + sheet, a ⋯ sheet per row and a full-screen preview. Writes use POST /mobile/api/files/* (API.md).
@@ -521,6 +523,7 @@ const NO_PREVIEW: Record<string, string> = {
 /** The full-screen preview: text with line numbers, an image or player, or a note. "Add to chat" sits at the bottom. */
 function Preview({ api, row, addLabel, onBack, onMore, onAdd, onDownload }: { api: Api; row: Row; addLabel: string | null; onBack: () => void; onMore: () => void; onAdd: () => void; onDownload: () => void }) {
   const [state, setState] = useState<{ path: string; data?: FilePreview; error?: string } | null>(null)
+  const [office, setOffice] = useState<OfficeFile | null>(null)
   useEffect(() => {
     const controller = new AbortController()
     api<FilePreview>(filesUrl.preview(row.full), undefined, controller.signal).then(data => setState({ path: row.full, data }), failure => { if (!controller.signal.aborted) setState({ path: row.full, error: errorText(failure) }) })
@@ -531,7 +534,7 @@ function Preview({ api, row, addLabel, onBack, onMore, onAdd, onDownload }: { ap
   const current = state?.path === row.full ? state : null
   const data = current?.data
   const locked = !!row.secret || inSecret(row.full)
-  return <div className="xp-preview" onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); onBack() } }}>
+  return <><div className="xp-preview" onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); onBack() } }}>
     <header className="xp-head xp-preview-head">
       <button type="button" className="icon-button" aria-label="Back to folder" onClick={onBack}><ChevronLeft size={24} /></button>
       <div className="xp-pick-title"><h1>{row.name}</h1><span>{[kindLabel(row), formatSize(row.size), formatModified(row.modified)].join(' · ')}</span></div>
@@ -540,6 +543,7 @@ function Preview({ api, row, addLabel, onBack, onMore, onAdd, onDownload }: { ap
     <div className="xp-preview-body" ref={body} tabIndex={-1} aria-label={`Preview of ${row.name}`} aria-busy={!current || undefined}>
       {current?.error ? <p className="xp-note" role="alert">{current.error}</p>
         : !data ? <p className="xp-note">Loading preview…</p>
+        : !locked && !row.dir && isOffice(row.name) ? <p className="xp-note"><button type="button" className="secondary" onClick={() => setOffice({ path: row.full, url: filesUrl.raw(row.full) })}>Open in viewer</button></p>
         : data.kind === 'text' ? <div className="xp-code">
             {data.lines.length ? data.lines.map((line, at) => <div key={at} className="xp-line"><span className="xp-ln" aria-hidden="true">{at + 1}</span><span className="xp-lt">{line || ' '}</span></div>)
               : <p className="xp-note">This file is empty.</p>}
@@ -556,4 +560,6 @@ function Preview({ api, row, addLabel, onBack, onMore, onAdd, onDownload }: { ap
       <button type="button" className="secondary xp-square" aria-label={`Download ${row.name}`} onClick={onDownload}><Download size={20} /></button>
     </div> : <p className="xp-preview-foot hint">Secret file: read only. Download and “Add to chat” stay off.</p>}
   </div>
+    <OfficeViewer file={!locked && office?.path === row.full ? office : null} close={() => setOffice(null)} />
+  </>
 }
