@@ -1,0 +1,204 @@
+[
+  {
+    "id": "classic",
+    "name": "Classic",
+    "description": "Today\u2019s Tether: the sessions list, the chat and the tabs.",
+    "panels": [
+      "activity",
+      "sessions",
+      "chat",
+      "agents"
+    ],
+    "grid": {
+      "columns": [
+        {
+          "main": "activity"
+        },
+        {
+          "main": "sessions",
+          "width": 248
+        },
+        {
+          "main": "chat"
+        }
+      ]
+    },
+    "style": {
+      "radius": 0,
+      "gap": 0,
+      "surface": "flat"
+    },
+    "theme": null
+  },
+  {
+    "id": "status",
+    "name": "Status column",
+    "description": "A right column shows every agent, grouped by what it needs.",
+    "panels": [
+      "sessions",
+      "chat",
+      "agents",
+      "status"
+    ],
+    "grid": {
+      "columns": [
+        {
+          "main": "sessions",
+          "width": 220
+        },
+        {
+          "main": "chat"
+        },
+        {
+          "main": "status",
+          "width": 230
+        }
+      ]
+    },
+    "style": {
+      "radius": 0,
+      "gap": 0,
+      "surface": "flat"
+    },
+    "theme": null
+  },
+  {
+    "id": "islands",
+    "name": "Islands",
+    "description": "Floating cards on a night stage. What waits on you sits over the sessions.",
+    "panels": [
+      "waiting",
+      "sessions",
+      "chat",
+      "agents"
+    ],
+    "grid": {
+      "columns": [
+        {
+          "top": "waiting",
+          "main": "sessions",
+          "width": 250
+        },
+        {
+          "main": "chat"
+        }
+      ]
+    },
+    "style": {
+      "radius": 16,
+      "gap": 10,
+      "surface": "flat"
+    },
+    "themeName": "Night islands",
+    "theme": {
+      "bg": "#0b0a1a",
+      "sidebar": "#16132e",
+      "surface": "#181434",
+      "bubble": "#221d47",
+      "text": "#ecebff",
+      "muted": "#a19bd0",
+      "line": "#2e2862",
+      "hover": "#2a2458",
+      "accent": "#a78bfa",
+      "accentText": "#120d2b",
+      "attention": "#fbbf24",
+      "done": "#4ade80",
+      "pin": "#7dd3fc",
+      "error": "#fb7185"
+    }
+  },
+  {
+    "id": "vscode",
+    "name": "VS Code",
+    "description": "An icon bar, the sessions list, tabs over the chat, and the waiting queue as a bottom panel.",
+    "panels": [
+      "activity",
+      "sessions",
+      "chat",
+      "agents",
+      "waiting"
+    ],
+    "grid": {
+      "columns": [
+        {
+          "main": "activity"
+        },
+        {
+          "main": "sessions",
+          "width": 230
+        },
+        {
+          "main": "chat",
+          "bottom": "waiting"
+        }
+      ]
+    },
+    "style": {
+      "radius": 0,
+      "gap": 0,
+      "surface": "flat"
+    },
+    "themeName": "Dark modern",
+    "theme": {
+      "bg": "#1f1f1f",
+      "sidebar": "#181818",
+      "surface": "#1f1f1f",
+      "bubble": "#2b2b2b",
+      "text": "#cccccc",
+      "muted": "#9d9d9d",
+      "line": "#2b2b2b",
+      "hover": "#2a2d2e",
+      "accent": "#0078d4",
+      "accentText": "#ffffff",
+      "attention": "#cca700",
+      "done": "#2ea043",
+      "pin": "#4daafc",
+      "error": "#f48771"
+    }
+  },
+  {
+    "id": "zed",
+    "name": "Zed",
+    "description": "The chat sits in the middle with space around it. The sidebar stays hidden until you show it (\u2318B).",
+    "panels": [
+      "sessions",
+      "chat",
+      "agents"
+    ],
+    "grid": {
+      "columns": [
+        {
+          "main": "sessions",
+          "width": 220
+        },
+        {
+          "main": "chat"
+        }
+      ],
+      "chatWidth": 720,
+      "sessionsClosed": true
+    },
+    "style": {
+      "radius": 8,
+      "gap": 0,
+      "surface": "flat"
+    },
+    "themeName": "Paper",
+    "theme": {
+      "bg": "#fafaf8",
+      "sidebar": "#f1f0ec",
+      "surface": "#fafaf8",
+      "bubble": "#ecebe6",
+      "text": "#1f1f1c",
+      "muted": "#6b6a64",
+      "line": "#e2e0da",
+      "hover": "#eceae4",
+      "accent": "#3a6ee8",
+      "accentText": "#ffffff",
+      "attention": "#b26b00",
+      "done": "#2f8a4c",
+      "pin": "#3a6ee8",
+      "error": "#b3261e"
+    }
+  }
+]

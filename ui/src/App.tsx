@@ -9,7 +9,7 @@ import type { Anchor } from './hooks'
 import { setPlace, setPlaceHandler } from './backNav'
 import { usePrefs } from './prefs'
 import { applyScheme } from './schemes'
-import { DEFAULT_LOOK, type PanelName, applyLayoutTheme, gridStyle, hasPanel as layoutHas, lookKey, lookLayout, themeMode } from './layouts'
+import { DEFAULT_LOOK, type PanelName, applyLayoutTheme, gridStyle, hasPanel as layoutHas, lookKey, lookLayout, themeMode, variantAttrs } from './layouts'
 import { StatusColumn, WaitingPanel } from './LayoutPanels'
 import './layouts.css'
 import './glass.css'
@@ -126,10 +126,13 @@ function App() {
     update(current => ({ seen: { ...current.seen, ...Object.fromEntries(ids.map(id => [id, now])) } }))
   }, [update])
   // A layout with its own colours also sets light or dark to match them (layouts.ts).
+  const [wide, setWide] = useState(() => typeof matchMedia === 'function' && matchMedia(WORKSPACE_QUERY).matches)
   const look = prefs.look ?? DEFAULT_LOOK
   const lookShown = lookLayout(look)
-  const lookTheme = JSON.stringify(lookShown.theme)
-  const themeShown = lookShown.theme ? themeMode(lookShown.theme) : prefs.theme
+  const lookKeep = !wide && lookShown.phone === 'keep'
+  const deviceLook = lookKeep ? (prefs.myLook ?? DEFAULT_LOOK) : look
+  const lookTheme = JSON.stringify(lookKeep ? null : lookShown.theme)
+  const themeShown = !lookKeep && lookShown.theme ? themeMode(lookShown.theme) : prefs.theme
   useEffect(() => {
     const root = document.documentElement
     if (themeShown === 'system') delete root.dataset.theme; else root.dataset.theme = themeShown
@@ -177,7 +180,6 @@ function App() {
     })
   }, [data, orderedSessions, pane, panes, prefs.selected, update])
   // Desktop workspace: on only at desktop width with a mouse or trackpad. The phone keeps one pane.
-  const [wide, setWide] = useState(() => typeof matchMedia === 'function' && matchMedia(WORKSPACE_QUERY).matches)
   useEffect(() => {
     const query = matchMedia(WORKSPACE_QUERY)
     const change = () => setWide(query.matches)
@@ -726,24 +728,25 @@ function App() {
   }
   // Layouts (layouts.ts, layouts.css): the grid shows on the wide workspace screen only. Home, Files, Share and the
   // phone keep today's arrangement and take only the colours and the Style. Classic adds no attribute and no style.
-  const lookGrid = lookShown.id !== 'classic' && !!view && !home && !files && !(wide && share)
+  const lookGrid = !lookKeep && lookShown.id !== 'classic' && !!view && !home && !files && !(wide && share)
   // Panel sizes and closed panels (PanelHandles.tsx), per layout on this device. Only the wide workspace uses them.
   const panelsOn = wide && !!view && !home && !files && !share
   const panelSizes = panelsOn ? sizeVars(prefs.panelSizes[lookId]) : {}
   const panelsClosed = lookGrid ? (prefs.panelsClosed[lookId] ?? []).filter(name => layoutHas(lookShown, name as PanelName)) : []
   const showPanel = (name: PanelName) => lookGrid && layoutHas(lookShown, name) && !panelsClosed.includes(name)
-  const lookStyle = lookShown.id === 'classic' ? (Object.keys(panelSizes).length ? panelSizes as CSSProperties : undefined) : {
+  const lookStyle = lookKeep || lookShown.id === 'classic' ? (Object.keys(panelSizes).length ? panelSizes as CSSProperties : undefined) : {
     '--l-radius': `${lookShown.style.radius}px`, '--l-gap': `${lookShown.style.gap}px`, ...lookShown.grid.chatWidth ? { '--l-chat': `${lookShown.grid.chatWidth}px` } : {}, ...panelSizes,
     ...lookGrid ? gridStyle(lookShown, { rail: wide, sessions: desk.sidebar && layoutHas(lookShown, 'sessions'), inbox: desk.inbox, closed: panelsClosed }) : {},
   } as CSSProperties
   const lookAttrs = {
+    ...variantAttrs(lookKeep ? { ...lookShown, variants: undefined } : lookShown),
     'data-layout': lookShown.id === 'classic' || !wide ? undefined : lookId.startsWith('custom:') ? 'custom' : lookShown.id,
     'data-grid': lookGrid ? '' : undefined, 'data-gap': lookGrid && lookShown.style.gap > 0 ? '' : undefined,
     'data-tabs': lookGrid && !layoutHas(lookShown, 'agents') ? 'off' : undefined, 'data-centre': lookGrid && lookShown.grid.chatWidth ? '' : undefined,
     'data-activity': lookGrid && layoutHas(lookShown, 'activity') ? '' : undefined,
     'data-sessions': lookGrid && !layoutHas(lookShown, 'sessions') ? 'off' : undefined,
     'data-waiting': lookGrid && layoutHas(lookShown, 'waiting') ? '' : undefined,
-    'data-surface': look.surface === 'glass' ? 'glass' : undefined, 'data-backdrop': look.surface === 'glass' ? (['graphite', 'dusk'].includes(look.backdrop) ? look.backdrop : 'ember') : undefined,
+    'data-surface': deviceLook.surface === 'glass' ? 'glass' : undefined, 'data-backdrop': deviceLook.surface === 'glass' ? (['graphite', 'dusk'].includes(deviceLook.backdrop) ? deviceLook.backdrop : 'ember') : undefined,
   }
   if (unauthorized) return <main className="signin"><Terminal size={32} strokeWidth={1.4} /><h1>Sign in</h1><p>Sign in to access your terminal sessions.</p><a className="primary" href="/mobile/login?next=/chat/">Sign in</a></main>
   return <WordsContext.Provider value={words}><main className={['app-shell', (view || (wide && home)) && !desk.sidebar && 'no-sidebar', wide && 'with-rail', files && 'screen-files', wide && share && 'screen-share', home && wide && 'screen-home', home && !wide && 'phone-home', !wide && 'phone-tabs', phoneFiles && 'phone-files', !wide && share && 'phone-share'].filter(Boolean).join(' ')} style={lookStyle} {...lookAttrs}>{wide && <Rail screen={home ? 'home' : screen} waiting={waitingCount} onScreen={chooseScreen} onLive={openLive} />}<aside className="sidebar"><Sidebar {...sidebarProps} /></aside><dialog {...drawerModal} className="drawer" aria-label="Sessions" onClick={event => { const box = event.currentTarget.getBoundingClientRect(); if (event.target === event.currentTarget && (event.clientX > box.right || event.clientX < box.left || event.clientY < box.top || event.clientY > box.bottom)) setDrawer(false) }} onTouchStart={event => { drawerTouch.current = (event.target as Element).closest('.swipe-row') ? null : { x: event.touches[0].clientX, y: event.touches[0].clientY } }} onTouchEnd={event => { const start = drawerTouch.current; drawerTouch.current = null; if (!start) return; const dx = event.changedTouches[0].clientX - start.x, dy = event.changedTouches[0].clientY - start.y; if (dx < -60 && Math.abs(dy) < Math.abs(dx) * 0.6) setDrawer(false) }}>{drawer && <Sidebar {...sidebarProps} onClose={() => setDrawer(false)} />}</dialog>

@@ -72,12 +72,12 @@
   {
     "agent": "claude",
     "note": "Run /terminal-setup to enable Shift+Enter for new lines",
-    "command": "/terminal-setup"
+    "command": null
   },
   {
     "agent": "claude",
     "note": "To enable Option as Meta, run /terminal-setup",
-    "command": "/terminal-setup"
+    "command": null
   },
   {
     "agent": "claude",

@@ -11,7 +11,7 @@
     ]
   },
   {
-    "pattern": "^(?!.*\\/[a-z][a-z-]*.*\\/[a-z]).*?(?:^[\u2714\u2713]?\\s*Update installed(?:[^/\\n]*)[\u00b7] (?:/restart to apply|Restart to apply|Restart to update)$)",
+    "pattern": "^(?!.*\\/[a-z][a-z-]*.*\\/[a-z]).*?(?:^[✔✓]?\\s*Update installed(?:[^/\\n]*)[·] (?:/restart to apply|Restart to apply|Restart to update)$)",
     "flags": "i",
     "label": "Restart",
     "command": "/restart",
@@ -52,21 +52,11 @@
     ]
   },
   {
-    "pattern": "^(?!.*\\/[a-z][a-z-]*.*\\/[a-z]).*?(?:(?:^|[ .\u00b7])(?:run /fast off|Run /fast off to change this)\\.?$)",
+    "pattern": "^(?!.*\\/[a-z][a-z-]*.*\\/[a-z]).*?(?:(?:^|[ .·])(?:run /fast off|Run /fast off to change this)\\.?$)",
     "flags": "i",
     "label": "Turn fast off",
     "command": "/fast off",
     "hint": "Turn off fast mode so auto mode can work.",
-    "agents": [
-      "claude"
-    ]
-  },
-  {
-    "pattern": "^(?!.*\\/[a-z][a-z-]*.*\\/[a-z]).*?(?:(?:^|[ ,])(?:run /terminal-setup(?: to enable[^/]*|$)|/terminal-setup to use [^/]+$))",
-    "flags": "i",
-    "label": "Set up terminal",
-    "command": "/terminal-setup",
-    "hint": "Open terminal setup.",
     "agents": [
       "claude"
     ]

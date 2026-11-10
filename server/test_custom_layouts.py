@@ -2,6 +2,8 @@ import json
 import os
 import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 import custom_layouts as cl
 
@@ -101,6 +103,102 @@ class Scan(unittest.TestCase):
 
     def test_folder_label_hides_the_home_path(self):
         self.assertEqual(cl.folder_label(cl.paths.HOME / '.config/x'), '~/.config/x')
+
+
+class VersionTwo(unittest.TestCase):
+    def test_optional_keys_default_without_changing_old_files(self):
+        clean = cl.validate(GOOD, 'cockpit')
+        self.assertEqual((clean['variants'], clean['phone'], clean['manifest']), ({}, 'theme', 1))
+        self.assertNotIn('variants', GOOD)
+
+    def test_every_manifest_variant_option_is_accepted(self):
+        for key, spec in cl.MANIFEST['variants'].items():
+            for value in spec['options']:
+                with self.subTest(key=key, value=value):
+                    self.assertEqual(cl.validate(changed(variants={key: value}, phone='keep', manifest=2), 'cockpit')['variants'], {key: value})
+
+    def test_unknown_keys_values_and_non_whole_versions_are_refused(self):
+        for parts in ({'variants': {'nope': 'list'}}, {'variants': {'sessions': 'nope'}},
+                      {'variants': []}, {'variants': None}, {'phone': 'nope'}, {'phone': None},
+                      {'manifest': True}, {'manifest': 1.5}, {'manifest': '1'}, {'manifest': 0}):
+            with self.subTest(parts=parts), self.assertRaises(cl.Bad):
+                cl.validate(changed(**parts), 'cockpit')
+
+
+class SaveDelete(unittest.TestCase):
+    def setUp(self):
+        folder = self.enterContext(tempfile.TemporaryDirectory())
+        self.folder = Path(folder) / 'layouts'
+        self.enterContext(patch.dict(os.environ, {'TETHER_LAYOUTS': str(self.folder)}))
+        # Read the real env override without reloading paths for unrelated tests.
+        import runpy
+        resolved = runpy.run_path(str(Path(cl.paths.__file__)))['LAYOUTS']
+        self.enterContext(patch.object(cl.paths, 'LAYOUTS', resolved))
+        cl._last_good.clear()
+
+    def test_save_scan_overwrite_and_delete(self):
+        result = cl.save(changed(id='cockpit'))
+        self.assertEqual(result['file'], 'cockpit.json')
+        self.assertEqual(json.loads((self.folder / result['file']).read_text()), result['layout'])
+        self.assertEqual(cl.scan()['layouts'][0]['name'], 'Cockpit')
+        with self.assertRaises(cl.Conflict):
+            cl.save(changed(id='cockpit', name='Replacement'))
+        self.assertEqual(cl.save(changed(id='cockpit', name='Replacement'), True)['layout']['name'], 'Replacement')
+        self.assertEqual(cl.delete('cockpit'), {'ok': True})
+        self.assertEqual(cl.scan()['layouts'], [])
+        self.assertEqual(list(self.folder.iterdir()), [])
+
+    def test_bad_ids_reserved_ids_and_overwrite_types_are_refused(self):
+        for value in ('../outside', '/absolute', 'classic', 'mine', '', None, 'a.json'):
+            with self.subTest(value=value), self.assertRaises(cl.Bad):
+                cl.delete(value)
+            with self.subTest(save=value), self.assertRaises(cl.Bad):
+                cl.save(changed(id=value))
+        with self.assertRaises(cl.Bad):
+            cl.save(changed(id='cockpit'), 'yes')
+        with self.assertRaises(cl.Missing):
+            cl.delete('missing')
+        self.assertFalse(self.folder.exists())
+
+    def test_limits_and_failed_replace_leave_existing_data_intact(self):
+        cl.save(changed(id='cockpit'))
+        target = self.folder / 'cockpit.json'
+        original = target.read_bytes()
+        with patch.object(cl, 'MAX_FILES', 1):
+            with self.assertRaisesRegex(cl.Bad, 'already has'):
+                cl.save(changed(id='other'))
+            cl.save(changed(id='cockpit'), True)
+        with patch.object(cl, 'MAX_BYTES', 10):
+            with self.assertRaisesRegex(cl.Bad, '16 KB'):
+                cl.save(changed(id='cockpit'), True)
+        with patch.object(cl.os, 'replace', side_effect=OSError('failed')):
+            with self.assertRaises(OSError):
+                cl.save(changed(id='cockpit', name='Replacement'), True)
+        self.assertEqual(target.read_bytes(), original)
+        self.assertEqual([item.name for item in self.folder.iterdir()], ['cockpit.json'])
+
+    def test_existing_id_in_an_older_filename_requires_overwrite(self):
+        self.folder.mkdir()
+        previous = self.folder / 'Old cockpit.json'
+        previous.write_text(json.dumps(changed(id='cockpit')))
+        with self.assertRaises(cl.Conflict):
+            cl.save(changed(id='cockpit'))
+        with patch.object(cl, 'MAX_FILES', 1):
+            result = cl.save(changed(id='cockpit', name='Replacement'), True)
+        self.assertEqual(result['file'], 'cockpit.json')
+        self.assertFalse(previous.exists())
+        self.assertEqual([item['name'] for item in cl.scan()['layouts']], ['Replacement'])
+
+    def test_symlinks_are_never_written_or_deleted(self):
+        self.folder.mkdir()
+        outside = self.folder.parent / 'outside.json'
+        outside.write_text('leave this')
+        (self.folder / 'cockpit.json').symlink_to(outside)
+        with self.assertRaises(cl.Bad):
+            cl.save(changed(id='cockpit'), True)
+        with self.assertRaises(cl.Bad):
+            cl.delete('cockpit')
+        self.assertEqual(outside.read_text(), 'leave this')
 
 
 if __name__ == '__main__':
