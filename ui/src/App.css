@@ -1,4 +1,4 @@
-.app-shell { display: flex; position: fixed; inset: 0; overflow: hidden; }
+.app-shell { display: flex; position: fixed; inset: 0; overflow: clip; }  /* clip, not hidden: a phone keyboard can scroll a hidden box and leave a gap above the tab bar */
 .sidebar { display: none; }
 /* Sidebar: exact values from the desktop prototype (Main.dc.html). Touch screens keep 44px rows at the end. */
 .sidebar-inner { display: flex; flex-direction: column; height: 100%; min-height: 0; }
