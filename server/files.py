@@ -12,15 +12,18 @@ to the freedesktop trash (~/.local/share/Trash) with a .trashinfo file; nothing 
 """
 import codecs
 import datetime
+import hashlib
 import json
 import mimetypes
 import os
 import pwd
 import re
+import secrets
 import shutil
 import stat
 import threading
 import time
+import weakref
 import zipfile
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlsplit
@@ -70,6 +73,8 @@ INLINE_TYPES = {'image', 'video', 'audio', 'pdf'}
 clock = time.time  # tests replace this to move time
 _window = {'until': 0.0}
 _window_lock = threading.Lock()
+_text_locks = weakref.WeakValueDictionary()
+_text_locks_guard = threading.Lock()
 
 
 class FilesError(ValueError):
@@ -801,6 +806,87 @@ def write_all(fd, data):
     view = memoryview(data)
     while view:
         view = view[os.write(fd, view):]
+
+
+def replace_contents(item, data):
+    """Install bytes atomically through the checked folder descriptor."""
+    name = '.' + item.name + '.tether-' + secrets.token_hex(8)
+    fd = os.open(name, NEW_FILE_FLAGS, 0o600, dir_fd=item.folder)
+    try:
+        os.fchmod(fd, stat.S_IMODE(item.st.st_mode))
+        write_all(fd, data)
+        os.fsync(fd)
+        # Catch a target swap during the write, before publishing the new file.
+        current = os.stat(item.name, dir_fd=item.folder, follow_symlinks=False)
+        if (current.st_dev, current.st_ino, current.st_mtime_ns, current.st_size) != (
+                item.st.st_dev, item.st.st_ino, item.st.st_mtime_ns, item.st.st_size):
+            raise changed()
+        os.rename(name, item.name, src_dir_fd=item.folder, dst_dir_fd=item.folder)
+        return os.fstat(fd)
+    finally:
+        os.close(fd)
+        try:
+            os.unlink(name, dir_fd=item.folder)
+        except FileNotFoundError:
+            pass
+
+
+def _text_lock(path):
+    with _text_locks_guard:
+        lock = _text_locks.get(path)
+        if lock is None:
+            lock = threading.Lock()
+            _text_locks[path] = lock
+        return lock
+
+
+def save_text(path, text, base, root=None):
+    """Save UTF-8 text only when the file still matches the browser's base hash."""
+    if not isinstance(text, str) or not isinstance(base, str) or not re.fullmatch(r'[0-9a-f]{64}', base):
+        raise invalid('Send text and a lowercase SHA-256 base.')
+    try:
+        data = text.encode('utf-8')
+    except UnicodeEncodeError as exc:
+        raise invalid('Send UTF-8 text.') from exc
+    if len(data) > media_files.TEXT_LIMIT:
+        raise FilesError(413, 'too-large', 'Tether edits text up to 2 MB.')
+    root = files_root(root)
+    lex = lexical(path, root)
+    try:
+        parent = lex.parent.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise gone() from exc
+    try:
+        with _text_lock(parent / lex.name):
+            item = write_item(path, root)
+            try:
+                if not stat.S_ISREG(item.st.st_mode):
+                    raise invalid('That is not a file.')
+                if item.real.suffix.lower() not in media_files.TEXT_SUFFIXES and item.name not in media_files.TEXT_NAMES:
+                    raise invalid('Tether edits only text files.')
+                fd = os.open(item.name, READ_FLAGS, dir_fd=item.folder)
+                with os.fdopen(fd, 'rb') as stream:
+                    current = os.fstat(stream.fileno())
+                    if (current.st_dev, current.st_ino, current.st_mtime_ns, current.st_size) != (
+                            item.st.st_dev, item.st.st_ino, item.st.st_mtime_ns, item.st.st_size):
+                        raise changed()
+                    old = stream.read()
+                try:
+                    old.decode('utf-8')
+                except UnicodeDecodeError as exc:
+                    raise FilesError(409, 'binary', 'Tether edits only UTF-8 text files.') from exc
+                if hashlib.sha256(old).hexdigest() != base:
+                    raise changed()
+                replace_contents(item, data)
+            finally:
+                item.close()
+    except FilesError as exc:
+        if exc.code == 'changed':
+            raise FilesError(409, 'changed', 'The file changed on disk. Reload it, then edit again.') from exc
+        raise
+    except OSError as exc:
+        raise disk_error(exc) from exc
+    return {'base': hashlib.sha256(data).hexdigest()}
 
 
 def disk_error(exc):

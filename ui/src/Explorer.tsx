@@ -272,7 +272,7 @@ export function Explorer({ api, panes, pane, target, onTarget, onAddToMessage, o
     if (preview?.kind === 'none') return
     if (shape === 'image' || row.kind === 'video' || row.kind === 'audio') setFull({ media: { name: row.name, url: filesUrl.raw(row.full), kind: row.kind === 'video' || row.kind === 'audio' ? row.kind : 'image' } })
     else if (row.kind === 'pdf') window.open(filesUrl.raw(row.full), '_blank', 'noopener')
-    else if (preview?.kind === 'text' || row.kind === 'code' || row.kind === 'text') setFull({ text: { path: row.full, url: filesUrl.raw(row.full) } })
+    else if (preview?.kind === 'text' || row.kind === 'code' || row.kind === 'text') setFull({ text: { path: row.full, url: filesUrl.raw(row.full), ...(current?.data && 'repo' in current.data ? { repo: !!current.data.repo } : {}) } })
   }
   const activate = (row: Row, keyboard = false) => {
     if (row.dir) { if (keyboard) focusFirst.current = true; go(row.full) }

@@ -1,0 +1,85 @@
+/* Text and Markdown editing in the text viewer: the edit bar, CodeMirror's colours and the Tiptap toolbar. */
+:root {
+  --cm-active: #00000008;
+  --cm-selection: color-mix(in srgb, var(--accent) 22%, transparent);
+  --cm-match: color-mix(in srgb, var(--attention) 18%, transparent);
+  --cm-keyword: #8a3f8f;
+  --cm-string: #3f7a3a;
+  --cm-number: #a0522d;
+  --cm-function: #2d5f9a;
+  --cm-type: #8c6b22;
+  --cm-property: #2f6f72;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --cm-active: #ffffff0a;
+    --cm-keyword: #d49be0;
+    --cm-string: #a5cf8f;
+    --cm-number: #e8a679;
+    --cm-function: #8fb8e8;
+    --cm-type: #d9b761;
+    --cm-property: #7fc8c4;
+  }
+}
+:root[data-theme="dark"] {
+  --cm-active: #ffffff0a;
+  --cm-keyword: #d49be0;
+  --cm-string: #a5cf8f;
+  --cm-number: #e8a679;
+  --cm-function: #8fb8e8;
+  --cm-type: #d9b761;
+  --cm-property: #7fc8c4;
+}
+
+/* The body scrolls inside each editor, so the toolbar and the edit bar stay in view. */
+.text-viewer.editing .text-viewer-body { overflow: hidden; display: flex; flex-direction: column; padding-bottom: 0; }
+.text-viewer.editing .text-viewer-head .primary.sm { min-width: 64px; }
+
+.text-edit-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 12px 8px 18px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.text-edit-hint { margin: 0; color: var(--muted); font-size: 13px; }
+.text-edit-note { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; color: var(--error); font-size: 13px; }
+.text-edit-note p { margin: 0; }
+
+.source-editor { flex: 1; min-height: 0; }
+.source-editor .cm-editor { height: 100%; }
+
+.rich-editor { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.rich-toolbar { position: relative; display: flex; align-items: center; gap: 2px; padding: 6px 12px; border-bottom: 1px solid var(--line); background: var(--surface); overflow-x: auto; scrollbar-width: none; }
+.rich-toolbar::-webkit-scrollbar { display: none; }
+.rich-gap { flex: none; width: 1px; height: 20px; margin: 0 6px; background: var(--line); }
+.rich-tool { flex: none; display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius-sm); color: var(--muted); }
+.rich-tool:not(:disabled):hover { background: var(--hover); color: var(--text); }
+.rich-tool[aria-pressed="true"] { background: var(--hover); color: var(--text); box-shadow: inset 0 0 0 1px var(--line); }
+.rich-tool:disabled { opacity: .4; }
+.rich-tool:focus-visible, .rich-block:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.rich-block { flex: none; height: 32px; padding: 0 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--bg); color: var(--text); font: inherit; font-size: 13px; }
+
+.rich-link { position: absolute; z-index: 5; top: calc(100% + 6px); right: 12px; width: min(360px, calc(100vw - 24px)); display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: 0 8px 24px #00000024; }
+.rich-toolbar:has(.rich-link) { overflow: visible; }
+.rich-link label { font-size: 13px; font-weight: 500; }
+/* 16px keeps iOS Safari from zooming the page when the field takes focus. */
+.rich-link input { height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); color: var(--text); font: inherit; font-size: 16px; }
+.rich-link input:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.rich-link input[aria-invalid="true"] { border-color: var(--error); }
+.rich-link p { margin: 0; color: var(--error); font-size: 13px; }
+.rich-link-actions { display: flex; justify-content: flex-end; gap: 6px; }
+
+.rich-body { flex: 1; min-height: 0; overflow: auto; background: var(--bg); padding-bottom: env(safe-area-inset-bottom); }
+.rich-doc { min-height: 100%; outline: none; caret-color: var(--text); }
+.rich-doc ul[data-type="taskList"] { list-style: none; padding-left: 4px; }
+.rich-doc ul[data-type="taskList"] li { display: flex; gap: 8px; align-items: flex-start; }
+.rich-doc ul[data-type="taskList"] li > label { flex: none; margin-top: .3em; }
+.rich-doc ul[data-type="taskList"] li > div { flex: 1; min-width: 0; }
+.rich-doc ul[data-type="taskList"] li > div > p { margin: 0; }
+.rich-doc .tableWrapper { overflow-x: auto; margin: 14px 0; }
+.rich-doc td, .rich-doc th { position: relative; min-width: 48px; }
+.rich-doc .selectedCell::after { content: ''; position: absolute; inset: 0; background: var(--cm-selection); pointer-events: none; }
+.rich-doc li > p { margin: 0; }
+.rich-doc a { cursor: text; }
+.rich-doc p.is-editor-empty:first-child::before { content: attr(data-placeholder); float: left; height: 0; color: var(--muted); pointer-events: none; }
+@media (max-width: 599px) {
+  .text-edit-bar { padding-left: 12px; }
+  .rich-toolbar { padding: 6px 8px; }
+  .rich-tool { width: 36px; height: 36px; }
+  .rich-block { height: 36px; font-size: 16px; }
+}

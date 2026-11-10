@@ -11,6 +11,8 @@ import './ExplorerPhone.css'
 import { useHost } from './host'
 import { OfficeViewer, isOffice } from './OfficeViewer'
 import type { OfficeFile } from './OfficeViewer'
+import { TextViewer } from './TextViewer'
+import type { TextFile } from './TextViewer'
 
 // The phone Files screen (slice 4). Layout from ExplorerPhone.dc.html: path chips, a sort cycle, search, Select mode with
 // an action bar, a + sheet, a ⋯ sheet per row and a full-screen preview. Writes use POST /mobile/api/files/* (API.md).
@@ -305,7 +307,7 @@ export function ExplorerPhone({ api, target, onTarget, chatName, onAddToChat, on
       </div>}
     </>}
 
-    {preview && <Preview api={api} row={preview} addLabel={canAdd ? addLabel : null} onBack={() => setPreview(null)} onMore={() => setSheet({ kind: 'row', row: preview })}
+    {preview && <Preview api={api} row={preview} repo={current?.data && 'repo' in current.data ? !!current.data.repo : undefined} addLabel={canAdd ? addLabel : null} onBack={() => setPreview(null)} onMore={() => setSheet({ kind: 'row', row: preview })}
       onAdd={() => addToChat([preview.full])} onDownload={() => download([preview])} />}
 
     {upload && <div className="xp-upload" role="status" aria-live="polite">
@@ -521,14 +523,17 @@ const NO_PREVIEW: Record<string, string> = {
 }
 
 /** The full-screen preview: text with line numbers, an image or player, or a note. "Add to chat" sits at the bottom. */
-function Preview({ api, row, addLabel, onBack, onMore, onAdd, onDownload }: { api: Api; row: Row; addLabel: string | null; onBack: () => void; onMore: () => void; onAdd: () => void; onDownload: () => void }) {
+function Preview({ api, row, repo, addLabel, onBack, onMore, onAdd, onDownload }: { api: Api; row: Row; repo?: boolean; addLabel: string | null; onBack: () => void; onMore: () => void; onAdd: () => void; onDownload: () => void }) {
   const [state, setState] = useState<{ path: string; data?: FilePreview; error?: string } | null>(null)
   const [office, setOffice] = useState<OfficeFile | null>(null)
+  const [editing, setEditing] = useState<TextFile | null>(null)
+  // Goes up when the editor closes, so the preview shows saved edits.
+  const [version, setVersion] = useState(0)
   useEffect(() => {
     const controller = new AbortController()
     api<FilePreview>(filesUrl.preview(row.full), undefined, controller.signal).then(data => setState({ path: row.full, data }), failure => { if (!controller.signal.aborted) setState({ path: row.full, error: errorText(failure) }) })
     return () => controller.abort()
-  }, [api, row.full])
+  }, [api, row.full, version])
   const body = useRef<HTMLDivElement>(null)
   useEffect(() => { body.current?.focus({ preventScroll: true }) }, [row.full])
   const current = state?.path === row.full ? state : null
@@ -538,6 +543,7 @@ function Preview({ api, row, addLabel, onBack, onMore, onAdd, onDownload }: { ap
     <header className="xp-head xp-preview-head">
       <button type="button" className="icon-button" aria-label="Back to folder" onClick={onBack}><ChevronLeft size={24} /></button>
       <div className="xp-pick-title"><h1>{row.name}</h1><span>{[kindLabel(row), formatSize(row.size), formatModified(row.modified)].join(' · ')}</span></div>
+      {!locked && data?.kind === 'text' && <button type="button" className="icon-button" aria-label={`Edit ${row.name}`} onClick={() => setEditing({ path: row.full, url: filesUrl.raw(row.full), repo, edit: true })}><Pencil size={20} /></button>}
       <button type="button" className="icon-button" aria-label={`Actions for ${row.name}`} aria-haspopup="dialog" onClick={onMore}><MoreHorizontal size={20} /></button>
     </header>
     <div className="xp-preview-body" ref={body} tabIndex={-1} aria-label={`Preview of ${row.name}`} aria-busy={!current || undefined}>
@@ -561,5 +567,6 @@ function Preview({ api, row, addLabel, onBack, onMore, onAdd, onDownload }: { ap
     </div> : <p className="xp-preview-foot hint">Secret file: read only. Download and “Add to chat” stay off.</p>}
   </div>
     <OfficeViewer file={!locked && office?.path === row.full ? office : null} close={() => setOffice(null)} />
+    <TextViewer file={!locked && editing?.path === row.full ? editing : null} close={() => { setEditing(null); setVersion(value => value + 1) }} />
   </>
 }

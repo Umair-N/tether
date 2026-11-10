@@ -260,29 +260,6 @@ def _expected(cap, st):
     return _state(st) in ((cap['m'], cap['s']), _saved.get(cap['k']))
 
 
-def _replace(item, data):
-    """Install bytes atomically through the checked folder descriptor."""
-    name = '.' + item.name + '.tether-' + secrets.token_hex(8)
-    fd = os.open(name, files.NEW_FILE_FLAGS, 0o600, dir_fd=item.folder)
-    try:
-        os.fchmod(fd, stat.S_IMODE(item.st.st_mode))
-        files.write_all(fd, data)
-        os.fsync(fd)
-        # Catch a target swap during the write, before publishing the new file.
-        current = os.stat(item.name, dir_fd=item.folder, follow_symlinks=False)
-        if (current.st_dev, current.st_ino, current.st_mtime_ns, current.st_size) != (
-                item.st.st_dev, item.st.st_ino, item.st.st_mtime_ns, item.st.st_size):
-            raise files.changed()
-        os.rename(name, item.name, src_dir_fd=item.folder, dst_dir_fd=item.folder)
-        return os.fstat(fd)
-    finally:
-        os.close(fd)
-        try:
-            os.unlink(name, dir_fd=item.folder)
-        except FileNotFoundError:
-            pass
-
-
 def save(cap, data):
     if len(data) > LIMIT:
         raise ValueError('Office download is too large.')
@@ -296,7 +273,7 @@ def save(cap, data):
                 target = _item(_copies[key])
             if _expected(cap, target.st):
                 try:
-                    _saved[key] = _state(_replace(target, data))
+                    _saved[key] = _state(files.replace_contents(target, data))
                     return
                 except files.FilesError as exc:
                     if exc.code != 'changed':

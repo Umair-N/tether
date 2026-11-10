@@ -150,6 +150,10 @@ The agent receives the file path. It may request permission to read that folder.
 The upload endpoint does not serve files back; authenticated file previews use separate checks for paths, types, and secrets.
 Those checks restrict previews to supported files under your home folder and exclude credential folders and secret-like names.
 
+`POST /mobile/api/files/save` saves UTF-8 text up to 2 MB with the same sign-in and write checks.
+Send a JSON object with `path`, `text`, and `base` (the current file's lowercase SHA-256 hash); `session` resolves relative paths against the tab folder.
+The response returns the new `base`. Saves preserve the file mode and reject disk changes, symlinks, secrets, and the managed Share folder.
+
 ## Office editor add-on (optional)
 
 The add-on edits docx, xlsx, and pptx files with ONLYOFFICE Docs Community Edition in a separate Docker container.

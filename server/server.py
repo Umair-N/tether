@@ -565,6 +565,16 @@ def tab_folder(entry):
     return folder
 
 
+def edit_file_path(body):
+    """Resolve editor paths relative to the tab's folder, as chat file reads do."""
+    text = body.get('path')
+    if isinstance(text, str) and text and not text.startswith(('/', '~')):
+        session = body.get('session')
+        folder = tab_folder(choose(session if isinstance(session, str) else None)) or str(paths.HOME)
+        text = os.path.join(folder, text)
+    return text
+
+
 def home_path(path):
     """A folder as shown to people: <home>/x becomes ~/x."""
     if not path:
@@ -1647,35 +1657,43 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(503, {'error': 'The conversation is currently unavailable.'})
 
     def do_POST(self):
-        if self.path == '/mobile/api/office/open':
+        if self.path in ('/mobile/api/office/open', '/mobile/api/files/save'):
+            text_save = self.path == '/mobile/api/files/save'
             if self.deny():
                 return
             if not auth.same_origin(self.headers.get('Origin', ''), self.headers.get('Host', '')) or self.headers.get('X-Codex-Mobile') != '1':
                 self.respond(403, {'error': 'Reload the page and try again.'})
                 return
-            if not office_addon.enabled():
+            if not text_save and not office_addon.enabled():
                 self.respond(404, {'error': 'The Office editor add-on is not installed.', 'code': 'office-off'})
                 return
             try:
                 size = int(self.headers.get('Content-Length', '0'))
-                if not 0 < size <= 65536:
+                if text_save and size <= 0:
+                    self.close_connection = True
+                    raise files.invalid('Send a JSON body.')
+                if not 0 < size <= (3 * 1024 * 1024 if text_save else 65536):
+                    if text_save:
+                        self.close_connection = True
+                        raise files.FilesError(413, 'too-large', 'That request is too large.')
                     self.respond(413, {'error': 'Request is too large.'})
                     return
                 body = json.loads(self.rfile.read(size))
-                if not isinstance(body, dict) or type(body.get('mobile', False)) is not bool:
+                if not isinstance(body, dict) or (not text_save and type(body.get('mobile', False)) is not bool):
                     raise ValueError('Invalid request.')
-                # A chat names a file relative to the tab's folder, as /mobile/api/file reads it.
-                text = body.get('path')
-                if isinstance(text, str) and text and not text.startswith(('/', '~')):
-                    session = body.get('session')
-                    folder = tab_folder(choose(session if isinstance(session, str) else None)) or str(paths.HOME)
-                    text = os.path.join(folder, text)
-                self.respond(200, office_addon.open_document(text, os.environ.get('USER', ''), body.get('mobile', False),
-                                                           body.get('lang', 'en'), body.get('theme', 'dark')))
+                text = edit_file_path(body)
+                if text_save:
+                    self.respond(200, files.save_text(text, body.get('text'), body.get('base')))
+                else:
+                    self.respond(200, office_addon.open_document(text, os.environ.get('USER', ''), body.get('mobile', False),
+                                                               body.get('lang', 'en'), body.get('theme', 'dark')))
             except files.FilesError as exc:
                 self.respond(exc.status, {'error': str(exc), 'code': exc.code})
             except ValueError:
-                self.respond(400, {'error': 'Invalid request.'})
+                if text_save:
+                    files.answer_error(self, files.invalid('Send a valid JSON object with path, text and base.'))
+                else:
+                    self.respond(400, {'error': 'Invalid request.'})
             except OSError as exc:
                 error = files.disk_error(exc)
                 self.respond(error.status, {'error': str(error), 'code': error.code})
