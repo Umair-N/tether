@@ -117,7 +117,8 @@ function ItemRow({ item, actions, links, sending, locked, editing, setEditing, t
     setEditing(null)
     if (keep && wording.trim() && wording.trim() !== item.text) actions.onReword(item, wording)
   }
-  return <li data-backlog-row={item.done ? undefined : item.id} className={['backlog-row', item.done && 'done', drop && `drop-${drop}`, dragged && 'dragged'].filter(Boolean).join(' ')}>
+  return <li data-backlog-row={item.done ? undefined : item.id} className={['backlog-row', item.done && 'done', drop && `drop-${drop}`, dragged && 'dragged'].filter(Boolean).join(' ')}
+    style={dragged ? { opacity: 1, zIndex: 1, background: 'var(--bg)', boxShadow: '0 3px 10px rgb(0 0 0 / .16)' } : undefined}>
     {!item.done && <button type="button" className="backlog-grip" aria-label={`Move ${item.text}. Use the up and down arrow keys.`} title="Drag to reorder" disabled={locked}
       onPointerDown={event => actions.onDragStart(event, item)} onKeyDown={event => actions.onDragKey(event, item)}
       onTouchStart={event => event.stopPropagation()} onTouchEnd={event => event.stopPropagation()}><GripVertical size={15} aria-hidden="true" /></button>}
@@ -371,40 +372,70 @@ export function Backlog({ api, guard, active = true, panes = [], onOpenPane }: {
     onReword: (target, wording) => { change(rewordItem(target, wording)) },
     onSend: target => { setSent(null); setSendFor(now => now === target.id ? null : target.id) },
     onDragStart: (event, target) => {
-      if (event.button !== 0) return
+      if (event.button !== 0 || !(event.currentTarget instanceof HTMLElement)) return
+      const box = list.current
+      const row = box?.querySelector<HTMLElement>(`[data-backlog-row="${CSS.escape(target.id)}"]`)
+      if (!box || !row) return
       event.preventDefault()
-      event.currentTarget.setPointerCapture(event.pointerId)
+      const grip = event.currentTarget, pointer = event.pointerId
+      grip.setPointerCapture(pointer)
+      const startY = event.clientY, startScroll = box.scrollTop
+      const area = row.getBoundingClientRect()
+      const places = [...box.querySelectorAll<HTMLElement>('[data-backlog-row]')]
+      const min = places[0].getBoundingClientRect().top - area.top
+      const max = places[places.length - 1].getBoundingClientRect().bottom - area.bottom
+      let offset = 0, lastY = startY, lastAt = performance.now(), speed = 0
+      let destination: { target: string | null; after: boolean } = { target: null, after: false }
+      row.style.transition = 'none'
+      const locate = (y: number) => {
+        let found: { target: string | null; after: boolean } = { target: null, after: false }
+        for (const place of places) {
+          const rect = place.getBoundingClientRect()
+          // The lifted row keeps its original slot for hit testing.
+          const center = rect.top + rect.height / 2 - (place === row ? offset : 0)
+          if (y < center) { found = { target: place.dataset.backlogRow!, after: false }; break }
+        }
+        if (!found.target && places.length) found = { target: places[places.length - 1].dataset.backlogRow!, after: true }
+        if (found.target !== destination.target || found.after !== destination.after) {
+          destination = found
+          setDrag({ item: target, ...found })
+        }
+      }
       const moved = (at: PointerEvent) => {
-        const box = list.current
-        if (!box) return
+        if (at.pointerId !== pointer) return
+        const now = performance.now()
+        if (now > lastAt) speed = speed * .4 + (at.clientY - lastY) / (now - lastAt) * .6
+        lastY = at.clientY; lastAt = now
         const edges = box.getBoundingClientRect()
         if (at.clientY < edges.top + 36) box.scrollTop -= 8
         else if (at.clientY > edges.bottom - 36) box.scrollTop += 8
-        const places = [...box.querySelectorAll<HTMLElement>('[data-backlog-row]')]
-        let found: { target: string; after: boolean } | null = null
-        for (const place of places) {
-          const area = place.getBoundingClientRect()
-          if (at.clientY < area.top + area.height / 2) { found = { target: place.dataset.backlogRow!, after: false }; break }
-        }
-        if (!found && places.length) found = { target: places[places.length - 1].dataset.backlogRow!, after: true }
-        setDrag({ item: target, target: found?.target ?? null, after: found?.after ?? false })
+        const y = at.clientY - startY + box.scrollTop - startScroll
+        const bound = Math.max(min, Math.min(max, y))
+        offset = bound + (y - bound) * .25
+        row.style.transform = `translateY(${offset}px)`
+        locate(at.clientY)
       }
       const finish = (ended: PointerEvent) => {
-        window.removeEventListener('pointermove', moved)
-        window.removeEventListener('pointerup', finish)
-        window.removeEventListener('pointercancel', finish)
-        setDrag(now => {
-          if (now?.target && ended.type === 'pointerup' && now.target !== target.id) {
-            const place = openItems.find(row => row.id === now.target)
-            if (place) queueMicrotask(() => change(moveItem(target.raw, target.line, place.raw, place.line, now.after)))
-          }
-          return null
-        })
+        if (ended.pointerId !== pointer) return
+        grip.removeEventListener('pointermove', moved)
+        grip.removeEventListener('pointerup', finish)
+        grip.removeEventListener('pointercancel', finish)
+        grip.removeEventListener('lostpointercapture', finish)
+        if (ended.type === 'pointerup' && !matchMedia('(prefers-reduced-motion: reduce)').matches && performance.now() - lastAt < 80 && Math.abs(speed) > .4 && Math.sign(speed) === Math.sign(lastY - startY)) {
+          const direction = Math.sign(speed), neighbor = places[places.indexOf(row) + direction]?.getBoundingClientRect()
+          const edge = neighbor ? neighbor.top + neighbor.height / 2 + direction : lastY
+          locate(direction > 0 ? Math.max(edge, lastY + speed * 100) : Math.min(edge, lastY + speed * 100))
+        }
+        const place = openItems.find(item => item.id === destination.target)
+        if (place && ended.type === 'pointerup' && place.id !== target.id) change(moveItem(target.raw, target.line, place.raw, place.line, destination.after))
+        row.style.transform = ''; row.style.transition = ''
+        setDrag(null)
       }
       setDrag({ item: target, target: null, after: false })
-      window.addEventListener('pointermove', moved)
-      window.addEventListener('pointerup', finish)
-      window.addEventListener('pointercancel', finish)
+      grip.addEventListener('pointermove', moved)
+      grip.addEventListener('pointerup', finish)
+      grip.addEventListener('pointercancel', finish)
+      grip.addEventListener('lostpointercapture', finish)
     },
     onDragKey: (event, target) => {
       if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
