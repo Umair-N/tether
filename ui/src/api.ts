@@ -198,11 +198,12 @@ export class ApiError extends Error {
 /** timeout: milliseconds before the request gives up (10 s). A broadcast types into many panes one after another, so it waits longer. */
 export type Api = <T>(path: string, body?: unknown, signal?: AbortSignal, method?: 'DELETE', timeout?: number) => Promise<T>
 export async function request<T>(path: string, body?: unknown, signal?: AbortSignal, method?: 'DELETE', timeout = 10000): Promise<T> {
+  const raw = body instanceof Blob
   const response = await fetch(`/mobile/api/${path}`, {
     method: method ?? (body === undefined ? 'GET' : 'POST'),
     credentials: 'same-origin',
-    headers: body === undefined ? undefined : { 'Content-Type': 'application/json', 'X-Codex-Mobile': '1' },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    headers: body === undefined ? undefined : { 'Content-Type': raw ? body.type || 'application/octet-stream' : 'application/json', 'X-Codex-Mobile': '1' },
+    body: body === undefined ? undefined : raw ? body : JSON.stringify(body),
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout),
   })
   const data = await response.json().catch(error => {
