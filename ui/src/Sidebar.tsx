@@ -460,7 +460,33 @@ function SessionList({ items, reorder, selected, prefs, update, onOpen, onAction
   }, [ids])
   // Swipe a row left to show Pin, Archive and Delete (Delete still asks first); swipe right or tap the row to hide them.
   const [swiped, setSwiped] = useState<string | null>(null)
-  const touch = useRef<{ x: number; y: number; id: string } | null>(null)
+  const touch = useRef<{ x: number; y: number; id: string; row: HTMLElement; base: number; lastX: number; lastAt: number; speed: number; locked: boolean; remove?: () => void } | null>(null)
+  const swipeMotion = useRef<{ row: HTMLElement; timer: ReturnType<typeof setTimeout>; done: () => void } | null>(null)
+  const suppressClick = useRef(false)
+  const swipeX = (x: number) => x > 0 ? x * .25 : x < -228 ? -228 + (x + 228) * .25 : x
+  const settleRow = (open: boolean, speed = 0) => {
+    const start = touch.current
+    touch.current = null; start?.remove?.()
+    if (!start) return
+    const { row, id } = start, node = row.querySelector<HTMLElement>('.session-row')!
+    const x = new DOMMatrix(getComputedStyle(node).transform).m41
+    const duration = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0
+      : open === (swiped === id) ? 220 : Math.round(Math.min(280, Math.max(200, Math.abs((open ? -228 : 0) - x) / Math.max(Math.abs(speed), .8))))
+    node.style.transition = duration ? `transform ${duration}ms cubic-bezier(.32,.72,0,1)` : 'none'
+    node.style.transform = `translateX(${open ? -228 : 0}px)`
+    const done = () => {
+      swipeMotion.current = null
+      setSwiped(current => open ? id : current === id ? null : current)
+      node.style.removeProperty('transform'); node.style.removeProperty('transition')
+      row.querySelector<HTMLElement>('.swipe-actions')!.style.removeProperty('visibility')
+    }
+    if (duration) swipeMotion.current = { row, done, timer: setTimeout(done, duration) }
+    else done()
+  }
+  useEffect(() => () => {
+    touch.current?.remove?.()
+    if (swipeMotion.current) clearTimeout(swipeMotion.current.timer)
+  }, [])
   const togglePin = (id: string) => update(current => ({ pinned: current.pinned.includes(id) ? current.pinned.filter(other => other !== id) : [...current.pinned, id] }))
   // In the desktop workspace, a pane on screen shows its slot key.
   // The same drag drops into a workspace slot (the data) or onto another session row (the carry).
@@ -487,13 +513,69 @@ function SessionList({ items, reorder, selected, prefs, update, onOpen, onAction
       const tag = tagDot(prefs.colors?.[session.id] ?? (session.panes.length === 1 ? prefs.colors?.[session.panes[0].id] : undefined))
       return <li key={session.id} data-id={session.id} className={`${dragging.current === session.id ? 'dragging' : ''} ${dropping ? 'drop-over' : ''} ${carry && !carry.pane && carry.session === session.id ? 'carried' : ''}`} {...dropTarget(session)}>
         <div className={`swipe-row ${swiped === session.id ? 'swiped' : ''}`}
-          onTouchStart={event => { if (!reorder) touch.current = { x: event.touches[0].clientX, y: event.touches[0].clientY, id: session.id } }}
+          onPointerDownCapture={() => { suppressClick.current = false }}
+          onClickCapture={event => { if (suppressClick.current && event.detail) { suppressClick.current = false; event.preventDefault(); event.stopPropagation() } }}
+          onTouchStart={event => {
+            suppressClick.current = false
+            if (carry || reorder || event.touches.length !== 1) return
+            if ((event.target as HTMLElement).closest('.swipe-actions')) {
+              const pending = swipeMotion.current
+              if (pending) { clearTimeout(pending.timer); pending.done() }
+              return
+            }
+            const row = event.currentTarget, node = row.querySelector<HTMLElement>('.session-row')!
+            const x = new DOMMatrix(getComputedStyle(node).transform).m41
+            const pending = swipeMotion.current
+            if (pending) { clearTimeout(pending.timer); if (pending.row !== row) pending.done(); swipeMotion.current = null }
+            node.style.transition = 'none'; node.style.transform = `translateX(${x}px)`
+            touch.current?.remove?.()
+            const finger = event.touches[0]
+            touch.current = { x: finger.clientX, y: finger.clientY, id: session.id, row, base: x > 0 ? x * 4 : x < -228 ? -228 + (x + 228) * 4 : x, lastX: finger.clientX, lastAt: performance.now(), speed: 0, locked: false }
+          }}
+          onTouchMove={event => {
+            const start = touch.current
+            if (!start || start.id !== session.id) return
+            if (carry || reorder || event.touches.length !== 1) { settleRow(swiped === session.id); return }
+            const finger = event.touches[0], dx = finger.clientX - start.x, dy = finger.clientY - start.y
+            if (Math.abs(dx) <= 10 && Math.abs(dy) <= 10) return
+            if (Math.abs(dx) <= 10 || Math.abs(dx) <= Math.abs(dy) * 1.5) { settleRow(swiped === session.id); return }
+            start.locked = true; suppressClick.current = true
+            const node = start.row.querySelector<HTMLElement>('.session-row')!
+            start.row.querySelector<HTMLElement>('.swipe-actions')!.style.visibility = 'visible'
+            const move = (event: TouchEvent) => {
+              if (event.touches.length !== 1) { settleRow(swiped === session.id); return }
+              const finger = event.touches[0], now = performance.now()
+              if (now > start.lastAt) start.speed = start.speed * .4 + (finger.clientX - start.lastX) / (now - start.lastAt) * .6
+              start.lastX = finger.clientX; start.lastAt = now
+              node.style.transform = `translateX(${swipeX(start.base + finger.clientX - start.x)}px)`
+              if (event.cancelable) event.preventDefault()
+              event.stopPropagation()
+            }
+            // The first move reaches the hold listener before React cancels propagation.
+            node.style.transform = `translateX(${swipeX(start.base + dx)}px)`
+            const now = performance.now()
+            if (now > start.lastAt) start.speed = dx / (now - start.lastAt) * .6
+            start.lastX = finger.clientX; start.lastAt = now
+            start.row.addEventListener('touchmove', move, { passive: false })
+            start.remove = () => start.row.removeEventListener('touchmove', move)
+            event.stopPropagation()
+          }}
+          onTouchCancel={() => settleRow(swiped === session.id)}
           onTouchEnd={event => {
-            const start = touch.current; touch.current = null
-            if (carry || !start || start.id !== session.id) return
-            const dx = event.changedTouches[0].clientX - start.x, dy = event.changedTouches[0].clientY - start.y
-            if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy) * 2) return
-            setSwiped(dx < 0 ? session.id : null)
+            const start = touch.current
+            if (!start || start.id !== session.id) return
+            if (!start.locked) {
+              touch.current = null
+              const node = start.row.querySelector<HTMLElement>('.session-row')!
+              node.style.removeProperty('transform'); node.style.removeProperty('transition')
+              start.row.querySelector<HTMLElement>('.swipe-actions')!.style.removeProperty('visibility')
+              return
+            }
+            if (carry || reorder) { settleRow(swiped === session.id); return }
+            event.stopPropagation()
+            const x = swipeX(start.base + event.changedTouches[0].clientX - start.x)
+            const speed = matchMedia('(prefers-reduced-motion: reduce)').matches || performance.now() - start.lastAt > 100 ? 0 : start.speed
+            settleRow(speed > .4 ? false : speed < -.4 || x < -114, speed)
           }}>
         <span className="swipe-actions" aria-hidden={swiped !== session.id}>
           <button type="button" tabIndex={swiped === session.id ? 0 : -1} onClick={() => { togglePin(session.id); setSwiped(null) }}>{prefs.pinned.includes(session.id) ? <PinOff size={18} /> : <Pin size={18} />}{prefs.pinned.includes(session.id) ? 'Unpin' : 'Pin'}</button>

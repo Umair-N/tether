@@ -638,13 +638,14 @@ dialog::backdrop { background: #11110e66; opacity: calc(1 - var(--sheet-progress
 .effort-levels { flex-wrap: wrap; }
 
 /* Sidebar row swipe: Pin and Delete sit under the row; a left swipe slides the row aside. */
-.swipe-row { position: relative; overflow: hidden; border-radius: var(--radius); }
-.swipe-row > .session-row { position: relative; z-index: 1; background: var(--sidebar); transition: transform .2s cubic-bezier(.23, 1, .32, 1); }
+.swipe-row { position: relative; overflow: hidden; border-radius: var(--radius); touch-action: pan-y pinch-zoom; }
+.swipe-row > .session-row { position: relative; z-index: 1; background: var(--sidebar); transition: transform .22s cubic-bezier(.32,.72,0,1); }
 .swipe-row > .session-row.selected { background: linear-gradient(var(--hover), var(--hover)), var(--sidebar); }
 .swipe-row.swiped > .session-row { transform: translateX(-228px); }
 .swipe-actions { position: absolute; inset: 0 0 0 auto; display: flex; width: 228px; visibility: hidden; }
 .swipe-row.swiped .swipe-actions { visibility: visible; }
-.swipe-actions button { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: 12px; background: var(--hover); color: var(--text); }
+.swipe-actions button { position: relative; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: 12px; background: var(--hover); color: var(--text); }
+.swipe-actions button::before { content: ""; position: absolute; inset: min(0px, calc((100% - 44px) / 2)) 0; }
 .swipe-actions .swipe-delete { background: var(--danger); color: #fff; }
 @media (prefers-reduced-motion: reduce) { .swipe-row > .session-row { transition: none; } }
 
