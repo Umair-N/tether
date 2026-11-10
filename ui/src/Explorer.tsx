@@ -58,7 +58,7 @@ async function copyText(text: string) {
   const box = document.createElement('textarea')
   box.value = text; box.setAttribute('readonly', ''); box.style.position = 'fixed'; box.style.opacity = '0'
   document.body.appendChild(box); box.select()
-  let done = false
+  let done: boolean
   try { done = document.execCommand('copy') } catch { done = false }
   box.remove()
   return done
