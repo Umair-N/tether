@@ -55,6 +55,7 @@
 .app-shell[data-surface="glass"] > .workspace { box-shadow: var(--g-shadow), 0 0 24px var(--g-glow); }
 .app-shell[data-surface="glass"].with-rail:not([data-gap]) > :is(.sidebar, .inbox, .l-panel) { margin: 8px 0; }
 .app-shell[data-surface="glass"].with-rail:not([data-gap]) > .workspace { margin: 8px; }
+.app-shell[data-surface="glass"].with-rail:not([data-gap]) > .inbox { margin-right: 8px; }
 .app-shell[data-surface="glass"][data-gap] > :is(.sidebar, .workspace, .inbox, .l-panel) { border-radius: max(var(--l-radius), 8px); }
 .app-shell[data-surface="glass"] :is(.slots.multi .slot, .swipe-row > .session-row, .home) { background: transparent; }
 
@@ -68,6 +69,23 @@
 .app-shell[data-surface="glass"] :is(.session-row.selected, .l-status-row[aria-current="true"]) { background: var(--g-fill-strong); }
 @media (hover: hover) { .app-shell[data-surface="glass"] :is(.session-row:hover, .l-status-row:hover) { background: var(--g-fill-strong); } }
 .app-shell[data-surface="glass"] .sheet { background: var(--g-fill-strong); border-color: var(--g-edge); -webkit-backdrop-filter: blur(26px) saturate(170%); backdrop-filter: blur(26px) saturate(170%); }
+
+/* Everything else inside glass uses the theme tokens. Redefine the ones that paint flat, opaque boxes, so every
+   control (hover, lines, segmented groups, tabs, inputs) reads as part of the glass and not as the flat theme. */
+.app-shell[data-surface="glass"] { --hover: color-mix(in srgb, var(--text) 7%, transparent); --line: var(--g-line); }
+.app-shell[data-surface="glass"] :is(.view-switch, .layout-switch) button[aria-pressed="true"], .app-shell[data-surface="glass"] .app-rail-button[aria-current="page"] { background: var(--g-fill-strong); box-shadow: 0 1px 0 var(--g-edge) inset, 0 0 0 1px var(--g-line); }
+.app-shell[data-surface="glass"] .sidebar-search { background: color-mix(in srgb, var(--text) 5%, transparent); border-color: var(--g-line); box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
+.app-shell[data-surface="glass"] .sidebar-search:focus-within { background: var(--g-fill-strong); border-color: var(--g-edge); }
+/* Controls round to suit the 16px glass panels. Grid layouts take theirs from the layout radius (layouts.css). */
+.app-shell[data-surface="glass"]:not([data-grid]) { --radius-sm: 8px; --radius: 10px; --radius-lg: 14px; }
+
+/* Installed app with the title bar hidden: Chrome paints one solid box behind its window controls, in the page
+   theme-color. A see-through backdrop cannot match it, so glass puts a solid band of --bg across the top and starts
+   the panels below it. titlebar.ts sets the theme-color to the same --bg. */
+@media (display-mode: window-controls-overlay) {
+  .app-shell[data-surface="glass"].with-rail { padding-top: var(--titlebar-height); box-shadow: inset 0 var(--titlebar-height) 0 var(--bg); }
+  .app-shell[data-surface="glass"].with-rail > .app-rail { padding-top: 12px; }
+}
 
 /* Phone: no rail and no panel margins. The chat takes the fill from edge to edge. */
 .app-shell[data-surface="glass"]:not(.with-rail) .chat-panel { background: var(--g-fill); -webkit-backdrop-filter: blur(var(--g-blur, 24px)) saturate(170%); backdrop-filter: blur(var(--g-blur, 24px)) saturate(170%); }

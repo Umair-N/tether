@@ -1223,7 +1223,7 @@ button.live-chip:active { background: var(--line); }
 .drop-hint span { padding: 6px 12px; border-radius: 999px; background: var(--surface); color: var(--text); font-size: 13px; font-weight: 500; box-shadow: 0 2px 8px #00000026; }
 /* Buttons default to a 44px minimum height (index.css). The workspace is mouse-only, so its header buttons use their own sizes. */
 .workspace :is(.workspace-bar button, .chat-header > button, .chat-header > .keys-container > button, .pane-tabs button) { min-height: 0; }
-.workspace .chat-title { height: auto; padding: 4px 0; }
+.workspace .chat-title { height: auto; padding: 4px 6px; margin-left: -6px; border-radius: var(--radius); }
 
 /* Actions as a popover on the desktop: a compact menu at the pointer, no dimmed page. */
 .action-label { margin: 6px 6px 2px; font-size: 12px; color: var(--muted); }
@@ -1327,7 +1327,7 @@ button.live-chip:active { background: var(--line); }
 .inbox-error { padding: 0 12px 10px; font-size: 12.5px; line-height: 1.4; color: var(--error); }
 .inbox-empty { padding: 12px 16px; font-size: 13px; color: var(--muted); }
 .inbox-toggle { position: relative; }
-.inbox-badge { position: absolute; top: 1px; right: 1px; min-width: 15px; height: 15px; padding: 0 3px; border-radius: var(--radius-sm); background: var(--attention); color: var(--bg); font-size: 10px; font-weight: 700; line-height: 15px; text-align: center; }
+.inbox-badge { position: absolute; top: 1px; right: 1px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 999px; background: var(--attention); color: var(--bg); font-size: 10px; font-weight: 700; line-height: 15px; text-align: center; }
 
 /* Foundry spend in Plan usage > Codex */
 .foundry-spend { margin: 12px 0 0; }
@@ -1759,7 +1759,7 @@ button.live-chip:active { background: var(--line); }
 .group-add:hover { color: var(--text); }
 .group-strip { display: contents; }
 .group-switch { display: none; }
-.group-badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--radius-sm); background: var(--attention); color: var(--bg); font-size: 11px; font-weight: 600; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
+.group-badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--attention); color: var(--bg); font-size: 11px; font-weight: 600; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
 .group-crumb { max-width: 28ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .group-list-row { display: flex; align-items: center; gap: 4px; }
 .group-list-row > button:first-child { flex: 1; min-width: 0; }
