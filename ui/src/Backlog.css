@@ -113,3 +113,7 @@ button.backlog-tag-open { border-color: color-mix(in srgb, var(--accent) 40%, va
 .backlog-send-empty { margin: 0; color: var(--muted); font-size: 13px; }
 .sidebar-backlog-new { flex: none; padding: 0 6px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-size: 11px; font-weight: 600; line-height: 18px; font-variant-numeric: tabular-nums; }
 @media (pointer: coarse) { .backlog-send li button { min-height: 38px; } }
+
+.backlog-voice { display: flex; flex: 1; flex-wrap: wrap; align-items: flex-start; gap: 6px; min-width: 0; }
+.backlog-voice > input, .backlog-voice > textarea { flex: 1; min-width: 0; width: 0; }
+.backlog-voice > .error { flex-basis: 100%; }

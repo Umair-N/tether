@@ -1,3 +1,4 @@
+import { BacklogVoice } from './BacklogVoice'
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent, KeyboardEvent } from 'react'
 import { ClipboardPlus, X } from 'lucide-react'
@@ -19,6 +20,8 @@ const tabName = (pane: Pane) => pane.pane_name || pane.agent_name || pane.label 
 export function BacklogAddSheet({ api, text, pane, onClose, onAdded }: { api: Api; text: string; pane?: Pane; onClose: () => void; onAdded: (message: string) => void }) {
   const [item, setItem] = useState(() => oneLine(text))
   const [details, setDetails] = useState('')
+  const [titleVoice, setTitleVoice] = useState(false)
+  const [detailsVoice, setDetailsVoice] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const modal = useModal(true, onClose)
@@ -28,7 +31,7 @@ export function BacklogAddSheet({ api, text, pane, onClose, onAdded }: { api: Ap
   const source = pane ? sourceOf(pane) : ''
   const add = (event?: FormEvent) => {
     event?.preventDefault()
-    if (busy || !oneLine(item)) return
+    if (busy || titleVoice || detailsVoice || !oneLine(item)) return
     setBusy(true); setError('')
     const lines = details.split('\n').map(oneLine).filter(Boolean)
     api<{ ref: string }>('projects/backlog-add', { text: item, details: lines, ...source ? { source } : {} }).then(added => {
@@ -46,15 +49,15 @@ export function BacklogAddSheet({ api, text, pane, onClose, onAdded }: { api: Ap
       </div>
       {pane && <p className="sheet-sub">From {tabName(pane)}</p>}
       <label htmlFor="backlog-add-item">Item</label>
-      <textarea id="backlog-add-item" className="backlog-add-item" rows={3} value={item} maxLength={2000} onChange={event => setItem(event.target.value)}
-        onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.metaKey && !event.ctrlKey) { event.preventDefault(); add() } }} />
+      <BacklogVoice label="backlog title" onBusyChange={setTitleVoice} value={item} setValue={setItem} multiline field={{ id: 'backlog-add-item', className: 'backlog-add-item', rows: 3, maxLength: 2000, disabled: busy,
+        onKeyDown: event => { if (event.key === 'Enter' && !event.shiftKey && !event.metaKey && !event.ctrlKey) { event.preventDefault(); add() } } }} />
       <label htmlFor="backlog-add-details">Details <span className="backlog-add-hint">optional, one per line</span></label>
-      <textarea id="backlog-add-details" className="backlog-add-details" rows={4} ref={detailsRef} value={details} maxLength={4000}
-        placeholder="Why it matters, where to look, what done means" onChange={event => setDetails(event.target.value)} />
+      <BacklogVoice label="backlog details" onBusyChange={setDetailsVoice} value={details} setValue={setDetails} multiline fieldRef={detailsRef} field={{ id: 'backlog-add-details', className: 'backlog-add-details', rows: 4, maxLength: 4000, disabled: busy,
+        placeholder: 'Why it matters, where to look, what done means' }} />
       {error && <p className="error" role="alert">{error}</p>}
       <div className="sheet-buttons">
         <button type="button" className="secondary" onClick={onClose}>Cancel</button>
-        <button type="submit" className="primary" disabled={busy || !oneLine(item)}><ClipboardPlus size={16} aria-hidden="true" />{busy ? 'Adding…' : 'Add'}</button>
+        <button type="submit" className="primary" disabled={busy || titleVoice || detailsVoice || !oneLine(item)}><ClipboardPlus size={16} aria-hidden="true" />{busy ? 'Adding…' : 'Add'}</button>
       </div>
     </form>
   </dialog>

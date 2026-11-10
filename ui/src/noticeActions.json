@@ -1,0 +1,106 @@
+[
+  {
+    "pattern": "^(?!.*\\/[a-z][a-z-]*.*\\/[a-z]).*?(?:^new task\\? /clear to save [0-9.,]+[kKmM]? tokens$)",
+    "flags": "i",
+    "label": "Clear",
+    "command": "/clear",
+    "hint": "Clear this chat and start with fresh context.",
+    "confirm": "Clear chat?",
+    "agents": [
+      "claude"
+    ]
+  },
+  {
+    "pattern": "^(?!.*\\/[a-z][a-z-]*.*\\/[a-z]).*?(?:^[\u2714\u2713]?\\s*Update installed(?:[^/\\n]*)[\u00b7] (?:/restart to apply|Restart to apply|Restart to update)$)",
+    "flags": "i",
+    "label": "Restart",
+    "command": "/restart",
+    "hint": "Restart Claude Code to apply the installed update.",
+    "agents": [
+      "claude"
+    ]
+  },
+  {
+    "pattern": "^(?!.*\\/[a-z][a-z-]*.*\\/[a-z]).*?(?:(?:^|[ .])(?:Run|Use) /compact (?:now to control what gets kept|to free space))",
+    "flags": "i",
+    "label": "Compact",
+    "command": "/compact",
+    "hint": "Summarize this chat to free context.",
+    "confirm": "Compact chat?",
+    "agents": [
+      "claude"
+    ]
+  },
+  {
+    "pattern": "^(?!.*\\/[a-z][a-z-]*.*\\/[a-z]).*?(?:(?:^|[ .])Run /reload-plugins to (?:apply|activate|refresh))",
+    "flags": "i",
+    "label": "Reload plugins",
+    "command": "/reload-plugins",
+    "hint": "Reload the plugins in this session.",
+    "agents": [
+      "claude"
+    ]
+  },
+  {
+    "pattern": "^(?!.*\\/[a-z][a-z-]*.*\\/[a-z]).*?(?:/rate-limit-options (?:to (?:re-arm|wait again|wait anyway|try again)|can arm it again))",
+    "flags": "i",
+    "label": "Retry options",
+    "command": "/rate-limit-options",
+    "hint": "Open the options for the usage limit.",
+    "agents": [
+      "claude"
+    ]
+  },
+  {
+    "pattern": "^(?!.*\\/[a-z][a-z-]*.*\\/[a-z]).*?(?:(?:^|[ .\u00b7])(?:run /fast off|Run /fast off to change this)\\.?$)",
+    "flags": "i",
+    "label": "Turn fast off",
+    "command": "/fast off",
+    "hint": "Turn off fast mode so auto mode can work.",
+    "agents": [
+      "claude"
+    ]
+  },
+  {
+    "pattern": "^(?!.*\\/[a-z][a-z-]*.*\\/[a-z]).*?(?:(?:^|[ ,])(?:run /terminal-setup(?: to enable[^/]*|$)|/terminal-setup to use [^/]+$))",
+    "flags": "i",
+    "label": "Set up terminal",
+    "command": "/terminal-setup",
+    "hint": "Open terminal setup.",
+    "agents": [
+      "claude"
+    ]
+  },
+  {
+    "pattern": "^(?!.*\\/[a-z][a-z-]*.*\\/[a-z]).*?(?:(?:^|[ .])Run /rewind to recover the conversation\\.?$)",
+    "flags": "i",
+    "label": "Rewind",
+    "command": "/rewind",
+    "hint": "Open the recovery menu for this chat.",
+    "confirm": "Rewind chat?",
+    "agents": [
+      "claude"
+    ]
+  },
+  {
+    "pattern": "^(?!.*\\/[a-z][a-z-]*.*\\/[a-z]).*?(?:(?:^|[ .])(?:Use /model to see available models|/model to switch models)\\.?$)",
+    "flags": "i",
+    "label": "Choose model",
+    "command": "/model",
+    "hint": "Open the model picker.",
+    "agents": [
+      "claude",
+      "codex"
+    ]
+  },
+  {
+    "pattern": "^(?!.*\\/[a-z][a-z-]*.*\\/[a-z]).*?(?:limit left\\. Run /status for a breakdown\\.$)",
+    "flags": "i",
+    "label": "Show status",
+    "command": "/status",
+    "hint": "Show the current model and usage.",
+    "agents": [
+      "codex"
+    ]
+  }
+]

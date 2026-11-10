@@ -1,3 +1,4 @@
+import { noticeAction } from './noticeActions'
 import { terminalText } from './terminalText'
 import { ShellOutput } from './ShellOutput'
 import { ContinueWith } from './ContinueWith'
@@ -34,7 +35,7 @@ import { StatusStack } from './StatusStack'
 import { PaneTabs, movePill } from './PaneTabs'
 import { WorktreeMark } from './Worktree'
 import { Elapsed, NoticeStack, formatElapsed } from './Notices'
-import type { NoticeVariant } from './Notices'
+import type { NoticeItem, NoticeVariant } from './Notices'
 import { State } from './NewSession'
 import { Linked, Message, convertMessage, SelectionCopy } from './Messages'
 import { Composer } from './Composer'
@@ -769,6 +770,12 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     requestAnimationFrame(() => { const box = panelRef.current?.querySelector<HTMLTextAreaElement>('.composer textarea'); if (box) { box.focus(); box.setSelectionRange(text.length, text.length) } })
   }
   // A hidden notice stays hidden while the same text shows in this pane; a new notice shows again.
+  const [noticeConfirm, setNoticeConfirm] = useState<{ key: string; until: number } | null>(null)
+  useEffect(() => {
+    if (!noticeConfirm) return
+    const timer = window.setTimeout(() => setNoticeConfirm(null), Math.max(0, noticeConfirm.until - Date.now()))
+    return () => window.clearTimeout(timer)
+  }, [noticeConfirm])
   const [hiddenNotices, setHiddenNotices] = useState<string[]>([])
   const visibleNotices = (footer.notices ?? []).filter(note => !hiddenNotices.includes(note))
   const hideNotice = (note: string) => setHiddenNotices(current => [...current.filter(item => (footer.notices ?? []).includes(item)), note])
@@ -853,7 +860,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     <NoticeStack items={[
       ...(data && !writable ? [{ id: 'read-only', group: 'environment' as const, variant: 'info' as const, icon: <Info size={15} />, title: 'This pane is read-only.' }] : []),
       ...(toast ? [{ id: 'toast', icon: <Info size={15} />, title: toast, live: true }] : []),
-      ...visibleNotices.map(note => {
+      ...visibleNotices.map((note): NoticeItem => {
         const base = { id: `notice:${note}`, dismissLabel: `Hide notice: ${note}`, onDismiss: () => hideNotice(note) }
         // Auto mode's safety check stopped a tool call. Say what Claude tried in words; the command waits behind the toggle.
         const block = autoBlock(note, footer.blocked)
@@ -861,7 +868,20 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
           detail: block.reason ? `Rule: ${block.reason}` : undefined,
           more: block.command ? <code className="notice-command">{block.command}</code> : undefined,
           action: { label: 'Review', hint: 'Open /permissions, tab Recently blocked. You can let Claude retry it once there.', disabled: !writable || acting, onClick: () => void openPermissions('Recently blocked') } }
-        return { ...base, variant: (/\b(error|failed|denied|limit)\b/i.test(note) ? 'warning' : 'default') as NoticeVariant, icon: /\b(error|failed|denied|limit)\b/i.test(note) ? <ShieldAlert size={15} /> : <Info size={15} />, title: <Linked text={note} /> }
+        const found = noticeAction(note, activePane.agent)
+        const confirmKey = `${activePane.id}:${data?.thread ?? ''}:${note}`
+        const confirmed = noticeConfirm?.key === confirmKey && noticeConfirm.until > Date.now()
+        const action = found ? {
+          label: found.confirm && confirmed ? found.confirm : found.label,
+          hint: found.hint, disabled: !writable || acting || state === 'Working',
+          onClick: (): void => {
+            if (!writable || acting || state === 'Working') return
+            if (found.confirm && !(noticeConfirm?.key === confirmKey && noticeConfirm.until > Date.now())) { setNoticeConfirm({ key: confirmKey, until: Date.now() + 4000 }); return }
+            setNoticeConfirm(null)
+            void send(found.command)
+          },
+        } : undefined
+        return { ...base, action, variant: (/\b(error|failed|denied|limit)\b/i.test(note) ? 'warning' : 'default') as NoticeVariant, icon: /\b(error|failed|denied|limit)\b/i.test(note) ? <ShieldAlert size={15} /> : <Info size={15} />, title: <Linked text={note} /> }
       }),
     ]} />
     {info && <SessionInfo pane={activePane} footer={footer} mode={MODES[currentMode]} onClose={() => setInfo(false)} />}

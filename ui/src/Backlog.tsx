@@ -1,3 +1,4 @@
+import { BacklogVoice } from './BacklogVoice'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CSSProperties, FormEvent, KeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode, RefObject } from 'react'
 import { Check, ChevronRight, ClipboardList, FileText, GripVertical, ListChecks, Pencil, Plus, Send, Trash2, X } from 'lucide-react'
@@ -124,9 +125,9 @@ function ItemRow({ item, actions, links, sending, locked, editing, setEditing, t
     <input type="checkbox" className="backlog-box" aria-label={item.text} checked={item.done} disabled={locked} onChange={event => actions.onDone(item.raw, item.line, event.target.checked)} />
     <div className="backlog-body">
       {editing
-        ? <input aria-label={`Reword ${item.text}`} className="backlog-input backlog-reword" autoFocus value={wording} onFocus={event => { ended.current = false; event.target.select() }}
-            onChange={event => { setWording(event.target.value); typed.current = event.target.value }} onBlur={() => finish(true)}
-            onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); finish(true) } else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); finish(false) } }} />
+        ? <BacklogVoice label="backlog title" value={wording} setValue={value => { setWording(value); typed.current = value }} onLeave={() => finish(true)} field={{ 'aria-label': `Reword ${item.text}`, className: 'backlog-input backlog-reword', autoFocus: true,
+            onFocus: event => { ended.current = false; event.target.select() },
+            onKeyDown: event => { if (event.key === 'Enter') { event.preventDefault(); finish(true) } else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); finish(false) } } }} />
         : <span className="backlog-text-line" onDoubleClick={() => { if (!locked && !item.done) { setWording(item.text); setEditing(item.id) } }}>{item.text}</span>}
       {(item.ref || item.source) && <span className="backlog-meta">
         {item.ref && <span className="backlog-ref" title="The ID agents use for this item">{item.ref}</span>}
@@ -162,6 +163,8 @@ export function Backlog({ api, guard, active = true, panes = [], onOpenPane }: {
   const [changes, setChanges] = useState<Change[]>([])  // made in the checklist, not saved yet
   const [draft, setDraft] = useState<string | null>(null)  // the text while the person edits it as text
   const [item, setItem] = useState('')
+  const [itemVoice, setItemVoice] = useState(false)
+  const [textVoice, setTextVoice] = useState(false)
   const [error, setError] = useState('')
   const [failed, setFailed] = useState('')  // saving failed for a reason that a retry can fix
   const [saving, setSaving] = useState(false)
@@ -346,7 +349,7 @@ export function Backlog({ api, guard, active = true, panes = [], onOpenPane }: {
 
   const add = (event: FormEvent) => {
     event.preventDefault()
-    if (item.trim() && change(addItem(item))) { reveal.current = `- [ ] ${item.trim().replace(/\s*\n\s*/g, ' ')}\n`; setItem('') }
+    if (!itemVoice && item.trim() && change(addItem(item))) { reveal.current = `- [ ] ${item.trim().replace(/\s*\n\s*/g, ' ')}\n`; setItem('') }
   }
   const rows = parseBacklog(shown)
   const done = rows.filter((row): row is Item => row.kind === 'item' && row.done)
@@ -455,14 +458,14 @@ export function Backlog({ api, guard, active = true, panes = [], onOpenPane }: {
       {inText
         ? <p className="backlog-mode">Editing as text. Items are Markdown lines like <code>- [ ] Item</code>.</p>
         : <form className="backlog-add" onSubmit={add}>
-            <input ref={addBox} aria-label="New backlog item" className="backlog-input" type="text" value={item} disabled={locked} placeholder="Add an item" enterKeyHint="done" onChange={event => setItem(event.target.value)} />
-            <button type="submit" className="secondary" disabled={locked || !item.trim()}>Add</button>
+            <BacklogVoice label="new backlog item" onBusyChange={setItemVoice} value={item} setValue={setItem} fieldRef={addBox} field={{ 'aria-label': 'New backlog item', className: 'backlog-input', type: 'text', disabled: locked, placeholder: 'Add an item', enterKeyHint: 'done' }} />
+            <button type="submit" className="secondary" disabled={locked || itemVoice || !item.trim()}>Add</button>
           </form>}
-      <button type="button" className="icon-button" aria-pressed={inText} disabled={!saved || (!inText && changes.length > 0)} aria-label={inText ? 'Show checklist' : 'Edit as text'} title={inText ? 'Show checklist' : 'Edit as text'}
+      <button type="button" className="icon-button" aria-pressed={inText} disabled={!saved || itemVoice || textVoice || (!inText && changes.length > 0)} aria-label={inText ? 'Show checklist' : 'Edit as text'} title={inText ? 'Show checklist' : 'Edit as text'}
         onClick={() => { if (inText) void leaveText(); else { setUndo(null); setDraft(shown) } }}>{inText ? <ListChecks size={17} /> : <FileText size={16} />}</button>
     </div>
     {inText
-      ? <textarea ref={textBox} aria-label="Backlog text" className="backlog-text" value={draft} readOnly={!!conflict} spellCheck onChange={event => setDraft(event.target.value)} />
+      ? <BacklogVoice label="backlog text" onBusyChange={setTextVoice} value={draft} setValue={setDraft} multiline fieldRef={textBox} field={{ 'aria-label': 'Backlog text', className: 'backlog-text', readOnly: !!conflict, disabled: !!conflict, spellCheck: true }} />
       : <div className="backlog-list" ref={list}>
           {saved && !rows.length && <div className="backlog-empty"><ClipboardList size={26} aria-hidden="true" /><p><strong>Nothing here yet</strong></p><p>Add what you want to remember. Agents add follow-ups they find, and fill in items you point them to.</p></div>}
           {saved && !!rows.length && !openItems.length && <p className="backlog-clear"><Check size={16} aria-hidden="true" />All done.</p>}

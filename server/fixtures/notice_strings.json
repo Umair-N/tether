@@ -1,0 +1,152 @@
+[
+  {
+    "agent": "claude",
+    "note": "new task? /clear to save 141.4k tokens",
+    "command": "/clear"
+  },
+  {
+    "agent": "claude",
+    "note": "✔ Update installed · /restart to apply",
+    "command": "/restart"
+  },
+  {
+    "agent": "claude",
+    "note": "✓ Update installed · Restart to apply",
+    "command": "/restart"
+  },
+  {
+    "agent": "claude",
+    "note": "4% until auto-compact",
+    "command": null
+  },
+  {
+    "agent": "claude",
+    "note": "Autocompact will trigger soon, which discards older messages. Use /compact now to control what gets kept.",
+    "command": "/compact"
+  },
+  {
+    "agent": "claude",
+    "note": "Autocompact is disabled. Use /compact to free space, or enable autocompact in /config.",
+    "command": null
+  },
+  {
+    "agent": "claude",
+    "note": "Run /reload-plugins to apply.",
+    "command": "/reload-plugins"
+  },
+  {
+    "agent": "claude",
+    "note": "Run /reload-plugins to activate.",
+    "command": "/reload-plugins"
+  },
+  {
+    "agent": "claude",
+    "note": "Run /reload-plugins to refresh the marketplace cache",
+    "command": "/reload-plugins"
+  },
+  {
+    "agent": "claude",
+    "note": "Automatic continue cancelled · /rate-limit-options to re-arm",
+    "command": "/rate-limit-options"
+  },
+  {
+    "agent": "claude",
+    "note": "Automatic continue stopped after repeated usage-limit hits · /rate-limit-options to try again",
+    "command": "/rate-limit-options"
+  },
+  {
+    "agent": "claude",
+    "note": "the automatic continue at the usage-limit reset was cancelled (/rate-limit-options to wait again)",
+    "command": "/rate-limit-options"
+  },
+  {
+    "agent": "claude",
+    "note": "auto mode unavailable while fast mode is on · run /fast off",
+    "command": "/fast off"
+  },
+  {
+    "agent": "claude",
+    "note": "auto mode is off while fast mode is on. Run /fast off to change this.",
+    "command": "/fast off"
+  },
+  {
+    "agent": "claude",
+    "note": "Run /terminal-setup to enable Shift+Enter for new lines",
+    "command": "/terminal-setup"
+  },
+  {
+    "agent": "claude",
+    "note": "To enable Option as Meta, run /terminal-setup",
+    "command": "/terminal-setup"
+  },
+  {
+    "agent": "claude",
+    "note": "Run /rewind to recover the conversation.",
+    "command": "/rewind"
+  },
+  {
+    "agent": "claude",
+    "note": "You're out of usage credits. /model to switch models.",
+    "command": "/model"
+  },
+  {
+    "agent": "codex",
+    "note": "Model 'gpt-5' is unavailable. Use /model to see available models.",
+    "command": "/model"
+  },
+  {
+    "agent": "codex",
+    "note": "You have 20% of your weekly limit left. Run /status for a breakdown.",
+    "command": "/status"
+  },
+  {
+    "agent": "codex",
+    "note": "Update available! 0.166.0 -> 0.167.0",
+    "command": null
+  },
+  {
+    "agent": "codex",
+    "note": "npm install -g @openai/codex",
+    "command": null
+  },
+  {
+    "agent": "codex",
+    "note": "brew upgrade --cask codex",
+    "command": null
+  },
+  {
+    "agent": "codex",
+    "note": "new task? /clear to save 141.4k tokens",
+    "command": null
+  },
+  {
+    "agent": "codex",
+    "note": "✔ Update installed · /restart to apply",
+    "command": null
+  },
+  {
+    "agent": "claude",
+    "note": "Not signed in · Please run /login",
+    "command": null
+  },
+  {
+    "agent": "claude",
+    "note": "/usage-credits to continue now",
+    "command": null
+  },
+  {
+    "agent": "claude",
+    "note": "Run /usage-credits to continue or switch models with /model.",
+    "command": null
+  },
+  {
+    "agent": "antigravity",
+    "note": "Run /reload-plugins to apply.",
+    "command": null
+  },
+  {
+    "agent": "claude",
+    "note": "Update available",
+    "command": null
+  }
+]

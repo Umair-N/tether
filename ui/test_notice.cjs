@@ -20,3 +20,12 @@ assert.equal(autoBlock('bash blocked by auto mode', { reason: 'Blocked by classi
 assert.equal(autoBlock('5% until auto-compact'), null)
 assert.equal(autoBlock('Auto mode on (shift+tab to cycle)'), null)
 console.log('notice: auto mode blocks say what Claude tried; the command waits behind the toggle; "No reason provided" is dropped')
+
+// Keep JS matching aligned with the Python fixture check.
+const actionCode = ts.transpileModule(readFileSync('src/noticeActions.ts', 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, esModuleInterop: true } }).outputText
+const actionExports = {}
+runInNewContext(actionCode, { exports: actionExports, require: name => require(`./src/${name.replace(/^\.\//, '')}`) })
+for (const fixture of JSON.parse(readFileSync('../server/fixtures/notice_strings.json', 'utf8'))) {
+  assert.equal(actionExports.noticeAction(fixture.note, fixture.agent)?.command ?? null, fixture.command, fixture.note)
+}
+console.log('notice actions: all real notice fixtures match in JavaScript')
