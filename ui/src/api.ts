@@ -198,7 +198,7 @@ export class ApiError extends Error {
 /** timeout: milliseconds before the request gives up (10 s). A broadcast types into many panes one after another, so it waits longer. */
 export type Api = <T>(path: string, body?: unknown, signal?: AbortSignal, method?: 'DELETE', timeout?: number) => Promise<T>
 export async function request<T>(path: string, body?: unknown, signal?: AbortSignal, method?: 'DELETE', timeout = 10000): Promise<T> {
-  const raw = body instanceof Blob
+  const raw = typeof Blob !== 'undefined' && body instanceof Blob  // background uploads send the image bytes as is
   const response = await fetch(`/mobile/api/${path}`, {
     method: method ?? (body === undefined ? 'GET' : 'POST'),
     credentials: 'same-origin',

@@ -896,13 +896,13 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
           action: { label: 'Review', hint: 'Open /permissions, tab Recently blocked. You can let Claude retry it once there.', disabled: !writable || acting, onClick: () => void openPermissions('Recently blocked') } }
         const found = noticeAction(note, activePane.agent)
         const confirmKey = `${activePane.id}:${data?.thread ?? ''}:${note}`
-        const confirmed = noticeConfirm?.key === confirmKey && noticeConfirm.until > Date.now()
+        const confirmed = noticeConfirm?.key === confirmKey  // the timer above clears it after 4 s
         const action = found ? {
           label: found.confirm && confirmed ? found.confirm : found.label,
           hint: found.hint, disabled: !writable || acting || state === 'Working',
           onClick: (): void => {
             if (!writable || acting || state === 'Working') return
-            if (found.confirm && !(noticeConfirm?.key === confirmKey && noticeConfirm.until > Date.now())) { setNoticeConfirm({ key: confirmKey, until: Date.now() + 4000 }); return }
+            if (found.confirm && !confirmed) { setNoticeConfirm({ key: confirmKey, until: Date.now() + 4000 }); return }
             setNoticeConfirm(null)
             void send(found.command)
           },
