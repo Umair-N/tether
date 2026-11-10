@@ -688,7 +688,16 @@ def codex_metrics(config, reported_usage, model='', effort='', credits=None):
     the context figure falls back to the terminal footer ("Context 97% left") until the first turn is recorded."""
     context, windows, reported = reported_usage or ({}, [], None)
     inherited = False
-    if windows:
+    try:
+        newest = json.loads(RATES_FILE.read_text())
+        newest['windows']
+    except (OSError, ValueError, KeyError, TypeError):
+        newest = None
+    if windows and newest and newest['windows'] and (epoch_of(newest.get('reported_at')) or 0) > (epoch_of(reported) or 0):
+        # An idle tab still holds the report from its last turn, maybe days old. The newest report wins, for the saved
+        # file and for this tab's allowance rings; the context ring stays this tab's own.
+        windows, reported, inherited = newest['windows'], newest.get('reported_at'), True
+    elif windows:
         saved = json.dumps({'windows': windows, 'reported_at': reported})
         if (str(RATES_FILE), saved) != LAST_RATES[0] or not RATES_FILE.exists():  # rewrite if the file moved or was deleted
             try:
@@ -697,13 +706,11 @@ def codex_metrics(config, reported_usage, model='', effort='', credits=None):
                 LAST_RATES[0] = (str(RATES_FILE), saved)
             except OSError:
                 pass
+    elif newest:
+        windows, reported, inherited = newest['windows'], newest.get('reported_at'), True
     else:
-        try:
-            saved = json.loads(RATES_FILE.read_text())
-            windows, reported, inherited = saved['windows'], saved.get('reported_at'), True
-        except (OSError, ValueError, KeyError, TypeError):
-            windows, reported = recent_rates()
-            inherited = bool(windows)
+        windows, reported = recent_rates()
+        inherited = bool(windows)
     try:
         screen = capture(config)
     except (OSError, ValueError, KeyError, subprocess.SubprocessError):

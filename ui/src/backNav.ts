@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import type { Screen } from './Rail'
 
 export type Place = { pane?: string; screen: Screen }
@@ -95,7 +95,7 @@ export function setPlaceHandler(fn: ((place: Place) => void) | null) {
 
 export function useBackStep(open: boolean, close: () => void) {
   const latest = useRef(close)
-  latest.current = close
+  useLayoutEffect(() => { latest.current = close }, [close])
   useEffect(() => {
     if (!open) return
     const id = openOverlay(() => latest.current())

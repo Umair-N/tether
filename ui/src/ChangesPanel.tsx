@@ -43,7 +43,8 @@ export function ChangesPanel({ api, pane, folder, active }: PanelProps) {
       if (!signal.aborted) { setData(result); setError('') }
     } catch (failure) { if (!signal.aborted) setError(errorText(failure)) }
   }, [api, query])
-  useEffect(() => { setData(null); setError('') }, [query])
+  const [previousQuery, setPreviousQuery] = useState(query)
+  if (query !== previousQuery) { setPreviousQuery(query); setData(null); setError('') }
   usePanelPoll(load, POLL_MS, active)
   const [picked, choose] = useRepoChoice(api, data?.folder)
 

@@ -47,7 +47,12 @@ export function AskForm({ ask, disabled, onAnswer, onEngage }: { ask: AskBridge;
   const expires = Math.max(ask.expires, renewed)
   const [left, setLeft] = useState(() => secondsLeft(expires))
   const lastEngage = useRef(0)
-  useEffect(() => { setPicked({}); setOther({}); setFailed(''); setRenewed(0); lastEngage.current = 0 }, [ask.id, ask.nonce])
+  const [identity, setIdentity] = useState({ id: ask.id, nonce: ask.nonce })
+  if (identity.id !== ask.id || identity.nonce !== ask.nonce) {
+    setIdentity({ id: ask.id, nonce: ask.nonce }); setPicked({}); setOther({}); setFailed(''); setRenewed(0)
+  }
+  useEffect(() => { lastEngage.current = 0 }, [ask.id, ask.nonce])
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- Resync the clock immediately when the deadline changes instead of waiting up to one second for the interval.
   useEffect(() => { const timer = setInterval(() => setLeft(secondsLeft(expires)), 1000); setLeft(secondsLeft(expires)); return () => clearInterval(timer) }, [expires])
   // At most one call per 5 s. A hidden page never renews: a phone left on a desk must not hold the question.
   const engage = useCallback(() => {  // at most one call per 5 s

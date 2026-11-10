@@ -10,14 +10,14 @@ export type Media = { name: string; url: string; kind?: 'image' | 'video' | 'aud
 export function ImageViewer({ image, close, onShow, onDetails, items = [], onSelect }: {
   image: Media | null; close: () => void; onShow?: () => void; onDetails?: () => void; items?: Media[]; onSelect?: (image: Media) => void
 }) {
-  const modal = useModal(!!image, close)
+  const { ref, onCancel } = useModal(!!image, close)
   // The installed app draws its window controls in the theme color: match the dark surface while it shows.
   const showing = !!image
   useEffect(() => showing ? holdThemeColor('#0b0c0e') : undefined, [showing])
   const index = image ? items.findIndex(item => item.url === image.url) : -1
   const grouped = index >= 0 && items.length > 1 && !!onSelect
   const move = (delta: number) => { const next = items[index + delta]; if (grouped && next) onSelect?.(next) }
-  return <dialog ref={modal.ref} onCancel={modal.onCancel} className="image-viewer" aria-label={image?.name ?? 'Media viewer'}
+  return <dialog ref={ref} onCancel={onCancel} className="image-viewer" aria-label={image?.name ?? 'Media viewer'}
     onTouchStart={event => event.stopPropagation()} onTouchMove={event => event.stopPropagation()}
     onTouchEnd={event => event.stopPropagation()} onTouchCancel={event => event.stopPropagation()}
     onKeyDown={event => {
@@ -40,9 +40,10 @@ function ViewerContent({ image, close, onShow, onDetails, move, index, total, it
   const natural = dimensions.url === image.url ? dimensions : { width: 0, height: 0 }
   const [size, setSize] = useState({ width: 0, height: 0 })
   const stage = useRef<HTMLDivElement>(null)
-  const touch = useRef<{ x: number; y: number; time: number; lastX: number; lastAt: number; speed: number; dragging: boolean } | null>(null)
+  const touch = useRef<{ x: number; y: number; time: number; lastX: number; lastY: number; lastAt: number; speed: number; axis: 'wait' | 'x' | 'y' } | null>(null)
   const lastTap = useRef<{ x: number; y: number; time: number } | null>(null)
   const track = useRef<HTMLDivElement>(null)
+  const background = useRef<HTMLDivElement>(null)
   const motion = useRef<{ timer?: ReturnType<typeof setTimeout>; frame?: number; selected?: string }>({})
   const selection = useRef({ url: image.url, index })
   const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -51,22 +52,45 @@ function ViewerContent({ image, close, onShow, onDetails, move, index, total, it
     if (motion.current.frame) cancelAnimationFrame(motion.current.frame)
     motion.current.timer = undefined; motion.current.frame = undefined
   }
-  const translate = (x: number, duration = 0) => {
+  const translate = (x: number, duration = 0, y = 0) => {
     const node = track.current
     if (!node) return
-    node.style.transition = duration ? `transform ${duration}ms cubic-bezier(.2,.8,.2,1)` : 'none'
-    node.style.transform = `translate3d(${x}px,0,0)`
+    // Neighbor slides stay hidden while the photo shrinks and snaps back.
+    if (y && !node.dataset.dismiss) node.dataset.dismiss = 'true'
+    else if (!y && (x || !duration)) delete node.dataset.dismiss
+    const progress = Math.min(1, Math.max(0, y / (stage.current?.clientHeight || 1)))
+    const curve = `${duration}ms cubic-bezier(.32,.72,0,1)`
+    node.style.transition = duration ? `transform ${curve}, opacity ${curve}` : 'none'
+    node.style.transform = `translate3d(${x}px,${y}px,0) scale(${1 - progress * .15})`
+    node.style.opacity = `${1 - progress}`
+    if (background.current) {
+      background.current.style.transition = duration ? `opacity ${curve}` : 'none'
+      background.current.style.opacity = `${1 - progress}`
+    }
+  }
+  const horizontalX = (x: number) => {
+    if (!items[index + (x < 0 ? 1 : -1)]) return x * .25
+    return Math.abs(x) > size.width ? Math.sign(x) * (size.width + (Math.abs(x) - size.width) * .25) : x
   }
   const finishSwipe = (dx: number, speed: number) => {
     const delta = dx < 0 ? 1 : -1
     const next = items[index + delta]
-    const fling = Math.abs(speed) > .35 && Math.sign(speed) === Math.sign(dx) && Math.abs(dx) > 40
+    const fling = !reduced() && Math.abs(speed) > .35 && Math.sign(speed) === Math.sign(dx)
     if (!next || !(Math.abs(dx) > size.width * .3 || fling)) { translate(0, reduced() ? 0 : 220); return }
     if (reduced()) { move(delta); return }
-    const duration = Math.round(Math.min(280, Math.max(140, (size.width - Math.min(Math.abs(dx), size.width)) / Math.max(Math.abs(speed), 1.2))))
+    const remaining = Math.abs(Math.sign(dx) * size.width - horizontalX(dx))
+    const duration = Math.round(Math.min(320, Math.max(140, remaining / Math.max(Math.abs(speed), 1.2))))
     motion.current.selected = next.url
     translate(Math.sign(dx) * size.width, duration)
     motion.current.timer = setTimeout(() => { motion.current.timer = undefined; move(delta) }, duration)
+  }
+  const finishDown = (dy: number, speed: number) => {
+    const height = stage.current?.clientHeight || 1
+    if (!(dy > height * .25 || !reduced() && speed > .5)) { translate(0, reduced() ? 0 : 220); return }
+    if (reduced()) { close(); return }
+    const duration = Math.round(Math.min(320, Math.max(140, Math.abs(height - dy) / Math.max(Math.abs(speed), 1.2))))
+    translate(0, duration, Math.max(height, dy))
+    motion.current.timer = setTimeout(() => { motion.current.timer = undefined; close() }, duration)
   }
   useLayoutEffect(() => {
     const previous = selection.current
@@ -103,7 +127,17 @@ function ViewerContent({ image, close, onShow, onDetails, move, index, total, it
       box.scrollTop = zoomed ? Math.max(0, origin.current.y * height - box.clientHeight / 2) : 0
     }
   }, [zoomed, width, height])
+  useLayoutEffect(() => {
+    const box = stage.current
+    if (!box) return
+    const move = (event: TouchEvent) => {
+      if (!zoomed && touch.current && touch.current.axis !== 'wait' && event.touches.length === 1 && event.cancelable) event.preventDefault()
+    }
+    box.addEventListener('touchmove', move, { passive: false })
+    return () => box.removeEventListener('touchmove', move)
+  }, [zoomed])
   const toggle = (x?: number, y?: number) => {
+    stopMotion(); translate(0); motion.current.selected = undefined
     const img = stage.current?.querySelector('[data-current="true"] img')
     if (img && x !== undefined && y !== undefined) {
       const rect = img.getBoundingClientRect()
@@ -112,6 +146,7 @@ function ViewerContent({ image, close, onShow, onDetails, move, index, total, it
     setZoom({ url: image.url, value: !zoomed })
   }
   return <>
+    <div ref={background} className="viewer-background" aria-hidden="true" />
     <header className="viewer-head">
       <button type="button" className="viewer-button viewer-close" onClick={close} aria-label="Close viewer" title="Close viewer" autoFocus><X size={21} strokeWidth={1.8} /></button>
       <div className="viewer-title"><p className="viewer-name" title={image.name}>{image.name.split('/').pop()}</p>
@@ -124,35 +159,46 @@ function ViewerContent({ image, close, onShow, onDetails, move, index, total, it
         {onDetails && <button type="button" className="viewer-button" onClick={onDetails} aria-label="File details and actions" title="File details and actions"><Ellipsis size={21} /></button>}
       </div>
     </header>
-    <div ref={stage} className={`viewer-stage${zoomed ? ' zoomed' : ''}`} tabIndex={zoomed ? 0 : undefined} aria-label={zoomed ? 'Zoomed image. Scroll to pan.' : undefined}
+    <div ref={stage} className={`viewer-stage${kind === 'image' ? ' viewer-photo' : ''}${zoomed ? ' zoomed' : ''}`} tabIndex={zoomed ? 0 : undefined} aria-label={zoomed ? 'Zoomed image. Scroll to pan.' : undefined}
       onTouchStart={event => {
-        if (motion.current.timer) return
-        stopMotion()
+        const matrix = track.current ? new DOMMatrix(getComputedStyle(track.current).transform) : new DOMMatrix()
+        stopMotion(); motion.current.selected = undefined
         const finger = event.touches[0]
-        touch.current = kind === 'image' && event.touches.length === 1 ? { x: finger.clientX, y: finger.clientY, time: Date.now(), lastX: finger.clientX, lastAt: performance.now(), speed: 0, dragging: false } : null
-        if (event.touches.length !== 1) { lastTap.current = null; translate(0) }
+        if (kind !== 'image' || event.touches.length !== 1) { touch.current = null; lastTap.current = null; translate(0); return }
+        const x = zoomed ? 0 : matrix.m41, y = zoomed ? 0 : matrix.m42
+        const rawX = !items[index + (x < 0 ? 1 : -1)] ? x * 4
+          : Math.abs(x) > size.width ? Math.sign(x) * (size.width + (Math.abs(x) - size.width) * 4) : x
+        translate(x, 0, y)
+        touch.current = { x: finger.clientX - rawX, y: finger.clientY - (y < 0 ? y * 4 : y), time: Date.now(), lastX: finger.clientX, lastY: finger.clientY, lastAt: performance.now(), speed: 0, axis: Math.abs(y) > .5 ? 'y' : Math.abs(x) > .5 ? 'x' : 'wait' }
       }}
       onTouchMove={event => {
         const start = touch.current
         if (!start || zoomed || event.touches.length !== 1) return
         const finger = event.touches[0], dx = finger.clientX - start.x, dy = finger.clientY - start.y
-        if (!start.dragging) {
+        if (start.axis === 'wait') {
           if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return
-          if (Math.abs(dx) < Math.abs(dy) * 1.5) { touch.current = null; return }
-          start.dragging = true; lastTap.current = null
+          if (Math.abs(dy) > Math.abs(dx) * 1.2) start.axis = 'y'
+          else if (Math.abs(dx) > Math.abs(dy) * 1.5) start.axis = 'x'
+          else return
+          lastTap.current = null
         }
         const now = performance.now()
-        if (now > start.lastAt) start.speed = start.speed * .4 + (finger.clientX - start.lastX) / (now - start.lastAt) * .6
-        start.lastX = finger.clientX; start.lastAt = now
-        translate(items[index + (dx < 0 ? 1 : -1)] ? dx : dx * .25)
+        if (now > start.lastAt) start.speed = start.speed * .4 + ((start.axis === 'x' ? finger.clientX - start.lastX : finger.clientY - start.lastY) / (now - start.lastAt)) * .6
+        start.lastX = finger.clientX; start.lastY = finger.clientY; start.lastAt = now
+        if (start.axis === 'y') translate(0, 0, dy < 0 ? dy * .25 : dy)
+        else translate(horizontalX(dx))
       }}
-      onTouchCancel={() => { touch.current = null; lastTap.current = null; translate(0, reduced() ? 0 : 220) }}
+      onTouchCancel={() => { touch.current = null; lastTap.current = null; stopMotion(); translate(0, reduced() ? 0 : 220) }}
       onTouchEnd={event => {
         const start = touch.current; touch.current = null
         if (!start || event.touches.length) return
         const end = event.changedTouches[0], dx = end.clientX - start.x, dy = end.clientY - start.y
-        if (!zoomed && (start.dragging || Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5)) {
-          lastTap.current = null; finishSwipe(dx, start.speed); return
+        if (!zoomed && start.axis !== 'wait') {
+          lastTap.current = null
+          const speed = performance.now() - start.lastAt > 100 ? 0 : start.speed
+          if (start.axis === 'y') finishDown(dy, speed)
+          else finishSwipe(dx, speed)
+          return
         }
         if (kind !== 'image' || Math.abs(dx) > 12 || Math.abs(dy) > 12 || Date.now() - start.time > 300) { lastTap.current = null; return }
         const previous = lastTap.current

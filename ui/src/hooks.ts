@@ -67,16 +67,107 @@ export function usePolling<T>(fetcher: (signal: AbortSignal) => Promise<T>, inte
   return { data, error, loading, refresh }
 }
 
-export function useModal(open: boolean, close: () => void) {
+export function useModal(open: boolean, close: () => void, drawer?: { onInterrupt: () => void }) {
   useBackStep(open, close)
   const ref = useRef<HTMLDialogElement>(null)
   const opened = useRef(0)
+  const horizontal = !!drawer
+  const latest = useRef({ close, interrupt: drawer?.onInterrupt })
+  useLayoutEffect(() => { latest.current = { close, interrupt: drawer?.onInterrupt } })
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const suppressClick = useRef(0)
+  const start = useRef<{ x: number; y: number; offset: number; last: number; at: number; speed: number; locked: boolean } | null>(null)
+  const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches
+  const position = useCallback((dialog: HTMLDialogElement) => {
+    const transform = getComputedStyle(dialog).transform
+    const matrix = transform === 'none' ? null : new DOMMatrix(transform)
+    return (horizontal ? matrix?.m41 : matrix?.m42) ?? 0
+  }, [horizontal])
+  const move = useCallback((dialog: HTMLDialogElement, offset: number, ms = 0) => {
+    const size = horizontal ? dialog.offsetWidth : dialog.offsetHeight
+    dialog.style.transition = ms ? `transform ${ms}ms cubic-bezier(.32,.72,0,1)` : 'none'
+    dialog.style.transform = `translate${horizontal ? 'X' : 'Y'}(${offset}px)`
+    dialog.style.setProperty('--sheet-duration', `${ms}ms`)
+    dialog.style.setProperty('--sheet-progress', String(Math.max(0, Math.min(1, (horizontal ? -offset : offset) / (size || 1)))))
+  }, [horizontal])
+  const reset = useCallback((dialog: HTMLDialogElement) => {
+    clearTimeout(timer.current); timer.current = undefined; start.current = null
+    dialog.style.removeProperty('transform'); dialog.style.removeProperty('transition')
+    dialog.style.removeProperty('--sheet-progress'); dialog.style.removeProperty('--sheet-duration')
+  }, [])
+  const finish = useCallback((dismiss: boolean, speed = 0, notify = true) => {
+    const dialog = ref.current
+    if (!dialog?.open) return
+    clearTimeout(timer.current)
+    const from = position(dialog), size = horizontal ? dialog.offsetWidth : dialog.offsetHeight
+    const to = dismiss ? (horizontal ? -size : size) : 0
+    const ms = reduced() || Math.abs(to - from) < 1 ? 0 : dismiss ? Math.round(Math.max(140, Math.min(320, Math.abs(to - from) / Math.max(Math.abs(speed), 1.2)))) : 220
+    move(dialog, from)
+    // Commit the caught position before changing the transition's destination.
+    void dialog.offsetWidth
+    move(dialog, to, ms)
+    const done = () => {
+      timer.current = undefined
+      if (!dismiss) { reset(dialog); return }
+      if (!notify) { dialog.close(); reset(dialog); return }
+      latest.current.close()
+      // A guarded close can refuse dismissal while a request is pending. Give React time to close the dialog
+      // before the sheet comes back, so a normal close does not flash the sheet upward.
+      timer.current = setTimeout(() => {
+        timer.current = undefined
+        if (!dialog.open) { reset(dialog); return }
+        const back = reduced() ? 0 : 220
+        move(dialog, 0, back)
+        if (back) timer.current = setTimeout(() => reset(dialog), back)
+        else reset(dialog)
+      }, 80)
+    }
+    if (ms) timer.current = setTimeout(done, ms)
+    else done()
+  }, [horizontal, move, position, reset])
   useEffect(() => {
     const dialog = ref.current
-    if (open) { dialog?.showModal(); opened.current = Date.now() }
-    else dialog?.close()
-  }, [open])
-  const start = useRef<{ y: number; x: number } | null>(null)
+    if (!dialog) return
+    if (open) {
+      if (!dialog.open) { reset(dialog); dialog.showModal(); opened.current = Date.now() }
+      else if (!start.current && timer.current !== undefined) finish(false)
+    } else if (horizontal && dialog.open) finish(true, 0, false)
+    else { dialog.close(); reset(dialog) }
+  }, [open, horizontal, finish, reset])
+  useEffect(() => {
+    const dialog = ref.current
+    if (!dialog) return
+    const cancel = () => { if (start.current) { start.current = null; finish(false) } }
+    const moveTouch = (event: TouchEvent) => {
+      const from = start.current
+      if (!from) return
+      if (event.touches.length !== 1) { cancel(); return }
+      const touch = event.touches[0], dx = touch.clientX - from.x, dy = touch.clientY - from.y
+      const delta = horizontal ? dx : dy, across = horizontal ? dy : dx
+      if (!from.locked) {
+        // Claim a downward pull at once: if Chrome starts a native scroll first, later moves cannot be cancelled.
+        if (!horizontal && delta > 0 && delta >= Math.abs(across)) event.preventDefault()
+        if (Math.max(Math.abs(delta), Math.abs(across)) < 10) return
+        if (Math.abs(delta) <= Math.abs(across) * 1.2 || (!horizontal && delta <= 0)) { cancel(); return }
+        from.locked = true
+      }
+      event.preventDefault()
+      const now = performance.now(), point = horizontal ? touch.clientX : touch.clientY
+      if (now > from.at) from.speed = from.speed * 0.4 + (point - from.last) / (now - from.at) * 0.6
+      from.last = point; from.at = now
+      const offset = from.offset + delta
+      move(dialog, (horizontal ? offset > 0 : offset < 0) ? offset * 0.25 : offset)
+      suppressClick.current = Date.now() + 400
+    }
+    const closed = () => reset(dialog)
+    dialog.addEventListener('touchmove', moveTouch, { passive: false })
+    dialog.addEventListener('close', closed)
+    return () => {
+      clearTimeout(timer.current); timer.current = undefined
+      dialog.removeEventListener('touchmove', moveTouch)
+      dialog.removeEventListener('close', closed)
+    }
+  }, [horizontal, move, finish, reset])
   return {
     ref,
     onCancel: (event: React.SyntheticEvent) => { event.preventDefault(); close() },
@@ -85,18 +176,37 @@ export function useModal(open: boolean, close: () => void) {
       const box = event.currentTarget.getBoundingClientRect()
       if (Date.now() - opened.current > 400 && event.target === event.currentTarget && (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom)) close()
     },
-    // A swipe down closes the sheet, unless the finger started in content that is scrolled down.
-    onTouchStart: (event: React.TouchEvent<HTMLDialogElement>) => {
-      let node = event.target as HTMLElement | null, scrolled = false
-      for (; node && node !== event.currentTarget.parentElement; node = node.parentElement) if (node.scrollTop > 0) scrolled = true
-      start.current = scrolled ? null : { x: event.touches[0].clientX, y: event.touches[0].clientY }
+    onClickCapture: (event: React.MouseEvent<HTMLDialogElement>) => {
+      if (Date.now() < suppressClick.current) { event.preventDefault(); event.stopPropagation() }
     },
-    onTouchEnd: (event: React.TouchEvent<HTMLDialogElement>) => {
+    onTouchStart: (event: React.TouchEvent<HTMLDialogElement>) => {
+      if (event.touches.length !== 1) { if (start.current) finish(false); start.current = null; return }
+      start.current = null
+      const dialog = event.currentTarget
+      if (!horizontal && (!dialog.classList.contains('sheet') || dialog.classList.contains('popover') || matchMedia('(min-width: 600px)').matches)) return
+      if (horizontal && (event.target as Element).closest('.swipe-row')) return
+      for (let node = event.target as HTMLElement | null; !horizontal && node && node !== dialog.parentElement; node = node.parentElement) if (node.scrollTop > 0) return
+      const touch = event.touches[0], box = dialog.getBoundingClientRect()
+      if (touch.clientX < box.left || touch.clientX > box.right || touch.clientY < box.top || touch.clientY > box.bottom) return
+      const offset = position(dialog), interrupted = timer.current !== undefined
+      clearTimeout(timer.current); timer.current = undefined
+      move(dialog, offset)
+      start.current = { x: touch.clientX, y: touch.clientY, offset: (horizontal ? offset > 0 : offset < 0) ? offset * 4 : offset, last: horizontal ? touch.clientX : touch.clientY, at: performance.now(), speed: 0, locked: false }
+      if (interrupted && horizontal) latest.current.interrupt?.()
+    },
+    onTouchEnd: () => {
       const from = start.current; start.current = null
       if (!from) return
-      const dy = event.changedTouches[0].clientY - from.y, dx = event.changedTouches[0].clientX - from.x
-      if (dy > 80 && Math.abs(dx) < dy * 0.6) close()
+      const dialog = ref.current
+      if (!dialog) return
+      const offset = position(dialog), size = horizontal ? dialog.offsetWidth : dialog.offsetHeight
+      const distance = horizontal ? -offset : offset
+      // A pause before release is not a fling.
+      const speed = performance.now() - from.at > 100 || reduced() ? 0 : from.speed
+      finish(from.locked && (distance > size * 0.4 || (horizontal ? speed < -0.4 : speed > 0.5)), speed)
+      if (from.locked) suppressClick.current = Date.now() + 400
     },
+    onTouchCancel: () => { if (start.current) { start.current = null; finish(false) } },
   }
 }
 

@@ -1,7 +1,8 @@
 /* Shared photo surface. Controls use one scale and stay clear of the image. */
-.image-viewer { --viewer-bg: #0b0c0e; --viewer-text: #f4f4f5; --viewer-muted: #94979f; --viewer-hover: #ffffff12; position: fixed; inset: 0; box-sizing: border-box; width: 100%; height: 100dvh; max-width: none; max-height: none; margin: 0; padding: 0; border: 0; border-radius: 0; background: var(--viewer-bg); color: var(--viewer-text); color-scheme: dark; display: none; flex-direction: column; gap: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+.image-viewer { --viewer-bg: #0b0c0e; --viewer-text: #f4f4f5; --viewer-muted: #94979f; --viewer-hover: #ffffff12; position: fixed; inset: 0; box-sizing: border-box; width: 100%; height: 100dvh; max-width: none; max-height: none; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; isolation: isolate; color: var(--viewer-text); color-scheme: dark; display: none; flex-direction: column; gap: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 .image-viewer[open] { display: flex; }
-.image-viewer::backdrop { background: var(--viewer-bg); }
+.image-viewer::backdrop { background: transparent; }
+.viewer-background { position: absolute; inset: 0; z-index: -1; pointer-events: none; background: var(--viewer-bg); }
 .image-viewer .viewer-head { display: flex; align-items: center; gap: 12px; flex-shrink: 0; width: 100%; box-sizing: border-box; padding: max(12px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 12px max(16px, env(safe-area-inset-left)); }
 .viewer-title { flex: 1; min-width: 0; }
 .image-viewer .viewer-name { margin: 0; color: var(--viewer-text); font: 500 13px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -15,6 +16,7 @@
 .image-viewer .viewer-button[aria-pressed="true"] { color: #fff; background: #ffffff1a; }
 .image-viewer .viewer-button:disabled { opacity: .22; cursor: default; }
 .viewer-stage { flex: 1; min-height: 0; width: 100%; overflow: hidden; overscroll-behavior: contain; touch-action: pan-y pinch-zoom; position: relative; }
+.viewer-stage.viewer-photo { touch-action: pinch-zoom; }
 .viewer-stage.zoomed { overflow: auto; touch-action: pan-x pan-y pinch-zoom; }
 .viewer-image-space { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 100%; height: 100%; }
 .image-viewer .viewer-stage img { display: block; flex-shrink: 0; max-width: none; max-height: none; width: auto; height: auto; object-fit: contain; border-radius: 0; user-select: none; cursor: zoom-in; }
@@ -26,17 +28,19 @@
 .viewer-filmstrip { display: flex; justify-content: center; align-items: center; gap: 12px; max-width: 480px; margin: 0 auto; }
 .viewer-thumbnails { display: flex; align-items: center; gap: 6px; min-width: 0; overflow-x: auto; padding: 4px; scrollbar-width: none; }
 .viewer-thumbnails::-webkit-scrollbar { display: none; }
-.image-viewer .viewer-thumbnail { display: block; flex-shrink: 0; width: 44px; height: 48px; padding: 0; border: 0; border-radius: 5px; background: #ffffff0c; cursor: pointer; opacity: .5; outline: 2px solid transparent; outline-offset: 2px; overflow: hidden; -webkit-tap-highlight-color: transparent; }
+.image-viewer .viewer-thumbnail { position: relative; display: block; flex-shrink: 0; width: 44px; height: 48px; padding: 0; border: 0; border-radius: 5px; background: #ffffff0c; cursor: pointer; opacity: .5; outline: 2px solid transparent; outline-offset: 2px; -webkit-tap-highlight-color: transparent; }
+.image-viewer .viewer-thumbnail::before { content: ""; position: absolute; inset: min(0px, calc((100% - 44px) / 2)) 0; }
 .image-viewer .viewer-thumbnail[aria-current="true"] { opacity: 1; outline-color: #f4f4f5; }
-.image-viewer .viewer-thumbnail img { width: 100%; height: 100%; object-fit: cover; }
+.image-viewer .viewer-thumbnail img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
 @media (max-width: 480px) { .image-viewer .viewer-head { gap: 8px; padding-left: 12px; padding-right: 8px; } .viewer-actions { gap: 0; } .viewer-filmstrip { gap: 4px; } .viewer-footer { padding-top: 16px; padding-bottom: max(16px, env(safe-area-inset-bottom)); } }
 @media (max-height: 420px) { .image-viewer .viewer-head { padding-top: 4px; padding-bottom: 4px; } .viewer-footer { padding-top: 6px; padding-bottom: max(6px, env(safe-area-inset-bottom)); } .image-viewer .viewer-thumbnail { height: 36px; } }
 
 .viewer-track { position: relative; min-width: 100%; min-height: 100%; will-change: transform; }
 .viewer-slide { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
 .viewer-slide[aria-hidden="true"] { pointer-events: none; }
+.viewer-track[data-dismiss] .viewer-slide[aria-hidden="true"] { opacity: 0; }
 .viewer-loading { position: absolute; width: 20px; height: 20px; border: 2px solid #ffffff24; border-top-color: #fff; border-radius: 50%; animation: viewer-spin .8s linear infinite; }
 @keyframes viewer-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .viewer-track { transition: none !important; } .viewer-loading { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .viewer-track, .viewer-background { transition: none !important; } .viewer-loading { animation: none; } }
 
 .viewer-stage:has(> video), .viewer-stage:has(> audio), .viewer-stage:has(> .viewer-error) { display: flex; align-items: center; justify-content: center; }

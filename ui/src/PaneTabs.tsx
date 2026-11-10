@@ -1,4 +1,4 @@
-import { createPortal } from 'react-dom'
+import { createPortal, flushSync } from 'react-dom'
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
 import { useWords } from './words'
 import { Eye, Plus } from 'lucide-react'
@@ -85,8 +85,9 @@ function scrollTo(strip: HTMLElement, left: number, ms: number) {
   scrollTween.set(strip, requestAnimationFrame(step))
 }
 
-interface Drag { id: string; startX: number; startY: number; lifted: boolean; moved: boolean; touch: boolean; timer: number; centers: { id: string; x: number }[] }
+interface Drag { id: string; tab: HTMLElement; startX: number; startY: number; startLeft: number; scroll: number; x: number; lastAt: number; speed: number; lifted: boolean; moved: boolean; touch: boolean; timer: number; centers: { id: string; x: number }[] }
 const HOLD_MS = 350
+const REORDER_CURVE = 'cubic-bezier(.32,.72,0,1)'
 
 // Tabs for the panes of one session. Reorder: long-press a tab, then drag it (a mouse drags at once).
 // A long press without a drag opens the pane actions, as before. Only Tether's order changes; tmux panes stay put.
@@ -175,46 +176,114 @@ export const PaneTabs = forwardRef<HTMLDivElement, Props>(function PaneTabs({ se
     const box = strip.current
     if (!box) return
     const tabOf = (target: EventTarget | null) => (target as Element | null)?.closest<HTMLElement>('[data-pane]')
+    const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches
+    const timers = new Map<HTMLElement, number>()
+    let clickTimer = 0
+    const stop = (tab: HTMLElement) => {
+      const transform = getComputedStyle(tab).transform
+      const x = transform === 'none' ? 0 : new DOMMatrix(transform).m41
+      window.clearTimeout(timers.get(tab)); timers.delete(tab)
+      tab.style.transition = 'none'
+      tab.style.transform = `translateX(${x}px)`
+      return x
+    }
+    const settle = (tab: HTMLElement, held = false) => {
+      const clear = () => {
+        tab.style.transition = ''; tab.style.transform = ''
+        timers.delete(tab)
+        if (held) setDragging(now => now === tab.dataset.pane ? null : now)
+      }
+      window.clearTimeout(timers.get(tab))
+      if (reduced()) { clear(); return }
+      void tab.offsetWidth
+      tab.style.transition = `transform 200ms ${REORDER_CURVE}`
+      tab.style.transform = 'translateX(0px)'
+      timers.set(tab, window.setTimeout(clear, 200))
+    }
+    // Measure visual positions so another crossing can interrupt a FLIP in flight.
+    const rearrange = (state: Drag, update: () => void) => {
+      const tabs = [...box.querySelectorAll<HTMLElement>('[data-pane]')]
+      const scroll = box.scrollLeft
+      const left = box.getBoundingClientRect().left - scroll
+      const before = new Map(tabs.map(tab => [tab, tab.getBoundingClientRect().left - left]))
+      flushSync(update)
+      box.scrollLeft = scroll
+      for (const tab of tabs) {
+        if (!tab.isConnected) continue
+        window.clearTimeout(timers.get(tab)); timers.delete(tab)
+        tab.style.transition = 'none'
+        const dx = before.get(tab)! - tab.offsetLeft
+        tab.style.transform = `translateX(${dx}px)`
+        if (tab !== state.tab) settle(tab)
+      }
+    }
+    const begin = (tab: HTMLElement, x: number, y: number, touch: boolean): Drag => ({
+      id: tab.dataset.pane!, tab, startX: x, startY: y, startLeft: tab.offsetLeft + stop(tab), scroll: box.scrollLeft,
+      x, lastAt: performance.now(), speed: 0, lifted: false, moved: false, touch, timer: 0, centers: [],
+    })
     // Tab centers in strip coordinates, so a scrolled strip still maps the finger to the right slot.
     const lift = (state: Drag) => {
-      const left = box.getBoundingClientRect().left - box.scrollLeft
-      state.centers = [...box.querySelectorAll<HTMLElement>('[data-pane]')].map(tab => { const rect = tab.getBoundingClientRect(); return { id: tab.dataset.pane!, x: rect.left - left + rect.width / 2 } })
+      state.centers = [...box.querySelectorAll<HTMLElement>('[data-pane]')].map(tab => ({ id: tab.dataset.pane!, x: tab.offsetLeft + tab.offsetWidth / 2 }))
       state.lifted = true
       if (state.touch) navigator.vibrate?.(15)
       setDragging(state.id)
       setPreview(latest.current.ids)
     }
-    const move = (state: Drag, x: number) => {
+    const move = (state: Drag, x: number, carry = 0) => {
       const rect = box.getBoundingClientRect()
       if (x < rect.left + 32) box.scrollLeft -= 8
       else if (x > rect.right - 32) box.scrollLeft += 8
-      const at = x - rect.left + box.scrollLeft
+      const tabs = [...box.querySelectorAll<HTMLElement>('[data-pane]')]
+      const min = Math.min(...tabs.map(tab => tab.offsetLeft))
+      const max = Math.max(...tabs.map(tab => tab.offsetLeft + tab.offsetWidth)) - state.tab.offsetWidth
+      const left = state.startLeft + x - state.startX + box.scrollLeft - state.scroll
+      const bound = Math.max(min, Math.min(max, left))
+      state.tab.style.transition = 'none'
+      state.tab.style.transform = `translateX(${bound + (left - bound) * .25 - state.tab.offsetLeft}px)`
+      if (!state.moved) return
+      const at = x + carry - rect.left + box.scrollLeft
       const others = state.centers.filter(item => item.id !== state.id)
       const slot = others.filter(item => item.x < at).length
       const next = others.map(item => item.id)
       next.splice(slot, 0, state.id)
-      if (previewNow.current?.join() !== next.join()) setPreview(next)
+      if (previewNow.current?.join() !== next.join()) rearrange(state, () => setPreview(next))
+    }
+    const track = (state: Drag, x: number) => {
+      const now = performance.now()
+      if (now > state.lastAt) state.speed = state.speed * .4 + (x - state.x) / (now - state.lastAt) * .6
+      state.x = x; state.lastAt = now
+      move(state, x)
     }
     const finish = (commit: boolean) => {
       const state = drag.current
       drag.current = null
       if (!state) return
       window.clearTimeout(state.timer)
+      if (commit && state.moved && !reduced() && performance.now() - state.lastAt < 80 && Math.abs(state.speed) > .4 && Math.sign(state.speed) === Math.sign(state.x - state.startX)) {
+        const direction = Math.sign(state.speed)
+        const neighbor = state.centers[state.centers.findIndex(item => item.id === state.id) + direction]
+        const edge = neighbor ? neighbor.x + box.getBoundingClientRect().left - box.scrollLeft + direction : state.x
+        const projected = state.x + state.speed * 100
+        move(state, state.x, (direction > 0 ? Math.max(edge, projected) : Math.min(edge, projected)) - state.x)
+      }
       if (state.lifted) {
         suppressClick.current = true
-        window.setTimeout(() => { suppressClick.current = false }, 400)
+        window.clearTimeout(clickTimer)
+        clickTimer = window.setTimeout(() => { suppressClick.current = false }, 400)
         const order = previewNow.current
-        if (commit && state.moved && order && order.join() !== latest.current.ids.join()) latest.current.onReorder(order)
-        setPreview(null)
+        rearrange(state, () => {
+          if (commit && state.moved && order && order.join() !== latest.current.ids.join()) latest.current.onReorder(order)
+          setPreview(null)
+        })
         if (commit && !state.moved && state.touch) latest.current.onPaneActions(state.id)
       }
-      setDragging(null)
+      settle(state.tab, true)
     }
     const touchStart = (event: TouchEvent) => {
       const tab = tabOf(event.target)
       if (!tab || event.touches.length > 1) return
       const touch = event.touches[0]
-      const state: Drag = { id: tab.dataset.pane!, startX: touch.clientX, startY: touch.clientY, lifted: false, moved: false, touch: true, timer: 0, centers: [] }
+      const state = begin(tab, touch.clientX, touch.clientY, true)
       state.timer = window.setTimeout(() => { if (drag.current === state) lift(state) }, HOLD_MS)
       drag.current = state
     }
@@ -224,18 +293,18 @@ export const PaneTabs = forwardRef<HTMLDivElement, Props>(function PaneTabs({ se
       const touch = event.touches[0]
       if (!state.lifted) {
         // The finger moved before the hold time: this is a scroll of the strip, not a drag.
-        if (Math.hypot(touch.clientX - state.startX, touch.clientY - state.startY) > 10) { window.clearTimeout(state.timer); drag.current = null }
+        if (Math.hypot(touch.clientX - state.startX, touch.clientY - state.startY) > 10) finish(false)
         return
       }
       event.preventDefault()
       if (Math.abs(touch.clientX - state.startX) > 6) state.moved = true
-      if (state.moved) move(state, touch.clientX)
+      track(state, touch.clientX)
     }
     const touchEnd = (event: TouchEvent) => { if (drag.current?.lifted) event.preventDefault(); finish(event.type === 'touchend') }
     const mouseDown = (event: MouseEvent) => {
       const tab = tabOf(event.target)
       if (!tab || event.button !== 0) return
-      drag.current = { id: tab.dataset.pane!, startX: event.clientX, startY: event.clientY, lifted: false, moved: false, touch: false, timer: 0, centers: [] }
+      drag.current = begin(tab, event.clientX, event.clientY, false)
     }
     // A group in the group row under the pointer, while a tab is dragged (desktop only).
     const dropAt = (x: number, y: number) => latest.current.onDropGroup ? document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-group-drop]') ?? null : null
@@ -247,7 +316,7 @@ export const PaneTabs = forwardRef<HTMLDivElement, Props>(function PaneTabs({ se
       if (!state.lifted) { if (Math.abs(event.clientX - state.startX) < 6) return; lift(state) }
       state.moved = true
       hover(dropAt(event.clientX, event.clientY))
-      move(state, event.clientX)
+      track(state, event.clientX)
     }
     const mouseUp = (event: MouseEvent) => {
       const state = drag.current
@@ -266,6 +335,11 @@ export const PaneTabs = forwardRef<HTMLDivElement, Props>(function PaneTabs({ se
     window.addEventListener('mouseup', mouseUp)
     return () => {
       if (drag.current) window.clearTimeout(drag.current.timer)
+      window.clearTimeout(clickTimer)
+      for (const [tab, timer] of timers) { window.clearTimeout(timer); tab.style.transition = ''; tab.style.transform = '' }
+      if (drag.current) { drag.current.tab.style.transition = ''; drag.current.tab.style.transform = '' }
+      drag.current = null
+      hover(null)
       box.removeEventListener('touchstart', touchStart)
       box.removeEventListener('touchmove', touchMove)
       box.removeEventListener('touchend', touchEnd)

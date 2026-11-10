@@ -88,7 +88,8 @@ export function SidePins({ api, pins, sessions, seen, selected, onOpen, onPin, o
   const label = `Pinned chats: ${live.length}${waiting ? `, ${waiting} needs you` : ''}${unreadCount ? `, ${unreadCount} unread` : ''}`
   const input = useRef<HTMLInputElement>(null)
   const list = useRef<HTMLUListElement>(null)
-  const drag = useRef<{ id: number; pane: string } | null>(null)
+  const [preview, setPreview] = useState<string[] | null>(null)
+  const drag = useRef<{ id: number; pane: string; order: string[] } | null>(null)
   const [moving, setMoving] = useState<string | null>(null)
 
   useEffect(() => { if (open && view === 'picker' && matchMedia('(pointer: fine)').matches) input.current?.focus() }, [open, view])
@@ -97,7 +98,7 @@ export function SidePins({ api, pins, sessions, seen, selected, onOpen, onPin, o
     event.preventDefault(); event.stopPropagation()
     event.currentTarget.focus()
     list.current?.setPointerCapture(event.pointerId)
-    drag.current = { id: event.pointerId, pane }
+    drag.current = { id: event.pointerId, pane, order: live.map(item => item.pane.id) }
     setMoving(pane)
   }
   const gripMove = (event: React.PointerEvent<HTMLUListElement>) => {
@@ -106,15 +107,25 @@ export function SidePins({ api, pins, sessions, seen, selected, onOpen, onPin, o
     event.preventDefault(); event.stopPropagation()
     const rows = [...list.current.querySelectorAll<HTMLElement>('[data-pin]')]
     const target = rows.find(row => { const box = row.getBoundingClientRect(); return event.clientY >= box.top && event.clientY <= box.bottom }) ?? (event.clientY < list.current.getBoundingClientRect().top ? rows[0] : rows[rows.length - 1])
-    if (target?.dataset.pin && target.dataset.pin !== held.pane) onMove(held.pane, target.dataset.pin)
+    if (target?.dataset.pin && target.dataset.pin !== held.pane) {
+      const next = [...held.order], from = next.indexOf(held.pane), at = next.indexOf(target.dataset.pin)
+      next.splice(at, 0, next.splice(from, 1)[0])
+      held.order = next; setPreview(next)
+    }
     const box = list.current.getBoundingClientRect()
-    if (event.clientY < box.top + 24) list.current.scrollTop -= 12
-    else if (event.clientY > box.bottom - 24) list.current.scrollTop += 12
+    if (event.clientY < box.top + 24) list.current.scrollTo({ top: list.current.scrollTop - 12 })
+    else if (event.clientY > box.bottom - 24) list.current.scrollTo({ top: list.current.scrollTop + 12 })
   }
   const gripUp = (event: React.PointerEvent<HTMLUListElement>) => {
     if (drag.current?.id !== event.pointerId) return
     event.stopPropagation()
+    const held = drag.current
+    if (event.type === 'pointerup') {
+      const from = live.findIndex(item => item.pane.id === held.pane), at = held.order.indexOf(held.pane)
+      if (from !== at && live[at]) onMove(held.pane, live[at].pane.id)
+    }
     drag.current = null
+    setPreview(null)
     setMoving(null)
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
   }
@@ -142,7 +153,7 @@ export function SidePins({ api, pins, sessions, seen, selected, onOpen, onPin, o
         {view === 'picker' ? matching.map(({ pane, session }) => <li key={pane.id} className="side-pin-picker-row">
           {dot(status([pane], seen, selected))}<span className="side-pin-text"><strong>{paneTitle(pane)}</strong><small>{session.name} · {agentNames[pane.agent]}</small></span>
           <button type="button" className="icon-button" aria-label={`Pin ${paneTitle(pane)}`} disabled={full} title={full ? 'Up to 40 chats can be pinned.' : undefined} onClick={() => onPin(pane.id)}><Plus size={18} /></button>
-        </li>) : view === 'edit' ? live.map(({ pane, pin }) => <li key={pane.id} data-pin={pane.id} className={`side-pin-edit-row ${moving === pane.id ? 'moving' : ''}`}>
+        </li>) : view === 'edit' ? (preview ? [...live].sort((a, b) => preview.indexOf(a.pane.id) - preview.indexOf(b.pane.id)) : live).map(({ pane, pin }) => <li key={pane.id} data-pin={pane.id} className={`side-pin-edit-row ${moving === pane.id ? 'moving' : ''}`}>
           <button type="button" className="side-pin-grip" aria-label={`Move ${paneTitle(pane)}. Alt+Up or Alt+Down.`} onPointerDown={event => gripDown(event, pane.id)}
             onKeyDown={event => {
               if (!event.altKey || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return

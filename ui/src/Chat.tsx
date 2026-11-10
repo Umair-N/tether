@@ -196,17 +196,15 @@ function WorkGlyph() {
 }
 
 function useSteadyPreview(text: string | undefined) {
-  const since = useRef(0)  // when the current run of preview text started; 0 = no preview
-  const [, wake] = useState(0)
-  if (!text) since.current = 0
-  else if (!since.current) since.current = Date.now()
-  const wait = since.current ? PREVIEW_HOLD_MS - (Date.now() - since.current) : 0
-  useEffect(() => {
-    if (wait <= 0) return
-    const timer = window.setTimeout(() => wake(n => n + 1), wait)
+  const present = !!text
+  const [preview, setPreview] = useState({ present, ready: false })
+  if (preview.present !== present) setPreview({ present, ready: false })
+  useLayoutEffect(() => {
+    if (!present) return
+    const timer = window.setTimeout(() => setPreview({ present: true, ready: true }), PREVIEW_HOLD_MS)
     return () => window.clearTimeout(timer)
-  }, [wait > 0, text])  // eslint-disable-line react-hooks/exhaustive-deps
-  return text && wait <= 0 ? text : undefined
+  }, [present])
+  return text && preview.ready ? text : undefined
 }
 
 export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, draft, setDraft, onOpenPane, onSessionActions, onPaneActions, onSplit, onFork, onContinued, onReorder, micOk, chime, readAloud, handsFree, slot, running = 0, sidePin, allPanes, headerExtra, askBar, groupHooks, onDropGroup, onBacklogAdd }: ChatProps) {
@@ -252,6 +250,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
   const [jump, setJump] = useState(false)
   const viewport = useRef<HTMLDivElement>(null)
   const page = useRef<HTMLDivElement>(null)  // everything under the tabs: it slides as one card on a side swipe
+  const hold = useRef<{ top: number; until: number } | null>(null)
   useLayoutEffect(() => { const element = page.current, id = pane.id; return () => saveDock(id, element) }, [pane.id])
   // A side swipe on the chat: 'wait' until the finger shows a direction, then 'drag' moves the chat with the finger.
   const swipe = useRef<{ x: number; y: number; mode: 'wait' | 'drag'; lastX: number; lastAt: number; speed: number } | null>(null)
@@ -294,7 +293,10 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     hold.current = null
     if (event.touches.length !== 1) return
     const touch = event.touches[0]
-    pull.current = viewport.current && viewport.current.scrollTop <= 0 ? touch.clientY : null
+    const offset = pullNote.current ? new DOMMatrix(getComputedStyle(pullNote.current).transform).m42 + 40 : 0
+    if (pullNote.current) { pullNote.current.style.transition = 'none'; pullNote.current.style.transform = `translate3d(0, ${offset - 40}px, 0)` }
+    pull.current = viewport.current && viewport.current.scrollTop <= 0 ? touch.clientY - Math.max(0, offset) : null
+    pullSpeed.current = { y: touch.clientY, at: performance.now(), speed: 0 }
     if (touch.clientX < 28 || touch.clientX > window.innerWidth - 28) return
     for (let node = event.target as HTMLElement | null; node && node !== event.currentTarget; node = node.parentElement) {
       if (node.scrollWidth > node.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(node).overflowX)) return
@@ -304,15 +306,36 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
   }
   // Pull down at the top of the chat to load earlier messages.
   const pull = useRef<number | null>(null)
-  const [pulled, setPulled] = useState(0)
+  const pullNote = useRef<HTMLParagraphElement>(null)
+  const pullDistance = useRef(0)
+  const pullLabel = useRef(0)
+  const pullSpeed = useRef({ y: 0, at: 0, speed: 0 })
+  const [pulled, setPullLabel] = useState(0)
+  const setPulled = (distance: number) => {
+    pullDistance.current = distance
+    const label = distance >= 70 ? 70 : distance > 0 ? 1 : 0
+    if (pullLabel.current !== label) { pullLabel.current = label; setPullLabel(label) }
+    if (pullNote.current) {
+      pullNote.current.style.transform = `translate3d(0, ${distance - 40}px, 0)`
+      pullNote.current.style.opacity = distance > 0 ? '1' : '0'
+    }
+  }
   const pullMove = (event: React.TouchEvent) => {
     if (pull.current === null || !data?.earlier) return
-    const distance = event.touches[0].clientY - pull.current
+    const y = event.touches[0].clientY, now = performance.now(), last = pullSpeed.current
+    last.speed = last.speed * 0.4 + (y - last.y) / Math.max(1, now - last.at) * 0.6
+    last.y = y; last.at = now
+    const distance = Math.max(0, y - pull.current)
     if (viewport.current && viewport.current.scrollTop > 0) { pull.current = null; setPulled(0); return }
-    setPulled(Math.max(0, Math.min(110, distance)))
+    setPulled(distance > 110 ? 110 + (distance - 110) * 0.25 : distance)
   }
   const pullEnd = () => {
-    if (pull.current !== null && pulled >= 70) loadEarlier()
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    // eslint-disable-next-line react-hooks/purity -- Runs on touchend, not during render.
+    const commit = pull.current !== null && (pullDistance.current >= 70 || (!reduced && pullDistance.current > 10 && performance.now() - pullSpeed.current.at < 100 && pullSpeed.current.speed > 0.45))
+    const duration = reduced ? 0 : commit ? Math.max(140, Math.min(320, pullDistance.current / Math.max(0.5, Math.abs(pullSpeed.current.speed)))) : 200
+    if (commit) loadEarlier()
+    if (pullNote.current) pullNote.current.style.transition = `transform ${duration}ms cubic-bezier(.32,.72,0,1), opacity ${duration}ms`
     pull.current = null; setPulled(0)
   }
   const reduceMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -388,8 +411,8 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
   useEffect(() => { tabs.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ inline: 'nearest', block: 'nearest' }) }, [pane.id])
   const content = useRef<HTMLDivElement>(null)
   const restore = useRef(scrollByPane.get(pane.id) ?? null)
-  const sticky = useRef(restore.current?.bottom ?? true)
-  const hold = useRef<{ top: number; until: number } | null>(null)
+  const sticky = useRef(scrollByPane.get(pane.id)?.bottom ?? true)
+  const anchor = useRef<{ height: number; top: number } | null>(null)
   // The chat stands still while text in it is selected: a scroll under the finger would move the selection.
   const frozen = useRef(false)
   const followBottom = useCallback(() => {
@@ -398,7 +421,6 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     frozen.current = !!selection && !selection.isCollapsed && !!viewport.current?.contains(selection.anchorNode)
     return !frozen.current
   }, [])
-  const anchor = useRef<{ height: number; top: number } | null>(null)
   const keysRef = useRef<HTMLDivElement>(null)
   // Menus opened from ⋯ hang below it, right-aligned (a popover is 288px wide).
   const menuAnchor = (): Anchor | undefined => { const box = keysRef.current?.getBoundingClientRect(); return box && { x: box.right - 288, y: box.bottom + 4 } }
@@ -438,6 +460,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     const ran = (item: Pending) => slashCommand(item.text) && !item.failed && data.state !== 'Working' && Date.now() - item.at > 3000
     // /clear (and a new chat) starts a new transcript: the count taken in the old one does not apply there.
     const seen = (item: Pending) => item.thread !== undefined && item.thread !== (data.thread ?? null) ? 0 : item.seen
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Reconcile persisted queued sends with the received transcript before scheduling the slash-command recheck.
     setPending(list => { const left = list.filter(item => matches(data.messages, item.key, imagesOnly(item.text)) <= seen(item) && Date.now() - item.at < 1800000 && !ran(item)); return left.length === list.length ? list : left })
     // An idle pane sends no new data, so check a slash command again once its 3 s have passed.
     const slash = pending.filter(item => slashCommand(item.text) && !item.failed).map(item => item.at + 3100 - Date.now())
@@ -500,6 +523,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     return () => observer.disconnect()
   }, [followBottom])
   const lastFailure = useRef<unknown>(null)
+  const cardError = useRef(false)
   async function write(path: string, body: object) {
     setSendError(''); setDraftBlocked(false); lastFailure.current = null; cardError.current = false
     try { await api(path, body); await refresh(); onUpdate(); return true }
@@ -559,6 +583,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     const lost = !accepted && !!failure && (!(failure instanceof ApiError) || (failure.status >= 500 && !failure.draft))
     if (lost) setSendError('')
     if ((accepted || lost) && activePane.agent !== 'shell' && key) {
+      // eslint-disable-next-line react-hooks/purity -- The runtime invokes this send handler on message submission; these timestamps follow the awaited write, never render.
       const item = { id: retryOf?.id ?? Date.now(), text, key, seen, thread: retryOf?.thread ?? data?.thread ?? null, at: retryOf?.at ?? Date.now(), ...(lost ? { failed: errorText(failure), offline: !(failure instanceof ApiError) } : {}) }
       setPending(list => retryOf ? list.map(other => other.id === retryOf.id ? item : other) : [...list, item])
     }
@@ -626,7 +651,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     if (kind === 'file') saveFile(url, name)
     else if (kind === 'pdf') window.open(url, '_blank', 'noopener')
     else setOpened({ name: path, url, kind })
-  }, [activePane.id, host])
+  }, [activePane.id, host, setTextFile, setOpened])
   // Desktop: "Show in Files" opens the explorer at the file's folder with the file selected. A relative path is in the pane's folder.
   const showInFiles = (path: string | null, close: () => void) => {
     if (!path || typeof matchMedia !== 'function' || !matchMedia(WORKSPACE_QUERY).matches) return undefined
@@ -685,7 +710,6 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
   const background = (footer.agents ?? []).filter(agent => !agent.main)
   const codexRuns = useCodexRuns(api, activePane.id, activePane.agent !== 'shell')
   // A card key that Claude did not take leaves its error under the message box. Clear it when the card changes or closes.
-  const cardError = useRef(false)
   const card = footer.heads_up ? `${footer.heads_up.state}|${footer.heads_up.text}` : ''
   useEffect(() => { if (cardError.current) { cardError.current = false; setSendError(''); setDraftBlocked(false) } }, [card, pane.id])
   async function sendKey(key: string, card = false) {
@@ -750,11 +774,13 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
   const runtime = useExternalStoreRuntime({ messages, convertMessage, isRunning: state === 'Working', onNew: async message => { await send(message.content.filter(part => part.type === 'text').map(part => part.text).join('\n')) } })
   // When this phone first saw the pane working. Claude prints its own timer in the spinner detail.
   const [workingSince, setWorkingSince] = useState<{ pane: string; at: number } | null>(null)
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- Capture the committed working transition's timestamp; deriving it during render would read the clock there.
   useEffect(() => { setWorkingSince(current => state !== 'Working' ? null : current?.pane === pane.id ? current : { pane: pane.id, at: Date.now() }) }, [state, pane.id])
   // A turn this page watched from its start ends: "Done in 2m 14s" with a check, for a few seconds. Short turns (under 10 s) say nothing.
   const [doneIn, setDoneIn] = useState<{ pane: string; seconds: number } | null>(null)
   const lastRun = useRef<{ pane: string; at: number; ended?: number } | null>(null)
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Clear the completion notice in the same effect that records the run and its six-second expiry.
     if (workingSince) { lastRun.current = { ...workingSince }; setDoneIn(null); return }
     const run = lastRun.current
     if (!run || run.pane !== pane.id) { setDoneIn(null); return }
@@ -816,7 +842,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     }}><div className="messages" ref={content}>
       {error && !data && <div className="inline-error" role="alert">{error}<button onClick={() => void refresh()}>Retry</button></div>}
       {loading && <p className="empty-note" role="status">Loading conversation…</p>}
-      {pulled > 0 && <p className="pull-note" style={{ height: pulled }} role="status">{pulled >= 70 ? 'Release to load earlier' : 'Pull to load earlier'}</p>}
+      <p ref={pullNote} className="pull-note" role="status" aria-hidden={pulled === 0}>{pulled >= 70 ? 'Release to load earlier' : 'Pull to load earlier'}</p>
       {started && !data?.earlier && activePane.agent !== 'shell' && <p className="chat-started">Chat started {started}</p>}
       {!!data?.earlier && <button className="load-earlier" disabled={data.limit !== limit} onClick={loadEarlier}>{data.limit !== limit ? 'Loading…' : `Load earlier · ${data.earlier}`}</button>}
       {data && activePane.agent !== 'shell' && !messages.length && <div className="chat-empty"><Terminal size={27} strokeWidth={1.4} /><h2>No messages yet</h2><p>{`Send a message to ${pane.label} to get started.`}</p>

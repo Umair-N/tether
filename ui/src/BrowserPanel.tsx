@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { AppWindow, ArrowLeft, ArrowRight, Bot, Check, ChevronDown, Crosshair, FlaskConical, HatGlasses, Keyboard, KeyRound, Monitor, PenLine, PictureInPicture2, Plus, RotateCw, Send, Smartphone, Square, Tablet, Trash2, Type, UserRound, X } from 'lucide-react'
 import { errorText } from './api'
@@ -19,7 +19,7 @@ type Mode = 'private' | 'saved'
 interface BrowserTab { id: string; url: string; title: string; preset: string; mode: Mode | 'agent'; width: number; height: number; touch: boolean; owner?: { pane: string | null } | null; controller?: 'user' | 'agent' }
 interface Preset { id: string; label: string; width: number; height: number; touch: boolean }
 interface BrowserState { tabs: BrowserTab[]; presets: Preset[]; nav?: { back: boolean; forward: boolean }; browsers?: BrowserAvailability[] }
-interface FrameMessage { seq: number; width: number; height: number; jpeg: string }
+interface FrameMessage { seq: number; width: number; height: number; jpeg: string; scrollOffsetX?: number; scrollOffsetY?: number }
 type Gesture = Record<string, string | number | string[]>
 type Tool = 'point' | 'pen' | 'rect' | 'text'
 type Shape = { kind: 'point'; x: number; y: number } | { kind: 'pen'; points: number[] } | { kind: 'rect'; x: number; y: number; w: number; h: number } | { kind: 'text'; x: number; y: number; text: string }
@@ -142,7 +142,7 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
   const watching = tab?.mode === 'agent' && tab.controller !== 'user'
   const [handing, setHanding] = useState(false)
   const watchingRef = useRef(watching)
-  watchingRef.current = watching
+  useLayoutEffect(() => { watchingRef.current = watching }, [watching])
   const owner = usePaneLabel(tab?.owner?.pane)
 
   const stageRef = useRef<HTMLDivElement | null>(null)
@@ -157,11 +157,11 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
   const keysRef = useRef<HTMLTextAreaElement>(null)
   const urlRef = useRef<HTMLInputElement>(null)
   const tabRef = useRef(tab)
-  tabRef.current = tab
+  useLayoutEffect(() => { tabRef.current = tab }, [tab])
   const frameRef = useRef(frame)
-  frameRef.current = frame
+  useLayoutEffect(() => { frameRef.current = frame }, [frame])
   const notingRef = useRef(noting)
-  notingRef.current = noting
+  useLayoutEffect(() => { notingRef.current = noting }, [noting])
 
   function apply(state: BrowserState) {
     setTabs(state.tabs)
@@ -186,7 +186,9 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
     return () => clearInterval(timer)
   }, [active, macEmpty]) // eslint-disable-line react-hooks/exhaustive-deps
   // Start the browser only when the panel is first shown.
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- Loading starts an external request; state changes occur after await or when the request fails.
   useEffect(() => { if (active && !loaded) void load() }, [active]) // eslint-disable-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- Keep fallback tab selection, frame reset, navigation reset, and saved tab identity in one transition.
   useEffect(() => { if (tab && tab.id !== current) choose(tab.id) }, [tab?.id]) // eslint-disable-line react-hooks/exhaustive-deps
   // "Watch" in a chat card (AgentBrowser.tsx): show that tab. Reload the list: the tab can be newer than the stream's last list.
   useEffect(() => {
@@ -232,6 +234,49 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
   const decoding = useRef(false)
   // Each stream gets a number. A frame that finishes decoding after its stream closed is dropped.
   const streamGen = useRef(0)
+  // Instant scroll. A wheel turn moves the last picture at once, by the CSS pixels the page will scroll; the next
+  // frame shows how far the page really moved and keeps only the part not yet done. A frame reaches the panel a
+  // round trip after the input, so without this the page seemed to follow the wheel late and in jumps.
+  // It runs only on a tab where a wheel turn has moved the page's own scroll position: a page that scrolls an
+  // inner box (mail and chat apps) reports no change, and moving the whole picture there would be wrong.
+  const painted = useRef<{ bitmap: ImageBitmap; x: number; y: number; width: number } | null>(null)
+  const ahead = useRef({ x: 0, y: 0, at: 0, confirmed: false })
+  const scrolls = useRef<{ tab: string | null; works: boolean }>({ tab: null, works: false })
+  const settle = useRef<ReturnType<typeof setTimeout> | null>(null)
+  function draw() {
+    const canvas = canvasRef.current, last = painted.current
+    const context = canvas?.getContext('2d')
+    if (!canvas || !last || !context) return
+    const scale = canvas.width / Math.max(1, last.width)
+    const dx = Math.round(-ahead.current.x * scale), dy = Math.round(-ahead.current.y * scale)
+    const { width, height } = canvas
+    context.drawImage(last.bitmap, dx, dy)
+    // Fill the strip the page has not sent yet with its edge row or column, stretched.
+    if (dy < 0) context.drawImage(last.bitmap, 0, height - 1, width, 1, dx, height + dy, width, -dy)
+    if (dy > 0) context.drawImage(last.bitmap, 0, 0, width, 1, dx, 0, width, dy)
+    if (dx < 0) context.drawImage(last.bitmap, width - 1, 0, 1, height, width + dx, 0, -dx, height)
+    if (dx > 0) context.drawImage(last.bitmap, 0, 0, 1, height, 0, 0, dx, height)
+  }
+  function reset() {
+    if (settle.current) clearTimeout(settle.current)
+    settle.current = null
+    const moved = ahead.current.x || ahead.current.y
+    if (moved && !ahead.current.confirmed) scrolls.current.works = false  // the page did not scroll itself
+    ahead.current = { x: 0, y: 0, at: 0, confirmed: false }
+    if (moved) draw()
+  }
+  function predict(dx: number, dy: number) {
+    const tab = tabRef.current, last = painted.current, size = frameRef.current
+    if (!tab || tab.touch || scrolls.current.tab !== tab.id || !scrolls.current.works || !last || !size) {
+      ahead.current.at = performance.now()  // still mark the turn so the next frame can learn that scrolling works
+      return
+    }
+    const limit = (value: number, most: number) => Math.max(-most, Math.min(most, value))
+    ahead.current = { ...ahead.current, x: limit(ahead.current.x + dx, size.width), y: limit(ahead.current.y + dy, size.height), at: performance.now() }
+    draw()
+    if (settle.current) clearTimeout(settle.current)
+    settle.current = setTimeout(reset, 350)  // no frame took the rest: the page reached its end
+  }
   async function paint() {
     decoding.current = true
     while (pending.current) {
@@ -246,10 +291,23 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
         const canvas = canvasRef.current
         if (canvas && !notingRef.current && gen === streamGen.current) {
           if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) { canvas.width = bitmap.width; canvas.height = bitmap.height }
-          canvas.getContext('2d')?.drawImage(bitmap, 0, 0)
+          const id = tabRef.current?.id ?? null
+          if (scrolls.current.tab !== id) { scrolls.current = { tab: id, works: false }; ahead.current = { x: 0, y: 0, at: 0, confirmed: false } }
+          const before = painted.current
+          const x = message.scrollOffsetX, y = message.scrollOffsetY
+          if (typeof x === 'number' && typeof y === 'number' && before && before.width === message.width) {
+            const movedX = x - before.x, movedY = y - before.y
+            if ((movedX || movedY) && performance.now() - ahead.current.at < 1000) scrolls.current.works = true
+            // Keep only the predicted scroll the page has not done yet; never overshoot past zero.
+            const rest = (left: number, moved: number) => left > 0 ? Math.max(0, left - moved) : left < 0 ? Math.min(0, left - moved) : 0
+            if (movedX || movedY) ahead.current = { ...ahead.current, x: rest(ahead.current.x, movedX), y: rest(ahead.current.y, movedY), confirmed: true }
+          } else ahead.current = { x: 0, y: 0, at: ahead.current.at, confirmed: false }
+          before?.bitmap.close()
+          painted.current = typeof x === 'number' && typeof y === 'number' ? { bitmap, x, y, width: message.width } : { bitmap, x: 0, y: 0, width: message.width }
+          if (typeof x !== 'number' || typeof y !== 'number') scrolls.current.works = false
+          draw()
           setFrame(old => old && old.width === message.width && old.height === message.height ? old : { width: message.width, height: message.height })
-        }
-        bitmap.close()
+        } else bitmap.close()
       } catch { /* skip a frame that does not decode */ }
     }
     decoding.current = false
@@ -358,6 +416,7 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
       touch.x = event.clientX; touch.y = event.clientY
       const scale = cssScale()
       push({ type: 'wheel', ...touch.start, dx: -dx * scale, dy: -dy * scale })
+      predict(-dx * scale, -dy * scale)
       return
     }
     // A phone or tablet tab gets only pressed moves (the server sends them as a finger drag); hover means nothing there.
@@ -386,6 +445,7 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
       event.preventDefault()
       const step = event.deltaMode === 1 ? 40 : event.deltaMode === 2 ? 800 : 1
       push({ type: 'wheel', ...pagePoint(event), dx: event.deltaX * step, dy: event.deltaY * step, modifiers: modifiers(event) })
+      if (!event.ctrlKey) predict(event.deltaX * step, event.deltaY * step)
     }
     canvas.addEventListener('wheel', wheel, { passive: false })
     return () => canvas.removeEventListener('wheel', wheel)

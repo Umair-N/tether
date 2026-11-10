@@ -180,12 +180,13 @@ export function FolderMenu({ api, value, folders, mode = 'collapsed', hiddenCoun
 }) {
   const [view, setView] = useState<'folders' | 'hidden'>('folders')
   const viewRef = useRef(view)
-  viewRef.current = view
+  useLayoutEffect(() => { viewRef.current = view }, [view])
   const [hidden, setHidden] = useState<HiddenData>()
   const [localMode, setLocalMode] = useState<TemporaryMode>()
-  const shownMode = localMode ?? mode
   // The server answer replaces the instant local state, and it carries changes from other devices.
-  useEffect(() => setLocalMode(undefined), [mode])
+  const [previousMode, setPreviousMode] = useState(mode)
+  if (previousMode !== mode) { setPreviousMode(mode); setLocalMode(undefined) }
+  const shownMode = localMode ?? mode
   const loadHidden = () => api<HiddenData>('history/hidden').then(setHidden, failure => onError(errorText(failure)))
   const post = async (body: object) => {
     try { await api('history/hide', body); onChanged(); if (viewRef.current === 'hidden') await loadHidden() }
@@ -198,11 +199,14 @@ export function FolderMenu({ api, value, folders, mode = 'collapsed', hiddenCoun
     if (view === 'hidden') {
       const restore = (run: () => void, label: string) => ({ run, pinTrailing: true, trailing: { label, icon: <ArchiveRestore size={14} aria-hidden="true" />, run } })
       const rows: MenuOption[] = [{ value: '#back', label: 'Hidden', noSearch: true, run: () => setView('folders'), lead: <ChevronLeft size={15} aria-hidden="true" /> }]
+      // eslint-disable-next-line react-hooks/refs -- restore only stores this handler; the latest-view ref is read after the user restores temporary folders.
       if (hidden?.temporary === 'hidden' && hidden.temporaryCount) rows.push({ value: '#temporary', label: 'Temporary folders', detail: `${hidden.temporaryCount} chats`, group: 'Folders', ...restore(() => setMode('collapsed'), 'Show temporary folders') })
       for (const item of hidden?.dirs ?? []) {
         const { name, parent } = folderParts(item.dir)
+        // eslint-disable-next-line react-hooks/refs -- restore only stores this handler; the latest-view ref is read after the user restores a folder.
         rows.push({ value: `#dir:${item.dir}`, label: name, detail: parent || undefined, count: item.count, search: item.dir, group: 'Folders', ...restore(() => void post({ kind: 'dir', dir: item.dir, hidden: false }), `Show ${item.dir}`) })
       }
+      // eslint-disable-next-line react-hooks/refs -- restore only stores this handler; the latest-view ref is read after the user restores a chat.
       for (const chat of hidden?.chats ?? []) rows.push({ value: `#chat:${chat.agent}:${chat.id}`, label: chat.title || 'Untitled chat', detail: chat.dir ?? undefined, group: 'Chats', ...restore(() => void post({ kind: 'chat', agent: chat.agent, id: chat.id, hidden: false }), `Show ${chat.title || 'this chat'}`) })
       return rows
     }
@@ -217,6 +221,7 @@ export function FolderMenu({ api, value, folders, mode = 'collapsed', hiddenCoun
     const collapsed = shownMode !== 'open'
     const rows: MenuOption[] = [{ value: '', label: 'All folders' }, ...known.filter(item => !isTemporary(item)).map(item => row(item, 'Folders'))]
     if (shownMode !== 'hidden' && temporary.length) {
+      // eslint-disable-next-line react-hooks/refs -- These stored click and undo handlers read the latest-view ref only after a user action.
       rows.push({ value: '#temporary', label: 'Temporary', noSearch: true, count: temporary.reduce((sum, item) => sum + item.count, 0), lead: collapsed ? <ChevronRight size={15} aria-hidden="true" /> : <ChevronDown size={15} aria-hidden="true" />,
         reveal: collapsed, run: () => setMode(collapsed ? 'open' : 'collapsed'), trailing: { label: 'Hide all temporary chats', icon: <EyeOff size={14} aria-hidden="true" />, run: () => { if (temporary.some(item => item.dir === value)) onChange(''); const before = shownMode; onRemoved?.('Temporary folders hidden', () => { setLocalMode(before); return post({ kind: 'temporary', mode: before }) }); setMode('hidden') } } })
       rows.push(...temporary.map(item => row(item, 'Temporary', collapsed)))

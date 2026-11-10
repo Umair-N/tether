@@ -209,17 +209,17 @@ export function Share({ wide, onAddToMessage }: { wide: boolean; onAddToMessage?
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), toast.undo ? 6000 : 3000); return () => clearTimeout(t) }, [toast])
 
   const options = useMemo(() => ({ kind: trash ? 'all' as const : view as ShareFilter, q, trash }), [view, q, trash])
-  const load = useCallback(async (signal?: AbortSignal) => {
-    try {
-      const data = await listShare(options, signal)
+  const load = useCallback((signal?: AbortSignal) =>
+    listShare(options, signal).then(data => {
       setFiles(data.files); setNext(data.next); setUsage(data.usage); setError('')
-    } catch (e) { if (!signal?.aborted) setError(errorText(e)) }
-    finally { if (!signal?.aborted) setLoading(false) }
-  }, [options])
+    }).catch(e => { if (!signal?.aborted) setError(errorText(e)) })
+      .finally(() => { if (!signal?.aborted) setLoading(false) }),
+  [options])
   const loadAgents = useCallback((signal?: AbortSignal) => listShare({ source: 'agent', limit: 24 }, signal).then(data => setAgentFiles(data.files), () => {}), [])
+  const [previousOptions, setPreviousOptions] = useState(options)
+  if (options !== previousOptions) { setPreviousOptions(options); setLoading(true); setPicked([]) }
   useEffect(() => {
     const stop = new AbortController()
-    setLoading(true); setPicked([])
     void load(stop.signal)
     return () => stop.abort()
   }, [load])

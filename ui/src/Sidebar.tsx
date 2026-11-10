@@ -240,7 +240,7 @@ interface Props {
   /** Shells that ended from the Shells list: their panels close. */
   onShellsEnded?: (panes: string[]) => void
   /** The + on a session row: a new tab (tmux pane) in that session. */
-  onAddPane?: (session: Session) => void
+  onAddPane?: (session: Session, at: Anchor) => void
 }
 
 export function Sidebar({ api, sessions, selected, prefs, update, loading, error, onRetry, onOpen, onNew, onActions, onPaneActions, onPastChat, onSettings, onBacklog, onClose, slots, drag, onCommandMenu, onMessageAll, marks, onMarks, onOpenShell, onShellsEnded, onAddPane, archivedTabs, onRestoreTab }: Props) {
@@ -283,6 +283,7 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
   // or a pane onto "New session" to split it out. A long press released on the spot opens the row's menu, as before.
   const root = useRef<HTMLDivElement>(null)
   const hold = useRef<{ timer: number; x: number; y: number; carried: Carry; label: string; menu: () => void; active: boolean; moved: boolean } | null>(null)
+  const ghostRef = useRef<HTMLDivElement>(null)
   const [ghost, setGhost] = useState<{ x: number; y: number; label: string } | null>(null)
   const [touchOver, setTouchOver] = useState<string | null>(null)
   const latest = useRef({ dropOn, merge, openChat, sessions })
@@ -303,8 +304,9 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
   useEffect(() => {
     const el = root.current
     if (!el || drag) return
+    let overNew = false, overSession: string | null = null
     const spotAt = (x: number, y: number) => document.elementFromPoint(x, y)?.closest<HTMLElement>('.new-session-drop, .session-list > li[data-id]') ?? null
-    const end = () => { if (hold.current) window.clearTimeout(hold.current.timer); hold.current = null; setGhost(null); setTouchOver(null); setOverNew(false) }
+    const end = () => { if (hold.current) window.clearTimeout(hold.current.timer); hold.current = null; setGhost(null); setTouchOver(null); setOverNew(false); overNew = false; overSession = null }
     const move = (event: TouchEvent) => {
       const held = hold.current, touch = event.touches[0]
       if (!held || !touch) return
@@ -312,11 +314,13 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
       if (!held.active) { if (far) end(); return }  // a scroll or a swipe, not a hold
       event.preventDefault()
       held.moved ||= far
-      setGhost({ x: touch.clientX, y: touch.clientY, label: held.label })
+      if (ghostRef.current) ghostRef.current.style.transform = `translate3d(${Math.max(118, Math.min(window.innerWidth - 118, touch.clientX))}px, ${touch.clientY}px, 0)`
       const spot = spotAt(touch.clientX, touch.clientY)
-      setOverNew(!!(held.carried.pane || held.carried.chat) && !!spot?.classList.contains('new-session-drop'))
+      const nextNew = !!(held.carried.pane || held.carried.chat) && !!spot?.classList.contains('new-session-drop')
+      if (overNew !== nextNew) { overNew = nextNew; setOverNew(nextNew) }
       const id = spot?.dataset.id
-      setTouchOver(id && id !== held.carried.session ? id : null)
+      const nextSession = id && id !== held.carried.session ? id : null
+      if (overSession !== nextSession) { overSession = nextSession; setTouchOver(nextSession) }
       // Near the top or bottom edge of the list, the list scrolls so far rows can be reached.
       const nav = el.querySelector<HTMLElement>('.session-groups')
       if (nav) { const box = nav.getBoundingClientRect(); if (touch.clientY < box.top + 48) nav.scrollTop -= 14; else if (touch.clientY > box.bottom - 48) nav.scrollTop += 14 }
@@ -371,7 +375,7 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
   // After the refresh, a target the list does not show (search, closed group) gets no rename box later.
   const shown = groups.filter(group => isOpen(group.key)).flatMap(group => group.items.map(session => session.id))
   const renameRow = renaming && (sessions === renaming.before || shown.includes(renaming.moved.session)) ? renaming.moved : null
-  useEffect(() => { if (renaming && !renameRow) setRenaming(null) }, [renaming, renameRow])
+  if (renaming && !renameRow) setRenaming(null)
   // A drag reorders one section; the other sessions keep their places in the saved order.
   const moveWithin = (items: Session[], ids: string[]) => update(current => {
     const others = sortByPrefs(sessions, current.order).map(session => session.id).filter(id => !ids.includes(id))
@@ -396,6 +400,7 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
     <BacklogButton api={api} onOpen={onBacklog} />
     {organizing && <OrganizeMenu api={api} sessions={sessions.filter(session => !isArchived(session, prefs.archived))} prefs={prefs} update={update} at={organizing.at} onClose={() => setOrganizing(null)} />}
     <nav className="session-groups" aria-label="Sessions">
+      {/* eslint-disable-next-line react-hooks/purity -- Sample snooze expiry on each existing render without adding a clock or delaying it. */}
       {prefs.attention && !search && <WaitingBox variant="list" sort={{ order: prefs.waitingOrder ?? 'oldest', onOrder: waitingOrder => update(() => ({ waitingOrder })) }} items={waitingAsks(sessions.flatMap(item => item.panes), Date.now() / 1000)} sessions={sessions} selected={selected} onOpen={onOpen} />}
       {error && <div className="sidebar-error" role="alert">{error}<button onClick={onRetry}>Retry</button></div>}
       {openingChat && <div className="past-opening" role="status">Opening {openingChat}…</div>}
@@ -420,7 +425,7 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
         {isOpen('past') && <PastChats api={api} search={search} showPaths={prefs.showPaths} onPick={onPastChat} sessions={sessions} drag={!!drag && !reorder} onCarry={startCarry} onHold={holdStart} />}
       </section>
     </nav>
-    {ghost && <div className="touch-ghost" aria-hidden="true" style={{ transform: `translate3d(${Math.max(118, Math.min(window.innerWidth - 118, ghost.x))}px, ${ghost.y}px, 0)` }}><span>{ghost.label}</span></div>}
+    {ghost && <div ref={ghostRef} className="touch-ghost" aria-hidden="true" style={{ transform: `translate3d(${Math.max(118, Math.min(window.innerWidth - 118, ghost.x))}px, ${ghost.y}px, 0)` }}><span>{ghost.label}</span></div>}
     {confirming && <MergeConfirm {...confirming} marks={marks} onMerge={keep => merge('session', confirming.source.id, confirming.target.id, keep)} onCancel={() => setConfirming(null)} />}
     <footer className="sidebar-footer">
       <RunningNow sessions={sessions} selected={selected} onOpen={onOpen} />
@@ -441,20 +446,48 @@ function projectMark(mark: ProjectMark | undefined) {
 function SessionList({ items, reorder, selected, prefs, update, onOpen, onActions, onPaneActions, onMove, pinned, slots, canDrag, api, carry, onCarry, onDrop, onHold, touchOver, renaming, onRenamed, marks, onAddPane }: { onAddPane?: Props['onAddPane']; marks?: ProjectMarks; onHold: (event: React.TouchEvent, carried: Carry, label: string, menu: () => void) => void; touchOver: string | null; items: Session[]; reorder: boolean; selected: string | undefined; prefs: Prefs; update: Props['update']; onOpen: Props['onOpen']; onActions: Props['onActions']; onPaneActions: Props['onPaneActions']; onMove: (ids: string[]) => void; pinned: boolean; slots: string[]; canDrag: boolean; api: Api; carry: Carry | null; onCarry: (carry: Carry | null) => void; onDrop: (target: Session) => void; renaming: Moved | null; onRenamed: () => void }) {
   const list = useRef<HTMLUListElement>(null)
   const dragging = useRef<string | null>(null)
-  const ids = items.map(session => session.id)
+  const [preview, setPreview] = useState<string[] | null>(null)
+  const order = useRef<string[] | null>(null)
+  const ids = preview ?? items.map(session => session.id)
   const drag = useCallback((event: React.PointerEvent) => {
     const id = dragging.current
     if (!id || !list.current) return
     const rows = [...list.current.querySelectorAll<HTMLElement>(':scope > li')]
-    const target = rows.findIndex(row => { const box = row.getBoundingClientRect(); return event.clientY < box.top + box.height / 2 })
+    const target = rows.filter(row => row.dataset.id !== id).findIndex(row => { const box = row.getBoundingClientRect(); return event.clientY < box.top + box.height / 2 })
     const without = ids.filter(other => other !== id)
     const at = target < 0 ? without.length : Math.min(target, without.length)
     const next = [...without.slice(0, at), id, ...without.slice(at)]
-    if (next.join() !== ids.join()) onMove(next)
-  }, [ids, onMove])
+    if (next.join() !== ids.join()) { order.current = next; setPreview(next) }
+  }, [ids])
   // Swipe a row left to show Pin, Archive and Delete (Delete still asks first); swipe right or tap the row to hide them.
   const [swiped, setSwiped] = useState<string | null>(null)
-  const touch = useRef<{ x: number; y: number; id: string } | null>(null)
+  const touch = useRef<{ x: number; y: number; id: string; row: HTMLElement; base: number; lastX: number; lastAt: number; speed: number; locked: boolean; remove?: () => void } | null>(null)
+  const swipeMotion = useRef<{ row: HTMLElement; timer: ReturnType<typeof setTimeout>; done: () => void } | null>(null)
+  const suppressClick = useRef(false)
+  const swipeX = (x: number) => x > 0 ? x * .25 : x < -228 ? -228 + (x + 228) * .25 : x
+  const settleRow = (open: boolean, speed = 0) => {
+    const start = touch.current
+    touch.current = null; start?.remove?.()
+    if (!start) return
+    const { row, id } = start, node = row.querySelector<HTMLElement>('.session-row')!
+    const x = new DOMMatrix(getComputedStyle(node).transform).m41
+    const duration = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0
+      : open === (swiped === id) ? 220 : Math.round(Math.min(280, Math.max(200, Math.abs((open ? -228 : 0) - x) / Math.max(Math.abs(speed), .8))))
+    node.style.transition = duration ? `transform ${duration}ms cubic-bezier(.32,.72,0,1)` : 'none'
+    node.style.transform = `translateX(${open ? -228 : 0}px)`
+    const done = () => {
+      swipeMotion.current = null
+      setSwiped(current => open ? id : current === id ? null : current)
+      node.style.removeProperty('transform'); node.style.removeProperty('transition')
+      row.querySelector<HTMLElement>('.swipe-actions')!.style.removeProperty('visibility')
+    }
+    if (duration) swipeMotion.current = { row, done, timer: setTimeout(done, duration) }
+    else done()
+  }
+  useEffect(() => () => {
+    touch.current?.remove?.()
+    if (swipeMotion.current) clearTimeout(swipeMotion.current.timer)
+  }, [])
   const togglePin = (id: string) => update(current => ({ pinned: current.pinned.includes(id) ? current.pinned.filter(other => other !== id) : [...current.pinned, id] }))
   // In the desktop workspace, a pane on screen shows its slot key.
   // The same drag drops into a workspace slot (the data) or onto another session row (the carry).
@@ -468,7 +501,8 @@ function SessionList({ items, reorder, selected, prefs, update, onOpen, onAction
   const words = useWords()
   const slotKey = (id: string) => { const at = slots.indexOf(id); return at < 0 ? null : <kbd className="slot-key" aria-label={`In slot ${at + 1}`}>⌥{at + 1}</kbd> }
   return <ul className={`session-list ${reorder ? 'reordering' : ''}`} ref={list}>
-    {items.map(session => {
+    {/* eslint-disable-next-line react-hooks/refs -- Sample the drag marker on reorder renders; state would add visible updates on pointer down and up. */}
+    {(preview ? [...items].sort((a, b) => preview.indexOf(a.id) - preview.indexOf(b.id)) : items).map(session => {
       const multi = session.panes.length > 1
       const active = session.panes.some(pane => pane.id === selected)
       const state = status(session.panes, prefs.seen, selected)
@@ -481,13 +515,69 @@ function SessionList({ items, reorder, selected, prefs, update, onOpen, onAction
       const tag = tagDot(prefs.colors?.[session.id] ?? (session.panes.length === 1 ? prefs.colors?.[session.panes[0].id] : undefined))
       return <li key={session.id} data-id={session.id} className={`${dragging.current === session.id ? 'dragging' : ''} ${dropping ? 'drop-over' : ''} ${carry && !carry.pane && carry.session === session.id ? 'carried' : ''}`} {...dropTarget(session)}>
         <div className={`swipe-row ${swiped === session.id ? 'swiped' : ''}`}
-          onTouchStart={event => { if (!reorder) touch.current = { x: event.touches[0].clientX, y: event.touches[0].clientY, id: session.id } }}
+          onPointerDownCapture={() => { suppressClick.current = false }}
+          onClickCapture={event => { if (suppressClick.current && event.detail) { suppressClick.current = false; event.preventDefault(); event.stopPropagation() } }}
+          onTouchStart={event => {
+            suppressClick.current = false
+            if (carry || reorder || event.touches.length !== 1) return
+            if ((event.target as HTMLElement).closest('.swipe-actions')) {
+              const pending = swipeMotion.current
+              if (pending) { clearTimeout(pending.timer); pending.done() }
+              return
+            }
+            const row = event.currentTarget, node = row.querySelector<HTMLElement>('.session-row')!
+            const x = new DOMMatrix(getComputedStyle(node).transform).m41
+            const pending = swipeMotion.current
+            if (pending) { clearTimeout(pending.timer); if (pending.row !== row) pending.done(); swipeMotion.current = null }
+            node.style.transition = 'none'; node.style.transform = `translateX(${x}px)`
+            touch.current?.remove?.()
+            const finger = event.touches[0]
+            touch.current = { x: finger.clientX, y: finger.clientY, id: session.id, row, base: x > 0 ? x * 4 : x < -228 ? -228 + (x + 228) * 4 : x, lastX: finger.clientX, lastAt: performance.now(), speed: 0, locked: false }
+          }}
+          onTouchMove={event => {
+            const start = touch.current
+            if (!start || start.id !== session.id) return
+            if (carry || reorder || event.touches.length !== 1) { settleRow(swiped === session.id); return }
+            const finger = event.touches[0], dx = finger.clientX - start.x, dy = finger.clientY - start.y
+            if (Math.abs(dx) <= 10 && Math.abs(dy) <= 10) return
+            if (Math.abs(dx) <= 10 || Math.abs(dx) <= Math.abs(dy) * 1.5) { settleRow(swiped === session.id); return }
+            start.locked = true; suppressClick.current = true
+            const node = start.row.querySelector<HTMLElement>('.session-row')!
+            start.row.querySelector<HTMLElement>('.swipe-actions')!.style.visibility = 'visible'
+            const move = (event: TouchEvent) => {
+              if (event.touches.length !== 1) { settleRow(swiped === session.id); return }
+              const finger = event.touches[0], now = performance.now()
+              if (now > start.lastAt) start.speed = start.speed * .4 + (finger.clientX - start.lastX) / (now - start.lastAt) * .6
+              start.lastX = finger.clientX; start.lastAt = now
+              node.style.transform = `translateX(${swipeX(start.base + finger.clientX - start.x)}px)`
+              if (event.cancelable) event.preventDefault()
+              event.stopPropagation()
+            }
+            // The first move reaches the hold listener before React cancels propagation.
+            node.style.transform = `translateX(${swipeX(start.base + dx)}px)`
+            const now = performance.now()
+            if (now > start.lastAt) start.speed = dx / (now - start.lastAt) * .6
+            start.lastX = finger.clientX; start.lastAt = now
+            start.row.addEventListener('touchmove', move, { passive: false })
+            start.remove = () => start.row.removeEventListener('touchmove', move)
+            event.stopPropagation()
+          }}
+          onTouchCancel={() => settleRow(swiped === session.id)}
           onTouchEnd={event => {
-            const start = touch.current; touch.current = null
-            if (carry || !start || start.id !== session.id) return
-            const dx = event.changedTouches[0].clientX - start.x, dy = event.changedTouches[0].clientY - start.y
-            if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy) * 2) return
-            setSwiped(dx < 0 ? session.id : null)
+            const start = touch.current
+            if (!start || start.id !== session.id) return
+            if (!start.locked) {
+              touch.current = null
+              const node = start.row.querySelector<HTMLElement>('.session-row')!
+              node.style.removeProperty('transform'); node.style.removeProperty('transition')
+              start.row.querySelector<HTMLElement>('.swipe-actions')!.style.removeProperty('visibility')
+              return
+            }
+            if (carry || reorder) { settleRow(swiped === session.id); return }
+            event.stopPropagation()
+            const x = swipeX(start.base + event.changedTouches[0].clientX - start.x)
+            const speed = matchMedia('(prefers-reduced-motion: reduce)').matches || performance.now() - start.lastAt > 100 ? 0 : start.speed
+            settleRow(speed > .4 ? false : speed < -.4 || x < -114, speed)
           }}>
         <span className="swipe-actions" aria-hidden={swiped !== session.id}>
           <button type="button" tabIndex={swiped === session.id ? 0 : -1} onClick={() => { togglePin(session.id); setSwiped(null) }}>{prefs.pinned.includes(session.id) ? <PinOff size={18} /> : <Pin size={18} />}{prefs.pinned.includes(session.id) ? 'Unpin' : 'Pin'}</button>
@@ -502,9 +592,9 @@ function SessionList({ items, reorder, selected, prefs, update, onOpen, onAction
             {!multi && slotKey(session.panes[0].id)}
             {multi && !open && state.kind !== 'idle' && dot(state)}
           </button>}
-          {onAddPane && !reorder && !dropping && renaming?.session !== session.id && <button type="button" className="session-add" aria-label={`${words.newRight} in ${session.name}`} title={words.newRight} onClick={() => onAddPane(session)}><Plus size={15} aria-hidden="true" /></button>}
+          {onAddPane && !reorder && !dropping && renaming?.session !== session.id && <button type="button" className="session-add" aria-label={`${words.newRight} in ${session.name}`} title={words.newRight} aria-haspopup="dialog" onClick={event => { const box = event.currentTarget.getBoundingClientRect(); onAddPane(session, { x: box.left, y: box.bottom + 6 }) }}><Plus size={15} aria-hidden="true" /></button>}
           {dropping && <span className="merge-hint" aria-hidden="true">{carry.pane ? 'Move here' : carry.chat ? 'Open here' : 'Merge here'}</span>}
-          {reorder && <span className="grip" aria-label={`Drag to move ${session.name}`} onPointerDown={event => { dragging.current = session.id; event.currentTarget.setPointerCapture(event.pointerId) }} onPointerMove={drag} onPointerUp={() => { dragging.current = null }} onPointerCancel={() => { dragging.current = null }}><GripVertical size={18} /></span>}
+          {reorder && <span className="grip" aria-label={`Drag to move ${session.name}`} onPointerDown={event => { dragging.current = session.id; order.current = null; event.currentTarget.setPointerCapture(event.pointerId) }} onPointerMove={drag} onPointerUp={() => { if (order.current) onMove(order.current); dragging.current = null; order.current = null; setPreview(null) }} onPointerCancel={() => { dragging.current = null; order.current = null; setPreview(null) }}><GripVertical size={18} /></span>}
         </div>
         </div>
         {multi && open && !reorder && <ul className="pane-children">{session.panes.map(pane => { const paneState = status([pane], prefs.seen, selected), paneTag = tagDot(prefs.colors?.[pane.id]); return <li key={pane.id}><button {...dragAs(DRAG_PANE, pane.id, { session: session.id, pane: pane.id })} className={pane.id === selected ? 'selected' : ''} aria-current={pane.id === selected ? 'page' : undefined} onMouseEnter={clipTitle} onTouchStart={event => onHold(event, { session: session.id, pane: pane.id }, paneTitle(pane) || session.name, () => onPaneActions(pane))} onClick={() => onOpen(pane)} onContextMenu={event => { event.preventDefault(); onPaneActions(pane, anchorOf(event)) }}>{dot(paneState)}<span className="pane-child-name">{[paneTitle(pane), shownIndex(pane)].filter(Boolean).join(' ')} · {agentNames[pane.agent]}{profileSuffix(pane)}</span>{paneTag}{slotKey(pane.id)}</button></li> })}</ul>}

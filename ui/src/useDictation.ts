@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { errorText } from './api'
 import { playChime, prepareChime } from './sound'
 import { stopSpeaking } from './speech'
@@ -24,7 +24,7 @@ export function useDictation({ text, setText, chime, handsFree, onHandsFreeDone,
   const cleanupRecording = useRef<(() => void) | null>(null)
   const disposed = useRef(false)
   const textNow = useRef(text)
-  textNow.current = text
+  useLayoutEffect(() => { textNow.current = text }, [text])
   useEffect(() => {
     disposed.current = false
     return () => { disposed.current = true; cleanupRecording.current?.() }
@@ -45,11 +45,13 @@ export function useDictation({ text, setText, chime, handsFree, onHandsFreeDone,
     const type = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4'].find(kind => MediaRecorder.isTypeSupported(kind))
     const active = new MediaRecorder(stream, type ? { mimeType: type } : undefined)
     const chunks: Blob[] = []
+    // eslint-disable-next-line react-hooks/purity -- This event callback samples the recording start after microphone access, never during render.
     const started = Date.now()
     // Live text: about every 1.5 s, send the audio so far to the fast model and show its rough text in the box.
     // The accurate model replaces it after stop.
     const base = textNow.current.trimEnd()
     // One id per recording: the server converts finished sentences while the user speaks, so stop only waits for the rest.
+    // eslint-disable-next-line react-hooks/purity -- Generate a fresh fallback ID when this event callback starts a recording.
     const recording = crypto.randomUUID?.() ?? `${started}-${Math.random().toString(36).slice(2)}`
     let finish: (text: string) => void = () => undefined
     const final = new Promise<string>(resolve => { finish = resolve })

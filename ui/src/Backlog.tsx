@@ -104,7 +104,7 @@ interface RowActions {
   onSend?: (item: Item) => void
 }
 
-function ItemRow({ item, actions, links, sending, locked, editing, setEditing, typed, drop, dragged }: { item: Item; actions: RowActions; links: Links; sending?: ReactNode; locked: boolean; editing: boolean; setEditing: (id: string | null) => void; typed: RefObject<string>; drop?: 'before' | 'after'; dragged: boolean }) {
+function ItemRow({ item, actions, links, sending, locked, editing, setEditing, typed: typedRef, drop, dragged }: { item: Item; actions: RowActions; links: Links; sending?: ReactNode; locked: boolean; editing: boolean; setEditing: (id: string | null) => void; typed: RefObject<string>; drop?: 'before' | 'after'; dragged: boolean }) {
   const [wording, setWording] = useState(item.text)
   // Sub-steps stay in view. Notes (the why, the files, selected chat text) fold under the title until opened.
   const [showNotes, setShowNotes] = useState(false)
@@ -114,18 +114,19 @@ function ItemRow({ item, actions, links, sending, locked, editing, setEditing, t
   const finish = (keep: boolean) => {
     if (ended.current) return
     ended.current = true
-    typed.current = ''
+    typedRef.current = ''
     setEditing(null)
     if (keep && wording.trim() && wording.trim() !== item.text) actions.onReword(item, wording)
   }
-  return <li data-backlog-row={item.done ? undefined : item.id} className={['backlog-row', item.done && 'done', drop && `drop-${drop}`, dragged && 'dragged'].filter(Boolean).join(' ')}>
+  return <li data-backlog-row={item.done ? undefined : item.id} className={['backlog-row', item.done && 'done', drop && `drop-${drop}`, dragged && 'dragged'].filter(Boolean).join(' ')}
+    style={dragged ? { opacity: 1, zIndex: 1, background: 'var(--bg)', boxShadow: '0 3px 10px rgb(0 0 0 / .16)' } : undefined}>
     {!item.done && <button type="button" className="backlog-grip" aria-label={`Move ${item.text}. Use the up and down arrow keys.`} title="Drag to reorder" disabled={locked}
       onPointerDown={event => actions.onDragStart(event, item)} onKeyDown={event => actions.onDragKey(event, item)}
       onTouchStart={event => event.stopPropagation()} onTouchEnd={event => event.stopPropagation()}><GripVertical size={15} aria-hidden="true" /></button>}
     <input type="checkbox" className="backlog-box" aria-label={item.text} checked={item.done} disabled={locked} onChange={event => actions.onDone(item.raw, item.line, event.target.checked)} />
     <div className="backlog-body">
       {editing
-        ? <BacklogVoice label="backlog title" value={wording} setValue={value => { setWording(value); typed.current = value }} onLeave={() => finish(true)} field={{ 'aria-label': `Reword ${item.text}`, className: 'backlog-input backlog-reword', autoFocus: true,
+        ? <BacklogVoice label="backlog title" value={wording} setValue={value => { setWording(value); typedRef.current = value }} onLeave={() => finish(true)} field={{ 'aria-label': `Reword ${item.text}`, className: 'backlog-input backlog-reword', autoFocus: true,
             onFocus: event => { ended.current = false; event.target.select() },
             onKeyDown: event => { if (event.key === 'Enter') { event.preventDefault(); finish(true) } else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); finish(false) } } }} />
         : <span className="backlog-text-line" onDoubleClick={() => { if (!locked && !item.done) { setWording(item.text); setEditing(item.id) } }}>{item.text}</span>}
@@ -158,7 +159,7 @@ interface Undo { label: string; change: Change }
 /** What a close has to ask about: text that would otherwise be lost. */
 export type BacklogGuard = RefObject<() => boolean>
 
-export function Backlog({ api, guard, active = true, panes = [], onOpenPane }: { api: Api; guard?: BacklogGuard; active?: boolean; panes?: Pane[]; onOpenPane?: (pane: Pane) => void }) {
+export function Backlog({ api, guard: guardRef, active = true, panes = [], onOpenPane }: { api: Api; guard?: BacklogGuard; active?: boolean; panes?: Pane[]; onOpenPane?: (pane: Pane) => void }) {
   const [saved, setSaved] = useState<Saved | null>(null)
   const [changes, setChanges] = useState<Change[]>([])  // made in the checklist, not saved yet
   const [draft, setDraft] = useState<string | null>(null)  // the text while the person edits it as text
@@ -314,10 +315,9 @@ export function Backlog({ api, guard, active = true, panes = [], onOpenPane }: {
   const fresh = useRef({ item, conflict, failed, tooLong, dirty, changes: changes.length })
   useEffect(() => { fresh.current = { item, conflict, failed, tooLong, dirty, changes: changes.length } })
   useEffect(() => {
-    if (!guard) return
-    const check = guard as { current: () => boolean }
-    check.current = () => { const now = fresh.current; return !!now.item.trim() || !!typedRow.current.trim() || !!now.conflict || !!now.tooLong || (!!now.failed && (now.changes > 0 || now.dirty)) }
-  }, [guard])
+    if (!guardRef) return
+    guardRef.current = () => { const now = fresh.current; return !!now.item.trim() || !!typedRow.current.trim() || !!now.conflict || !!now.tooLong || (!!now.failed && (now.changes > 0 || now.dirty)) }
+  }, [guardRef])
 
   // Closing the sheet keeps what was typed. The version check still protects an agent's edit.
   useEffect(() => () => {
@@ -374,40 +374,71 @@ export function Backlog({ api, guard, active = true, panes = [], onOpenPane }: {
     onReword: (target, wording) => { change(rewordItem(target, wording)) },
     onSend: target => { setSent(null); setSendFor(now => now === target.id ? null : target.id) },
     onDragStart: (event, target) => {
-      if (event.button !== 0) return
+      if (event.button !== 0 || !(event.currentTarget instanceof HTMLElement)) return
+      const box = list.current
+      const row = box?.querySelector<HTMLElement>(`[data-backlog-row="${CSS.escape(target.id)}"]`)
+      if (!box || !row) return
       event.preventDefault()
-      event.currentTarget.setPointerCapture(event.pointerId)
+      const grip = event.currentTarget, pointer = event.pointerId
+      grip.setPointerCapture(pointer)
+      const startY = event.clientY, startScroll = box.scrollTop
+      const area = row.getBoundingClientRect()
+      const places = [...box.querySelectorAll<HTMLElement>('[data-backlog-row]')]
+      const min = places[0].getBoundingClientRect().top - area.top
+      const max = places[places.length - 1].getBoundingClientRect().bottom - area.bottom
+      // eslint-disable-next-line react-hooks/purity -- Runs in the row's pointerdown handler, not during render.
+      let offset = 0, lastY = startY, lastAt = performance.now(), speed = 0
+      let destination: { target: string | null; after: boolean } = { target: null, after: false }
+      row.style.transition = 'none'
+      const locate = (y: number) => {
+        let found: { target: string | null; after: boolean } = { target: null, after: false }
+        for (const place of places) {
+          const rect = place.getBoundingClientRect()
+          // The lifted row keeps its original slot for hit testing.
+          const center = rect.top + rect.height / 2 - (place === row ? offset : 0)
+          if (y < center) { found = { target: place.dataset.backlogRow!, after: false }; break }
+        }
+        if (!found.target && places.length) found = { target: places[places.length - 1].dataset.backlogRow!, after: true }
+        if (found.target !== destination.target || found.after !== destination.after) {
+          destination = found
+          setDrag({ item: target, ...found })
+        }
+      }
       const moved = (at: PointerEvent) => {
-        const box = list.current
-        if (!box) return
+        if (at.pointerId !== pointer) return
+        const now = performance.now()
+        if (now > lastAt) speed = speed * .4 + (at.clientY - lastY) / (now - lastAt) * .6
+        lastY = at.clientY; lastAt = now
         const edges = box.getBoundingClientRect()
         if (at.clientY < edges.top + 36) box.scrollTop -= 8
         else if (at.clientY > edges.bottom - 36) box.scrollTop += 8
-        const places = [...box.querySelectorAll<HTMLElement>('[data-backlog-row]')]
-        let found: { target: string; after: boolean } | null = null
-        for (const place of places) {
-          const area = place.getBoundingClientRect()
-          if (at.clientY < area.top + area.height / 2) { found = { target: place.dataset.backlogRow!, after: false }; break }
-        }
-        if (!found && places.length) found = { target: places[places.length - 1].dataset.backlogRow!, after: true }
-        setDrag({ item: target, target: found?.target ?? null, after: found?.after ?? false })
+        const y = at.clientY - startY + box.scrollTop - startScroll
+        const bound = Math.max(min, Math.min(max, y))
+        offset = bound + (y - bound) * .25
+        row.style.transform = `translateY(${offset}px)`
+        locate(at.clientY)
       }
       const finish = (ended: PointerEvent) => {
-        window.removeEventListener('pointermove', moved)
-        window.removeEventListener('pointerup', finish)
-        window.removeEventListener('pointercancel', finish)
-        setDrag(now => {
-          if (now?.target && ended.type === 'pointerup' && now.target !== target.id) {
-            const place = openItems.find(row => row.id === now.target)
-            if (place) queueMicrotask(() => change(moveItem(target.raw, target.line, place.raw, place.line, now.after)))
-          }
-          return null
-        })
+        if (ended.pointerId !== pointer) return
+        grip.removeEventListener('pointermove', moved)
+        grip.removeEventListener('pointerup', finish)
+        grip.removeEventListener('pointercancel', finish)
+        grip.removeEventListener('lostpointercapture', finish)
+        if (ended.type === 'pointerup' && !matchMedia('(prefers-reduced-motion: reduce)').matches && performance.now() - lastAt < 80 && Math.abs(speed) > .4 && Math.sign(speed) === Math.sign(lastY - startY)) {
+          const direction = Math.sign(speed), neighbor = places[places.indexOf(row) + direction]?.getBoundingClientRect()
+          const edge = neighbor ? neighbor.top + neighbor.height / 2 + direction : lastY
+          locate(direction > 0 ? Math.max(edge, lastY + speed * 100) : Math.min(edge, lastY + speed * 100))
+        }
+        const place = openItems.find(item => item.id === destination.target)
+        if (place && ended.type === 'pointerup' && place.id !== target.id) change(moveItem(target.raw, target.line, place.raw, place.line, destination.after))
+        row.style.transform = ''; row.style.transition = ''
+        setDrag(null)
       }
       setDrag({ item: target, target: null, after: false })
-      window.addEventListener('pointermove', moved)
-      window.addEventListener('pointerup', finish)
-      window.addEventListener('pointercancel', finish)
+      grip.addEventListener('pointermove', moved)
+      grip.addEventListener('pointerup', finish)
+      grip.addEventListener('pointercancel', finish)
+      grip.addEventListener('lostpointercapture', finish)
     },
     onDragKey: (event, target) => {
       if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
@@ -539,13 +570,23 @@ function SheetResize({ sheet, sizing, resized }: { sheet: RefObject<HTMLDialogEl
     event.preventDefault()
     const handle = event.currentTarget, from = { x: event.clientX, y: event.clientY, width: box.width, height: box.height }
     handle.setPointerCapture(event.pointerId)
-    let last = size
+    let last = size, frame = 0
+    const paint = () => {
+      frame = 0
+      if (!sheet.current) return
+      if (wide) sheet.current.style.maxWidth = `${last.width ?? box.width}px`
+      sheet.current.style.height = `${(wide ? last.height : last.phoneHeight) ?? box.height}px`
+    }
     const move = (moved: PointerEvent) => {
       const dx = moved.clientX - from.x, dy = moved.clientY - from.y
       last = wide ? fit(from.width + 2 * dx, from.height + 2 * dy) : fit(from.width, from.height - dy)
-      sizing.save(last)
+      if (!frame) frame = requestAnimationFrame(paint)
     }
     const end = () => {
+      cancelAnimationFrame(frame)
+      save(last)
+      sheet.current?.style.removeProperty('max-width')
+      sheet.current?.style.removeProperty('height')
       resized.current = Date.now()
       handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', end); handle.removeEventListener('pointercancel', end)
     }

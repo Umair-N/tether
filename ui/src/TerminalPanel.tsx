@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { errorText } from './api'
 import type { PanelBodyProps } from './panels'
 import { LiveTerminal } from './Terminal'
@@ -12,9 +12,13 @@ export function TerminalPanel({ api, pane, item, onItem }: PanelBodyProps) {
   const [shell, setShell] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [attempt, setAttempt] = useState(0)
+  const [requestFor, setRequestFor] = useState({ api, id: item.id, attempt })
+  if (requestFor.api !== api || requestFor.id !== item.id || requestFor.attempt !== attempt) {
+    setRequestFor({ api, id: item.id, attempt }); setError('')
+  }
   // The request reads these once per attempt. A changed focus or a saved shell id does not start another shell.
   const latest = useRef({ pane: pane.id, item, onItem })
-  latest.current = { pane: pane.id, item, onItem }
+  useLayoutEffect(() => { latest.current = { pane: pane.id, item, onItem } }, [pane.id, item, onItem])
   useEffect(() => {
     let live = true
     const key = `${item.id}:${attempt}`
@@ -25,7 +29,6 @@ export function TerminalPanel({ api, pane, item, onItem }: PanelBodyProps) {
       starting.set(key, request)
       void request.catch(() => '').then(() => starting.delete(key))
     }
-    setError('')
     request.then(id => {
       if (!live) return
       setShell(id)

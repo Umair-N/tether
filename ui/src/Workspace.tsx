@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Columns2, Columns3, LayoutGrid, PanelLeft, Rows2, Search, Square, X } from 'lucide-react'
 import type { Pane } from './api'
@@ -54,7 +54,11 @@ export function Workspace({ layout, slots, focus, zoomed, onCount, onFocus, onLa
   const rows = count === 4 || stacked ? 2 : 1
   // While a divider moves, the sizes live here. They go to prefs once, when the drag ends.
   const [draft, setDraft] = useState<{ cols?: number[]; row?: number } | null>(null)
+  const draftRef = useRef(draft)
+  const frame = useRef(0)
+  const pending = useRef<(() => void) | null>(null)
   const [drag, setDrag] = useState<string | null>(null)
+  useEffect(() => () => cancelAnimationFrame(frame.current), [])
   const grid = useRef<HTMLDivElement>(null)
   const bounds = draft?.cols ?? columnBounds(layout, count)
   const row = draft?.row ?? clampRow(layout.row)
@@ -103,12 +107,14 @@ export function Workspace({ layout, slots, focus, zoomed, onCount, onFocus, onLa
     const vertical = kind === 'col'
     const at = `calc(${PAD}px + (100% - ${2 * PAD + (cells - 1) * GAP}px) * ${share.toFixed(4)} + ${j * GAP - 2}px)`
     const id = kind + j
-    const place = (event: React.PointerEvent) => {
+    const place = (event: Pick<React.PointerEvent, 'clientX' | 'clientY'>) => {
       const box = grid.current!.getBoundingClientRect()
       const along = vertical ? event.clientX - box.left : event.clientY - box.top
       const total = (vertical ? box.width : box.height) - 2 * PAD - (cells - 1) * GAP
       const value = (along - PAD - j * GAP - GAP / 2) / total
-      setDraft(current => vertical ? { ...current, cols: moveBound(current?.cols ?? bounds, j, value) } : { ...current, row: clampRow(value) })
+      // eslint-disable-next-line react-hooks/refs -- place runs from pointer handlers and animation frames, not during render.
+      draftRef.current = vertical ? { ...draftRef.current, cols: moveBound(draftRef.current?.cols ?? bounds, j, value) } : { ...draftRef.current, row: clampRow(value) }
+      setDraft(draftRef.current)
     }
     const set = (value: number) => vertical ? saveCols(moveBound(bounds, j, value)) : onLayout({ row: clampRow(value) })
     const reset = () => vertical ? saveCols(equalBounds(count)) : onLayout({ row: 0.5 })
@@ -117,9 +123,14 @@ export function Workspace({ layout, slots, focus, zoomed, onCount, onFocus, onLa
       aria-valuemin={15} aria-valuemax={85} aria-valuenow={Math.round(share * 100)} title="Drag to resize. Double-click to make equal."
       style={vertical ? { left: at, top: PAD, bottom: PAD } : { top: at, left: PAD, right: PAD }}
       onPointerDown={event => { event.currentTarget.setPointerCapture(event.pointerId); event.currentTarget.focus(); event.preventDefault(); setDrag(id) }}
-      onPointerMove={event => { if (drag === id) place(event) }}
-      onPointerUp={() => { if (drag !== id) return; setDrag(null); if (draft?.cols) saveCols(draft.cols); if (draft?.row !== undefined) onLayout({ row: draft.row }); setDraft(null) }}
-      onPointerCancel={() => { setDrag(null); setDraft(null) }}
+      onPointerMove={event => { if (drag !== id) return
+        const point = { clientX: event.clientX, clientY: event.clientY }
+        // eslint-disable-next-line react-hooks/refs -- Pointer move handler, not render.
+        pending.current = () => place(point)
+        if (!frame.current) frame.current = requestAnimationFrame(() => { frame.current = 0; pending.current?.(); pending.current = null })
+      }}
+      onPointerUp={() => { if (drag !== id) return; cancelAnimationFrame(frame.current); frame.current = 0; pending.current?.(); pending.current = null; setDrag(null); const done = draftRef.current; if (done?.cols) saveCols(done.cols); if (done?.row !== undefined) onLayout({ row: done.row }); draftRef.current = null; setDraft(null) }}
+      onPointerCancel={() => { cancelAnimationFrame(frame.current); frame.current = 0; pending.current = null; draftRef.current = null; setDrag(null); setDraft(null) }}
       onDoubleClick={reset}
       onKeyDown={event => {
         const back = vertical ? 'ArrowLeft' : 'ArrowUp', forward = vertical ? 'ArrowRight' : 'ArrowDown'

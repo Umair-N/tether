@@ -15,10 +15,11 @@
 .backlog-group li:last-child, .backlog-done li:last-child { border-bottom: 0; }
 .backlog-row.done { grid-template-columns: 18px minmax(0, 1fr) auto; }
 .backlog-row.dragged { opacity: .45; }
-.backlog-row.drop-before::before, .backlog-row.drop-after::after { content: ''; position: absolute; inset-inline: 0; height: 2px; background: var(--accent); border-radius: 1px; }
+.backlog-row.drop-before::before, .backlog-row.drop-after::after { content: ''; position: absolute; inset-inline: 0; height: 2px; background: var(--accent); border-radius: 1px; pointer-events: none; }
 .backlog-row.drop-before::before { top: -1px; }
 .backlog-row.drop-after::after { bottom: -1px; }
-button.backlog-grip { display: grid; place-items: center; width: 18px; min-width: 0; height: 22px; min-height: 0; padding: 0; border: 0; border-radius: 4px; background: none; color: var(--muted); cursor: grab; touch-action: none; }
+button.backlog-grip { position: relative; display: grid; place-items: center; width: 18px; min-width: 0; height: 22px; min-height: 0; padding: 0; border: 0; border-radius: 4px; background: none; color: var(--muted); cursor: grab; touch-action: none; }
+button.backlog-grip::before { content: ''; position: absolute; width: 44px; height: 44px; left: 50%; top: 50%; transform: translate(-50%, -50%); }
 button.backlog-grip:not(:disabled):hover { background: var(--hover); color: var(--text); }
 .backlog-box { width: 16px; height: 16px; margin: 3px 0 0; accent-color: var(--accent); cursor: pointer; }
 .backlog-body { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
@@ -85,7 +86,6 @@ button.backlog-resize:focus-visible { outline: 2px solid var(--accent); outline-
 @media (pointer: coarse) {
   .backlog-row { grid-template-columns: 26px 22px minmax(0, 1fr) auto; padding-block: 11px; font-size: 15px; }
   .backlog-row.done { grid-template-columns: 22px minmax(0, 1fr) auto; }
-  button.backlog-grip { width: 26px; height: 30px; margin-top: -4px; }
   .backlog-box { width: 20px; height: 20px; margin-top: 1px; }
   .backlog-actions .icon-button { width: 34px; height: 34px; }
   button.backlog-tag { padding-block: 3px; }

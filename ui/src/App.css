@@ -1,4 +1,4 @@
-.app-shell { display: flex; position: fixed; inset: 0; overflow: hidden; }
+.app-shell { display: flex; position: fixed; inset: 0; overflow: clip; }  /* clip, not hidden: a phone keyboard can scroll a hidden box and leave a gap above the tab bar */
 .sidebar { display: none; }
 /* Sidebar: exact values from the desktop prototype (Main.dc.html). Touch screens keep 44px rows at the end. */
 .sidebar-inner { display: flex; flex-direction: column; height: 100%; min-height: 0; }
@@ -461,10 +461,22 @@ a { -webkit-touch-callout: default; }
 .toast { background: var(--surface); margin: 0 18px 8px; padding: 12px 16px; border: 1px solid var(--line); border-radius: var(--radius); font-size: 14px; line-height: 1.5; }
 .read-only { font-size: 13px; color: var(--muted); padding: 4px 20px; text-align: center; }
 dialog { color: var(--text); background: var(--surface); border: 1px solid var(--line); }
-dialog::backdrop { background: #11110e66; }
-.drawer { position: fixed; inset: 0 auto 0 0; margin: 0; width: min(340px, 88vw); max-width: none; height: 100dvh; max-height: none; border: 0; padding: 0; background: var(--sidebar); }
+dialog::backdrop { background: #11110e66; opacity: calc(1 - var(--sheet-progress, 0)); transition: opacity var(--sheet-duration, 0ms) cubic-bezier(.32,.72,0,1); }
+.drawer { position: fixed; inset: 0 auto 0 0; margin: 0; width: min(340px, 88vw); max-width: none; height: 100dvh; max-height: none; border: 0; padding: 0; background: var(--sidebar); transition: transform 320ms cubic-bezier(.32,.72,0,1); touch-action: pan-y; }
 .drawer[open] { display: flex; flex-direction: column; }
+@starting-style { .drawer[open] { transform: translateX(-100%); } }
 .sheet { position: fixed; inset: auto 0 0; width: 100%; max-width: 500px; max-height: 90dvh; margin: 0 auto; padding: 22px 24px max(24px, env(safe-area-inset-bottom)); border-radius: var(--radius-xl) var(--radius-xl) 0 0; border-bottom: 0; }
+@media (max-width: 599.98px) {
+  .sheet:not(.popover) { transition: transform 300ms cubic-bezier(.32,.72,0,1); touch-action: pan-x pan-y; }
+  /* Content keeps native scrolling; the heading reserves vertical drags. */
+  .sheet:not(.popover) .sheet-heading { touch-action: pan-x; }
+  @starting-style { .sheet:not(.popover)[open] { transform: translateY(100%); } }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sheet:not(.popover), .drawer, dialog::backdrop { transition: none; }
+}
+.sheet-heading .icon-button { position: relative; }
+.sheet-heading .icon-button::before { content: ''; position: absolute; width: max(100%, 44px); height: max(100%, 44px); left: 50%; top: 50%; transform: translate(-50%, -50%); }
 .sheet-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .sheet h2 { font-family: ui-serif, Georgia, serif; font-size: 28px; font-weight: 400; }
 .sheet form > p { color: var(--muted); margin: 8px 0 26px; font-size: 14px; line-height: 1.6; }
@@ -513,7 +525,7 @@ dialog::backdrop { background: #11110e66; }
 
 /* Suggestions above the message box: "/" commands and skills, "@" files. */
 .composer-area { position: relative; }
-.suggest { position: absolute; left: max(14px, env(safe-area-inset-left)); right: max(14px, env(safe-area-inset-right)); bottom: calc(100% - 4px); z-index: 6; max-height: min(42dvh, 360px); overflow-y: auto; overscroll-behavior: contain; padding: 4px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: 0 8px 28px #00000024; }
+.suggest { position: absolute; left: max(14px, env(safe-area-inset-left)); right: max(14px, env(safe-area-inset-right)); bottom: calc(100% - 4px); z-index: 6; max-height: min(42dvh, 360px); overflow-y: auto; overscroll-behavior: contain; scroll-padding-top: 34px; padding: 4px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: 0 8px 28px #00000024; }
 .suggest-head { position: sticky; top: -4px; display: flex; align-items: center; gap: 6px; margin: -4px -4px 2px; padding: 8px 12px 6px; background: var(--surface); color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .suggest button { display: flex; align-items: flex-start; gap: 10px; width: 100%; min-height: var(--control-lg); padding: 8px 10px; border-radius: var(--radius); text-align: left; }
 .suggest button > svg { flex-shrink: 0; margin-top: 2px; color: var(--muted); }
@@ -626,13 +638,14 @@ dialog::backdrop { background: #11110e66; }
 .effort-levels { flex-wrap: wrap; }
 
 /* Sidebar row swipe: Pin and Delete sit under the row; a left swipe slides the row aside. */
-.swipe-row { position: relative; overflow: hidden; border-radius: var(--radius); }
-.swipe-row > .session-row { position: relative; z-index: 1; background: var(--sidebar); transition: transform .2s cubic-bezier(.23, 1, .32, 1); }
+.swipe-row { position: relative; overflow: hidden; border-radius: var(--radius); touch-action: pan-y pinch-zoom; }
+.swipe-row > .session-row { position: relative; z-index: 1; background: var(--sidebar); transition: transform .22s cubic-bezier(.32,.72,0,1); }
 .swipe-row > .session-row.selected { background: linear-gradient(var(--hover), var(--hover)), var(--sidebar); }
 .swipe-row.swiped > .session-row { transform: translateX(-228px); }
 .swipe-actions { position: absolute; inset: 0 0 0 auto; display: flex; width: 228px; visibility: hidden; }
 .swipe-row.swiped .swipe-actions { visibility: visible; }
-.swipe-actions button { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: 12px; background: var(--hover); color: var(--text); }
+.swipe-actions button { position: relative; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: 12px; background: var(--hover); color: var(--text); }
+.swipe-actions button::before { content: ""; position: absolute; inset: min(0px, calc((100% - 44px) / 2)) 0; }
 .swipe-actions .swipe-delete { background: var(--danger); color: #fff; }
 @media (prefers-reduced-motion: reduce) { .swipe-row > .session-row { transition: none; } }
 
@@ -650,7 +663,7 @@ dialog::backdrop { background: #11110e66; }
 .thread:has(.jump-button) .selection-copy { bottom: 66px; }
 /* With a mouse: one button by the end of the selected text. */
 .selection-backlog { position: fixed; z-index: 30; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; background: var(--surface); box-shadow: 0 2px 10px rgb(0 0 0 / .18); -webkit-user-select: none; user-select: none; }
-.pull-note { display: flex; align-items: flex-end; justify-content: center; margin: 0; padding-bottom: 8px; overflow: hidden; font-size: 13px; color: var(--muted); }
+.pull-note { position: relative; z-index: 1; height: 40px; transform: translate3d(0, -40px, 0); opacity: 0; pointer-events: none; display: flex; align-items: flex-end; justify-content: center; margin: 0 0 -40px; padding-bottom: 8px; overflow: hidden; font-size: 13px; color: var(--muted); }
 
 /* Mode menu above the mode pill; session details; reply times; model list refresh. */
 .mode-container { position: relative; display: inline-flex; flex: none; }
@@ -915,6 +928,7 @@ button.live-chip:active { background: var(--line); }
 /* One disclosure and one scroll boundary keep chat visible on short phones. */
 .status-stack { flex: none; max-height: 50dvh; overflow-y: auto; overscroll-behavior: contain; margin: 0 12px 6px; }
 .status-grip { position: sticky; top: 0; z-index: 2; display: flex; justify-content: center; align-items: center; height: 20px; background: var(--bg); cursor: ns-resize; touch-action: none; }
+.status-grip::before { content: ""; position: absolute; left: 0; right: 0; top: -12px; height: 44px; }
 .status-grip + .status-rail { top: 20px; }
 .status-grip span { width: 40px; height: 4px; border-radius: 2px; background: var(--line); }
 .status-grip:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--radius-sm); }
@@ -1000,7 +1014,7 @@ button.live-chip:active { background: var(--line); }
 .file-chip { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .82em; background: var(--bubble); color: var(--file-chip-text); padding: 2px 4px; border-radius: var(--radius-xs); overflow-wrap: anywhere; }
 .file-chip code { color: inherit; background: none; padding: 0; font-size: inherit; }
 .assistant-message :not(pre) > code.file-chip { color: var(--file-chip-text); }
-.pane-tabs button.dragging { background: var(--surface); border-color: var(--text); color: var(--text); box-shadow: 0 4px 14px rgb(0 0 0 / 0.18); transform: scale(1.04); }
+.pane-tabs button.dragging { z-index: 1; background: var(--surface); border-color: var(--text); color: var(--text); box-shadow: 0 4px 14px rgb(0 0 0 / 0.18); touch-action: pan-y; }
 /* Settings use the existing sheet and control tokens, with one visible tab. */
 .settings-sheet { overflow-y: auto; padding: 16px 18px max(18px, env(safe-area-inset-bottom)); }
 .settings-tabs { margin: 12px 0 0; padding-bottom: 8px; border-bottom: 1px solid var(--line); }

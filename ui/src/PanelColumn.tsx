@@ -28,14 +28,26 @@ export function PopMenu({ at, label, onClose, children }: { at: Anchor; label: s
 }
 
 /** A drag handle between two areas. Arrow keys move it, Enter or a double-click resets it. */
-function Handle({ vertical, label, share, style, onMove, onDone, onReset, onStep }: { vertical: boolean; label: string; share: number; style: React.CSSProperties; onMove: (event: React.PointerEvent) => void; onDone: () => void; onReset: () => void; onStep: (step: number) => void }) {
+function Handle({ vertical, label, share, style, onMove, onDone, onReset, onStep }: { vertical: boolean; label: string; share: number; style: React.CSSProperties; onMove: (event: Pick<React.PointerEvent, 'clientX' | 'clientY' | 'currentTarget'>) => void; onDone: () => void; onReset: () => void; onStep: (step: number) => void }) {
   const [drag, setDrag] = useState(false)
+  const frame = useRef(0)
+  const pending = useRef<(() => void) | null>(null)
+  useEffect(() => () => cancelAnimationFrame(frame.current), [])
+  const finish = () => {
+    cancelAnimationFrame(frame.current); frame.current = 0
+    pending.current?.(); pending.current = null
+    setDrag(false); onDone()
+  }
   return <div role="separator" tabIndex={0} className={`slot-divider ${vertical ? 'vertical' : 'horizontal'} ${drag ? 'dragging' : ''}`} aria-orientation={vertical ? 'vertical' : 'horizontal'} aria-label={label}
     aria-valuemin={15} aria-valuemax={85} aria-valuenow={Math.round(share * 100)} title="Drag to resize. Double-click to reset." style={style}
     onPointerDown={event => { event.currentTarget.setPointerCapture(event.pointerId); event.currentTarget.focus(); event.preventDefault(); setDrag(true) }}
-    onPointerMove={event => { if (drag) onMove(event) }}
-    onPointerUp={() => { if (drag) { setDrag(false); onDone() } }}
-    onPointerCancel={() => { setDrag(false); onDone() }}
+    onPointerMove={event => { if (!drag) return
+      const point = { clientX: event.clientX, clientY: event.clientY, currentTarget: event.currentTarget }
+      pending.current = () => onMove(point)
+      if (!frame.current) frame.current = requestAnimationFrame(() => { frame.current = 0; pending.current?.(); pending.current = null })
+    }}
+    onPointerUp={() => { if (drag) finish() }}
+    onPointerCancel={finish}
     onDoubleClick={onReset}
     onKeyDown={event => {
       const back = vertical ? 'ArrowLeft' : 'ArrowUp', forward = vertical ? 'ArrowRight' : 'ArrowDown'
@@ -60,6 +72,8 @@ interface ColumnProps {
 export function PanelColumn({ api, desk, pane, setPanels, renderChat }: ColumnProps) {
   const cols = panelCols(desk)
   const [draft, setDraft] = useState<{ width?: number; split?: number; rows?: { c: number; bounds: number[] } } | null>(null)
+  const draftRef = useRef(draft)
+  const preview = (next: NonNullable<typeof draft>) => { draftRef.current = next; setDraft(next) }
   const [expanded, setExpanded] = useState<string | null>(null)
   const [active, setActive] = useState<string | null>(null)
   const [menu, setMenu] = useState<{ id: string; at: Anchor } | null>(null)
@@ -92,7 +106,8 @@ export function PanelColumn({ api, desk, pane, setPanels, renderChat }: ColumnPr
   const another = (item: PanelItem) => setPanels(current => ({ cols: addPanel(panelCols(current), { id: newPanelId(), kind: item.kind, fresh: true }, item.id) }))
   const move = (id: string, where: PanelMove) => setPanels(current => ({ cols: movePanel(panelCols(current), id, where) }))
   const save = () => {
-    const done = draft
+    const done = draftRef.current
+    draftRef.current = null
     setDraft(null)
     if (!done) return
     setPanels(current => done.rows ? { cols: panelCols(current).map((col, c) => c === done.rows!.c ? { ...col, rows: done.rows!.bounds } : col) } : { width: done.width ?? current.panels?.width, split: done.split ?? current.panels?.split })
@@ -102,7 +117,7 @@ export function PanelColumn({ api, desk, pane, setPanels, renderChat }: ColumnPr
 
   return <aside ref={root} className={shown ? 'panel-column expanded' : 'panel-column'} style={shown ? undefined : { flexBasis: `${(width * 100).toFixed(2)}%` }} aria-label="Panels">
     {!shown && <Handle vertical label="Resize the panel column" share={width} style={{ left: -2, top: 8, bottom: 8 }}
-      onMove={event => { const area = root.current!.parentElement!.getBoundingClientRect(); setDraft({ width: Math.min(0.75, Math.max(0.2, (area.right - event.clientX) / area.width)) }) }}
+      onMove={event => { const area = root.current!.parentElement!.getBoundingClientRect(); preview({ width: Math.min(0.75, Math.max(0.2, (area.right - event.clientX) / area.width)) }) }}
       onDone={save} onReset={() => setPanels(() => ({ width: undefined }))} onStep={step => setPanels(current => ({ width: Math.min(0.75, Math.max(0.2, panelWidth(current) - step)) }))} />}
     <div className="panel-cols" style={!shown && cols.length > 1 ? { gridTemplateColumns: tracks([split]) } : undefined}>
       {cols.map((col, c) => {
@@ -132,12 +147,12 @@ export function PanelColumn({ api, desk, pane, setPanels, renderChat }: ColumnPr
             </section>
           })}
           {!shown && col.items.length > 1 && bounds.map((share, j) => <Handle key={j} vertical={false} label={`Resize panels ${j + 1} and ${j + 2}`} share={share} style={{ top: handleAt(share, j, col.items.length), left: 0, right: 0 }}
-            onMove={event => { const area = (event.currentTarget.parentElement as HTMLElement).getBoundingClientRect(); const total = area.height - (col.items.length - 1) * GAP; setDraft({ rows: { c, bounds: moveBound(bounds, j, (event.clientY - area.top - j * GAP - GAP / 2) / total) } }) }}
+            onMove={event => { const area = (event.currentTarget.parentElement as HTMLElement).getBoundingClientRect(); const total = area.height - (col.items.length - 1) * GAP; preview({ rows: { c, bounds: moveBound(bounds, j, (event.clientY - area.top - j * GAP - GAP / 2) / total) } }) }}
             onDone={save} onReset={() => setRows(c, evenBounds(col.items.length))} onStep={step => setRows(c, moveBound(bounds, j, share + step))} />)}
         </div>
       })}
       {!shown && cols.length > 1 && <Handle vertical label="Resize the two panel columns" share={split} style={{ left: handleAt(split, 0, 2), top: 0, bottom: 0 }}
-        onMove={event => { const area = (event.currentTarget.parentElement as HTMLElement).getBoundingClientRect(); setDraft({ split: clampRow((event.clientX - area.left - GAP / 2) / (area.width - GAP)) }) }}
+        onMove={event => { const area = (event.currentTarget.parentElement as HTMLElement).getBoundingClientRect(); preview({ split: clampRow((event.clientX - area.left - GAP / 2) / (area.width - GAP)) }) }}
         onDone={save} onReset={() => setPanels(() => ({ split: undefined }))} onStep={step => setPanels(current => ({ split: clampRow(panelSplit(current) + step) }))} />}
     </div>
     {menu && menuItem && <PanelOptions api={api} item={menuItem} at={menu.at} canMove={where => canMovePanel(cols, menuItem.id, where)}

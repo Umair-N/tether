@@ -1,0 +1,23 @@
+  - Background work: none is running. I removed the build worktree.
+
+  Still open: the gap above the bottom tab bar. I need your answers to these questions:
+  1. Did you open the answers from the pin bubble or from a "Waiting on you" card?
+  2. Did the keyboard open?
+  3. How did you close it?
+
+  Next: answer the 3 questions about the gap.
+
+  Needs you: yes
+
+✻ Brewed for 14s · done 6:31 AM
+
+❯ /restart
+  ⎿  Successfully downgraded from 2.1.318 to version 2.1.311
+  ⎿  SessionStart:resume says: Session charter loaded.
+                                                                     ✔ Update installed · /restart to apply
+────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 1. waiiting on me inside the chat i guess
+  2. yes
+────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Opus 5.5 | ctx 11% (107k/1000k) | 7d 11% | tether | main
+  ⏵⏵ auto mode on (shift+tab to cycle)

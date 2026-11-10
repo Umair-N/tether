@@ -33,10 +33,8 @@ DESKTOP = (1280, 800)
 # JPEG quality of streamed frames. At 60, text on a 2x screen showed blocks. Desktop tabs render at 2x (PRESETS) for the same reason;
 # the stream is still capped at the panel size in device pixels.
 QUALITY = 80
-MOTION_IDLE = 0.3
 # Seconds after the last viewer leaves before a user tab's window is minimized (see Browser._park).
 PARK_SECONDS = 5
-SCROLL_KEYS = {'PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'Home', 'End', ' '}
 
 IPHONE_UA = ('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) '
              'Version/18.0 Mobile/15E148 Safari/604.1')
@@ -343,9 +341,6 @@ class Tab:
         self.casting = None  # (max width, max height) while a screencast runs
         self.viewer_sizes = []
         self.last_input = 0.0
-        self.motion_until = 0.0
-        self.motion_timer = None
-        self.motion_generation = 0
         self.changed = threading.Condition()
         self.healed = 0.0  # when the emulation was last applied again (see Browser.heal)
         self.parked = False  # the tab's window is minimized because nobody watches it
@@ -455,7 +450,6 @@ class Browser:
 
     def _reset(self):
         for tab in self.tabs.values():
-            self._cancel_motion(tab)
             with tab.changed:
                 tab.changed.notify_all()
         self.tabs, self.order, self.by_session = {}, [], {}
@@ -580,7 +574,6 @@ class Browser:
             return self.state()
 
     def _forget(self, tab):
-        self._cancel_motion(tab)
         self.tabs.pop(tab.target, None)
         self.by_session.pop(tab.session, None)
         if tab.mode != 'agent' and tab.context and self.running() and not any(other.context == tab.context for other in self.tabs.values()):
@@ -711,11 +704,6 @@ class Browser:
                 method, params = as_touch(method, params)
                 if method is None:
                     continue
-            # Only input that moves the page lowers the size: not clicks or typing, so text stays sharp while Mak types.
-            if (method == 'Input.dispatchTouchEvent' or params.get('type') == 'mouseWheel'
-                    or (params.get('type') == 'mouseMoved' and params.get('buttons'))
-                    or (method == 'Input.dispatchKeyEvent' and params.get('key') in SCROLL_KEYS)):
-                self._moving(tab)
             self.conn.call(method, params, tab.session, timeout=5)
         return {'ok': True}
 
@@ -764,7 +752,6 @@ class Browser:
             tab.viewers = len(tab.viewer_sizes)
             self.touch()
             if not tab.viewers and tab.casting and self.running() and tab.target in self.tabs:
-                self._cancel_motion(tab)
                 tab.casting = None
                 self.conn.send('Page.stopScreencast', session=tab.session)
             if not tab.viewers and self.running() and tab.target in self.tabs:
@@ -806,68 +793,7 @@ class Browser:
             pass  # a minimized tab still sends screencast frames
 
     def _cast_size(self, tab):
-        size = tuple(max(s[i] for s, _ in tab.viewer_sizes) for i in (0, 1))
-        if self.clock() < tab.motion_until:
-            # Old clients send only device-pixel bounds. Preserve those bounds rather than guess their DPR.
-            floor = tuple(max((css or pixels)[i] for pixels, css in tab.viewer_sizes) for i in (0, 1))
-            factor = max(0.5, min(1, floor[0] / size[0]), min(1, floor[1] / size[1]))
-            size = tuple(max(1, round(value * factor)) for value in size)
-        return size
-
-    def _cancel_motion(self, tab):
-        tab.motion_generation += 1
-        if tab.motion_timer:
-            tab.motion_timer.cancel()
-            tab.motion_timer = None
-        tab.motion_until = 0.0
-
-    def _motion_later(self, tab, delay):
-        tab.motion_timer = threading.Timer(delay, self._settle_cast, args=(tab, tab.motion_generation))
-        tab.motion_timer.daemon = True
-        tab.motion_timer.start()
-
-    def _moving(self, tab):
-        with self.lock:
-            if not tab.viewers or not tab.casting:
-                return
-            tab.motion_until = self.clock() + MOTION_IDLE
-            if tab.motion_timer is None:
-                self._motion_later(tab, MOTION_IDLE)
-            size = self._cast_size(tab)
-            if tab.casting != size:
-                self._start_cast(tab, size)
-
-    def _settle_cast(self, tab, generation=None):
-        with self.lock:
-            if generation is not None and generation != tab.motion_generation:
-                return  # a canceled callback must not alter a new viewer's motion timer
-            tab.motion_timer = None
-            if not self.running() or self.tabs.get(tab.target) is not tab or not tab.viewers or not tab.casting:
-                return
-            left = tab.motion_until - self.clock()
-            if left > 0:
-                self._motion_later(tab, left)
-                return
-            try:
-                size = self._cast_size(tab)
-                if tab.casting == size:
-                    return
-                self._start_cast(tab, size)
-                seq = tab.seq  # exclude late frames from the stopped motion cast
-            except BrowserError:
-                return  # a closed or detached page cannot supply a still frame
-        # A static page can miss the first screencast paint. Give it a chance before taking a screenshot.
-        # Neither the wait nor the fallback capture may hold the input lock.
-        if self.wait_frame(tab, seq, 0.1) is None:
-            with self.lock:
-                if (not self.running() or self.tabs.get(tab.target) is not tab or not tab.viewers
-                        or tab.casting != size or self.clock() < tab.motion_until
-                        or (generation is not None and generation != tab.motion_generation)):
-                    return
-            try:
-                self._snapshot(tab)
-            except BrowserError:
-                pass
+        return tuple(max(s[i] for s, _ in tab.viewer_sizes) for i in (0, 1))
 
     def _start_cast(self, tab, size):
         if tab.controller == 'agent':

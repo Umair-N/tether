@@ -73,6 +73,7 @@ export function Composer({ onTerminalEscape, api, pane, thread, disabled, onSend
   const hintId = useId()
   const camera = useRef<HTMLInputElement>(null)
   const photos = useRef<HTMLInputElement>(null)
+  const textarea = useRef<HTMLTextAreaElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!menu) return
@@ -88,6 +89,44 @@ export function Composer({ onTerminalEscape, api, pane, thread, disabled, onSend
   }
   // Gboard's image history cannot reach a web text box, so read the newest file in the Screenshots folder instead.
   const [hasFolder, setHasFolder] = useState(() => { try { return localStorage.getItem('tether-screenshot-folder') === '1' } catch { return false } })
+  const [files, setFiles] = useState<{ name: string; path: string; url?: string }[]>([])
+  const [viewing, setViewing] = useState<{ name: string; url: string } | null>(null)
+  const [uploading, setUploading] = useState('')
+  const picker = useRef<HTMLInputElement>(null)
+  const suggest = useRef<SuggestHandle>(null)
+  // A line that starts with "!" runs as a shell command in the agent's terminal on the server. The box shows it as a terminal prompt.
+  const shellMode = pane.agent !== 'shell' && draft.startsWith('!')
+  const terminalInput = shellMode || pane.agent === 'shell'
+  const canAttach = pane.agent !== 'shell' && pane.writable && !shellMode
+  // Long pastes wait as badges above the box. Tap one to read it in place.
+  const [pastes, setPastes] = useState<Paste[]>([])
+  const [openPaste, setOpenPaste] = useState<number | null>(null)
+  const [attachmentContext, setAttachmentContext] = useState({ pane: pane.id, thread })
+  if (attachmentContext.pane !== pane.id || attachmentContext.thread !== thread) {
+    setAttachmentContext({ pane: pane.id, thread }); setFiles([]); setPastes([]); setOpenPaste(null)
+  }
+  const [sending, setSending] = useState(false)
+  const form = useRef<HTMLFormElement>(null)
+  const dictation = useDictation({ text: draft, setText: setDraft, chime, handsFree,
+    onHandsFreeDone: () => form.current?.requestSubmit(), onFinished: () => textarea.current?.focus() })
+  const { listening, transcribing, seconds, error: speechError, setError: setSpeechError, canRecord, toggle: toggleMic } = dictation
+  // Upload files in order and return how many worked. onSaved runs after each good upload.
+  async function attach(list: FileList | File[], onSaved?: (index: number) => void): Promise<number> {
+    const chosen = Array.from(list)
+    if (!chosen.length) return 0
+    setSpeechError('')
+    let count = 0
+    try {
+      for (const [index, file] of chosen.entries()) {
+        setUploading(`Uploading ${chosen.length > 1 ? `${index + 1}/${chosen.length} ` : ''}${file.name || 'file'}…`)
+        const saved = await uploadFile(file, pane.id, thread)
+        setFiles(current => [...current, { ...saved, url: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined }])
+        onSaved?.(index); count++
+      }
+    } catch (failure) { setSpeechError(errorText(failure)) } finally { setUploading('') }
+    textarea.current?.focus()
+    return count
+  }
   async function attachLatest() {
     setMenu(false)
     if (!canPickFolder()) { photos.current?.click(); return }
@@ -125,19 +164,6 @@ export function Composer({ onTerminalEscape, api, pane, thread, disabled, onSend
     setHasFolder(false)
     await attachLatest()
   }
-  const [files, setFiles] = useState<{ name: string; path: string; url?: string }[]>([])
-  const [viewing, setViewing] = useState<{ name: string; url: string } | null>(null)
-  const [uploading, setUploading] = useState('')
-  const picker = useRef<HTMLInputElement>(null)
-  const suggest = useRef<SuggestHandle>(null)
-  // A line that starts with "!" runs as a shell command in the agent's terminal on the server. The box shows it as a terminal prompt.
-  const shellMode = pane.agent !== 'shell' && draft.startsWith('!')
-  const terminalInput = shellMode || pane.agent === 'shell'
-  const canAttach = pane.agent !== 'shell' && pane.writable && !shellMode
-  // Long pastes wait as badges above the box. Tap one to read it in place.
-  const [pastes, setPastes] = useState<Paste[]>([])
-  const [openPaste, setOpenPaste] = useState<number | null>(null)
-  useEffect(() => { setFiles([]); setPastes([]); setOpenPaste(null) }, [pane.id, thread])
   // Attach files shared from another app (Gallery → Share → Tether) once a session that takes files is open.
   // Wait until the chat has loaded (disabled is false), so the upload carries the current thread.
   useEffect(() => { if (canAttach && !disabled) void takeShared().then(async shared => { if (!shared.length) return; const saved = await attach(shared.map(item => item.file), index => void doneShared(shared[index])); releaseShared(shared.slice(saved)) }) }, [canAttach, disabled, pane.id, thread]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -148,36 +174,13 @@ export function Composer({ onTerminalEscape, api, pane, thread, disabled, onSend
     window.addEventListener('tether-attach', take)
     return () => window.removeEventListener('tether-attach', take)
   }, [canAttach, disabled, pane.id, thread]) // eslint-disable-line react-hooks/exhaustive-deps
-  // Upload files in order and return how many worked. onSaved runs after each good upload.
-  async function attach(list: FileList | File[], onSaved?: (index: number) => void): Promise<number> {
-    const chosen = Array.from(list)
-    if (!chosen.length) return 0
-    setSpeechError('')
-    let count = 0
-    try {
-      for (const [index, file] of chosen.entries()) {
-        setUploading(`Uploading ${chosen.length > 1 ? `${index + 1}/${chosen.length} ` : ''}${file.name || 'file'}…`)
-        const saved = await uploadFile(file, pane.id, thread)
-        setFiles(current => [...current, { ...saved, url: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined }])
-        onSaved?.(index); count++
-      }
-    } catch (failure) { setSpeechError(errorText(failure)) } finally { setUploading('') }
-    textarea.current?.focus()
-    return count
-  }
-  const textarea = useRef<HTMLTextAreaElement>(null)
-  const [sending, setSending] = useState(false)
-  const form = useRef<HTMLFormElement>(null)
-  const dictation = useDictation({ text: draft, setText: setDraft, chime, handsFree,
-    onHandsFreeDone: () => form.current?.requestSubmit(), onFinished: () => textarea.current?.focus() })
-  const { listening, transcribing, seconds, error: speechError, setError: setSpeechError, canRecord, toggle: toggleMic } = dictation
   useLayoutEffect(() => {
     const input = textarea.current
     if (input) { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 180)}px` }
   }, [draft])
   // Hands-free: a read-aloud reply asks for the mic (listenRequest). A pause after speech stops it and sends.
   const dictationRef = useRef(dictation)
-  dictationRef.current = dictation
+  useLayoutEffect(() => { dictationRef.current = dictation })
   useEffect(() => { if (listenRequest && !dictationRef.current.active() && micOk) void dictationRef.current.toggle() }, [listenRequest, micOk])
   async function submit(event: React.FormEvent) {
     event.preventDefault()

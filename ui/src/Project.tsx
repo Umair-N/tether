@@ -67,11 +67,12 @@ export function ProjectSheet({ api, session, group, mark, pin, onChanged, onClos
 
   const show = (next: ProjectState, keepText = false) => { setProject(next); if (!keepText) setText(next.instructions.replace(/\n$/, '')) }
   const groupId = group?.id
-  const load = useCallback(async () => {
-    setError(''); setStale(false)
-    try { show(await api<ProjectState>(groupId ? `groups/context?session=${encodeURIComponent(session.id)}&group=${encodeURIComponent(groupId)}` : `projects/project?session=${encodeURIComponent(session.id)}`)) }
-    catch (failure) { setError(errorText(failure)) }
-  }, [api, session.id, groupId])
+  const load = useCallback(() =>
+    api<ProjectState>(groupId ? `groups/context?session=${encodeURIComponent(session.id)}&group=${encodeURIComponent(groupId)}` : `projects/project?session=${encodeURIComponent(session.id)}`)
+      .then(next => show(next)).catch(failure => { setError(errorText(failure)) }),
+  [api, session.id, groupId])
+  const [previousLoad, setPreviousLoad] = useState(() => load)
+  if (load !== previousLoad) { setPreviousLoad(() => load); setError(''); setStale(false) }
   useEffect(() => { void load() }, [load])
 
   async function post(path: string, body: Record<string, unknown>, keepText = true) {
@@ -112,7 +113,7 @@ export function ProjectSheet({ api, session, group, mark, pin, onChanged, onClos
     </div>
     <p className="sheet-sub">{group ? `${session.name} › ${group.name}` : session.name}{project && ` · ${project.chars.toLocaleString()} / ${project.budget.toLocaleString()} characters`}</p>
     {!project && !error && <p className="hint">Loading…</p>}
-    {error && <p className="error" role="alert">{error}{stale && <> <button type="button" className="link-button" onClick={() => void load()}>Reload</button></>}</p>}
+    {error && <p className="error" role="alert">{error}{stale && <> <button type="button" className="link-button" onClick={() => { setError(''); setStale(false); void load() }}>Reload</button></>}</p>}
 
     {project && note ? <section className="settings-group project-note" aria-label={`Note ${note.name}`}>
       <button type="button" className="link-button project-back" disabled={pending} onClick={() => { setNote(null); setConfirmDelete(false) }}><ArrowLeft size={16} />All notes</button>

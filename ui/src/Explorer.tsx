@@ -58,7 +58,7 @@ async function copyText(text: string) {
   const box = document.createElement('textarea')
   box.value = text; box.setAttribute('readonly', ''); box.style.position = 'fixed'; box.style.opacity = '0'
   document.body.appendChild(box); box.select()
-  let done = false
+  let done: boolean
   try { done = document.execCommand('copy') } catch { done = false }
   box.remove()
   return done
@@ -84,6 +84,8 @@ interface Props {
 
 export function Explorer({ api, panes, pane, target, onTarget, onAddToMessage, onTerminalHere, onPin }: Props) {
   const [stored, setStored] = useState(loadStored)
+  const [places, setPlaces] = useState<PlacesData | null>(null)
+  const sessionCwd = places?.sessions.find(item => item.session === pane?.id)?.cwd
   const { tabs, view, hidden, sort, asc } = stored
   const active = Math.min(stored.active, tabs.length - 1)
   const tab = tabs[active]
@@ -121,16 +123,17 @@ export function Explorer({ api, panes, pane, target, onTarget, onAddToMessage, o
     patch(current => { const next = current.tabs.filter((_, n) => n !== at); return { tabs: next, active: Math.min(current.active > at || current.active === next.length ? current.active - 1 : current.active, next.length - 1) } })
   }
   // A folder in a tab: switch to the tab that shows it, or open a new tab. select: then select that item.
+  const revealPathRef = useRef('')
   const showIn = (folder: string, select?: string) => {
     const at = tabs.findIndex(item => item.path === folder)
     if (at === active) go(folder); else if (at >= 0) pickTab(at); else newTab(folder)
-    if (select) { setSelected([select]); setFocusPath(select); revealPath.current = select }
+    if (select) { setSelected([select]); setFocusPath(select); revealPathRef.current = select }
   }
-  const revealPath = useRef('')
   // "Open in Files" from the panel column, "Show in Files" from a chat. A chat path may be absolute: stat gives its ~ path and folder.
   useEffect(() => {
     if (!target) return
     onTarget()
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Consume the external Files target in the same effect as navigation and focus.
     if (pane && stored.session !== pane.id) patch({ session: pane.id })
     if (!target.select) { showIn(target.path); return }
     api<FileStat & { parent?: string | null }>(filesUrl.stat(target.select)).then(
@@ -157,6 +160,7 @@ export function Explorer({ api, panes, pane, target, onTarget, onAddToMessage, o
   const secretsLeft = secrets.on ? Math.max(0, (secrets.expires - now) / 1000) : 0
   useEffect(() => {
     if (!secrets.on) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Refresh the wall clock when the server's secret window changes, before the first interval tick.
     setNow(Date.now())
     const tick = setInterval(() => setNow(Date.now()), 15000)
     // the server ends the window at expires_at. Turn the switch off on time; the listing reloads without secret items.
@@ -184,7 +188,7 @@ export function Explorer({ api, panes, pane, target, onTarget, onAddToMessage, o
     return { ...entry, full, where: where && where !== cwd ? where.slice(cwd.length + 1) || undefined : undefined }
   }), [entries, cwd, search])
   const [lastRows, setLastRows] = useState<Row[]>([])
-  useEffect(() => { if (current) setLastRows(rows) }, [current, rows])
+  if (current && lastRows !== rows) setLastRows(rows)
   // Keep the old rows while the next folder loads, so the list does not flash empty.
   const shownRows = current ? rows : lastRows
   const byPath = useMemo(() => new Map(shownRows.map(row => [row.full, row])), [shownRows])
@@ -194,9 +198,9 @@ export function Explorer({ api, panes, pane, target, onTarget, onAddToMessage, o
 
   // "Show in Files": scroll the selected item into view once its folder has loaded.
   useEffect(() => {
-    const path = revealPath.current
+    const path = revealPathRef.current
     if (!path || !current) return
-    revealPath.current = ''
+    revealPathRef.current = ''
     const node = listRef.current?.querySelector<HTMLElement>(`[data-path="${CSS.escape(path)}"]`)
     // A new folder shows its name field: focus that, not the row, or the field loses focus and keeps the name.
     if (node) { (node.querySelector<HTMLElement>('.fx-rename') ?? node).focus(); node.scrollIntoView({ block: 'center' }) }
@@ -208,7 +212,6 @@ export function Explorer({ api, panes, pane, target, onTarget, onAddToMessage, o
   }, [current])
 
   // Places: pinned folders, a folder for each session at its cwd, and the disk.
-  const [places, setPlaces] = useState<PlacesData | null>(null)
   useEffect(() => {
     const controller = new AbortController()
     const load = () => api<PlacesData>(filesUrl.places(), undefined, controller.signal).then(data => { setPlaces(data); takeSecrets(data.secrets) }, () => {})
@@ -224,11 +227,15 @@ export function Explorer({ api, panes, pane, target, onTarget, onAddToMessage, o
   const [detail, setDetail] = useState<{ path: string; stat?: FileStat; preview?: FilePreview; error?: string } | null>(null)
   const detailPath = one?.full ?? ''
   const detailDir = !!one?.dir
+  const [detailFor, setDetailFor] = useState({ api, path: detailPath, dir: detailDir })
+  if (detailFor.api !== api || detailFor.path !== detailPath || detailFor.dir !== detailDir) {
+    setDetailFor({ api, path: detailPath, dir: detailDir })
+    if (detailPath) setDetail({ path: detailPath })
+  }
   useEffect(() => {
     if (!detailPath) return
     const controller = new AbortController()
     const signal = controller.signal
-    setDetail({ path: detailPath })
     api<FileStat>(filesUrl.stat(detailPath), undefined, signal).then(stat => setDetail(old => old?.path === detailPath ? { ...old, stat } : old),
       failure => { if (!signal.aborted) setDetail(old => old?.path === detailPath ? { ...old, error: errorText(failure) } : old) })
     if (!detailDir) api<FilePreview>(filesUrl.preview(detailPath), undefined, signal).then(preview => setDetail(old => old?.path === detailPath ? { ...old, preview } : old),
@@ -280,7 +287,7 @@ export function Explorer({ api, panes, pane, target, onTarget, onAddToMessage, o
   const uploadInput = useRef<HTMLInputElement>(null)
   const reload = (select?: string[]) => {
     setReloadTick(n => n + 1)
-    if (select) { setSelected(select); setFocusPath(select[0] ?? ''); revealPath.current = select[0] ?? '' }
+    if (select) { setSelected(select); setFocusPath(select[0] ?? ''); revealPathRef.current = select[0] ?? '' }
   }
   const writable = (items: Row[]) => !inSecret && plain(items)
   const canUpload = !inSecret && !search && !current?.error
@@ -426,12 +433,10 @@ export function Explorer({ api, panes, pane, target, onTarget, onAddToMessage, o
   }, [])
 
   // Start at the active chat's folder: on the first visit, and when the active chat changed since the last visit.
-  const sessionCwd = places?.sessions.find(item => item.session === pane?.id)?.cwd
-  useEffect(() => {
-    if (!places || !pane || stored.session === pane.id) return
+  if (places && pane && stored.session !== pane.id) {
     if (sessionCwd && !target) { const at = tabs.findIndex(item => item.path === sessionCwd); if (at >= 0) pickTab(at); else if (cwd !== sessionCwd) go(sessionCwd) }
     patch({ session: pane.id })
-  })
+  }
 
   const pinned = (places?.pinned ?? []).map(item => typeof item === 'string' ? { path: item, label: baseName(item) } : { path: item.path, label: item.name || baseName(item.path) })
   const sessionDot = (id: string) => {
@@ -630,6 +635,7 @@ export function Explorer({ api, panes, pane, target, onTarget, onAddToMessage, o
     <ImageViewer image={full?.media ?? null} close={() => setFull(null)} />
     <TextViewer file={full?.text ?? null} close={() => setFull(null)} />
     <UploadPanel />
+    {/* eslint-disable-next-line react-hooks/refs -- menuItems only stores event handlers; their focus and reveal refs are accessed after a user action. */}
     {menu && <ItemMenu at={menu.at} title={menu.row.name} items={menuItems(menu.row)} onClose={() => setMenu(null)} />}
     {trash && <TrashConfirm names={trash.map(row => row.name)} onCancel={() => setTrash(null)} onConfirm={() => toTrash(trash)} />}
     {zip && <ZipConfirm api={api} paths={zip} onClose={() => setZip(null)} />}

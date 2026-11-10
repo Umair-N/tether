@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { AtSign, Blocks, File, Folder, Slash, Sparkles } from 'lucide-react'
 import { errorText } from './api'
 import type { Api, Catalog, CatalogItem, Pane } from './api'
@@ -48,6 +48,7 @@ export const Suggestions = forwardRef<SuggestHandle, Props>(function Suggestions
   const [files, setFiles] = useState<{ query: string; list: string[] } | null>(null)
   const [dismissed, setDismissed] = useState('')
   const [active, setActive] = useState(0)
+  const list = useRef<HTMLDivElement>(null)
   const found = pane.agent === 'shell' ? null : trigger(draft, pane.agent)
   const wantsCommands = found?.kind === 'command'
   useEffect(() => { setCatalog(null); setCatalogError('') }, [pane.id])
@@ -103,8 +104,10 @@ export const Suggestions = forwardRef<SuggestHandle, Props>(function Suggestions
       return false
     },
   }))
+  // Arrow keys move the highlight; keep it in view, below the sticky heading.
+  useEffect(() => { list.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' }) }, [active, open])
   if (!open) return null
-  return <div className="suggest" role="listbox" aria-label={found.kind === 'file' ? 'Files' : 'Commands and skills'}>
+  return <div ref={list} className="suggest" role="listbox" aria-label={found.kind === 'file' ? 'Files' : 'Commands and skills'}>
     <div className="suggest-head">{found.kind === 'file' ? <><AtSign size={13} />Files in {pane.dir}</> : <><Slash size={13} />Commands and skills</>}</div>
     {status && <p className="suggest-status">{status}</p>}
     {items.map((item, index) => <button key={item.label} type="button" role="option" aria-selected={index === active} className={index === active ? 'active' : ''}

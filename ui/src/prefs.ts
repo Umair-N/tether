@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { request } from './api'
 import type { GroupBy, SessionGroup, SortBy } from './Organize'
 import { DEFAULT_LOOK } from './layouts'
@@ -158,7 +158,7 @@ export function usePrefs() {
     })
   }, [])
 
-  const flush = useCallback(async () => {
+  const flush = useCallback(async function flush() {
     if (busy.current || !Object.keys(pending.current).length) return
     busy.current = true
     const changes = pending.current
@@ -168,7 +168,7 @@ export function usePrefs() {
     busy.current = false
     if (Object.keys(pending.current).length) timer.current = window.setTimeout(flush, 2000)
   }, [apply])
-  flushRef.current = flush
+  useLayoutEffect(() => { flushRef.current = flush }, [flush])
 
   const pull = useCallback(async () => {
     if (busy.current) return

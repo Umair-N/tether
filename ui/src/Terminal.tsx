@@ -131,7 +131,10 @@ export function LiveTerminal({ paneId, onChat, shell = false, fixed = false }: {
   const [dragCopied, setDragCopied] = useState(false)  // a drag in the live terminal copied its text
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => () => { if (copyTimer.current !== null) clearTimeout(copyTimer.current) }, [])
-  useEffect(() => { setSelection(null); setCopyStatus(''); setHasSelection(false) }, [arg, attempt])
+  const [selectionFor, setSelectionFor] = useState({ arg, attempt })
+  if (selectionFor.arg !== arg || selectionFor.attempt !== attempt) {
+    setSelectionFor({ arg, attempt }); setSelection(null); setCopyStatus(''); setHasSelection(false)
+  }
   const selectText = () => {
     if (selection !== null) { setSelection(null); setCopyStatus(''); return }
     const text = frame.current ? terminalText(frame.current, paneCols.current) : null
@@ -157,7 +160,6 @@ export function LiveTerminal({ paneId, onChat, shell = false, fixed = false }: {
   }
   useEffect(() => {
     let live = true
-    setStatus('checking')
     fetch('/terminal/live/', { credentials: 'same-origin' }).then(response => { if (live) setStatus(response.ok ? 'ok' : 'down') }, () => { if (live) setStatus('down') })
     return () => { live = false }
   }, [attempt])
@@ -184,7 +186,7 @@ export function LiveTerminal({ paneId, onChat, shell = false, fixed = false }: {
     <p className={`terminal-copied${dragCopied ? ' shown' : ''}`} role="status">{dragCopied ? 'Copied to clipboard' : ''}</p></div>
   return <div className="live-terminal-empty">{status === 'checking' ? <p role="status">Connecting to the terminal…</p> : <>
     <SquareTerminal size={28} strokeWidth={1.4} /><p><strong>The live terminal is not running.</strong></p><p>On the server, run <code>python3 ~/apps/mobile_tmux_public/deploy/install.py</code>.</p>
-    <div>{!shell && <button type="button" className="secondary" onClick={onChat}>Back to chat</button>}<button type="button" className="primary" onClick={() => setAttempt(attempt + 1)}>Try again</button></div></>}</div>
+    <div>{!shell && <button type="button" className="secondary" onClick={onChat}>Back to chat</button>}<button type="button" className="primary" onClick={() => { setStatus('checking'); setAttempt(attempt + 1) }}>Try again</button></div></>}</div>
 }
 
 // Claude draws a text block and writes it to the transcript at almost the same moment, so most previews last under a second.
