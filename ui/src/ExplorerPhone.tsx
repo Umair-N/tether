@@ -115,6 +115,7 @@ export function ExplorerPhone({ api, target, onTarget, chatName, onAddToChat, on
     setStored(current => ({ ...current, path }))
     setSelected([]); setQuery(''); setSearch(''); setSearchOpen(false); setPreview(null)
   }, [])
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- Consume the external Files target and acknowledge it after the parent commits.
   useEffect(() => { if (target) { onTarget(); go(target) } }, [target, onTarget, go])
 
   // The "Show secret folders" read window. the server runs the clock; this shows the minutes left and turns off on time.
@@ -134,6 +135,7 @@ export function ExplorerPhone({ api, target, onTarget, chatName, onAddToChat, on
   }
   useEffect(() => {
     if (!secrets.on) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Refresh the wall clock when the server's secret window changes, before the first interval tick.
     setNow(Date.now())
     const timer = setInterval(() => setNow(Date.now()), 15000)
     const end = setTimeout(() => { setSecrets({ on: false, expires: 0 }); setToast('Secret folders are hidden again.') }, Math.max(0, secrets.expires - Date.now()) + 250)
@@ -169,7 +171,7 @@ export function ExplorerPhone({ api, target, onTarget, chatName, onAddToChat, on
     })
   }, [current, cwd, search])
   const [lastRows, setLastRows] = useState<Row[]>([])
-  useEffect(() => { if (current?.data) setLastRows(rows) }, [current, rows])
+  if (current?.data && lastRows !== rows) setLastRows(rows)
   const shown = current ? rows : lastRows
   const picked = shown.filter(row => selected.includes(row.full))
   const secretHere = inSecret(cwd)
@@ -218,6 +220,7 @@ export function ExplorerPhone({ api, target, onTarget, chatName, onAddToChat, on
     const folders = [...new Set(uploads.map(item => item.folder))]
     const where = folders.length === 1 ? baseName(folders[0]) : `${folders.length} folders`
     const notes = failed.filter(item => item.error !== 'Stopped.').slice(0, 2).map(item => `${item.name}: ${item.error}`)
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Acknowledge a completed external upload batch before clearing its shared store, including batches completed off-screen.
     setToast(!failed.length ? `Uploaded ${done.length === 1 ? done[0].name : `${done.length} files`} to ${where}.`
       : [stopped ? `Upload stopped. ${done.length} of ${uploads.length} uploaded.` : `Uploaded ${done.length} of ${uploads.length} to ${where}.`, ...notes].join(' '))
     clearUploads()

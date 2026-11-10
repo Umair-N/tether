@@ -24,7 +24,8 @@ import './InfoPanel.css'
 function InfoPanel({ info, disabled, onAction }: { info: Attention; disabled: boolean; onAction?: (action: PromptAction) => Promise<string | null> }) {
   const [busy, setBusy] = useState('')
   const [failed, setFailed] = useState('')
-  useEffect(() => { setFailed('') }, [info.revision])
+  const [revision, setRevision] = useState(info.revision)
+  if (info.revision !== revision) { setRevision(info.revision); setFailed('') }
   const actions = info.actions ?? []
   const press = async (action: PromptAction) => {
     if (!onAction || busy) return
@@ -140,7 +141,10 @@ const plainMarkdown = (line: string) => line.replace(/\*\*(.+?)\*\*/g, '$1').rep
 export function HeadsUp({ card, disabled, onKey, onChat }: { card: NonNullable<Footer['heads_up']>; disabled: boolean; onKey: (key: string) => Promise<void>; onChat: (note: string) => void }) {
   const [sent, setSent] = useState('')
   // The card always shows in full. The status panel scrolls, and its grip sets the height.
-  useEffect(() => { setSent('') }, [card.text, card.state])
+  const [previousCard, setPreviousCard] = useState({ text: card.text, state: card.state })
+  if (card.text !== previousCard.text || card.state !== previousCard.state) {
+    setPreviousCard({ text: card.text, state: card.state }); setSent('')
+  }
   useEffect(() => { if (!sent) return; const timer = setTimeout(() => setSent(''), 4000); return () => clearTimeout(timer) }, [sent])  // the card did not change: let the person try again
   const linked = (text: string) => card.url && text.includes(card.url)
     ? <>{text.slice(0, text.indexOf(card.url))}<a href={card.url} target="_blank" rel="noreferrer">{card.url}</a>{text.slice(text.indexOf(card.url) + card.url.length)}</>
@@ -238,9 +242,14 @@ export function SearchSheet({ api, pane, shell, onClose, onPick }: { api: Api; p
   const [query, setQuery] = useState(() => lastSearch.get(pane.id) ?? '')
   const [result, setResult] = useState<{ matches: SearchMatch[]; total: number; max_limit: number; query: string } | null>(null)
   const [error, setError] = useState('')
+  const [previousQuery, setPreviousQuery] = useState(query)
+  if (query !== previousQuery) {
+    setPreviousQuery(query)
+    if (!query.trim()) { setResult(null); setError('') }
+  }
   useEffect(() => {
     lastSearch.set(pane.id, query)
-    if (!query.trim()) { setResult(null); setError(''); return }
+    if (!query.trim()) return
     const abort = new AbortController()
     const timer = setTimeout(() => {
       api<{ matches: SearchMatch[]; total: number; max_limit: number }>(`search?session=${encodeURIComponent(pane.id)}&q=${encodeURIComponent(query.trim())}${shell ? '&mode=shell' : ''}`, undefined, abort.signal)

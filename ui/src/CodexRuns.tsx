@@ -15,8 +15,10 @@ const STATE_LABEL: Record<CodexRunState, string> = { starting: 'Starting', runni
 /** Polls every 3 s while a run lives, else every 15 s. Stops while the page is hidden. */
 export function useCodexRuns(api: Api, pane: string, enabled: boolean) {
   const [value, setValue] = useState<CodexRuns | null>(null)
+  const [wasEnabled, setWasEnabled] = useState(enabled)
+  if (enabled !== wasEnabled) { setWasEnabled(enabled); if (!enabled) setValue(null) }
   useEffect(() => {
-    if (!enabled) { setValue(null); return }
+    if (!enabled) return
     let stopped = false, timer: ReturnType<typeof setTimeout> | undefined
     const controller = new AbortController()
     const read = () => {

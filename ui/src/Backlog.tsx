@@ -103,7 +103,7 @@ interface RowActions {
   onSend?: (item: Item) => void
 }
 
-function ItemRow({ item, actions, links, sending, locked, editing, setEditing, typed, drop, dragged }: { item: Item; actions: RowActions; links: Links; sending?: ReactNode; locked: boolean; editing: boolean; setEditing: (id: string | null) => void; typed: RefObject<string>; drop?: 'before' | 'after'; dragged: boolean }) {
+function ItemRow({ item, actions, links, sending, locked, editing, setEditing, typed: typedRef, drop, dragged }: { item: Item; actions: RowActions; links: Links; sending?: ReactNode; locked: boolean; editing: boolean; setEditing: (id: string | null) => void; typed: RefObject<string>; drop?: 'before' | 'after'; dragged: boolean }) {
   const [wording, setWording] = useState(item.text)
   // Sub-steps stay in view. Notes (the why, the files, selected chat text) fold under the title until opened.
   const [showNotes, setShowNotes] = useState(false)
@@ -113,7 +113,7 @@ function ItemRow({ item, actions, links, sending, locked, editing, setEditing, t
   const finish = (keep: boolean) => {
     if (ended.current) return
     ended.current = true
-    typed.current = ''
+    typedRef.current = ''
     setEditing(null)
     if (keep && wording.trim() && wording.trim() !== item.text) actions.onReword(item, wording)
   }
@@ -126,7 +126,7 @@ function ItemRow({ item, actions, links, sending, locked, editing, setEditing, t
     <div className="backlog-body">
       {editing
         ? <input aria-label={`Reword ${item.text}`} className="backlog-input backlog-reword" autoFocus value={wording} onFocus={event => { ended.current = false; event.target.select() }}
-            onChange={event => { setWording(event.target.value); typed.current = event.target.value }} onBlur={() => finish(true)}
+            onChange={event => { setWording(event.target.value); typedRef.current = event.target.value }} onBlur={() => finish(true)}
             onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); finish(true) } else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); finish(false) } }} />
         : <span className="backlog-text-line" onDoubleClick={() => { if (!locked && !item.done) { setWording(item.text); setEditing(item.id) } }}>{item.text}</span>}
       {(item.ref || item.source) && <span className="backlog-meta">
@@ -158,7 +158,7 @@ interface Undo { label: string; change: Change }
 /** What a close has to ask about: text that would otherwise be lost. */
 export type BacklogGuard = RefObject<() => boolean>
 
-export function Backlog({ api, guard, active = true, panes = [], onOpenPane }: { api: Api; guard?: BacklogGuard; active?: boolean; panes?: Pane[]; onOpenPane?: (pane: Pane) => void }) {
+export function Backlog({ api, guard: guardRef, active = true, panes = [], onOpenPane }: { api: Api; guard?: BacklogGuard; active?: boolean; panes?: Pane[]; onOpenPane?: (pane: Pane) => void }) {
   const [saved, setSaved] = useState<Saved | null>(null)
   const [changes, setChanges] = useState<Change[]>([])  // made in the checklist, not saved yet
   const [draft, setDraft] = useState<string | null>(null)  // the text while the person edits it as text
@@ -312,10 +312,9 @@ export function Backlog({ api, guard, active = true, panes = [], onOpenPane }: {
   const fresh = useRef({ item, conflict, failed, tooLong, dirty, changes: changes.length })
   useEffect(() => { fresh.current = { item, conflict, failed, tooLong, dirty, changes: changes.length } })
   useEffect(() => {
-    if (!guard) return
-    const check = guard as { current: () => boolean }
-    check.current = () => { const now = fresh.current; return !!now.item.trim() || !!typedRow.current.trim() || !!now.conflict || !!now.tooLong || (!!now.failed && (now.changes > 0 || now.dirty)) }
-  }, [guard])
+    if (!guardRef) return
+    guardRef.current = () => { const now = fresh.current; return !!now.item.trim() || !!typedRow.current.trim() || !!now.conflict || !!now.tooLong || (!!now.failed && (now.changes > 0 || now.dirty)) }
+  }, [guardRef])
 
   // Closing the sheet keeps what was typed. The version check still protects an agent's edit.
   useEffect(() => () => {
@@ -384,6 +383,7 @@ export function Backlog({ api, guard, active = true, panes = [], onOpenPane }: {
       const places = [...box.querySelectorAll<HTMLElement>('[data-backlog-row]')]
       const min = places[0].getBoundingClientRect().top - area.top
       const max = places[places.length - 1].getBoundingClientRect().bottom - area.bottom
+      // eslint-disable-next-line react-hooks/purity -- Runs in the row's pointerdown handler, not during render.
       let offset = 0, lastY = startY, lastAt = performance.now(), speed = 0
       let destination: { target: string | null; after: boolean } = { target: null, after: false }
       row.style.transition = 'none'

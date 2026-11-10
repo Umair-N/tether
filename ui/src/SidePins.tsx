@@ -113,8 +113,8 @@ export function SidePins({ api, pins, sessions, seen, selected, onOpen, onPin, o
       held.order = next; setPreview(next)
     }
     const box = list.current.getBoundingClientRect()
-    if (event.clientY < box.top + 24) list.current.scrollTop -= 12
-    else if (event.clientY > box.bottom - 24) list.current.scrollTop += 12
+    if (event.clientY < box.top + 24) list.current.scrollTo({ top: list.current.scrollTop - 12 })
+    else if (event.clientY > box.bottom - 24) list.current.scrollTo({ top: list.current.scrollTop + 12 })
   }
   const gripUp = (event: React.PointerEvent<HTMLUListElement>) => {
     if (drag.current?.id !== event.pointerId) return

@@ -20,7 +20,8 @@ export function AccountLogin({ agent, api, account, onDone }: { agent: 'claude' 
   const [code, setCode] = useState('')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
-  useEffect(() => { if (data) setState(data) }, [data])
+  const [previousData, setPreviousData] = useState(data)
+  if (data !== previousData) { setPreviousData(data); if (data) setState(data) }
   useEffect(() => { if (state?.phase === 'done') onDone() }, [state?.phase, onDone])
   const active = state?.phase === 'waiting_code' || state?.phase === 'waiting_browser'
   const current = state?.phase === 'done' ? state.account : account

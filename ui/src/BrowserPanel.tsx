@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { AppWindow, ArrowLeft, ArrowRight, Bot, Check, ChevronDown, Crosshair, FlaskConical, HatGlasses, Keyboard, KeyRound, Monitor, PenLine, PictureInPicture2, Plus, RotateCw, Send, Smartphone, Square, Tablet, Trash2, Type, UserRound, X } from 'lucide-react'
 import { errorText } from './api'
@@ -142,7 +142,7 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
   const watching = tab?.mode === 'agent' && tab.controller !== 'user'
   const [handing, setHanding] = useState(false)
   const watchingRef = useRef(watching)
-  watchingRef.current = watching
+  useLayoutEffect(() => { watchingRef.current = watching }, [watching])
   const owner = usePaneLabel(tab?.owner?.pane)
 
   const stageRef = useRef<HTMLDivElement | null>(null)
@@ -157,11 +157,11 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
   const keysRef = useRef<HTMLTextAreaElement>(null)
   const urlRef = useRef<HTMLInputElement>(null)
   const tabRef = useRef(tab)
-  tabRef.current = tab
+  useLayoutEffect(() => { tabRef.current = tab }, [tab])
   const frameRef = useRef(frame)
-  frameRef.current = frame
+  useLayoutEffect(() => { frameRef.current = frame }, [frame])
   const notingRef = useRef(noting)
-  notingRef.current = noting
+  useLayoutEffect(() => { notingRef.current = noting }, [noting])
 
   function apply(state: BrowserState) {
     setTabs(state.tabs)
@@ -186,7 +186,9 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
     return () => clearInterval(timer)
   }, [active, macEmpty]) // eslint-disable-line react-hooks/exhaustive-deps
   // Start the browser only when the panel is first shown.
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- Loading starts an external request; state changes occur after await or when the request fails.
   useEffect(() => { if (active && !loaded) void load() }, [active]) // eslint-disable-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- Keep fallback tab selection, frame reset, navigation reset, and saved tab identity in one transition.
   useEffect(() => { if (tab && tab.id !== current) choose(tab.id) }, [tab?.id]) // eslint-disable-line react-hooks/exhaustive-deps
   // "Watch" in a chat card (AgentBrowser.tsx): show that tab. Reload the list: the tab can be newer than the stream's last list.
   useEffect(() => {

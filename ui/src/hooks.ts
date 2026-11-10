@@ -73,7 +73,7 @@ export function useModal(open: boolean, close: () => void, drawer?: { onInterrup
   const opened = useRef(0)
   const horizontal = !!drawer
   const latest = useRef({ close, interrupt: drawer?.onInterrupt })
-  latest.current = { close, interrupt: drawer?.onInterrupt }
+  useLayoutEffect(() => { latest.current = { close, interrupt: drawer?.onInterrupt } })
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const suppressClick = useRef(0)
   const start = useRef<{ x: number; y: number; offset: number; last: number; at: number; speed: number; locked: boolean } | null>(null)

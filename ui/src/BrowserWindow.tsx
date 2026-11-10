@@ -70,7 +70,7 @@ function BrowserWindow({ onDock, onClose, children }: { onDock: () => void; onCl
     return () => removeEventListener('resize', onResize)
   }, [])
 
-  const start = (kind: 'move' | 'size') => (event: ReactPointerEvent) => {
+  const start = (kind: 'move' | 'size', event: ReactPointerEvent) => {
     if (event.button !== 0 || (event.target as HTMLElement).closest('button:not(.browser-window-grip)')) return
     event.preventDefault()
     event.currentTarget.setPointerCapture(event.pointerId)
@@ -125,13 +125,13 @@ function BrowserWindow({ onDock, onClose, children }: { onDock: () => void; onCl
   }
 
   return <section ref={windowRef} className="browser-window" role="dialog" aria-label="Browser" style={{ left: 0, top: 0, transform: `translate3d(${rect.x}px, ${rect.y}px, 0)`, width: rect.width, height: rect.height }}>
-    <header className="browser-window-head" onPointerDown={start('move')} onPointerMove={move} onPointerUp={end} onPointerCancel={end}>
+    <header className="browser-window-head" onPointerDown={event => start('move', event)} onPointerMove={move} onPointerUp={end} onPointerCancel={end}>
       <button type="button" className="browser-window-grip" aria-label="Move the browser window. Arrow keys move it, Shift with arrows resizes it." onKeyDown={onKey}><GripHorizontal size={16} /></button>
       <strong>Browser</strong>
       <button type="button" className="browser-icon" aria-label="Put the browser back in the side column" title="Put back in the side column" onClick={onDock}><PanelRightOpen size={17} /></button>
       <button type="button" className="browser-icon" aria-label="Close the browser window" title="Close" onClick={onClose}><X size={17} /></button>
     </header>
     {children}
-    <div className="browser-window-size" aria-hidden="true" onPointerDown={start('size')} onPointerMove={move} onPointerUp={end} onPointerCancel={end} />
+    <div className="browser-window-size" aria-hidden="true" onPointerDown={event => start('size', event)} onPointerMove={move} onPointerUp={end} onPointerCancel={end} />
   </section>
 }

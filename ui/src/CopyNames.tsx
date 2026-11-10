@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Check, Copy } from 'lucide-react'
 import type { Pane } from './api'
 import { copyText } from './clipboard'
@@ -45,7 +45,7 @@ export function CopyNames({ pane, disabled = false, onCopied }: { pane: Pane; di
     timer.current = setTimeout(onCopied, 600)  // Show the check, then close the menu.
   }
   const copyRef = useRef(copy)
-  copyRef.current = copy
+  useLayoutEffect(() => { copyRef.current = copy })
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return

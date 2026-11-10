@@ -375,7 +375,7 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
   // After the refresh, a target the list does not show (search, closed group) gets no rename box later.
   const shown = groups.filter(group => isOpen(group.key)).flatMap(group => group.items.map(session => session.id))
   const renameRow = renaming && (sessions === renaming.before || shown.includes(renaming.moved.session)) ? renaming.moved : null
-  useEffect(() => { if (renaming && !renameRow) setRenaming(null) }, [renaming, renameRow])
+  if (renaming && !renameRow) setRenaming(null)
   // A drag reorders one section; the other sessions keep their places in the saved order.
   const moveWithin = (items: Session[], ids: string[]) => update(current => {
     const others = sortByPrefs(sessions, current.order).map(session => session.id).filter(id => !ids.includes(id))
@@ -400,6 +400,7 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
     <BacklogButton api={api} onOpen={onBacklog} />
     {organizing && <OrganizeMenu api={api} sessions={sessions.filter(session => !isArchived(session, prefs.archived))} prefs={prefs} update={update} at={organizing.at} onClose={() => setOrganizing(null)} />}
     <nav className="session-groups" aria-label="Sessions">
+      {/* eslint-disable-next-line react-hooks/purity -- Sample snooze expiry on each existing render without adding a clock or delaying it. */}
       {prefs.attention && !search && <WaitingBox variant="list" sort={{ order: prefs.waitingOrder ?? 'oldest', onOrder: waitingOrder => update(() => ({ waitingOrder })) }} items={waitingAsks(sessions.flatMap(item => item.panes), Date.now() / 1000)} sessions={sessions} selected={selected} onOpen={onOpen} />}
       {error && <div className="sidebar-error" role="alert">{error}<button onClick={onRetry}>Retry</button></div>}
       {openingChat && <div className="past-opening" role="status">Opening {openingChat}…</div>}
@@ -500,6 +501,7 @@ function SessionList({ items, reorder, selected, prefs, update, onOpen, onAction
   const words = useWords()
   const slotKey = (id: string) => { const at = slots.indexOf(id); return at < 0 ? null : <kbd className="slot-key" aria-label={`In slot ${at + 1}`}>⌥{at + 1}</kbd> }
   return <ul className={`session-list ${reorder ? 'reordering' : ''}`} ref={list}>
+    {/* eslint-disable-next-line react-hooks/refs -- Sample the drag marker on reorder renders; state would add visible updates on pointer down and up. */}
     {(preview ? [...items].sort((a, b) => preview.indexOf(a.id) - preview.indexOf(b.id)) : items).map(session => {
       const multi = session.panes.length > 1
       const active = session.panes.some(pane => pane.id === selected)

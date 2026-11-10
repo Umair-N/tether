@@ -37,10 +37,12 @@ function ToolRow({ tool, api, session, live, onOpen }: { tool: ToolSummary; api:
   const [error, setError] = useState('')
   const [attempt, setAttempt] = useState(0)
   const id = useId()
+  const request = [open, api, session, tool.id, tool.is_error, tool.status, attempt]
+  const [previousRequest, setPreviousRequest] = useState(request)
+  if (request.some((value, at) => !Object.is(value, previousRequest[at]))) { setPreviousRequest(request); if (open) setError('') }
   useEffect(() => {
     if (!open) return
     const controller = new AbortController()
-    setError('')
     void api<ToolDetail>(`tool?session=${encodeURIComponent(session)}&id=${encodeURIComponent(tool.id)}`, undefined, controller.signal)
       .then(value => { if (!controller.signal.aborted) setDetail(value) }).catch(reason => { if (!controller.signal.aborted) setError(errorText(reason)) })
     return () => controller.abort()

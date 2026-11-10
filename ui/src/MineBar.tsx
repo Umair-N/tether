@@ -60,7 +60,7 @@ export function MineBar({ view, messages, earlier, onReveal, onEarlier }: {
     element.addEventListener('scroll', onScroll, { passive: true })
     return () => { element.removeEventListener('scroll', onScroll); if (frame) cancelAnimationFrame(frame); window.clearTimeout(hideTimer.current) }
   }, [view, mine])
-  const hold = (on: boolean) => () => {
+  const hold = (on: boolean) => {
     held.current = on
     if (on) window.clearTimeout(hideTimer.current)
     else hideTimer.current = window.setTimeout(() => setShown(false), HIDE_MS)
@@ -68,7 +68,7 @@ export function MineBar({ view, messages, earlier, onReveal, onEarlier }: {
   const message = above ? mine.get(above) : undefined
   if (!message && (!mine.size || !earlier)) return null
   const text = message ? oneLine(message.text) || (message.images ? 'Image' : 'Message') : ''
-  return <div className={`mine-bar ${shown ? 'shown' : ''}`} inert={!shown} onPointerEnter={hold(true)} onPointerLeave={hold(false)} onFocus={hold(true)} onBlur={hold(false)}>
+  return <div className={`mine-bar ${shown ? 'shown' : ''}`} inert={!shown} onPointerEnter={() => hold(true)} onPointerLeave={() => hold(false)} onFocus={() => hold(true)} onBlur={() => hold(false)}>
     {message
       ? <button type="button" title={text} aria-label={`Go to your message: ${text}`} onClick={() => onReveal(message.id)}>
         <ArrowUp size={14} aria-hidden="true" /><span className="mine-bar-who">You</span><span className="mine-bar-text">{text}</span>

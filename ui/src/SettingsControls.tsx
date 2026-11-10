@@ -21,11 +21,11 @@ export function Notifications({ api }: { api: Api }) {
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => onNotice(''), 5000); return () => clearTimeout(timer) }, [notice])
   const supported = 'Notification' in window && 'serviceWorker' in navigator && 'PushManager' in window
   const [state, setState] = useState(supported ? Notification.permission === 'denied' ? 'blocked' : 'off' : 'unsupported')
-  const [pending, setPending] = useState(true)
+  const [pending, setPending] = useState(supported)
   const [publicKey, setPublicKey] = useState('')
   const [delivery, setDelivery] = useState<Record<Priority, Delivery>>({ urgent: 'sound', important: 'sound', low: 'off' })
   useEffect(() => {
-    if (!supported) { setPending(false); return }
+    if (!supported) return
     let live = true
     Promise.all([api<PushConfig>('push/config'), navigator.serviceWorker.ready.then(registration => registration.pushManager.getSubscription())])
       .then(([config, subscription]) => {

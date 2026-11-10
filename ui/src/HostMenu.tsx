@@ -62,11 +62,15 @@ export function HostMenu({ host, hosts, onChange }: { host: string; hosts: Host[
 
   // Check every host each time the menu opens.
   const urls = hosts.map(item => item.url).join(' ')
+  const [previousCheck, setPreviousCheck] = useState({ open, urls })
+  if (open !== previousCheck.open || urls !== previousCheck.urls) {
+    setPreviousCheck({ open, urls })
+    if (open && urls) setStatus(Object.fromEntries(urls.split(' ').map(url => [url, 'checking' as Reach])))
+  }
   useEffect(() => {
     if (!open || !urls) return
     let live = true
     const list = urls.split(' ')
-    setStatus(Object.fromEntries(list.map(url => [url, 'checking' as Reach])))
     for (const url of list) void reach(url).then(result => { if (live) setStatus(current => ({ ...current, [url]: result })) })
     return () => { live = false }
   }, [open, urls])

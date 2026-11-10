@@ -10,14 +10,14 @@ export type Media = { name: string; url: string; kind?: 'image' | 'video' | 'aud
 export function ImageViewer({ image, close, onShow, onDetails, items = [], onSelect }: {
   image: Media | null; close: () => void; onShow?: () => void; onDetails?: () => void; items?: Media[]; onSelect?: (image: Media) => void
 }) {
-  const modal = useModal(!!image, close)
+  const { ref, onCancel } = useModal(!!image, close)
   // The installed app draws its window controls in the theme color: match the dark surface while it shows.
   const showing = !!image
   useEffect(() => showing ? holdThemeColor('#0b0c0e') : undefined, [showing])
   const index = image ? items.findIndex(item => item.url === image.url) : -1
   const grouped = index >= 0 && items.length > 1 && !!onSelect
   const move = (delta: number) => { const next = items[index + delta]; if (grouped && next) onSelect?.(next) }
-  return <dialog ref={modal.ref} onCancel={modal.onCancel} className="image-viewer" aria-label={image?.name ?? 'Media viewer'}
+  return <dialog ref={ref} onCancel={onCancel} className="image-viewer" aria-label={image?.name ?? 'Media viewer'}
     onTouchStart={event => event.stopPropagation()} onTouchMove={event => event.stopPropagation()}
     onTouchEnd={event => event.stopPropagation()} onTouchCancel={event => event.stopPropagation()}
     onKeyDown={event => {

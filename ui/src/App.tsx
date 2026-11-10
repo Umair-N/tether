@@ -212,6 +212,7 @@ function App() {
     const toggle = document.querySelector<HTMLButtonElement>('.slot.focused .terminal-toggle') ?? toggleButton()
     if (!toggle) return
     const shown: Screen = toggle.getAttribute('aria-pressed') === 'true' ? 'terminals' : 'chats'
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Read the committed slot DOM before paint so the rail matches its terminal view.
     setScreen(current => current === 'chats' || current === 'terminals' ? shown : current)
   }, [home, pane?.id])
   const screenKeys = useRef<{ files: boolean; home: boolean; choose: (next: Screen) => void; toggleSidebar: () => void } | null>(null)
@@ -431,6 +432,7 @@ function App() {
     const url = new URL(location.href)
     url.searchParams.delete('go')
     history.replaceState(history.state, '', url)
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Consume the external navigation request after session data arrives and update history once.
     setGo(null)
     if (go === 'new') setNewSession(true)
     else if (go === 'usage') setPlanSheet(true)
@@ -543,7 +545,7 @@ function App() {
   }, [])
   const drawerModal = useModal(drawer, () => setDrawer(false), { onInterrupt: () => setDrawer(true) })
   const [drawerPresent, setDrawerPresent] = useState(false)
-  useEffect(() => { if (drawer) setDrawerPresent(true) }, [drawer])
+  if (drawer && !drawerPresent) setDrawerPresent(true)
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 5000); return () => clearTimeout(timer) }, [notice])
   // Files explorer → chat: "Add to message" puts @paths in the active chat's draft; "Terminal here" opens a side shell at a folder.
   const addToMessage = (paths: string[]) => {

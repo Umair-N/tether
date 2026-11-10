@@ -376,7 +376,7 @@ export function ModelSheet({ api, pane, thread, currentLabel, currentEffort, onC
   const initial = cachedModels(pane.agent)
   const [data, setData] = useState<ModelOptions | null>(initial && markCurrent(initial, currentLabel, currentEffort))
   const [note, setNote] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(!initial)
   const [model, setModel] = useState(() => data ? (data.models.find(item => item.current) ?? data.models[0])?.id ?? '' : '')
   const [effort, setEffort] = useState(data?.current_effort ?? '')
   const [busy, setBusy] = useState(false)
@@ -385,7 +385,6 @@ export function ModelSheet({ api, pane, thread, currentLabel, currentEffort, onC
   const live = useRef(true)
   useEffect(() => () => { live.current = false }, [])
   const fetchList = useCallback(() => {
-    setLoading(true); setNote('')
     api<ModelOptions>('model-options', { session: pane.id, thread }).then(result => {
       if (!live.current) return
       try { localStorage.setItem(modelCacheKey(pane.agent), JSON.stringify(result)) } catch { /* private mode */ }
@@ -423,7 +422,7 @@ export function ModelSheet({ api, pane, thread, currentLabel, currentEffort, onC
     </div></fieldset>}
     {loading && <p className="hint" role="status">Reading the model list from the terminal… about 5 seconds.</p>}
     {note && <p className="hint" role="status">{note}</p>}
-    {!loading && <button type="button" className="link-button refresh-models" disabled={busy} onClick={fetchList}><RotateCw size={14} />{data ? 'Refresh model list' : 'Try again'}</button>}
+    {!loading && <button type="button" className="link-button refresh-models" disabled={busy} onClick={() => { setLoading(true); setNote(''); fetchList() }}><RotateCw size={14} />{data ? 'Refresh model list' : 'Try again'}</button>}
     {data && <button type="button" className="primary create-button" disabled={busy || !changed} onClick={() => void apply()}>{busy ? 'Applying…' : 'Apply'}</button>}
     </>}
   </dialog>

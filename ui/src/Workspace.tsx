@@ -112,6 +112,7 @@ export function Workspace({ layout, slots, focus, zoomed, onCount, onFocus, onLa
       const along = vertical ? event.clientX - box.left : event.clientY - box.top
       const total = (vertical ? box.width : box.height) - 2 * PAD - (cells - 1) * GAP
       const value = (along - PAD - j * GAP - GAP / 2) / total
+      // eslint-disable-next-line react-hooks/refs -- place runs from pointer handlers and animation frames, not during render.
       draftRef.current = vertical ? { ...draftRef.current, cols: moveBound(draftRef.current?.cols ?? bounds, j, value) } : { ...draftRef.current, row: clampRow(value) }
       setDraft(draftRef.current)
     }
@@ -124,6 +125,7 @@ export function Workspace({ layout, slots, focus, zoomed, onCount, onFocus, onLa
       onPointerDown={event => { event.currentTarget.setPointerCapture(event.pointerId); event.currentTarget.focus(); event.preventDefault(); setDrag(id) }}
       onPointerMove={event => { if (drag !== id) return
         const point = { clientX: event.clientX, clientY: event.clientY }
+        // eslint-disable-next-line react-hooks/refs -- Pointer move handler, not render.
         pending.current = () => place(point)
         if (!frame.current) frame.current = requestAnimationFrame(() => { frame.current = 0; pending.current?.(); pending.current = null })
       }}
