@@ -58,7 +58,7 @@ export function TextViewer({ file, close, onShow }: { file: TextFile | null; clo
   const name = file?.path.split('/').pop() || file?.path
   return <dialog {...modal} className="text-viewer" aria-labelledby="text-viewer-title">{file && <>
     <div className="text-viewer-head">
-      <div className="text-viewer-title"><h2 id="text-viewer-title">{name}{target ? <span>:{target}</span> : null}</h2><p title={file.path}>{file.path}</p></div>
+      <div className="text-viewer-title"><h2 id="text-viewer-title">{name}{target ? <span>:{target}</span> : null}</h2><p title={file.path}><bdi>{file.path}</bdi></p></div>
       {markdown && <div className="view-switch" role="group" aria-label="View">
         {(['Preview', 'Source'] as const).map(view => <button key={view} type="button" aria-pressed={preview === (view === 'Preview')}
           onClick={() => setChosen({ url: file.url, preview: view === 'Preview' })}>{view}</button>)}
