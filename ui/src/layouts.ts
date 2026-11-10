@@ -1,26 +1,31 @@
 import { useEffect, useState } from 'react'
 import type { Api } from './api'
+import manifest from '../../server/ui_manifest.json'
 
 // Layouts are data: { id, name, grid, panels, style, theme }. The desktop shell draws the same panels in a different
 // grid; the phone keeps its own UI and takes only the theme and the style. Classic is today's UI and adds nothing.
 // Custom layouts are JSON files in the server's layouts folder (server/custom_layouts.py). The checks below repeat
 // the server's checks, so a file that reaches the browser some other way is still refused. Keep the two in step.
 
-export const PANEL_NAMES = ['waiting', 'chat', 'agents', 'sessions', 'status', 'activity'] as const
-export type PanelName = typeof PANEL_NAMES[number]
+export const PANEL_NAMES = Object.keys(manifest.panels) as (keyof typeof manifest.panels)[]
+export type PanelName = keyof typeof manifest.panels
 type Placed = Exclude<PanelName, 'agents'>
-const PLACED: readonly string[] = ['activity', 'sessions', 'chat', 'status', 'waiting']
+const PLACED = PANEL_NAMES.filter(name => manifest.panels[name].placement !== 'tab-strip')
+const EDGE = PANEL_NAMES.filter(name => manifest.panels[name].placement === 'edge')
 export interface GridColumn { top?: 'waiting'; main: Placed; bottom?: 'waiting'; width?: number }
 export interface LayoutGrid { columns: GridColumn[]; chatWidth?: number; sessionsClosed?: boolean }
 export type Surface = 'flat' | 'glass'
 export type Backdrop = 'ember' | 'graphite' | 'dusk'
 export interface LayoutStyle { radius: number; gap: number; surface: Surface }
-const THEME_KEYS = ['bg', 'sidebar', 'surface', 'bubble', 'text', 'muted', 'line', 'hover', 'accent', 'accentText', 'attention', 'done', 'pin', 'error'] as const
-const THEME_REQUIRED = ['bg', 'surface', 'text', 'muted', 'line', 'accent', 'attention'] as const
-type ThemeKey = typeof THEME_KEYS[number]
-export type LayoutTheme = Pick<Record<ThemeKey, string>, typeof THEME_REQUIRED[number]> & Partial<Record<ThemeKey, string>>
+const THEME_KEYS = Object.keys(manifest.theme.keys) as (keyof typeof manifest.theme.keys)[]
+const THEME_REQUIRED = manifest.theme.required
+type ThemeKey = keyof typeof manifest.theme.keys
+export type LayoutTheme = Partial<Record<ThemeKey, string>> & Record<'bg' | 'surface' | 'text' | 'muted' | 'line' | 'accent' | 'attention', string>
+export type LayoutVariants = { [K in keyof typeof manifest.variants]?: keyof typeof manifest.variants[K]['options'] }
+export type LayoutPhone = keyof typeof manifest.devices.phone.options
 export interface Layout {
   id: string; name: string; description?: string; grid: LayoutGrid; panels: PanelName[]; style: LayoutStyle; theme: LayoutTheme | null
+  variants?: LayoutVariants; phone?: LayoutPhone; manifest?: number
   /** Built-in layouts name their colours for the "Save your current look first?" dialog. */ themeName?: string
   /** Custom layouts: the file it came from, and why the file is now refused (the last good layout still shows). */ file?: string; stale?: string
 }
@@ -31,8 +36,8 @@ export interface SavedLook extends Look { scheme: string }
 
 export const DEFAULT_LOOK: Look = { layout: 'classic', surface: 'flat', backdrop: 'ember' }
 export const CUSTOM_PREFIX = 'custom:'
-const MIN_CONTRAST = 4.5
-const RESERVED = ['classic', 'status', 'islands', 'vscode', 'zed', 'mine']
+const MIN_CONTRAST = manifest.theme.minContrast
+const RESERVED = manifest.limits.reserved
 
 export const BUILT_INS: Layout[] = [
   { id: 'classic', name: 'Classic', description: 'Today’s Tether: the sessions list, the chat and the tabs.', panels: ['activity', 'sessions', 'chat', 'agents'],
@@ -88,33 +93,33 @@ function theme(value: unknown): LayoutTheme | null {
 function grid(value: unknown, panels: string[]): LayoutGrid {
   keys(value, ['columns', 'chatWidth', 'sessionsClosed'], 'grid')
   const columns = value.columns
-  if (!Array.isArray(columns) || columns.length < 1 || columns.length > 5) throw new Bad('grid.columns must be a list of 1 to 5 columns.')
+  if (!Array.isArray(columns) || columns.length < 1 || columns.length > manifest.grid.maxColumns) throw new Bad('grid.columns must be a list of 1 to 5 columns.')
   const placed: string[] = []
   const out = columns.map((column: unknown, at) => {
     const where = `grid.columns[${at}]`
-    keys(column, ['top', 'main', 'bottom', 'width'], where)
+    keys(column, [...manifest.grid.slots, 'width'], where)
     if (!('main' in column)) throw new Bad(`${where} needs main.`)
     const item: Record<string, unknown> = {}
-    for (const slot of ['top', 'main', 'bottom'] as const) {
+    for (const slot of manifest.grid.slots) {
       if (!(slot in column)) continue
       const name = column[slot]
-      if (typeof name !== 'string' || !PLACED.includes(name)) throw new Bad(`${where}.${slot} must be one of: ${PLACED.join(', ')}.`)
-      if (slot !== 'main' && name !== 'waiting') throw new Bad(`${where}.${slot} can only be waiting.`)
-      if (name === 'activity' && at !== 0) throw new Bad('activity can only be the main panel of the first column.')
+      if (typeof name !== 'string' || !(PLACED as readonly string[]).includes(name)) throw new Bad(`${where}.${slot} must be one of: ${PLACED.join(', ')}.`)
+      if (slot !== 'main' && !(EDGE as readonly string[]).includes(name)) throw new Bad(`${where}.${slot} can only be waiting.`)
+      if (manifest.panels[name as PanelName].placement === 'first-column-only' && (at !== 0 || slot !== 'main')) throw new Bad('activity can only be the main panel of the first column.')
       if (placed.includes(name)) throw new Bad(`${name} is placed twice.`)
       if (!panels.includes(name)) throw new Bad(`${name} is in grid but not in panels.`)
       placed.push(name)
       item[slot] = name
     }
-    if ('width' in column) item.width = whole(column.width, 160, 480, `${where}.width`)
+    if ('width' in column) item.width = whole(column.width, manifest.grid.columnWidth[0], manifest.grid.columnWidth[1], `${where}.width`)
     return item as unknown as GridColumn
   })
   if (out.filter(column => column.main === 'chat').length !== 1) throw new Bad('chat must be the main panel of one column.')
-  for (const name of panels) if (PLACED.includes(name) && !placed.includes(name)) throw new Bad(`${name} is in panels but has no place in grid.`)
+  for (const name of panels) if ((PLACED as readonly string[]).includes(name) && !placed.includes(name)) throw new Bad(`${name} is in panels but has no place in grid.`)
   const result: LayoutGrid = { columns: out }
   if ('chatWidth' in value) {
-    if (value.chatWidth !== 0) whole(value.chatWidth, 480, 1600, 'grid.chatWidth')
-    result.chatWidth = whole(value.chatWidth, 0, 1600, 'grid.chatWidth')
+    if (value.chatWidth !== 0) whole(value.chatWidth, manifest.grid.chatWidth[0], manifest.grid.chatWidth[1], 'grid.chatWidth')
+    result.chatWidth = whole(value.chatWidth, 0, manifest.grid.chatWidth[1], 'grid.chatWidth')
   }
   if ('sessionsClosed' in value) {
     if (typeof value.sessionsClosed !== 'boolean') throw new Bad('grid.sessionsClosed must be true or false.')
@@ -125,9 +130,9 @@ function grid(value: unknown, panels: string[]): LayoutGrid {
 
 /** Check a custom layout. Returns a clean copy, or throws an Error whose message says what to fix. */
 export function validateLayout(data: unknown, fallbackId: string): Layout {
-  keys(data, ['id', 'name', 'description', 'grid', 'panels', 'style', 'theme'], 'The layout')
+  keys(data, ['id', 'name', 'description', 'grid', 'panels', 'style', 'theme', 'variants', 'phone', 'manifest'], 'The layout')
   const id = 'id' in data ? data.id : fallbackId
-  if (typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,39}$/.test(id)) throw new Bad('id must be 1 to 40 lowercase letters, digits or hyphens.')
+  if (typeof id !== 'string' || !new RegExp(`^[a-z0-9][a-z0-9-]{0,${manifest.limits.idLength - 1}}$`).test(id)) throw new Bad('id must be 1 to 40 lowercase letters, digits or hyphens.')
   if (RESERVED.includes(id)) throw new Bad(`id "${id}" belongs to a built-in layout.`)
   const panels = data.panels
   if (!Array.isArray(panels) || !panels.length || panels.some(name => !(PANEL_NAMES as readonly unknown[]).includes(name))) throw new Bad(`panels must be a list of: ${PANEL_NAMES.join(', ')}.`)
@@ -137,13 +142,24 @@ export function validateLayout(data: unknown, fallbackId: string): Layout {
   const style = 'style' in data ? data.style : {}
   keys(style, ['radius', 'gap', 'surface'], 'style')
   const surface = 'surface' in style ? style.surface : 'flat'
-  if (surface !== 'flat' && surface !== 'glass') throw new Bad('style.surface must be flat or glass.')
+  if (typeof surface !== 'string' || !manifest.style.surface.includes(surface)) throw new Bad('style.surface must be flat or glass.')
   const layout: Layout = {
-    id, name: plain(data.name, 40, 'name'), grid: grid(data.grid, panels as string[]), panels: [...panels] as PanelName[],
-    style: { radius: whole('radius' in style ? style.radius : 0, 0, 24, 'style.radius'), gap: whole('gap' in style ? style.gap : 0, 0, 24, 'style.gap'), surface },
+    id, name: plain(data.name, manifest.limits.nameLength, 'name'), grid: grid(data.grid, panels as string[]), panels: [...panels] as PanelName[],
+    style: { radius: whole('radius' in style ? style.radius : 0, manifest.style.radius[0], manifest.style.radius[1], 'style.radius'), gap: whole('gap' in style ? style.gap : 0, manifest.style.gap[0], manifest.style.gap[1], 'style.gap'), surface: surface as Surface },
     theme: theme(data.theme),
   }
-  if ('description' in data) layout.description = plain(data.description, 200, 'description')
+  if ('description' in data) layout.description = plain(data.description, manifest.limits.descriptionLength, 'description')
+  const variants = 'variants' in data ? data.variants : {}
+  keys(variants, Object.keys(manifest.variants), 'variants')
+  for (const [key, value] of Object.entries(variants)) {
+    const options = manifest.variants[key as keyof LayoutVariants].options
+    if (typeof value !== 'string' || !Object.keys(options).includes(value)) throw new Bad(`variants.${key} must be one of: ${Object.keys(options).join(', ')}.`)
+  }
+  const phone = 'phone' in data ? data.phone : manifest.devices.phone.default
+  if (typeof phone !== 'string' || !Object.keys(manifest.devices.phone.options).includes(phone)) throw new Bad(`phone must be one of: ${Object.keys(manifest.devices.phone.options).join(', ')}.`)
+  layout.variants = { ...variants } as LayoutVariants
+  layout.phone = phone as LayoutPhone
+  layout.manifest = whole('manifest' in data ? data.manifest : 1, 1, Number.MAX_SAFE_INTEGER, 'manifest')
   return layout
 }
 
@@ -179,8 +195,8 @@ export function useCustomLayouts(api: Api, active = true) {
 export function lookLayout(look: Look | undefined): Layout {
   if (!look) return CLASSIC
   if (look.layout.startsWith(CUSTOM_PREFIX) && look.custom) {
-    const { id, name, description, grid, panels, style, theme } = look.custom
-    try { return { ...validateLayout({ id, name, ...description === undefined ? {} : { description }, grid, panels, style, theme }, id), file: look.custom.file } } catch { return CLASSIC }
+    const data = layoutData(look.custom)
+    try { return { ...validateLayout(data, data.id), file: look.custom.file } } catch { return CLASSIC }
   }
   return BUILT_INS.find(layout => layout.id === look.layout) ?? CLASSIC
 }
@@ -234,3 +250,43 @@ export function gridStyle(layout: Layout, shown: GridShown) {
 }
 
 export const hasPanel = (layout: Layout, name: PanelName) => layout.panels.includes(name)
+
+/** Only data fields go back to the server; file and stale describe the local scan. */
+function layoutData(layout: Layout) {
+  return Object.fromEntries(Object.entries(layout).filter(([key, value]) =>
+    !['file', 'stale', 'themeName'].includes(key) && value !== undefined)) as unknown as Layout
+}
+
+export function saveLayout(api: Api, layout: Layout, overwrite = false) {
+  return api<{ layout: Layout; file: string }>('layouts/save', { layout: layoutData(layout), overwrite })
+}
+
+export function deleteLayout(api: Api, id: string) {
+  return api<{ ok: boolean }>('layouts/delete', { id })
+}
+
+/** Abort stops polling; a running server job still completes and stays a draft. */
+export async function generateLayout(api: Api, prompt: string, base?: Layout, signal?: AbortSignal): Promise<{ layout: Layout; notes: string }> {
+  const { job } = await api<{ job: string }>('layouts/generate', { prompt, ...base ? { base: layoutData(base) } : {} }, signal)
+  const deadline = Date.now() + 420000
+  while (Date.now() < deadline) {
+    await new Promise<void>((resolve, reject) => {
+      if (signal?.aborted) { reject(new DOMException('Aborted', 'AbortError')); return }
+      const aborted = () => { clearTimeout(timer); reject(new DOMException('Aborted', 'AbortError')) }
+      const timer = setTimeout(() => { signal?.removeEventListener('abort', aborted); resolve() }, 1500)
+      signal?.addEventListener('abort', aborted, { once: true })
+    })
+    const result = await api<{ state: 'running' | 'done' | 'failed'; layout?: unknown; notes?: string; error?: string }>(`layouts/generate?job=${encodeURIComponent(job)}`, undefined, signal)
+    if (result.state === 'failed') throw new Error(result.error ?? 'Tether could not make the layout.')
+    if (result.state === 'done') return { layout: validateLayout(result.layout, ''), notes: result.notes ?? '' }
+  }
+  throw new Error('The layout job took too long.')
+}
+
+/** Defaults add no variant attribute, so built-in layouts keep their current appearance. */
+export function variantAttrs(layout: Layout) {
+  return Object.fromEntries(Object.entries(manifest.variants).map(([key, spec]) => {
+    const value = layout.variants?.[key as keyof LayoutVariants]
+    return [`data-v-${key}`, value && value !== spec.default ? value : undefined]
+  }))
+}

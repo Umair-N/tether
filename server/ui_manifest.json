@@ -1,0 +1,189 @@
+{
+  "version": 1,
+  "description": "Tether layout capabilities. Layouts contain data only; unknown fields are refused.",
+  "panels": {
+    "waiting": {
+      "description": "Agents and approvals that need attention; may also sit above or below a main panel.",
+      "placement": "edge"
+    },
+    "chat": {
+      "description": "The conversation workspace. Required exactly once as a main panel.",
+      "placement": "main"
+    },
+    "agents": {
+      "description": "The existing agent tab strip above chat; never a grid panel.",
+      "placement": "tab-strip"
+    },
+    "sessions": {
+      "description": "The sessions list and navigation.",
+      "placement": "main"
+    },
+    "status": {
+      "description": "Agents grouped by state in a separate column.",
+      "placement": "main"
+    },
+    "activity": {
+      "description": "The wide-screen navigation rail; only the main panel of the first column.",
+      "placement": "first-column-only"
+    }
+  },
+  "grid": {
+    "description": "One main panel per column, optional edge panels. Non-chat widths are pixels; chatWidth 0 fills available space. sessionsClosed hides sessions initially.",
+    "slots": [
+      "top",
+      "main",
+      "bottom"
+    ],
+    "maxColumns": 5,
+    "columnWidth": [
+      160,
+      480
+    ],
+    "chatWidth": [
+      480,
+      1600
+    ]
+  },
+  "style": {
+    "radius": [
+      0,
+      24
+    ],
+    "gap": [
+      0,
+      24
+    ],
+    "surface": [
+      "flat",
+      "glass"
+    ]
+  },
+  "theme": {
+    "description": "Six-digit hex colours only. Text must meet minContrast on bg and surface.",
+    "keys": {
+      "bg": "Page background",
+      "sidebar": "Sessions and side panels",
+      "surface": "Panel background",
+      "bubble": "Message background",
+      "text": "Main text",
+      "muted": "Secondary text",
+      "line": "Borders and dividers",
+      "hover": "Hover background",
+      "accent": "Selected items and actions",
+      "accentText": "Text on the accent",
+      "attention": "Needs attention",
+      "done": "Finished work",
+      "pin": "Pinned items",
+      "error": "Errors"
+    },
+    "required": [
+      "bg",
+      "surface",
+      "text",
+      "muted",
+      "line",
+      "accent",
+      "attention"
+    ],
+    "minContrast": 4.5
+  },
+  "variants": {
+    "sessions": {
+      "default": "list",
+      "options": {
+        "list": "Standard sessions list",
+        "avatars": "Each session row shows a round avatar with initials and its colour, two-line name and last message, like a messenger app",
+        "compact": "One line per session, dense"
+      }
+    },
+    "chat": {
+      "default": "plain",
+      "options": {
+        "plain": "Plain conversation transcript",
+        "bubbles": "Agent replies sit in rounded bubbles on the left, user messages on the right"
+      }
+    },
+    "tabs": {
+      "default": "pills",
+      "options": {
+        "pills": "Rounded tab pills",
+        "underline": "Tabs with an underline for the selected tab",
+        "square": "Square tabs with a selected edge"
+      }
+    },
+    "density": {
+      "default": "comfortable",
+      "options": {
+        "comfortable": "Standard spacing",
+        "compact": "Dense spacing"
+      }
+    },
+    "type": {
+      "default": "sans",
+      "options": {
+        "sans": "Sans serif text",
+        "serif": "Serif text",
+        "mono": "Monospaced text"
+      }
+    }
+  },
+  "devices": {
+    "phone": {
+      "default": "theme",
+      "options": {
+        "theme": "The phone keeps its own layout and takes the colours and style",
+        "keep": "The phone ignores this layout completely"
+      }
+    }
+  },
+  "features": [
+    {
+      "id": "agent-bubble",
+      "description": "Floating bubble with agent counts and unread work; stays above the workspace when enabled."
+    },
+    {
+      "id": "side-pins",
+      "description": "Pinned sessions stay available at the screen edge."
+    },
+    {
+      "id": "notices",
+      "description": "Chat notices, approvals and status cards stay above the composer."
+    },
+    {
+      "id": "composer",
+      "description": "Message input, attachments, model controls and voice controls remain available."
+    },
+    {
+      "id": "sheets-dialogs",
+      "description": "Settings, actions, search and other sheets and dialogs keep their own interactions."
+    },
+    {
+      "id": "rail",
+      "description": "The navigation rail remains available on wide screens."
+    },
+    {
+      "id": "toasts",
+      "description": "Short action and error messages stay visible above the workspace."
+    },
+    {
+      "id": "update-chip",
+      "description": "The reload chip still appears when a new UI build is available."
+    }
+  ],
+  "limits": {
+    "description": "Custom layout file and text limits. Built-in ids cannot be saved or deleted.",
+    "maxBytes": 16384,
+    "maxFiles": 50,
+    "idLength": 40,
+    "nameLength": 40,
+    "descriptionLength": 200,
+    "reserved": [
+      "classic",
+      "status",
+      "islands",
+      "vscode",
+      "zed",
+      "mine"
+    ]
+  }
+}

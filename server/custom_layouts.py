@@ -10,32 +10,44 @@ import os
 import re
 import stat
 import threading
+import tempfile
+from pathlib import Path
+from urllib.parse import urlsplit, parse_qs
 
 import paths
 
 PATH = '/mobile/api/layouts'
-MAX_BYTES = 16 * 1024
-MAX_FILES = 50
-PANELS = ('waiting', 'chat', 'agents', 'sessions', 'status', 'activity')
-PLACED = ('activity', 'sessions', 'chat', 'status', 'waiting')  # Panels that take a place in the grid. 'agents' is the tab strip.
-EDGE = ('waiting',)  # Panels that may sit above or below another panel in a column.
-RESERVED = ('classic', 'status', 'islands', 'vscode', 'zed', 'mine')
-ID = re.compile(r'[a-z0-9][a-z0-9-]{0,39}')
+MANIFEST = json.loads(Path(__file__).with_name('ui_manifest.json').read_text(encoding='utf-8'))
+MAX_BYTES = MANIFEST['limits']['maxBytes']
+MAX_FILES = MANIFEST['limits']['maxFiles']
+PANELS = tuple(MANIFEST['panels'])
+PLACED = tuple(name for name, panel in MANIFEST['panels'].items() if panel['placement'] != 'tab-strip')
+EDGE = tuple(name for name, panel in MANIFEST['panels'].items() if panel['placement'] == 'edge')
+RESERVED = tuple(MANIFEST['limits']['reserved'])
+ID = re.compile(r'[a-z0-9][a-z0-9-]{0,%d}' % (MANIFEST['limits']['idLength'] - 1))
 HEX = re.compile(r'#[0-9a-fA-F]{6}')
-THEME_KEYS = ('bg', 'sidebar', 'surface', 'bubble', 'text', 'muted', 'line', 'hover', 'accent', 'accentText', 'attention', 'done', 'pin', 'error')
-THEME_REQUIRED = ('bg', 'surface', 'text', 'muted', 'line', 'accent', 'attention')
-TOP_KEYS = ('id', 'name', 'description', 'grid', 'panels', 'style', 'theme')
-MIN_CONTRAST = 4.5
+THEME_KEYS = tuple(MANIFEST['theme']['keys'])
+THEME_REQUIRED = tuple(MANIFEST['theme']['required'])
+TOP_KEYS = ('id', 'name', 'description', 'grid', 'panels', 'style', 'theme', 'variants', 'phone', 'manifest')
+MIN_CONTRAST = MANIFEST['theme']['minContrast']
 _last_good = {}
 _lock = threading.Lock()
 
 
 class Bad(ValueError):
-    pass
+    status = 400
+
+
+class Conflict(Bad):
+    status = 409
+
+
+class Missing(Bad):
+    status = 404
 
 
 def handles(path):
-    return path.split('?', 1)[0] == PATH
+    return path.split('?', 1)[0] in (PATH, PATH + '/generate', PATH + '/save', PATH + '/delete')
 
 
 def _keys(value, allowed, where):
@@ -90,17 +102,17 @@ def _theme(value):
 def _grid(value, panels):
     _keys(value, ('columns', 'chatWidth', 'sessionsClosed'), 'grid')
     columns = value.get('columns')
-    if not isinstance(columns, list) or not 1 <= len(columns) <= 5:
+    if not isinstance(columns, list) or not 1 <= len(columns) <= MANIFEST['grid']['maxColumns']:
         raise Bad('grid.columns must be a list of 1 to 5 columns.')
     placed = []
     out = []
     for at, column in enumerate(columns):
         where = 'grid.columns[%d]' % at
-        _keys(column, ('top', 'main', 'bottom', 'width'), where)
+        _keys(column, (*MANIFEST['grid']['slots'], 'width'), where)
         if 'main' not in column:
             raise Bad('%s needs main.' % where)
         item = {}
-        for slot in ('top', 'main', 'bottom'):
+        for slot in MANIFEST['grid']['slots']:
             if slot not in column:
                 continue
             name = column[slot]
@@ -108,7 +120,7 @@ def _grid(value, panels):
                 raise Bad('%s.%s must be one of: %s.' % (where, slot, ', '.join(PLACED)))
             if slot != 'main' and name not in EDGE:
                 raise Bad('%s.%s can only be waiting.' % (where, slot))
-            if name == 'activity' and at != 0:
+            if MANIFEST['panels'][name]['placement'] == 'first-column-only' and (at != 0 or slot != 'main'):
                 raise Bad('activity can only be the main panel of the first column.')
             if name in placed:
                 raise Bad('%s is placed twice.' % name)
@@ -117,7 +129,7 @@ def _grid(value, panels):
             placed.append(name)
             item[slot] = name
         if 'width' in column:
-            item['width'] = _int(column['width'], 160, 480, where + '.width')
+            item['width'] = _int(column['width'], *MANIFEST['grid']['columnWidth'], where + '.width')
         out.append(item)
     if [column['main'] for column in out].count('chat') != 1:
         raise Bad('chat must be the main panel of one column.')
@@ -128,8 +140,8 @@ def _grid(value, panels):
     if 'chatWidth' in value:
         width = value['chatWidth']
         if width != 0:
-            _int(width, 480, 1600, 'grid.chatWidth')
-        grid['chatWidth'] = _int(width, 0, 1600, 'grid.chatWidth')
+            _int(width, *MANIFEST['grid']['chatWidth'], 'grid.chatWidth')
+        grid['chatWidth'] = _int(width, 0, MANIFEST['grid']['chatWidth'][1], 'grid.chatWidth')
     if 'sessionsClosed' in value:
         if not isinstance(value['sessionsClosed'], bool):
             raise Bad('grid.sessionsClosed must be true or false.')
@@ -157,18 +169,28 @@ def validate(data, fallback_id):
     style = data.get('style', {})
     _keys(style, ('radius', 'gap', 'surface'), 'style')
     surface = style.get('surface', 'flat')
-    if surface not in ('flat', 'glass'):
+    if surface not in MANIFEST['style']['surface']:
         raise Bad('style.surface must be flat or glass.')
     layout = {
         'id': layout_id,
-        'name': _text(data.get('name'), 40, 'name'),
+        'name': _text(data.get('name'), MANIFEST['limits']['nameLength'], 'name'),
         'grid': _grid(data['grid'], panels),
         'panels': list(panels),
-        'style': {'radius': _int(style.get('radius', 0), 0, 24, 'style.radius'), 'gap': _int(style.get('gap', 0), 0, 24, 'style.gap'), 'surface': surface},
+        'style': {'radius': _int(style.get('radius', 0), *MANIFEST['style']['radius'], 'style.radius'), 'gap': _int(style.get('gap', 0), *MANIFEST['style']['gap'], 'style.gap'), 'surface': surface},
         'theme': _theme(data.get('theme')),
     }
     if 'description' in data:
-        layout['description'] = _text(data['description'], 200, 'description')
+        layout['description'] = _text(data['description'], MANIFEST['limits']['descriptionLength'], 'description')
+    variants = data.get('variants', {})
+    _keys(variants, MANIFEST['variants'], 'variants')
+    for key, value in variants.items():
+        if not isinstance(value, str) or value not in MANIFEST['variants'][key]['options']:
+            raise Bad('variants.%s must be one of: %s.' % (key, ', '.join(MANIFEST['variants'][key]['options'])))
+    phone = data.get('phone', MANIFEST['devices']['phone']['default'])
+    if not isinstance(phone, str) or phone not in MANIFEST['devices']['phone']['options']:
+        raise Bad('phone must be one of: %s.' % ', '.join(MANIFEST['devices']['phone']['options']))
+    layout.update(variants=dict(variants), phone=phone,
+                  manifest=_int(data.get('manifest', 1), 1, 9007199254740991, 'manifest'))
     return layout
 
 
@@ -229,5 +251,114 @@ def scan(folder=None):
     return {'folder': folder_label(folder), 'layouts': layouts, 'errors': errors}
 
 
+def checked_id(value):
+    if not isinstance(value, str) or not ID.fullmatch(value):
+        raise Bad('id must be 1 to 40 lowercase letters, digits or hyphens.')
+    if value in RESERVED:
+        raise Bad('id "%s" belongs to a built-in layout.' % value)
+    return value
+
+
+def save(data, overwrite=False):
+    if not isinstance(overwrite, bool):
+        raise Bad('overwrite must be true or false.')
+    layout = validate(data, '')
+    raw = (json.dumps(layout, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+    if len(raw) > MAX_BYTES:
+        raise Bad('The file is larger than 16 KB.')
+    folder = Path(paths.LAYOUTS)
+    name = layout['id'] + '.json'
+    with _lock:
+        folder.mkdir(parents=True, exist_ok=True)
+        target = folder / name
+        exists = os.path.lexists(target)
+        if exists and not stat.S_ISREG(target.lstat().st_mode):
+            raise Bad('Only plain files can be overwritten (no links or folders).')
+        files = [item for item in folder.iterdir() if item.name.endswith('.json') and not item.name.startswith('.')]
+        previous = []
+        for item in files:
+            if item == target:
+                continue
+            stem = re.sub(r'[^a-z0-9-]+', '-', item.stem.lower()).strip('-')[:40] or 'layout'
+            try:
+                if validate(_read(item), stem)['id'] == layout['id']:
+                    previous.append(item)
+            except (Bad, OSError):
+                continue
+        if (exists or previous) and not overwrite:
+            raise Conflict('This layout already exists. Choose overwrite to replace it.')
+        if len(files) + (not exists) - len(previous) > MAX_FILES:
+            raise Bad('The layouts folder already has %d files.' % MAX_FILES)
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=folder, prefix='.layout-', delete=False) as handle:
+                temporary = handle.name
+                handle.write(raw)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, target)
+            # Older agent-written files may use a filename other than their layout id.
+            for item in previous:
+                item.unlink(missing_ok=True)
+                _last_good.pop(item.name, None)
+        finally:
+            if temporary and os.path.exists(temporary):
+                os.unlink(temporary)
+        _last_good.pop(name, None)
+    return {'layout': layout, 'file': name}
+
+
+def delete(layout_id):
+    name = checked_id(layout_id) + '.json'
+    with _lock:
+        target = Path(paths.LAYOUTS) / name
+        try:
+            if not stat.S_ISREG(target.lstat().st_mode):
+                raise Bad('Only plain layout files can be deleted (no links or folders).')
+            target.unlink()
+        except FileNotFoundError:
+            raise Missing('This custom layout does not exist.') from None
+        _last_good.pop(name, None)
+    return {'ok': True}
+
+
 def get(handler):
-    handler.respond(200, scan())
+    if urlsplit(handler.path).path == PATH:
+        handler.respond(200, scan())
+    elif urlsplit(handler.path).path == PATH + '/generate':
+        import layout_generate
+        job = parse_qs(urlsplit(handler.path).query).get('job', [''])[0]
+        result = layout_generate.poll(job)
+        handler.respond(200 if result else 404, result or {'error': 'This layout job does not exist.'})
+    else:
+        handler.respond(404, {'error': 'Not found'})
+
+
+def post(handler):
+    try:
+        size = int(handler.headers.get('Content-Length', '0'))
+        if not 0 < size <= 65536:
+            handler.respond(413, {'error': 'Message is too large.'})
+            return
+        body = json.loads(handler.rfile.read(size))
+        if not isinstance(body, dict):
+            raise Bad('The request must be an object.')
+        if handler.path == PATH + '/save':
+            result = save(body.get('layout'), body.get('overwrite', False))
+        elif handler.path == PATH + '/delete':
+            result = delete(body.get('id'))
+        elif handler.path == PATH + '/generate':
+            import layout_generate
+            result = {'job': layout_generate.start(body.get('prompt'), body.get('base'))}
+            handler.respond(202, result)
+            return
+        else:
+            handler.respond(404, {'error': 'Not found'})
+            return
+        handler.respond(200, result)
+    except Bad as error:
+        handler.respond(error.status, {'error': str(error)})
+    except (ValueError, UnicodeError, RecursionError):
+        handler.respond(400, {'error': 'The request is not valid JSON.'})
+    except OSError:
+        handler.respond(500, {'error': 'Tether could not change the layout files.'})
