@@ -13,7 +13,7 @@ const PLACED: readonly string[] = ['activity', 'sessions', 'chat', 'status', 'wa
 export interface GridColumn { top?: 'waiting'; main: Placed; bottom?: 'waiting'; width?: number }
 export interface LayoutGrid { columns: GridColumn[]; chatWidth?: number; sessionsClosed?: boolean }
 export type Surface = 'flat' | 'glass'
-export type Backdrop = 'ember' | 'graphite' | 'dusk'
+export type Backdrop = 'ember' | 'graphite' | 'dusk' | 'photo'
 export interface LayoutStyle { radius: number; gap: number; surface: Surface }
 const THEME_KEYS = ['bg', 'sidebar', 'surface', 'bubble', 'text', 'muted', 'line', 'hover', 'accent', 'accentText', 'attention', 'done', 'pin', 'error'] as const
 const THEME_REQUIRED = ['bg', 'surface', 'text', 'muted', 'line', 'accent', 'attention'] as const
@@ -25,7 +25,13 @@ export interface Layout {
   /** Custom layouts: the file it came from, and why the file is now refused (the last good layout still shows). */ file?: string; stale?: string
 }
 /** The look on this device: the chosen layout, the Style and the Glass backdrop. custom: the last good copy of a custom layout. */
-export interface Look { layout: string; surface: Surface; backdrop: Backdrop; custom?: Layout }
+export interface Look {
+  layout: string; surface: Surface; backdrop: Backdrop; custom?: Layout
+  photo?: { id: string; url: string }
+  tint?: string  // hex colour
+  blur?: number  // 0–40
+  fill?: number  // 0.3–0.9 panel opacity
+}
 /** "My look": the look and colours saved before a layout replaced them. */
 export interface SavedLook extends Look { scheme: string }
 
