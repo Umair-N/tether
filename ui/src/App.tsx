@@ -23,6 +23,7 @@ import { BacklogSheet } from './Backlog'
 import { BacklogAddSheet } from './BacklogAdd'
 import { orderPanes, reorderPanes } from './PaneTabs'
 import { worktreeNotice } from './Worktree'
+import { NewTask } from './NewTask'
 import { isTabArchived, tabNeighbor, withTabArchived, withoutTab } from './tabArchive'
 import { selectPane } from './paneSelection'
 import type { SelectionSnapshot } from './paneSelection'
@@ -92,6 +93,8 @@ function App() {
   const [paneActions, setPaneActions] = useState<string | null>(null)
   // Where the actions menu opens on the desktop. Without it (the phone) the actions show as a sheet.
   const [menuAt, setMenuAt] = useState<Anchor>()
+  // The sidebar row's +: the same New task popover as the tab strip's +, for that session's last pane.
+  const [tabTask, setTabTask] = useState<{ pane: Pane; at: Anchor } | null>(null)
   const [resume, setResume] = useState<PastChat | null>(null)
   const [notice, setNotice] = useState('')
   const [settings, setSettings] = useState(false)
@@ -684,7 +687,7 @@ function App() {
   }
   const canMessage = sessions.some(item => item.panes.some(p => p.agent !== 'shell' && p.writable))
   const words = useMemo(() => wordsFor(prefs.tmuxWords), [prefs.tmuxWords])
-  const sidebarProps = { archivedTabs, onRestoreTab: restoreTab, api, sessions, marks, onMarks: loadMarks, selected: openId, slots: multi && !home ? view?.slots : undefined, drag: !!view && !home, prefs, update, loading, error, onRetry: () => void refresh(), onOpen: openPane, onNew: () => { setDrawer(false); setNewSession(true) }, onActions: (item: Session, remove?: boolean, at?: Anchor) => { if (remove) setDrawer(false); setMenuAt(view ? at : undefined); setActionsDelete(!!remove); setActions(item.id) }, onPaneActions: (item: Pane, at?: Anchor) => { setDrawer(false); setMenuAt(view ? at : undefined); setPaneActions(item.id) }, onPastChat: pickPastChat, onSettings: () => { setDrawer(false); setSettings(true) }, onBacklog: () => { setDrawer(false); setBacklog(true) }, onCommandMenu: view && !home ? () => setMenu('commands') : undefined, onMessageAll: canMessage ? () => { setDrawer(false); setAgentsPage('message') } : undefined, onOpenShell: view ? openShell : undefined, onShellsEnded: shellsEnded, onAddPane: (item: Session) => { const target = item.panes.find(entry => entry.id === prefs.lastPane[item.id]) ?? item.panes[0]; void split('right', target) } }
+  const sidebarProps = { archivedTabs, onRestoreTab: restoreTab, api, sessions, marks, onMarks: loadMarks, selected: openId, slots: multi && !home ? view?.slots : undefined, drag: !!view && !home, prefs, update, loading, error, onRetry: () => void refresh(), onOpen: openPane, onNew: () => { setDrawer(false); setNewSession(true) }, onActions: (item: Session, remove?: boolean, at?: Anchor) => { if (remove) setDrawer(false); setMenuAt(view ? at : undefined); setActionsDelete(!!remove); setActions(item.id) }, onPaneActions: (item: Pane, at?: Anchor) => { setDrawer(false); setMenuAt(view ? at : undefined); setPaneActions(item.id) }, onPastChat: pickPastChat, onSettings: () => { setDrawer(false); setSettings(true) }, onBacklog: () => { setDrawer(false); setBacklog(true) }, onCommandMenu: view && !home ? () => setMenu('commands') : undefined, onMessageAll: canMessage ? () => { setDrawer(false); setAgentsPage('message') } : undefined, onOpenShell: view ? openShell : undefined, onShellsEnded: shellsEnded, onAddPane: (item: Session, at: Anchor) => { setDrawer(false); setTabTask({ pane: item.panes.find(entry => entry.id === prefs.lastPane[item.id]) ?? item.panes[0], at }) } }
   // The command menu runs the same actions as the keys. A command shows only when it would do something now.
   const commands: Command[] = view ? [
     { label: 'Home', key: '⌥H', run: () => chooseScreen('home') },
@@ -785,6 +788,10 @@ function App() {
     {backlog && <BacklogSheet api={api} panes={panes} onOpenPane={openPane} onClose={() => setBacklog(false)} />}
     {backlogAdd && <BacklogAddSheet key={backlogAdd.text} api={api} text={backlogAdd.text} pane={backlogAdd.pane} onClose={() => setBacklogAdd(null)} onAdded={setNotice} />}
     {settings && <Settings api={api} prefs={prefs} update={update} onReload={reload} onClose={() => setSettings(false)} />}
+    {tabTask && <NewTask api={api} pane={tabTask.pane} at={tabTask.at} micOk={!prefs.voiceOff} chime={prefs.voiceSound} onClose={() => setTabTask(null)}
+      onEmpty={() => { const target = tabTask.pane; setTabTask(null); void split('right', target) }}
+      onCreated={(_id, made) => { setTabTask(null); void refresh(); if (made) setNotice(worktreeNotice(made)) }}
+      onOpen={item => { setTabTask(null); void refresh(); openPane(item) }} onMoved={item => { setTabTask(null); void refresh(); openPane(item) }} />}
     {newSession && <NewSession api={api} onClose={() => setNewSession(false)} onCreated={(created, made) => { openPane(created); setNewSession(false); void refresh(); if (made) setNotice(worktreeNotice(made)) }} />}
     {actionSession && pane && <SessionActions key={`${actionSession.id}-${actionsDelete}`} tabCount={panes.filter(item => item.tmux_session === actionSession.id).length} startDelete={actionsDelete} at={actionsDelete ? undefined : menuAt} place={placeFor(actionSession.panes[0].id, actionSession)} api={api} session={actionSession} pane={actionSession.panes.find(item => item.id === pane.id)?.id ?? actionSession.panes[0].id} pinned={prefs.pinned.includes(actionSession.id)} archived={isArchived(actionSession, prefs.archived)} canMoveUp={ordered.indexOf(actionSession.id) > 0} canMoveDown={ordered.indexOf(actionSession.id) < ordered.length - 1} targets={moveTargets} marks={marks} onMarks={loadMarks}
       onPin={() => update(current => ({ pinned: current.pinned.includes(actionSession.id) ? current.pinned.filter(id => id !== actionSession.id) : [...current.pinned, actionSession.id] }))}

@@ -525,7 +525,7 @@ dialog::backdrop { background: #11110e66; opacity: calc(1 - var(--sheet-progress
 
 /* Suggestions above the message box: "/" commands and skills, "@" files. */
 .composer-area { position: relative; }
-.suggest { position: absolute; left: max(14px, env(safe-area-inset-left)); right: max(14px, env(safe-area-inset-right)); bottom: calc(100% - 4px); z-index: 6; max-height: min(42dvh, 360px); overflow-y: auto; overscroll-behavior: contain; padding: 4px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: 0 8px 28px #00000024; }
+.suggest { position: absolute; left: max(14px, env(safe-area-inset-left)); right: max(14px, env(safe-area-inset-right)); bottom: calc(100% - 4px); z-index: 6; max-height: min(42dvh, 360px); overflow-y: auto; overscroll-behavior: contain; scroll-padding-top: 34px; padding: 4px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: 0 8px 28px #00000024; }
 .suggest-head { position: sticky; top: -4px; display: flex; align-items: center; gap: 6px; margin: -4px -4px 2px; padding: 8px 12px 6px; background: var(--surface); color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .suggest button { display: flex; align-items: flex-start; gap: 10px; width: 100%; min-height: var(--control-lg); padding: 8px 10px; border-radius: var(--radius); text-align: left; }
 .suggest button > svg { flex-shrink: 0; margin-top: 2px; color: var(--muted); }

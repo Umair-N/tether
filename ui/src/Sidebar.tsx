@@ -240,7 +240,7 @@ interface Props {
   /** Shells that ended from the Shells list: their panels close. */
   onShellsEnded?: (panes: string[]) => void
   /** The + on a session row: a new tab (tmux pane) in that session. */
-  onAddPane?: (session: Session) => void
+  onAddPane?: (session: Session, at: Anchor) => void
 }
 
 export function Sidebar({ api, sessions, selected, prefs, update, loading, error, onRetry, onOpen, onNew, onActions, onPaneActions, onPastChat, onSettings, onBacklog, onClose, slots, drag, onCommandMenu, onMessageAll, marks, onMarks, onOpenShell, onShellsEnded, onAddPane, archivedTabs, onRestoreTab }: Props) {
@@ -590,7 +590,7 @@ function SessionList({ items, reorder, selected, prefs, update, onOpen, onAction
             {!multi && slotKey(session.panes[0].id)}
             {multi && !open && state.kind !== 'idle' && dot(state)}
           </button>}
-          {onAddPane && !reorder && !dropping && renaming?.session !== session.id && <button type="button" className="session-add" aria-label={`${words.newRight} in ${session.name}`} title={words.newRight} onClick={() => onAddPane(session)}><Plus size={15} aria-hidden="true" /></button>}
+          {onAddPane && !reorder && !dropping && renaming?.session !== session.id && <button type="button" className="session-add" aria-label={`${words.newRight} in ${session.name}`} title={words.newRight} aria-haspopup="dialog" onClick={event => { const box = event.currentTarget.getBoundingClientRect(); onAddPane(session, { x: box.left, y: box.bottom + 6 }) }}><Plus size={15} aria-hidden="true" /></button>}
           {dropping && <span className="merge-hint" aria-hidden="true">{carry.pane ? 'Move here' : carry.chat ? 'Open here' : 'Merge here'}</span>}
           {reorder && <span className="grip" aria-label={`Drag to move ${session.name}`} onPointerDown={event => { dragging.current = session.id; order.current = null; event.currentTarget.setPointerCapture(event.pointerId) }} onPointerMove={drag} onPointerUp={() => { if (order.current) onMove(order.current); dragging.current = null; order.current = null; setPreview(null) }} onPointerCancel={() => { dragging.current = null; order.current = null; setPreview(null) }}><GripVertical size={18} /></span>}
         </div>
