@@ -45,3 +45,21 @@ export async function generateBackground(api: Api, prompt: string, tuned: boolea
     if (result.state === 'failed') throw new Error(result.error)
   }
 }
+
+export interface BackgroundJobHandle { promise: Promise<BackgroundItem>; controller: AbortController }
+let running: BackgroundJobHandle | null = null
+
+/** The image job in this page. It keeps polling after Settings closes, so the finished image still applies. */
+export function backgroundJob(): BackgroundJobHandle | null {
+  return running
+}
+
+export function startBackground(api: Api, prompt: string, tuned: boolean, size: BackgroundSize = 'landscape'): BackgroundJobHandle {
+  if (running) return running
+  const controller = new AbortController()
+  const handle: BackgroundJobHandle = { controller, promise: generateBackground(api, prompt, tuned, size, controller.signal) }
+  running = handle
+  const clear = () => { if (running === handle) running = null }
+  handle.promise.then(clear, clear)
+  return handle
+}

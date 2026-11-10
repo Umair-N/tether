@@ -89,7 +89,8 @@ export function OrganizeMenu({ api, sessions, prefs, update, at, onClose }: { ap
     setAsking(true); setError(''); setSuggestion(null)
     try {
       const body = { sessions: sessions.slice(0, 200).map(session => ({ id: session.id, name: session.name, dir: session.dir, chats: session.panes.map(pane => pane.pane_name || pane.agent_name || '').filter(Boolean).slice(0, 12) })) }
-      setSuggestion(await api<Suggestion>('suggest-groups', body))
+      // The server waits up to 25 s for the local model, then falls back to folders.
+      setSuggestion(await api<Suggestion>('suggest-groups', body, undefined, undefined, 35000))
     } catch (failure) { setError(errorText(failure)) } finally { setAsking(false) }
   }
   function apply(found: Suggestion) {

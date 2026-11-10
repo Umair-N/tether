@@ -6,7 +6,7 @@ import { BUILT_INS, CUSTOM_PREFIX, DEFAULT_LOOK, MANIFEST_VERSION, PHOTO_URL, de
 import type { Backdrop, Layout, Look, Surface } from './layouts'
 import { LayoutPreviews } from './LayoutPreview'
 import { startTrial } from './lookTrial'
-import { deleteBackground, generateBackground, listBackgrounds, uploadBackground, type BackgroundItem } from './backgrounds'
+import { backgroundJob, deleteBackground, listBackgrounds, startBackground, uploadBackground, type BackgroundItem } from './backgrounds'
 import { Choice } from './SettingsControls'
 import { keyLabel } from './keys'
 
@@ -263,11 +263,16 @@ function Photos({ api, look, prefs, set, update }: { api: Api; look: Look; prefs
   const [busy, setBusy] = useState<'' | 'upload' | 'make'>('')
   const [wish, setWish] = useState('')
   const file = useRef<HTMLInputElement>(null)
-  const job = useRef<AbortController | null>(null)
+  const live = useRef(true)
   useEffect(() => {
-    let live = true
-    listBackgrounds(api).then(list => { if (live) setItems(list) }, failure => { if (live) setError(message(failure)) })
-    return () => { live = false; job.current?.abort() }
+    live.current = true
+    listBackgrounds(api).then(list => { if (live.current) setItems(list) }, failure => { if (live.current) setError(message(failure)) })
+    // A job from before Settings closed keeps going. Show it as busy again.
+    const pending = backgroundJob()
+    if (pending) void follow(pending)
+    return () => { live.current = false }
+    // follow is stable enough: it only reads refs and state setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api])
   const tuned = prefs.imagePromptTuned !== false
 
@@ -285,15 +290,17 @@ function Photos({ api, look, prefs, set, update }: { api: Api; look: Look; prefs
     try { const item = await uploadBackground(api, picked); setItems(list => [item, ...list ?? []]); await pick(item) }
     catch (failure) { setError(message(failure)) } finally { setBusy('') }
   }
-  const make = async () => {
-    if (!wish.trim()) return
+  // The finished image applies even after Settings closes. The list and messages update only while it is open.
+  async function follow(handle: ReturnType<typeof startBackground>) {
     setBusy('make'); setError('')
-    const controller = new AbortController()
-    job.current = controller
-    try { const item = await generateBackground(api, wish.trim(), tuned, 'landscape', controller.signal); setItems(list => [item, ...list ?? []]); setWish(''); await pick(item) }
-    catch (failure) { if (!controller.signal.aborted) setError(message(failure)) }
-    finally { if (job.current === controller) job.current = null; setBusy('') }
+    try {
+      const item = await handle.promise
+      if (live.current) { setItems(list => list?.some(entry => entry.id === item.id) ? list : [item, ...list ?? []]); setWish('') }
+      await pick(item)
+    } catch (failure) { if (live.current && !handle.controller.signal.aborted) setError(message(failure)) }
+    finally { if (live.current) setBusy('') }
   }
+  const make = () => { if (wish.trim()) void follow(startBackground(api, wish.trim(), tuned)) }
   const remove = async (item: BackgroundItem) => {
     setError('')
     try {
@@ -319,9 +326,9 @@ function Photos({ api, look, prefs, set, update }: { api: Api; look: Look; prefs
       <textarea className="look-textarea" rows={2} maxLength={1000} value={wish} disabled={busy === 'make'} aria-label="Describe an image" placeholder="Make an image, for example: misty pine forest at dawn" onChange={event => setWish(event.target.value)} />
       <div className="look-maker-buttons">
         {busy === 'make' ? <>
-          <span className="look-busy" role="status"><span className="look-spinner" aria-hidden="true" />Codex is making the image. This takes up to 2 minutes.</span>
-          <button type="button" className="secondary" onClick={() => job.current?.abort()}>Stop waiting</button>
-        </> : wish.trim() ? <ConfirmButton className="primary" label="Make image" confirm="Uses Codex usage. Make it?" onConfirm={() => void make()} /> : <button type="button" className="primary" disabled>Make image</button>}
+          <span className="look-busy" role="status"><span className="look-spinner" aria-hidden="true" />Codex is making the image. This takes up to 2 minutes. You can close Settings.</span>
+          <button type="button" className="secondary" onClick={() => backgroundJob()?.controller.abort()}>Stop waiting</button>
+        </> : wish.trim() ? <ConfirmButton className="primary" label="Make image" confirm="Uses Codex usage. Make it?" onConfirm={make} /> : <button type="button" className="primary" disabled>Make image</button>}
       </div>
     </form>
     <label className="look-check"><input type="checkbox" checked={tuned} onChange={event => update(() => ({ imagePromptTuned: event.target.checked }))} />Tuned prompt: ask for a calm wallpaper with soft areas behind the panels</label>
