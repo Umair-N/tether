@@ -105,6 +105,10 @@ interface RowActions {
 
 function ItemRow({ item, actions, links, sending, locked, editing, setEditing, typed, drop, dragged }: { item: Item; actions: RowActions; links: Links; sending?: ReactNode; locked: boolean; editing: boolean; setEditing: (id: string | null) => void; typed: RefObject<string>; drop?: 'before' | 'after'; dragged: boolean }) {
   const [wording, setWording] = useState(item.text)
+  // Sub-steps stay in view. Notes (the why, the files, selected chat text) fold under the title until opened.
+  const [showNotes, setShowNotes] = useState(false)
+  const notes = item.details.filter(detail => detail.done === undefined)
+  const shown = showNotes ? item.details : item.details.filter(detail => detail.done !== undefined)
   const ended = useRef(false)
   const finish = (keep: boolean) => {
     if (ended.current) return
@@ -129,7 +133,9 @@ function ItemRow({ item, actions, links, sending, locked, editing, setEditing, t
         {item.source && <SourceTag source={item.source} links={links} />}
       </span>}
       {item.status && (item.status.kind === 'done' ? item.done : !item.done) && <StatusLine status={item.status} links={links} />}
-      {item.details.length > 0 && <ul className="backlog-details">{item.details.map(detail => <li key={detail.line}>
+      {notes.length > 0 && <button type="button" className="backlog-done-toggle backlog-notes-toggle" aria-expanded={showNotes} onClick={() => setShowNotes(!showNotes)}>
+        <ChevronRight size={14} className={showNotes ? 'open' : ''} aria-hidden="true" />Details · {notes.length}</button>}
+      {shown.length > 0 && <ul className="backlog-details">{shown.map(detail => <li key={detail.line}>
         {detail.done === undefined ? <span>{detail.text}</span>
           : <label className={`backlog-sub${detail.done ? ' done' : ''}`}><input type="checkbox" checked={detail.done} disabled={locked} onChange={event => actions.onDone(detail.raw, detail.line, event.target.checked)} /><span>{detail.text}</span></label>}
       </li>)}</ul>}

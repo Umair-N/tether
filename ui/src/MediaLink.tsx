@@ -3,8 +3,9 @@ import { fileChecks } from './fileChecks'
 import { useIsMarkdownCodeBlock } from '@assistant-ui/react-markdown'
 
 // Paths an agent names in a reply (`shots/row-menu.png`, [clip](out/demo.mp4), src/App.tsx:42) open on the phone through
-// GET /mobile/api/file. the server decides what may open: media and text files only, home folder only, no secrets.
-export type Kind = 'image' | 'video' | 'audio' | 'pdf' | 'text'
+// GET /mobile/api/file. the server decides what may open: home folder only, no secrets. Media and text open in Tether;
+// any other file ('file': a spreadsheet, a document, an archive) downloads.
+export type Kind = 'image' | 'video' | 'audio' | 'pdf' | 'text' | 'file'
 const KINDS: Record<string, Kind> = {
   png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image',
   mp4: 'video', webm: 'video', mov: 'video', m4v: 'video', mp3: 'audio', m4a: 'audio', wav: 'audio', ogg: 'audio', pdf: 'pdf' }
@@ -12,6 +13,9 @@ const KINDS: Record<string, Kind> = {
 for (const suffix of ('txt md markdown log json jsonl csv tsv yml yaml toml ini cfg conf py js jsx mjs cjs ts tsx css scss html htm xml svg sh zsh bash '
   + 'sql go rs java kt swift c h cc cpp hpp rb php lua diff patch tf graphql proto vue svelte ipynb lock gitignore dockerignore editorconfig').split(' ')) KINDS[suffix] = 'text'
 const TEXT_NAMES = new Set(['Makefile', 'Dockerfile', 'README', 'LICENSE', 'Procfile', 'Gemfile', 'Justfile', 'CODEOWNERS'])
+// Other types download. A bare name needs one of these extensions, so "Node.js" or "e.g." is not a file; a path with a folder may have any.
+const DOCUMENTS = new Set(('xlsx xls xlsm ods docx doc odt rtf pptx ppt odp key numbers pages epub zip tar gz tgz bz2 xz 7z rar '
+  + 'dmg pkg apk ipa heic avif tiff psd sketch fig').split(' '))
 
 // "src/a.png:12" and "file:///x.png" name the same file; the line number is kept for text files. URLs to other sites are not paths.
 export function mediaPath(text: string) {
@@ -20,7 +24,9 @@ export function mediaPath(text: string) {
   const path = raw.replace(/:\d+(?::\d+)?$/, '')
   if (!path || /\s/.test(path) && !path.includes('/') || /^[a-z][\w+.-]*:\/\//i.test(path) || path.length > 1024) return null
   const name = path.split('/').pop() ?? ''
-  const kind = TEXT_NAMES.has(name) ? 'text' : name.includes('.') ? KINDS[name.split('.').pop()!.toLowerCase()] : undefined
+  const suffix = name.includes('.') ? name.split('.').pop()!.toLowerCase() : ''
+  const other = /^[a-z0-9]{1,10}$/.test(suffix) && /[a-z]/.test(suffix) && (DOCUMENTS.has(suffix) || path.includes('/'))
+  const kind: Kind | undefined = TEXT_NAMES.has(name) ? 'text' : KINDS[suffix] ?? (other ? 'file' : undefined)
   return kind ? { path, kind, line } : null
 }
 
@@ -86,7 +92,7 @@ export function InlineCode(props: React.ComponentProps<'code'>) {
   const text = typeof props.children === 'string' ? props.children : ''
   const { media, open } = useOpen(block ? '' : text)
   if (!open) return <code {...props} className={media ? [props.className, 'file-chip'].filter(Boolean).join(' ') : props.className} />
-  return <FileLink open={open} label={`Open ${text}`}><code {...props} /></FileLink>
+  return <FileLink open={open} label={`${media?.kind === 'file' ? 'Download' : 'Open'} ${text}`}><code {...props} /></FileLink>
 }
 
 export function Link({ href = '', children, ...props }: React.ComponentProps<'a'>) {
@@ -102,6 +108,16 @@ function FileLink({ open, label, children }: { open: () => void; label?: string;
   return <a href="#" role="button" className="file-link" aria-label={label}
     onClick={event => { event.preventDefault(); open() }}
     onKeyDown={event => { if (event.key === ' ') { event.preventDefault(); open() } }}>{children}</a>
+}
+
+/** Save a file the server sends as an attachment. */
+export function saveFile(url: string, name: string) {
+  const link = document.createElement('a')
+  link.href = url
+  link.download = name
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
 }
 
 function safeDecode(text: string) { try { return decodeURI(text) } catch { return text } }

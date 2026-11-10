@@ -245,6 +245,47 @@ def add_detail(query, text, project=''):
     _change(change)
 
 
+def reword(query, text, project=''):
+    """Give an item new words. Its ID and the record of who added it stay."""
+    text = _one_line(text)
+    if not text:
+        raise invalid('Write the item text.')
+
+    def change(lines):
+        at = _match(lines, query, project, need_open=False)
+        line = lines[at]
+        body = ITEM.fullmatch(line)[2]
+        number = ID.search(body)
+        source = SOURCE.search(ID.sub('', body))
+        lines[at] = f'{line[:line.index("] ") + 2]}{text}{source[0].rstrip() if source else ""}{number[0] if number else ""}'
+        return lines[at]
+    return _change(change)
+
+
+def move(query, target, project=''):
+    """Move an item and its details to the end of another project's items, or to the inbox when target is empty.
+    A project heading left with no lines goes."""
+    target = _clean(_one_line(target))
+
+    def change(lines):
+        at = _match(lines, query, project, need_open=False)
+        block = lines[at:_block_end(lines, at)]
+        del lines[at:at + len(block)]
+        for heading in [at for at, line in enumerate(lines) if HEADING.fullmatch(line)][::-1]:
+            start, end = _section(lines, HEADING.fullmatch(lines[heading])[1])
+            if start == heading + 1 and not any(line.strip() for line in lines[start:end]):
+                del lines[heading:end]
+        while lines and not lines[-1].strip():
+            lines.pop()
+        start, end = _section(lines, target)
+        if start is None:
+            lines.extend([''] * bool(lines) + [f'## {target}', *block])
+        else:
+            _insert_at_end(lines, start, end, block)
+        return block[0]
+    return _change(change)
+
+
 def _block_end(lines, at):
     at += 1
     while at < len(lines) and lines[at].strip() and lines[at][0].isspace():

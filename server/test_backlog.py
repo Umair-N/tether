@@ -209,7 +209,7 @@ class BacklogTests(unittest.TestCase):
 
     def test_agents_learn_the_commands_not_the_file(self):
         text = projects.render('a1b2c3d4e5f6')
-        for part in ('agent_backlog_cli.py`', '`list`', '`add "text"`', '`start B12`', '`done B12 "result"`', 'never by editing'):
+        for part in ('agent_backlog_cli.py`', '`list`', '`add "title" --detail', '`move B12 PROJECT`', '`--project NAME`', '`start B12`', '`done B12 "result"`', 'never by editing'):
             self.assertIn(part, text)
         self.assertNotIn('BACKLOG.md', text)
 
@@ -277,6 +277,24 @@ class BacklogTests(unittest.TestCase):
             self.assertIn('  - Doing: claude · chat abc', self.text())
             self.assertEqual(agent_backlog_cli.main(['done', 'B1', 'shipped in PR 9']), 0)
         self.assertEqual(self.text(), '- [x] Fix it #B1\n  - Done: shipped in PR 9 (claude · chat abc)\n')
+
+    def test_reword_and_move_keep_the_id_source_and_details(self):
+        backlog.save('## other-app\n- [ ] A long title (claude · chat a) #B1\n  - Doing: claude\n\n## tether\n- [ ] Other #B2\n', backlog.read()['version'])
+        self.assertEqual(backlog.reword('B1', 'Short'), '- [ ] Short (claude · chat a) #B1')
+        backlog.move('B1', 'tether')
+        self.assertEqual(self.text(), '## tether\n- [ ] Other #B2\n- [ ] Short (claude · chat a) #B1\n  - Doing: claude\n')
+        backlog.move('B2', '')
+        self.assertEqual(self.text(), '- [ ] Other #B2\n\n## tether\n- [ ] Short (claude · chat a) #B1\n  - Doing: claude\n')
+
+    def test_the_cli_adds_a_short_title_with_details_to_another_project(self):
+        import agent_backlog_cli
+        env = {'TMUX_PANE': '', 'CLAUDE_CODE_SESSION_ID': 'abc', 'CODEX_THREAD_ID': ''}
+        with mock.patch.dict(os.environ, env), mock.patch('sys.stdout'), mock.patch('sys.stderr') as err:
+            self.assertEqual(agent_backlog_cli.main(['add', 'x' * 101]), 1)
+            self.assertIn('--detail', ''.join(call.args[0] for call in err.write.call_args_list))
+            self.assertEqual(agent_backlog_cli.main(['add', 'Chat links', '--detail', 'why one', '--detail', 'why two', '--project', 'tether']), 0)
+            self.assertEqual(agent_backlog_cli.main(['reword', 'B1', 'Chat links for every file type']), 0)
+        self.assertEqual(self.text(), '## tether\n- [ ] Chat links for every file type (claude · chat abc) #B1\n  - why one\n  - why two\n')
 
 
 if __name__ == '__main__':

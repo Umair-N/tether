@@ -43,9 +43,20 @@ class MediaFileTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.open('big.log')
 
+    def test_other_types_download(self):
+        for name in ('Asset-Inventory-v0.2.xlsx', 'brief.docx', 'logs.zip', 'tool.bin'):
+            (self.home / 'proj' / name).write_bytes(b'PK')
+            with self.subTest(name=name):
+                self.assertEqual(self.open(name), (self.home / 'proj' / name, media.DOWNLOAD))
+        for name in ('secrets.xlsx', 'vault.kdbx', '.ssh/keys.zip', '.config/x/a.xlsx'):
+            (self.home / 'proj' / name).parent.mkdir(parents=True, exist_ok=True)
+            (self.home / 'proj' / name).write_bytes(b'PK')
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                self.open(name)
+
     def test_refused(self):
-        (self.home / 'proj/tool.bin').write_bytes(b'x')
-        for name, folder in (('tool.bin', 'proj'), ('.ssh/key.png', '.'), ('.config/x/a.png', '.'), ('.git/a.png', 'proj'),
+        (self.home / 'proj/folder.xlsx').mkdir()
+        for name, folder in (('folder.xlsx', 'proj'), ('.ssh/key.png', '.'), ('.config/x/a.png', '.'), ('.git/a.png', 'proj'),
                              ('link.png', 'proj'), ('/etc/hostname', 'proj'), ('../../x.png', 'proj'), ('missing.png', 'proj'), ('', 'proj')):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 self.open(name, folder)

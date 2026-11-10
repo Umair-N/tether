@@ -1071,7 +1071,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Content-Range', 'bytes %d-%d/%d' % (start, end, size))
         self.send_header('Cache-Control', 'private, no-cache')
         self.send_header('X-Content-Type-Options', 'nosniff')
-        self.send_header('Content-Disposition', 'inline')
+        self.send_header('Content-Disposition', files.disposition(path.name) if kind == media_files.DOWNLOAD else 'inline')
         if kind == media_files.TEXT:
             self.send_header('Content-Security-Policy', 'sandbox')
         self.end_headers()

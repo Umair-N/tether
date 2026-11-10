@@ -13,6 +13,7 @@ from projects import ProjectError
 CHAT_ENV = {'claude': 'CLAUDE_CODE_SESSION_ID', 'codex': 'CODEX_THREAD_ID'}
 CHAT = re.compile(r'[A-Za-z0-9_-]{1,80}')
 TMUX_ENV = re.compile(r'.*,[0-9]+,([0-9]+)')
+TITLE = 100  # an item's line is its title: the Backlog sheet shows it in full. The why and how go in --detail lines.
 
 
 def tmux_session(pane):
@@ -55,10 +56,17 @@ def guess_agent():
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
-    commands.add_parser('list', help="the inbox and this project's open items")
+    shown = commands.add_parser('list', help="the inbox and this project's open items")
     add = commands.add_parser('add', help='add an open item to this project')
     add.add_argument('--agent', choices=sorted(CHAT_ENV), help='who adds it; found from the tab when left out')
-    add.add_argument('text')
+    add.add_argument('--detail', action='append', default=[], help='a line under the item: the why, the files, the case; repeat for more')
+    add.add_argument('text', help=f'a short title, {TITLE} characters at most')
+    reword = commands.add_parser('reword', help="change an item's title; its ID stays")
+    reword.add_argument('item', help='the item ID, like B12, or part of the item text')
+    reword.add_argument('text', help=f'a short title, {TITLE} characters at most')
+    move = commands.add_parser('move', help='move an item and its details to another project')
+    move.add_argument('item', help='the item ID, like B12, or part of the item text')
+    move.add_argument('to', help='the project: its repository folder name, like tether; "" for the inbox')
     detail = commands.add_parser('detail', help='add a line under an item')
     detail.add_argument('item', help='the item ID, like B12, or part of the item text')
     detail.add_argument('text')
@@ -69,13 +77,23 @@ def main(argv=None):
     done.add_argument('item', help='the item ID, like B12, or part of the item text')
     done.add_argument('result', nargs='?', default='', help='what was done: the commit, PR, or outcome')
     done.add_argument('--agent', choices=sorted(CHAT_ENV))
+    for command in (shown, add):
+        command.add_argument('--project', help="the project, by its repository folder name; this tab's project when left out")
     args = parser.parse_args(argv)
-    project = project_name()
+    project = project_name() if getattr(args, 'project', None) is None else backlog._clean(args.project)
+    if args.command in ('add', 'reword') and len(' '.join(args.text.split())) > TITLE:
+        print(f'Backlog error: the title is over {TITLE} characters. Write a short title; put the rest in '
+              + ('--detail "..."' if args.command == 'add' else 'detail B12 "..."') + '.', file=sys.stderr)
+        return 1
     try:
         if args.command == 'list':
             print(backlog.list_open(project))
         elif args.command == 'add':
-            print(f'Added: {backlog.add(args.text, source(args.agent or guess_agent()), project)}')
+            print(f'Added: {backlog.add(args.text, source(args.agent or guess_agent()), project, args.detail)}')
+        elif args.command == 'reword':
+            print(f'Reworded: {backlog.reword(args.item, args.text, project)}')
+        elif args.command == 'move':
+            print(f'Moved to {args.to or "the inbox"}: {backlog.move(args.item, args.to, project)}')
         elif args.command == 'detail':
             backlog.add_detail(args.item, args.text, project)
             print('Added the detail.')

@@ -1,7 +1,7 @@
 """Open a file an agent names in chat (a screenshot, a screen recording, a PDF, a source or log file) on the phone.
 
-Read-only and narrow: images, video, audio, PDF and text only (text is sent as text/plain, never rendered);
-files whose names look like secrets (.env, keys, tokens) are refused; under the home folder only; never inside folders
+Read-only: images, video, audio, PDF and text open in Tether (text is sent as text/plain, never rendered); any other
+file (a spreadsheet, a document, an archive) is sent as a download; files whose names look like secrets (.env, keys, tokens) are refused; under the home folder only; never inside folders
 that hold keys or tokens. A relative path is read from the tab's folder, as the agent would mean it."""
 import os
 import re
@@ -11,6 +11,7 @@ TYPES = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif
          '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime', '.m4v': 'video/mp4',
          '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.pdf': 'application/pdf'}
 TEXT = 'text/plain; charset=utf-8'
+DOWNLOAD = 'application/octet-stream'  # a type Tether cannot show: the browser saves it
 TEXT_LIMIT = 2 * 1024 * 1024
 TEXT_SUFFIXES = {'.txt', '.md', '.markdown', '.log', '.json', '.jsonl', '.csv', '.tsv', '.yml', '.yaml', '.toml', '.ini', '.cfg', '.conf',
                  '.py', '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.css', '.scss', '.html', '.htm', '.xml', '.svg', '.sh', '.zsh', '.bash',
@@ -42,9 +43,7 @@ def resolve(name, folder, home=None):
         raise ValueError('Tether does not open files in that folder.')
     if SECRET.search(path.name):
         raise ValueError('Tether does not open files that may hold secrets.')
-    kind = TYPES.get(path.suffix.lower()) or (TEXT if path.suffix.lower() in TEXT_SUFFIXES or path.name in TEXT_NAMES else None)
-    if not kind:
-        raise ValueError('Tether opens images, videos, audio, PDFs and text files only.')
+    kind = TYPES.get(path.suffix.lower()) or (TEXT if path.suffix.lower() in TEXT_SUFFIXES or path.name in TEXT_NAMES else DOWNLOAD)
     if not path.is_file():
         raise ValueError('That is not a file.')
     if kind == TEXT and path.stat().st_size > TEXT_LIMIT:
