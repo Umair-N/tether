@@ -283,6 +283,7 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
   // or a pane onto "New session" to split it out. A long press released on the spot opens the row's menu, as before.
   const root = useRef<HTMLDivElement>(null)
   const hold = useRef<{ timer: number; x: number; y: number; carried: Carry; label: string; menu: () => void; active: boolean; moved: boolean } | null>(null)
+  const ghostRef = useRef<HTMLDivElement>(null)
   const [ghost, setGhost] = useState<{ x: number; y: number; label: string } | null>(null)
   const [touchOver, setTouchOver] = useState<string | null>(null)
   const latest = useRef({ dropOn, merge, openChat, sessions })
@@ -303,8 +304,9 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
   useEffect(() => {
     const el = root.current
     if (!el || drag) return
+    let overNew = false, overSession: string | null = null
     const spotAt = (x: number, y: number) => document.elementFromPoint(x, y)?.closest<HTMLElement>('.new-session-drop, .session-list > li[data-id]') ?? null
-    const end = () => { if (hold.current) window.clearTimeout(hold.current.timer); hold.current = null; setGhost(null); setTouchOver(null); setOverNew(false) }
+    const end = () => { if (hold.current) window.clearTimeout(hold.current.timer); hold.current = null; setGhost(null); setTouchOver(null); setOverNew(false); overNew = false; overSession = null }
     const move = (event: TouchEvent) => {
       const held = hold.current, touch = event.touches[0]
       if (!held || !touch) return
@@ -312,11 +314,13 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
       if (!held.active) { if (far) end(); return }  // a scroll or a swipe, not a hold
       event.preventDefault()
       held.moved ||= far
-      setGhost({ x: touch.clientX, y: touch.clientY, label: held.label })
+      if (ghostRef.current) ghostRef.current.style.transform = `translate3d(${Math.max(118, Math.min(window.innerWidth - 118, touch.clientX))}px, ${touch.clientY}px, 0)`
       const spot = spotAt(touch.clientX, touch.clientY)
-      setOverNew(!!(held.carried.pane || held.carried.chat) && !!spot?.classList.contains('new-session-drop'))
+      const nextNew = !!(held.carried.pane || held.carried.chat) && !!spot?.classList.contains('new-session-drop')
+      if (overNew !== nextNew) { overNew = nextNew; setOverNew(nextNew) }
       const id = spot?.dataset.id
-      setTouchOver(id && id !== held.carried.session ? id : null)
+      const nextSession = id && id !== held.carried.session ? id : null
+      if (overSession !== nextSession) { overSession = nextSession; setTouchOver(nextSession) }
       // Near the top or bottom edge of the list, the list scrolls so far rows can be reached.
       const nav = el.querySelector<HTMLElement>('.session-groups')
       if (nav) { const box = nav.getBoundingClientRect(); if (touch.clientY < box.top + 48) nav.scrollTop -= 14; else if (touch.clientY > box.bottom - 48) nav.scrollTop += 14 }
@@ -420,7 +424,7 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
         {isOpen('past') && <PastChats api={api} search={search} showPaths={prefs.showPaths} onPick={onPastChat} sessions={sessions} drag={!!drag && !reorder} onCarry={startCarry} onHold={holdStart} />}
       </section>
     </nav>
-    {ghost && <div className="touch-ghost" aria-hidden="true" style={{ transform: `translate3d(${Math.max(118, Math.min(window.innerWidth - 118, ghost.x))}px, ${ghost.y}px, 0)` }}><span>{ghost.label}</span></div>}
+    {ghost && <div ref={ghostRef} className="touch-ghost" aria-hidden="true" style={{ transform: `translate3d(${Math.max(118, Math.min(window.innerWidth - 118, ghost.x))}px, ${ghost.y}px, 0)` }}><span>{ghost.label}</span></div>}
     {confirming && <MergeConfirm {...confirming} marks={marks} onMerge={keep => merge('session', confirming.source.id, confirming.target.id, keep)} onCancel={() => setConfirming(null)} />}
     <footer className="sidebar-footer">
       <RunningNow sessions={sessions} selected={selected} onOpen={onOpen} />
@@ -441,17 +445,19 @@ function projectMark(mark: ProjectMark | undefined) {
 function SessionList({ items, reorder, selected, prefs, update, onOpen, onActions, onPaneActions, onMove, pinned, slots, canDrag, api, carry, onCarry, onDrop, onHold, touchOver, renaming, onRenamed, marks, onAddPane }: { onAddPane?: Props['onAddPane']; marks?: ProjectMarks; onHold: (event: React.TouchEvent, carried: Carry, label: string, menu: () => void) => void; touchOver: string | null; items: Session[]; reorder: boolean; selected: string | undefined; prefs: Prefs; update: Props['update']; onOpen: Props['onOpen']; onActions: Props['onActions']; onPaneActions: Props['onPaneActions']; onMove: (ids: string[]) => void; pinned: boolean; slots: string[]; canDrag: boolean; api: Api; carry: Carry | null; onCarry: (carry: Carry | null) => void; onDrop: (target: Session) => void; renaming: Moved | null; onRenamed: () => void }) {
   const list = useRef<HTMLUListElement>(null)
   const dragging = useRef<string | null>(null)
-  const ids = items.map(session => session.id)
+  const [preview, setPreview] = useState<string[] | null>(null)
+  const order = useRef<string[] | null>(null)
+  const ids = preview ?? items.map(session => session.id)
   const drag = useCallback((event: React.PointerEvent) => {
     const id = dragging.current
     if (!id || !list.current) return
     const rows = [...list.current.querySelectorAll<HTMLElement>(':scope > li')]
-    const target = rows.findIndex(row => { const box = row.getBoundingClientRect(); return event.clientY < box.top + box.height / 2 })
+    const target = rows.filter(row => row.dataset.id !== id).findIndex(row => { const box = row.getBoundingClientRect(); return event.clientY < box.top + box.height / 2 })
     const without = ids.filter(other => other !== id)
     const at = target < 0 ? without.length : Math.min(target, without.length)
     const next = [...without.slice(0, at), id, ...without.slice(at)]
-    if (next.join() !== ids.join()) onMove(next)
-  }, [ids, onMove])
+    if (next.join() !== ids.join()) { order.current = next; setPreview(next) }
+  }, [ids])
   // Swipe a row left to show Pin, Archive and Delete (Delete still asks first); swipe right or tap the row to hide them.
   const [swiped, setSwiped] = useState<string | null>(null)
   const touch = useRef<{ x: number; y: number; id: string } | null>(null)
@@ -468,7 +474,7 @@ function SessionList({ items, reorder, selected, prefs, update, onOpen, onAction
   const words = useWords()
   const slotKey = (id: string) => { const at = slots.indexOf(id); return at < 0 ? null : <kbd className="slot-key" aria-label={`In slot ${at + 1}`}>⌥{at + 1}</kbd> }
   return <ul className={`session-list ${reorder ? 'reordering' : ''}`} ref={list}>
-    {items.map(session => {
+    {(preview ? [...items].sort((a, b) => preview.indexOf(a.id) - preview.indexOf(b.id)) : items).map(session => {
       const multi = session.panes.length > 1
       const active = session.panes.some(pane => pane.id === selected)
       const state = status(session.panes, prefs.seen, selected)
@@ -504,7 +510,7 @@ function SessionList({ items, reorder, selected, prefs, update, onOpen, onAction
           </button>}
           {onAddPane && !reorder && !dropping && renaming?.session !== session.id && <button type="button" className="session-add" aria-label={`${words.newRight} in ${session.name}`} title={words.newRight} onClick={() => onAddPane(session)}><Plus size={15} aria-hidden="true" /></button>}
           {dropping && <span className="merge-hint" aria-hidden="true">{carry.pane ? 'Move here' : carry.chat ? 'Open here' : 'Merge here'}</span>}
-          {reorder && <span className="grip" aria-label={`Drag to move ${session.name}`} onPointerDown={event => { dragging.current = session.id; event.currentTarget.setPointerCapture(event.pointerId) }} onPointerMove={drag} onPointerUp={() => { dragging.current = null }} onPointerCancel={() => { dragging.current = null }}><GripVertical size={18} /></span>}
+          {reorder && <span className="grip" aria-label={`Drag to move ${session.name}`} onPointerDown={event => { dragging.current = session.id; order.current = null; event.currentTarget.setPointerCapture(event.pointerId) }} onPointerMove={drag} onPointerUp={() => { if (order.current) onMove(order.current); dragging.current = null; order.current = null; setPreview(null) }} onPointerCancel={() => { dragging.current = null; order.current = null; setPreview(null) }}><GripVertical size={18} /></span>}
         </div>
         </div>
         {multi && open && !reorder && <ul className="pane-children">{session.panes.map(pane => { const paneState = status([pane], prefs.seen, selected), paneTag = tagDot(prefs.colors?.[pane.id]); return <li key={pane.id}><button {...dragAs(DRAG_PANE, pane.id, { session: session.id, pane: pane.id })} className={pane.id === selected ? 'selected' : ''} aria-current={pane.id === selected ? 'page' : undefined} onMouseEnter={clipTitle} onTouchStart={event => onHold(event, { session: session.id, pane: pane.id }, paneTitle(pane) || session.name, () => onPaneActions(pane))} onClick={() => onOpen(pane)} onContextMenu={event => { event.preventDefault(); onPaneActions(pane, anchorOf(event)) }}>{dot(paneState)}<span className="pane-child-name">{[paneTitle(pane), shownIndex(pane)].filter(Boolean).join(' ')} · {agentNames[pane.agent]}{profileSuffix(pane)}</span>{paneTag}{slotKey(pane.id)}</button></li> })}</ul>}

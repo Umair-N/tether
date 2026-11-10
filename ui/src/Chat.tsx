@@ -293,7 +293,10 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     hold.current = null
     if (event.touches.length !== 1) return
     const touch = event.touches[0]
-    pull.current = viewport.current && viewport.current.scrollTop <= 0 ? touch.clientY : null
+    const offset = pullNote.current ? new DOMMatrix(getComputedStyle(pullNote.current).transform).m42 + 40 : 0
+    if (pullNote.current) { pullNote.current.style.transition = 'none'; pullNote.current.style.transform = `translate3d(0, ${offset - 40}px, 0)` }
+    pull.current = viewport.current && viewport.current.scrollTop <= 0 ? touch.clientY - Math.max(0, offset) : null
+    pullSpeed.current = { y: touch.clientY, at: performance.now(), speed: 0 }
     if (touch.clientX < 28 || touch.clientX > window.innerWidth - 28) return
     for (let node = event.target as HTMLElement | null; node && node !== event.currentTarget; node = node.parentElement) {
       if (node.scrollWidth > node.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(node).overflowX)) return
@@ -303,15 +306,35 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
   }
   // Pull down at the top of the chat to load earlier messages.
   const pull = useRef<number | null>(null)
-  const [pulled, setPulled] = useState(0)
+  const pullNote = useRef<HTMLParagraphElement>(null)
+  const pullDistance = useRef(0)
+  const pullLabel = useRef(0)
+  const pullSpeed = useRef({ y: 0, at: 0, speed: 0 })
+  const [pulled, setPullLabel] = useState(0)
+  const setPulled = (distance: number) => {
+    pullDistance.current = distance
+    const label = distance >= 70 ? 70 : distance > 0 ? 1 : 0
+    if (pullLabel.current !== label) { pullLabel.current = label; setPullLabel(label) }
+    if (pullNote.current) {
+      pullNote.current.style.transform = `translate3d(0, ${distance - 40}px, 0)`
+      pullNote.current.style.opacity = distance > 0 ? '1' : '0'
+    }
+  }
   const pullMove = (event: React.TouchEvent) => {
     if (pull.current === null || !data?.earlier) return
-    const distance = event.touches[0].clientY - pull.current
+    const y = event.touches[0].clientY, now = performance.now(), last = pullSpeed.current
+    last.speed = last.speed * 0.4 + (y - last.y) / Math.max(1, now - last.at) * 0.6
+    last.y = y; last.at = now
+    const distance = Math.max(0, y - pull.current)
     if (viewport.current && viewport.current.scrollTop > 0) { pull.current = null; setPulled(0); return }
-    setPulled(Math.max(0, Math.min(110, distance)))
+    setPulled(distance > 110 ? 110 + (distance - 110) * 0.25 : distance)
   }
   const pullEnd = () => {
-    if (pull.current !== null && pulled >= 70) loadEarlier()
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const commit = pull.current !== null && (pullDistance.current >= 70 || (!reduced && pullDistance.current > 10 && performance.now() - pullSpeed.current.at < 100 && pullSpeed.current.speed > 0.45))
+    const duration = reduced ? 0 : commit ? Math.max(140, Math.min(320, pullDistance.current / Math.max(0.5, Math.abs(pullSpeed.current.speed)))) : 200
+    if (commit) loadEarlier()
+    if (pullNote.current) pullNote.current.style.transition = `transform ${duration}ms cubic-bezier(.32,.72,0,1), opacity ${duration}ms`
     pull.current = null; setPulled(0)
   }
   const reduceMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -809,7 +832,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     }}><div className="messages" ref={content}>
       {error && !data && <div className="inline-error" role="alert">{error}<button onClick={() => void refresh()}>Retry</button></div>}
       {loading && <p className="empty-note" role="status">Loading conversation…</p>}
-      {pulled > 0 && <p className="pull-note" style={{ height: pulled }} role="status">{pulled >= 70 ? 'Release to load earlier' : 'Pull to load earlier'}</p>}
+      <p ref={pullNote} className="pull-note" role="status" aria-hidden={pulled === 0}>{pulled >= 70 ? 'Release to load earlier' : 'Pull to load earlier'}</p>
       {started && !data?.earlier && activePane.agent !== 'shell' && <p className="chat-started">Chat started {started}</p>}
       {!!data?.earlier && <button className="load-earlier" disabled={data.limit !== limit} onClick={loadEarlier}>{data.limit !== limit ? 'Loading…' : `Load earlier · ${data.earlier}`}</button>}
       {data && activePane.agent !== 'shell' && !messages.length && <div className="chat-empty"><Terminal size={27} strokeWidth={1.4} /><h2>No messages yet</h2><p>{`Send a message to ${pane.label} to get started.`}</p>

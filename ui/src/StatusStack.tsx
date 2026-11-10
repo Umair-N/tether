@@ -18,12 +18,14 @@ export function StatusStack({ priorityKey, items, chips }: { priorityKey: string
   const [height, setHeight] = useState<number | null>(() => { try { const saved = Number(localStorage.getItem(HEIGHT_KEY)); return saved > 0 ? saved : null } catch { return null } })
   const limit = (value: number) => Math.round(Math.min(window.innerHeight * 0.85, Math.max(96, value)))
   const save = (value: number | null) => { setHeight(value); try { if (value) localStorage.setItem(HEIGHT_KEY, String(value)); else localStorage.removeItem(HEIGHT_KEY) } catch { /* storage blocked: keep it for this visit */ } }
-  const drag = useRef<{ y: number; start: number } | null>(null)
+  const frame = useRef(0)
+  const drag = useRef<{ y: number; start: number; original: number | null; latest: number } | null>(null)
+  useLayoutEffect(() => () => cancelAnimationFrame(frame.current), [])
   const grip = {
-    onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => { event.currentTarget.setPointerCapture(event.pointerId); drag.current = { y: event.clientY, start: stack.current?.getBoundingClientRect().height ?? 200 } },
-    onPointerMove: (event: React.PointerEvent<HTMLDivElement>) => { if (drag.current) setHeight(limit(drag.current.start + drag.current.y - event.clientY)) },
-    onPointerUp: () => { if (drag.current) { drag.current = null; save(height) } },
-    onPointerCancel: () => { drag.current = null },
+    onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => { event.currentTarget.setPointerCapture(event.pointerId); drag.current = { y: event.clientY, start: stack.current?.getBoundingClientRect().height ?? 200, original: height, latest: height ?? stack.current?.getBoundingClientRect().height ?? 200 } },
+    onPointerMove: (event: React.PointerEvent<HTMLDivElement>) => { if (drag.current) { drag.current.latest = limit(drag.current.start + drag.current.y - event.clientY); if (!frame.current) frame.current = requestAnimationFrame(() => { frame.current = 0; if (drag.current) setHeight(drag.current.latest) }) } },
+    onPointerUp: () => { if (drag.current) { cancelAnimationFrame(frame.current); frame.current = 0; save(drag.current.latest); drag.current = null } },
+    onPointerCancel: () => { cancelAnimationFrame(frame.current); frame.current = 0; if (drag.current) setHeight(drag.current.original); drag.current = null },
     onDoubleClick: () => save(null),
     onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => {
       if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
