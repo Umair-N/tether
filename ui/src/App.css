@@ -491,7 +491,7 @@ dialog::backdrop { background: #11110e66; }
   .composer-area { padding-bottom: max(22px, env(safe-area-inset-bottom)); }
 }
 @media (min-width: 900px) {
-  .sidebar { display: flex; flex-direction: column; width: 248px; flex-shrink: 0; background: var(--sidebar); border-right: 1px solid var(--line); padding-top: env(safe-area-inset-top); }
+  .sidebar { display: flex; flex-direction: column; width: var(--lw-sessions, 248px); flex-shrink: 0; background: var(--sidebar); border-right: 1px solid var(--line); padding-top: env(safe-area-inset-top); }
   .mobile-menu { display: none; }
   .chat-header { padding-left: 30px; }
 }
@@ -1282,7 +1282,7 @@ button.live-chip:active { background: var(--line); }
 @media (hover: hover) and (pointer: fine) { .sidebar-search button.search-key:focus { display: inline-flex; } }
 
 /* Needs you: the desktop list on the right (Inbox.tsx). Values follow the desktop prototype. */
-.inbox { flex: none; display: flex; flex-direction: column; width: clamp(240px, 22vw, 320px); min-height: 0; background: var(--sidebar); border-left: 1px solid var(--line); }
+.inbox { flex: none; display: flex; flex-direction: column; width: var(--lw-inbox, clamp(240px, 22vw, 320px)); min-height: 0; background: var(--sidebar); border-left: 1px solid var(--line); }
 .inbox-head { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 4px 6px 4px 16px; }
 .inbox-head h2 { font-size: 14px; font-weight: 600; }
 .inbox-count { font-size: 12px; color: var(--muted); }

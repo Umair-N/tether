@@ -9,7 +9,7 @@ import type { Anchor } from './hooks'
 import { setPlace, setPlaceHandler } from './backNav'
 import { usePrefs } from './prefs'
 import { applyScheme } from './schemes'
-import { DEFAULT_LOOK, applyLayoutTheme, gridStyle, hasPanel as layoutHas, lookKey, lookLayout, themeMode } from './layouts'
+import { DEFAULT_LOOK, type PanelName, applyLayoutTheme, gridStyle, hasPanel as layoutHas, lookKey, lookLayout, themeMode } from './layouts'
 import { StatusColumn, WaitingPanel } from './LayoutPanels'
 import './layouts.css'
 import './glass.css'
@@ -71,11 +71,15 @@ import type { GroupHooks } from './Groups'
 import { groupOf, placesOf, stepPlace, tabFor } from './groups'
 import './App.css'
 import './TitleBar.css'
+import { useWindowControls } from './titlebar'
+import { PanelHandles } from './PanelHandles'
+import { sizeVars } from './panelEdges'
 
 // One tap turns notifications for this pane off or on. Hidden until this browser has notifications on.
 
 function App() {
   const [unauthorized, setUnauthorized] = useState(false)
+  useWindowControls(!unauthorized)
   const api: Api = useCallback(async (path, body, signal, method, timeout) => {
     try { return await request(path, body, signal, method, timeout) } catch (error) {
       if (error instanceof ApiError && error.status === 401) setUnauthorized(true)
@@ -723,9 +727,14 @@ function App() {
   // Layouts (layouts.ts, layouts.css): the grid shows on the wide workspace screen only. Home, Files, Share and the
   // phone keep today's arrangement and take only the colours and the Style. Classic adds no attribute and no style.
   const lookGrid = lookShown.id !== 'classic' && !!view && !home && !files && !(wide && share)
-  const lookStyle = lookShown.id === 'classic' ? undefined : {
-    '--l-radius': `${lookShown.style.radius}px`, '--l-gap': `${lookShown.style.gap}px`, ...lookShown.grid.chatWidth ? { '--l-chat': `${lookShown.grid.chatWidth}px` } : {},
-    ...lookGrid ? gridStyle(lookShown, { rail: wide, sessions: desk.sidebar && layoutHas(lookShown, 'sessions'), inbox: desk.inbox }) : {},
+  // Panel sizes and closed panels (PanelHandles.tsx), per layout on this device. Only the wide workspace uses them.
+  const panelsOn = wide && !!view && !home && !files && !share
+  const panelSizes = panelsOn ? sizeVars(prefs.panelSizes[lookId]) : {}
+  const panelsClosed = lookGrid ? (prefs.panelsClosed[lookId] ?? []).filter(name => layoutHas(lookShown, name as PanelName)) : []
+  const showPanel = (name: PanelName) => lookGrid && layoutHas(lookShown, name) && !panelsClosed.includes(name)
+  const lookStyle = lookShown.id === 'classic' ? (Object.keys(panelSizes).length ? panelSizes as CSSProperties : undefined) : {
+    '--l-radius': `${lookShown.style.radius}px`, '--l-gap': `${lookShown.style.gap}px`, ...lookShown.grid.chatWidth ? { '--l-chat': `${lookShown.grid.chatWidth}px` } : {}, ...panelSizes,
+    ...lookGrid ? gridStyle(lookShown, { rail: wide, sessions: desk.sidebar && layoutHas(lookShown, 'sessions'), inbox: desk.inbox, closed: panelsClosed }) : {},
   } as CSSProperties
   const lookAttrs = {
     'data-layout': lookShown.id === 'classic' || !wide ? undefined : lookId.startsWith('custom:') ? 'custom' : lookShown.id,
@@ -751,8 +760,8 @@ function App() {
       panelTools={<PanelTools desk={desk} pane={pane} setPanels={setPanels} onSideChat={() => void sideChat()} />}
       panels={<PanelColumn api={api} desk={desk} pane={pane} setPanels={setPanels} renderChat={id => { const target = panes.find(item => item.id === id); return target ? chatFor(target) : null }} />} /> : chatFor(pane)) : null}
     {pane && view && wide && <BrowserFloat api={api} pane={pane} onDock={() => { if (!hasPanel(panelCols(desk), 'browser')) togglePanelKind(setPanels, 'browser') }} onClose={() => { if (hasPanel(panelCols(desk), 'browser')) togglePanelKind(setPanels, 'browser') }} />}
-    {lookGrid && layoutHas(lookShown, 'waiting') && <WaitingPanel api={api} cards={groups.needs} asks={prefs.attention && waiting.length ? <WaitingBox items={waiting} sessions={sessions} selected={openId} limit={0} sort={waitSort} onOpen={openPane} /> : undefined} edge={lookShown.grid.columns.some(column => (column.top === 'waiting' || column.bottom === 'waiting') && (column.main !== 'sessions' || desk.sidebar))} onOpen={openPane} onUpdate={() => void refresh()} />}
-    {lookGrid && layoutHas(lookShown, 'status') && <StatusColumn groups={groups} panes={panes} sessions={sessions} selected={openId} onOpen={openPane} />}
+    {showPanel('waiting') && <WaitingPanel api={api} cards={groups.needs} asks={prefs.attention && waiting.length ? <WaitingBox items={waiting} sessions={sessions} selected={openId} limit={0} sort={waitSort} onOpen={openPane} /> : undefined} edge={lookShown.grid.columns.some(column => (column.top === 'waiting' || column.bottom === 'waiting') && (column.main !== 'sessions' || desk.sidebar))} onOpen={openPane} onUpdate={() => void refresh()} />}
+    {showPanel('status') && <StatusColumn groups={groups} panes={panes} sessions={sessions} selected={openId} onOpen={openPane} />}
     {home && <Home api={api} groups={groups} asks={waiting} sessions={sessions} sort={waitSort} hasAgents={hasAgents(panes)} loaded={!!data} loading={loading} error={error} onRetry={() => void refresh()} onOpen={openPane} onMarkRead={markRead} onUpdate={() => void refresh()} onNew={() => setNewSession(true)} onMenu={() => setDrawer(true)} onBacklog={() => setBacklog(true)} />}
     {files && <Explorer api={api} panes={panes} pane={pane} target={filesTarget} onTarget={() => setFilesTarget(null)} onAddToMessage={addToMessage} onTerminalHere={terminalHere} onPin={pinTarget} />}
     {share && <Share wide={wide} onAddToMessage={wide ? addToMessage : pane ? paths => {
@@ -779,6 +788,10 @@ function App() {
     {browserSheet && pane && <BrowserSheet api={api} pane={pane} onClose={() => setBrowserSheet(false)} />}
     {liveMode && <Live api={api} panes={panes} selected={pane} commands={commands.filter(item => !item.label.includes('Live mode'))} onClose={() => setLive(false)} onBacklog={() => setBacklog(true)} reveal={liveReveal} from={liveFrom} />}
     {view && <Inbox api={api} items={inbox} sessions={sessions} selected={openId} open={desk.inbox} onToggle={() => { if (!home) setDesk({ inbox: !desk.inbox }) }} onOpen={openPane} onUpdate={() => void refresh()} />}
+    {panelsOn && <PanelHandles grid={lookShown.grid} closed={panelsClosed}
+      onSize={(key, size) => update(current => { const sizes = { ...current.panelSizes[lookId] }; if (size === null) delete sizes[key]; else sizes[key] = size; return { panelSizes: { ...current.panelSizes, [lookId]: sizes } } })}
+      onClose={name => { if (name === 'sessions') setDesk({ sidebar: false }); else if (name === 'inbox') setDesk({ inbox: false }); else update(current => ({ panelsClosed: { ...current.panelsClosed, [lookId]: [...new Set([...(current.panelsClosed[lookId] ?? []), name])] } })) }}
+      onOpen={name => update(current => ({ panelsClosed: { ...current.panelsClosed, [lookId]: (current.panelsClosed[lookId] ?? []).filter(item => item !== name) } }))} />}
     {view && picking !== null && picking < view.slots.length && <SlotPicker index={picking} sessions={sortByPrefs(sessions, prefs.order).filter(item => !isArchived(item, prefs.archived))} slots={view.slots} onPane={id => { showInSlot(id, picking); setPicking(null) }} onSession={target => { showSession(target); setPicking(null) }} onClose={() => setPicking(null)} />}
     {project && sessions.some(item => item.id === project.session && (!project.group || item.groups?.some(group => group.id === project.group))) && <ProjectSheet key={`${project.session}/${project.group ?? ''}`} api={api} session={sessions.find(item => item.id === project.session)!} group={project.group ? sessions.find(item => item.id === project.session)!.groups?.find(item => item.id === project.group) : undefined} mark={marks[project.session]} pin={project.pin} onChanged={loadMarks} onClose={() => setProject(null)} />}
     {backlog && <BacklogSheet api={api} panes={panes} onOpenPane={openPane} onClose={() => setBacklog(false)} />}

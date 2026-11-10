@@ -101,3 +101,11 @@
 .look-swatches { display: flex; gap: 6px; margin: 4px 0 12px; }
 .look-swatches span { width: 28px; height: 28px; border: 1px solid var(--line); border-radius: 50%; }
 .look-save-buttons { flex-wrap: wrap; }
+
+/* Bubbles (agents, side pins) float over every layout and style. A plain surface tab disappears against glass and
+   dark layout panels, so on a layout they take an accent edge and a deeper shadow. */
+.app-shell:is([data-grid], [data-surface="glass"]) > .agent-bubble {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); background: var(--surface);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / .18), 0 2px 4px rgb(0 0 0 / .18), 0 10px 26px rgb(0 0 0 / .32);
+}
+.app-shell:is([data-grid], [data-surface="glass"]) > .agent-bubble.side-pin-bubble { border-color: color-mix(in srgb, var(--pin) 60%, var(--line)); }

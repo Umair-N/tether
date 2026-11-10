@@ -209,7 +209,7 @@ export function applyLayoutTheme(value: LayoutTheme | null) {
 }
 
 /** What the shell shows now. The rail always shows on a wide screen: it is Tether's way to the other screens. */
-export interface GridShown { rail: boolean; sessions: boolean; inbox: boolean }
+export interface GridShown { rail: boolean; sessions: boolean; inbox: boolean; closed?: string[] }
 type Area = Placed | 'inbox'
 interface Column { top?: Area; main: Area; bottom?: Area; width?: number }
 
@@ -218,17 +218,23 @@ export function gridStyle(layout: Layout, shown: GridShown) {
   let columns: Column[] = layout.grid.columns.map(column => ({ ...column }))
   if (shown.rail && columns[0].main !== 'activity') columns.unshift({ main: 'activity' })
   if (!shown.rail) columns = columns.filter(column => column.main !== 'activity')
-  if (!shown.sessions) columns = columns.flatMap(column => {
-    if (column.main !== 'sessions') return [column]
-    const edge = column.top ?? column.bottom
+  // A closed panel gives its room away: a closed edge goes, and a closed column's edge panel takes the whole column.
+  const closed = new Set<string>(shown.closed ?? [])
+  if (!shown.sessions) closed.add('sessions')
+  columns = columns.flatMap((column): Column[] => {
+    const top = column.top && !closed.has(column.top) ? column.top : undefined
+    const bottom = column.bottom && !closed.has(column.bottom) ? column.bottom : undefined
+    if (column.main === 'chat' || !closed.has(column.main)) return [{ ...column, top, bottom }]
+    const edge = top ?? bottom
     return edge ? [{ main: edge, width: column.width }] : []
   })
   if (shown.inbox) columns.push({ main: 'inbox' })
-  const track = (column: Column) => column.main === 'chat' ? 'minmax(0, 1fr)' : column.main === 'activity' || column.main === 'inbox' ? 'auto' : `${column.width ?? (column.main === 'sessions' ? 248 : 240)}px`
+  // Widths the user dragged (panels.ts) arrive as --lw-<panel>; edge heights as --lh-top and --lh-bottom.
+  const track = (column: Column) => column.main === 'chat' ? 'minmax(0, 1fr)' : column.main === 'activity' || column.main === 'inbox' ? 'auto' : `var(--lw-${column.main}, ${column.width ?? (column.main === 'sessions' ? 248 : 240)}px)`
   const row = (pick: (column: Column) => Area) => `"${columns.map(pick).join(' ')}"`
   return {
     gridTemplateColumns: columns.map(track).join(' '),
-    gridTemplateRows: 'auto minmax(0, 1fr) auto',
+    gridTemplateRows: 'var(--lh-top, auto) minmax(0, 1fr) var(--lh-bottom, auto)',
     gridTemplateAreas: [row(column => column.top ?? column.main), row(column => column.main), row(column => column.bottom ?? column.main)].join(' '),
   }
 }

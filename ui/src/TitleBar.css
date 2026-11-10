@@ -8,22 +8,28 @@
     --rail-width: 60px;
   }
 
-  /* Keep content clear of the left controls (macOS) and the right controls and menu. */
+  /* Keep content clear of the controls. titlebar.ts measures every panel of the app shell and sets, on each panel
+     the controls reach into, data-wco and --wco-l / --wco-r (how far they reach from its left / right edge) and
+     --wco-h (how far down). So any layout, built in or made later, keeps its headers clear. */
   :root .app-rail { padding-top: max(12px, var(--titlebar-height)); }
-  :root .sidebar-top { min-height: var(--titlebar-height); padding-left: max(16px, calc(var(--titlebar-left) - var(--rail-width) + 8px)); }
-  :root .workspace-bar { min-height: max(40px, var(--titlebar-height)); padding-right: calc(var(--titlebar-right) + 8px); }
-  /* With the Needs you panel open, that panel holds the top right corner instead of the toolbar. */
-  :root .app-shell:has(> .inbox) .workspace-bar { padding-right: 8px; }
-  :root .inbox { width: max(clamp(240px, 22vw, 320px), calc(var(--titlebar-right) + 180px)); }
-  :root .inbox-head { min-height: max(40px, var(--titlebar-height)); padding-right: calc(var(--titlebar-right) + 6px); }
+  :root .sidebar-top { min-height: var(--wco-h, 0px); padding-left: max(16px, calc(var(--wco-l, 0px) + 8px)); padding-right: max(12px, calc(var(--wco-r, 0px) + 8px)); }
+  :root .workspace-bar { min-height: max(40px, var(--wco-h, 0px)); padding-left: max(8px, calc(var(--wco-l, 0px) + 8px)); padding-right: calc(var(--wco-r, 0px) + 8px); }
+  :root .app-shell:not([data-grid]) > .inbox { width: max(var(--lw-inbox, clamp(240px, 22vw, 320px)), calc(var(--titlebar-right) + 180px)); }
+  :root .inbox-head { min-height: max(40px, var(--wco-h, 0px)); padding-left: max(12px, calc(var(--wco-l, 0px) + 8px)); padding-right: calc(var(--wco-r, 0px) + 6px); }
   :root .inbox-head h2 { white-space: nowrap; }
-  :root .inbox-next kbd { display: none; }
-  :root .no-sidebar .workspace-bar { padding-left: max(8px, calc(var(--titlebar-left) - var(--rail-width) + 8px)); }
-  :root .fx-tabs { padding-right: calc(var(--titlebar-right) + 10px); }
-  :root .sh-head { padding-right: calc(var(--titlebar-right) + 16px); }
-  :root .home-head { padding-right: calc(var(--titlebar-right) + 16px); }
+  :root .inbox[data-wco] .inbox-next kbd { display: none; }
+  :root .fx-tabs { padding-right: calc(var(--wco-r, var(--titlebar-right)) + 10px); }
+  :root .sh-head { padding-right: calc(var(--wco-r, var(--titlebar-right)) + 16px); }
+  :root .home-head { padding-right: calc(var(--wco-r, var(--titlebar-right)) + 16px); }
   :root .image-viewer .viewer-head, :root .text-viewer-head { padding-left: max(16px, calc(var(--titlebar-left) + 8px)); padding-right: calc(var(--titlebar-right) + 12px); }
-  :root .chat-header:not(.workspace .chat-header) { padding-left: max(10px, var(--titlebar-left)); padding-right: calc(var(--titlebar-right) + 16px); }
+  :root .chat-header:not(.workspace .chat-header) { padding-left: max(10px, var(--wco-l, var(--titlebar-left))); padding-right: calc(var(--wco-r, var(--titlebar-right)) + 16px); }
+  /* A panel without one of the headers above (layout panels, panels added later) moves its content below the
+     controls. The strip above stays free to move the window. */
+  :root .app-shell > [data-wco]:not(.app-rail):not(:has(:is(.sidebar-top, .workspace-bar, .inbox-head, .fx-tabs, .sh-head, .home-head, .chat-header))) {
+    padding-top: var(--wco-h);
+  }
+  :root .app-shell > [data-wco].l-panel { -webkit-app-region: drag; app-region: drag; }
+  :root .app-shell > [data-wco].l-panel > * { -webkit-app-region: no-drag; app-region: no-drag; }
 
   /* The empty parts of the top row move the window. */
   .app-rail, .sidebar-top, .workspace-bar, .inbox-head, .fx-tabs, .sh-head, .home-head, .viewer-head, .text-viewer-head, .chat-header:not(.workspace .chat-header) {
