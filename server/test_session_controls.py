@@ -1,3 +1,4 @@
+import json
 """Checks for session creation, shell input, and pre-conversation trust dialogs."""
 import os
 import subprocess
@@ -1751,6 +1752,21 @@ class CodexMetricsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as other, patch.object(server, 'RATES_FILE', Path(other) / 'rates.json'):
             server.codex_metrics({'id': '%1'}, usage)  # same content, different file
             self.assertTrue(server.RATES_FILE.exists())
+
+    def test_an_idle_tab_with_an_old_report_does_not_replace_a_newer_one(self):
+        # Allowances are account-wide. An idle Codex tab still holds the report from its last turn days ago (65%);
+        # a busy tab reported 75% just now. Polling the idle tab must keep 75%, in the saved file and in its rings.
+        week = time.time() + 86400
+        new = ({'percent': 10.0}, [{'label': '168h', 'percent': 75.0, 'resets_at': week}], '2026-11-10T02:35:00Z')
+        old = ({'percent': 30.0}, [{'label': '168h', 'percent': 65.0, 'resets_at': week}], '2026-11-07T14:36:00Z')
+        server.codex_metrics({'id': '%1'}, new)
+        with patch.object(server, 'capture', return_value=''):
+            report = server.codex_metrics({'id': '%2'}, old)
+        self.assertEqual(json.loads(server.RATES_FILE.read_text())['windows'][0]['percent'], 75.0)
+        self.assertEqual(report['weekly']['percent'], 75.0)
+        self.assertEqual(report['context']['percent'], 30.0)  # the context ring stays this tab's own
+        self.assertTrue(report['allowance_inherited'])
+        self.assertEqual(server.usage_summary()['codex']['windows'][0]['percent'], 75.0)
 
     def test_a_reporting_session_is_not_marked_inherited(self):
         windows = [{'label': '5h', 'percent': 5.0, 'resets_at': time.time() + 3600, 'window_minutes': 300}]
