@@ -395,11 +395,11 @@ def render(pid, agent='claude', home=None, group=None, backlog_project=None):
                  'When a tab you started or review is done, save a note in notes/ (what it did, outcome, findings), '
                  'then run `close --pane %N`. Busy tabs stay open.\n')
     backlog = f'{sys.executable} {Path(__file__).resolve().with_name("agent_backlog_cli.py")}'
-    parts.append(f'\n## Backlog\nThe user keeps one backlog for all sessions. Change it only with `{backlog}`, never by editing its file. '
+    parts.append(f'\n## Backlog\nOne backlog serves all sessions. Change it only with `{backlog}`, never edit its file. '
                  'Commands: `list`, `add "title" --detail "why"`, `detail B12 "text"`, `start B12`, `done B12 "result"`, `move B12 PROJECT`. '
                  '`--project NAME` files elsewhere. `list` shows the inbox and this project\'s open items.\n'
-                 '- Add an item without asking for real work outside your task that takes more than about 5 minutes. No style nits, no steps of your own task.\n'
-                 '- Work on an item only when the user points you to it. Run `start` first. When it is finished, run `done` with the commit, PR, or outcome.\n')
+                 '- Add an item, without asking, for real work outside your task over about 5 minutes. No style nits or steps of your task.\n'
+                 '- Work on an item only when the user asks. Run `start` first. When finished, run `done` with the commit, PR, or outcome.\n')
     parts.append(f'\n## Notes\nSave a project fact that other agents in this session need as a Markdown file in {folder}/notes/ '
                  '(one topic per file, a "# Title" first line). Keep your own memory as before. The user reviews notes in Tether.\n')
     listing, excerpts, waiting = [], [], []

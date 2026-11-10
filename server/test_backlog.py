@@ -209,7 +209,7 @@ class BacklogTests(unittest.TestCase):
 
     def test_agents_learn_the_commands_not_the_file(self):
         text = projects.render('a1b2c3d4e5f6')
-        for part in ('agent_backlog_cli.py`', '`list`', '`add "title" --detail', '`move B12 PROJECT`', '`--project NAME`', '`start B12`', '`done B12 "result"`', 'never by editing'):
+        for part in ('agent_backlog_cli.py`', '`list`', '`add "title" --detail', '`move B12 PROJECT`', '`--project NAME`', '`start B12`', '`done B12 "result"`', 'never edit its file'):
             self.assertIn(part, text)
         self.assertNotIn('BACKLOG.md', text)
 
