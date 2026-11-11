@@ -64,3 +64,4 @@ button.ask-chip.primary:not(:disabled):hover { background: color-mix(in srgb, va
 .attention-digest .digest-error { margin: 6px 0 0; color: var(--error); font-size: 13px; }
 /* A layout with its own waiting panel shows the asks there, so the sidebar box hides. */
 .app-shell[data-waiting] .sidebar .waiting-box{display:none}
+.waiting-dot.urgent { background: var(--error); box-shadow: 0 0 0 2px color-mix(in srgb, var(--error) 25%, transparent); }

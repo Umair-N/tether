@@ -1,8 +1,10 @@
 from datetime import datetime
+import io
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import attention
 
@@ -41,7 +43,8 @@ class AttentionTest(unittest.TestCase):
         self.dir = tempfile.TemporaryDirectory()
         self.path = Path(self.dir.name) / 'attention.json'
         self.clock = Clock()
-        self.store = attention.Attention(self.path, self.clock)
+        self.on_urgent = mock.Mock()
+        self.store = attention.Attention(self.path, self.clock, on_urgent=self.on_urgent)
         self.world = World(self.store)
 
     def tearDown(self):
@@ -57,6 +60,117 @@ class AttentionTest(unittest.TestCase):
         self.assertFalse(ask['opened'])
         self.assertIsNone(ask['snoozed_until'])
         self.assertNotIn('reply', ask)
+        self.assertFalse(ask['urgent'])
+
+    def test_urgent_text_uses_last_matching_line_and_strips_markdown(self):
+        for prefix in ('Urgent:', '**Urgent:**', '- **URGENT:**', '• Urgent:', '> **urgent:**', '`Urgent:`'):
+            with self.subTest(prefix=prefix):
+                self.assertEqual(attention.urgent_text(f'Urgent: old\n{prefix} **Choose** `now`?\nNeeds you: yes'),
+                                 'Choose now?')
+        for text in (None, '', 'No urgent ask.', 'Urgent:', 'An Urgent: aside'):
+            self.assertIsNone(attention.urgent_text(text))
+        self.assertEqual(attention.urgent_text('Urgent: ' + 'x' * 200), 'x' * (attention.LIMIT - 1) + '…')
+
+    def test_new_urgent_replies_notify_once_each_and_keep_the_first_since(self):
+        self.world.turn('%1', 'Next: normal\nNeeds you: yes', 10)
+        self.world.observe(entry())
+        since = self.store.ask('%1', 't1')['since']
+        self.on_urgent.assert_not_called()
+        self.clock.now += 60
+        reply = 'Next: normal\nUrgent: May I proceed?\nNeeds you: yes'
+        self.world.turn('%1', reply, 20)
+        self.world.observe(entry())
+        ask = self.store.ask('%1', 't1')
+        self.assertEqual((ask['urgent'], ask['next'], ask['since']), (True, 'May I proceed?', since))
+        self.on_urgent.assert_called_once_with(ask)
+        self.world.observe(entry())
+        self.world.turn('%1', reply, 30)  # A re-read with a new turn marker still has the same reply key.
+        self.world.observe(entry())
+        self.on_urgent.assert_called_once()
+        self.world.turn('%1', 'New context.\n' + reply, 40)
+        self.world.observe(entry())
+        self.assertEqual(self.on_urgent.call_count, 2)
+        self.world.turn('%1', 'Next: normal again\nNeeds you: yes', 50)
+        self.world.observe(entry())
+        self.assertFalse(self.store.ask('%1', 't1')['urgent'])
+        self.assertEqual(self.on_urgent.call_count, 2)
+
+    def test_urgent_requires_needs_you_yes(self):
+        self.world.turn('%1', 'Urgent: Ignore this?\nNeeds you: no', 10)
+        self.world.observe(entry())
+        self.assertEqual(self.store.waiting(), [])
+        self.on_urgent.assert_not_called()
+
+    def test_urgent_callback_runs_outside_lock_with_a_public_copy_and_can_fail(self):
+        locked, observed = [], []
+        def notify(ask):
+            locked.append(self.store.lock.locked())
+            if not locked[-1]:
+                observed.append((self.store.ask('%1', 't1'), dict(ask)))
+            ask['next'] = 'Do not change the stored ask'
+            raise RuntimeError('notification failed')
+        self.on_urgent.side_effect = notify
+        self.world.turn('%1', 'Urgent: Choose?\nNeeds you: yes', 10)
+        self.assertTrue(self.world.observe(entry()))
+        self.assertEqual(locked, [False])
+        self.assertEqual(observed, [(self.store.ask('%1', 't1'), self.store.ask('%1', 't1'))])
+        self.assertNotIn('reply', observed[0][1])
+        self.assertEqual(self.store.ask('%1', 't1')['next'], 'Choose?')
+        self.assertTrue(json.loads(self.path.read_text())['asks']['%1']['urgent'])
+        self.world.observe(entry())
+        self.on_urgent.assert_called_once()
+
+    def test_urgent_restart_does_not_notify_again_and_old_asks_default_to_false(self):
+        reply = 'Urgent: Choose?\nNeeds you: yes'
+        self.world.turn('%1', reply, 10)
+        self.world.observe(entry())
+        notify = mock.Mock()
+        again = attention.Attention(self.path, self.clock, on_urgent=notify)
+        self.assertTrue(again.ask('%1', 't1')['urgent'])
+        self.assertFalse(again.note_reply('%1', 't1', reply))
+        notify.assert_not_called()
+        data = json.loads(self.path.read_text())
+        del data['asks']['%1']['urgent']
+        self.path.write_text(json.dumps(data))
+        old = attention.Attention(self.path, self.clock, on_urgent=notify)
+        self.assertFalse(old.ask('%1', 't1')['urgent'])
+
+    def test_clear_records_a_reply_or_urgent_question_once_outside_lock(self):
+        for urgent in (False, True):
+            with self.subTest(urgent=urgent), mock.patch.object(attention.decisions, 'record') as record:
+                self.store.note_reply('%1', 't1', f'{"Urgent" if urgent else "Next"}: Choose {urgent}?\nNeeds you: yes')
+                if urgent:
+                    self.store.asks['%1']['kind'] = 'question'  # urgent also records non-reply asks
+                def check(question, answer):
+                    self.assertFalse(self.store.lock.locked())
+                    self.assertIsNone(self.store.ask('%1', 't1'))
+                record.side_effect = check
+                self.assertTrue(self.store.clear('%1', 't1', answer='Use the default'))
+                record.assert_called_once_with(f'Choose {urgent}?', 'Use the default')
+                self.assertFalse(self.store.clear('%1', 't1', answer='Again'))
+                record.assert_called_once()
+
+    def test_clear_without_an_answer_or_with_a_stale_thread_does_not_record(self):
+        with mock.patch.object(attention.decisions, 'record') as record:
+            for index, answer in enumerate((None, '', ' \n ', 3)):
+                self.store.note_reply('%1', 't1', f'Next: Choose {index}?\nNeeds you: yes')
+                self.assertTrue(self.store.clear('%1', 't1', answer=answer))
+            self.store.note_reply('%1', 't1', 'Next: New question?\nNeeds you: yes')
+            self.assertFalse(self.store.clear('%1', 'stale', answer='No'))
+            self.store.act('%1', 't1', 'handled')
+            self.clock.now += attention.QUIET + 1
+            self.world.status['%1'] = APPROVAL
+            self.world.observe(entry())
+            self.assertTrue(self.store.clear('%1', 't1', answer='Approved'))
+            record.assert_not_called()
+
+    def test_decision_write_failure_does_not_report_failed_delivery(self):
+        self.store.note_reply('%1', 't1', 'Next: Choose?\nNeeds you: yes')
+        with mock.patch.object(attention.decisions, 'record', side_effect=OSError('disk full')), \
+                mock.patch('sys.stderr', new_callable=io.StringIO) as err:
+            self.assertTrue(self.store.clear('%1', 't1', answer='Default'))
+        self.assertIsNone(self.store.ask('%1', 't1'))
+        self.assertIn('disk full', err.getvalue())
 
     def test_next_falls_back_to_the_last_line_and_is_clipped(self):
         self.world.turn('%1', 'x ' * 200 + '\nNeeds you: yes', 10)
@@ -270,6 +384,78 @@ class RouteTest(unittest.TestCase):
         self.assertEqual(self.post('handled', {'session': 'x', 'thread': 't1'})[0], 400)
         self.assertEqual(self.post('digest', {'enabled': 'yes', 'hour': 9})[0], 400)
         self.assertEqual(self.post('digest', {'enabled': True, 'hour': 7}), (200, {'digest': {'enabled': True, 'hour': 7}}))
+
+
+class AnswerEndpointTest(unittest.TestCase):
+    """Exercise POST dispatch with mocked writes; no sockets or terminals."""
+
+    def setUp(self):
+        import server
+        self.server = server
+        self.config = entry(writable=True)
+        for target in ('choose', 'send_text', 'type_text', 'menu_choose', 'respond_approval', 'broadcast_message'):
+            patcher = mock.patch.object(server, target)
+            setattr(self, target, patcher.start())
+            self.addCleanup(patcher.stop)
+        self.choose.return_value = self.config
+        patcher = mock.patch.object(server.attention.STORE, 'clear')
+        self.clear = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def post(self, path, **body):
+        raw = json.dumps(dict(session='%1', thread='t1', **body)).encode()
+        handler = object.__new__(self.server.Handler)
+        handler.path = '/mobile/api/' + path
+        handler.headers = {'Content-Length': str(len(raw)), 'Host': 'tether.test',
+                           'Origin': 'https://tether.test', 'X-Codex-Mobile': '1'}
+        handler.rfile = io.BytesIO(raw)
+        handler.deny = lambda: False
+        handler.respond = mock.Mock()
+        handler.do_POST()
+        return handler.respond.call_args.args[0]
+
+    def test_message_passes_answer_only_after_success(self):
+        self.send_text.return_value = 'submitted'
+        self.assertEqual(self.post('message', message='Use default'), 200)
+        self.send_text.assert_called_once_with(self.config, 'Use default')
+        self.clear.assert_called_once_with('%1', 't1', answer='Use default')
+        self.clear.reset_mock()
+        self.send_text.side_effect = RuntimeError('refused')
+        with mock.patch('sys.stderr', new_callable=io.StringIO):
+            self.assertEqual(self.post('message', message='Use default'), 503)
+        self.clear.assert_not_called()
+
+    def test_type_only_passes_answer_when_submitted(self):
+        self.assertEqual(self.post('type', text='Default', enter=False), 200)
+        self.clear.assert_not_called()
+        self.assertEqual(self.post('type', text='Default', enter=True), 200)
+        self.clear.assert_called_once_with('%1', 't1', answer='Default')
+
+    def test_menu_passes_the_free_text_answer(self):
+        self.assertEqual(self.post('menu', choice=1, answer='Default'), 200)
+        self.menu_choose.assert_called_once_with(self.config, 1, label=None, answer='Default')
+        self.clear.assert_called_once_with('%1', 't1', answer='Default')
+
+    def test_approval_passes_optional_typed_feedback(self):
+        self.assertEqual(self.post('approval', action='approve'), 200)
+        self.clear.assert_called_once_with('%1', 't1', answer=None)
+        self.clear.reset_mock()
+        self.assertEqual(self.post('approval', action='reject', feedback='Use the safer plan'), 200)
+        self.respond_approval.assert_called_with(self.config, None, 'reject', choice=None, feedback='Use the safer plan')
+        self.clear.assert_called_once_with('%1', 't1', answer='Use the safer plan')
+
+    def test_broadcast_only_records_successful_sends(self):
+        self.broadcast_message.return_value = {'results': [
+            {'pane': '%1', 'result': 'sent'}, {'pane': '%2', 'result': 'sent_busy'},
+            {'pane': '%3', 'result': 'skipped'}]}
+        self.assertEqual(self.post('broadcast', message='Default'), 200)
+        self.assertEqual(self.clear.call_args_list, [mock.call('%1', answer='Default'), mock.call('%2', answer='Default')])
+
+    def test_stale_conversation_does_not_send_or_clear(self):
+        self.config['thread'] = 'new'
+        self.assertEqual(self.post('message', message='Default'), 409)
+        self.send_text.assert_not_called()
+        self.clear.assert_not_called()
 
 
 if __name__ == '__main__':

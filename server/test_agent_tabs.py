@@ -488,6 +488,12 @@ class CLITests(unittest.TestCase):
         self.assertEqual(self.stdout.getvalue(), '{"pane": "%13", "name": "task"}\n')
         self.assertEqual(self.stderr.getvalue(), '')
 
+    def test_start_passes_model_and_effort_to_delegate(self):
+        self.assertEqual(cli.main(['start', '--reviews-me', '--agent', 'claude', '--model', 'opus',
+                                   '--effort', 'high']), 0)
+        self.assertEqual(self.payload(), dict(action='start', session='%12', message='', review='new',
+                                             context=False, agent='claude', model='opus', effort='high'))
+
     def test_reviews_me_allows_omitted_task_and_stdin_maps_to_message(self):
         self.assertEqual(cli.main(['start', '--reviews-me']), 0)
         self.assertEqual(self.payload(), dict(action='start', session='%12', message='', review='new', context=False))

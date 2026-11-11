@@ -40,6 +40,7 @@ import { SlotPicker, Workspace } from './Workspace'
 import { Inbox, InboxButton } from './Inbox'
 import { inboxItems } from './needs'
 import { AskChips, OldestButton, WaitingBox } from './Attention'
+import { ActionDeck, useUrgentDeck } from './ActionDeck'
 import { useNow, visibleAsk, waitingAsks } from './attention'
 import { Home } from './Home'
 import { hasAgents, homeGroups } from './homeGroups'
@@ -277,6 +278,7 @@ function App() {
   const now = useNow()
   const waitSort = { order: prefs.waitingOrder ?? 'oldest', onOrder: (waitingOrder: WaitOrder) => update(() => ({ waitingOrder })) }
   const waiting = useMemo(() => prefs.attention ? waitingAsks(panes, now) : [], [prefs.attention, panes, now])
+  const [deck, setDeck] = useUrgentDeck(waiting, prefs.attention)
   const waitingCount = new Set([...groups.needs.map(item => item.pane.id), ...waiting.map(item => item.pane.id)]).size
   const stacked = !!desk.stack && slotPanes.length === 2
   // Keep the stored slots in step with what shows, so focus moves and pane picks survive a reload.
@@ -719,7 +721,7 @@ function App() {
   }
   const canMessage = sessions.some(item => item.panes.some(p => p.agent !== 'shell' && p.writable))
   const words = useMemo(() => wordsFor(prefs.tmuxWords), [prefs.tmuxWords])
-  const sidebarProps = { archivedTabs, onRestoreTab: restoreTab, api, sessions, marks, onMarks: loadMarks, selected: openId, slots: multi && !home ? view?.slots : undefined, drag: !!view && !home, prefs, update, loading, loaded: !!data, error, onRetry: () => refresh(), onReload: reload, onOpen: openPane, onNew: () => { setDrawer(false); setNewSession(true) }, onActions: (item: Session, remove?: boolean, at?: Anchor) => { if (remove) setDrawer(false); setMenuAt(view ? at : undefined); setActionsDelete(!!remove); setActions(item.id) }, onPaneActions: (item: Pane, at?: Anchor) => { setDrawer(false); setMenuAt(view ? at : undefined); setPaneActions(item.id) }, onPastChat: pickPastChat, onSettings: () => { setDrawer(false); setSettings(true) }, onBacklog: () => { setDrawer(false); setBacklog(true) }, onCommandMenu: view && !home ? () => setMenu('commands') : undefined, onMessageAll: canMessage ? () => { setDrawer(false); setAgentsPage('message') } : undefined, onOpenShell: view ? openShell : undefined, onShellsEnded: shellsEnded, onAddPane: (item: Session, at: Anchor) => { setDrawer(false); setTabTask({ pane: item.panes.find(entry => entry.id === prefs.lastPane[item.id]) ?? item.panes[0], at }) } }
+  const sidebarProps = { onDeck: () => setDeck(true), archivedTabs, onRestoreTab: restoreTab, api, sessions, marks, onMarks: loadMarks, selected: openId, slots: multi && !home ? view?.slots : undefined, drag: !!view && !home, prefs, update, loading, loaded: !!data, error, onRetry: () => refresh(), onReload: reload, onOpen: openPane, onNew: () => { setDrawer(false); setNewSession(true) }, onActions: (item: Session, remove?: boolean, at?: Anchor) => { if (remove) setDrawer(false); setMenuAt(view ? at : undefined); setActionsDelete(!!remove); setActions(item.id) }, onPaneActions: (item: Pane, at?: Anchor) => { setDrawer(false); setMenuAt(view ? at : undefined); setPaneActions(item.id) }, onPastChat: pickPastChat, onSettings: () => { setDrawer(false); setSettings(true) }, onBacklog: () => { setDrawer(false); setBacklog(true) }, onCommandMenu: view && !home ? () => setMenu('commands') : undefined, onMessageAll: canMessage ? () => { setDrawer(false); setAgentsPage('message') } : undefined, onOpenShell: view ? openShell : undefined, onShellsEnded: shellsEnded, onAddPane: (item: Session, at: Anchor) => { setDrawer(false); setTabTask({ pane: item.panes.find(entry => entry.id === prefs.lastPane[item.id]) ?? item.panes[0], at }) } }
   // The command menu runs the same actions as the keys. A command shows only when it would do something now.
   const commands: Command[] = view ? [
     { label: 'Home', key: '⌥H', run: () => chooseScreen('home') },
@@ -755,7 +757,7 @@ function App() {
       onContext: group => setProject({ session: owner.id, group: group.id }),
     } : undefined
     const onDropGroup = owner ? (id: string, group: string) => { api('groups/move', { session: owner.id, pane: id, group: group || null }).then(() => refresh(), error => setNotice(errorText(error))) } : undefined
-    return <Chat onBacklogAdd={(text, from) => setBacklogAdd({ text, pane: from })} headerExtra={view ? undefined : <OldestButton compact sort={waitSort} items={waiting} sessions={sessions} selected={openId} onOpen={openPane} />}
+    return <Chat onBacklogAdd={(text, from) => setBacklogAdd({ text, pane: from })} headerExtra={view ? undefined : <OldestButton compact sort={waitSort} onDeck={() => setDeck(true)} items={waiting} sessions={sessions} selected={openId} onOpen={openPane} />}
       groupHooks={groupHooks} onDropGroup={onDropGroup} askBar={ask && target.writable ? <AskChips api={api} pane={target} ask={ask} onDone={setNotice} onUpdate={() => void refresh()} /> : undefined} allPanes={panes} sidePin={sidePin} liveReplyPreview={prefs.liveReplyPreview} key={target.id} pane={target} session={owner} api={api} onMenu={() => setDrawer(true)} onUpdate={() => void refresh()} draft={prefs.drafts[target.id]?.text ?? ''} setDraft={text => setDraft(target.id, text)} onOpenPane={openPane} onSessionActions={at => { if (owner) { setMenuAt(view ? at : undefined); setActionsDelete(false); setActions(owner.id) } }} onPaneActions={(id, at) => { setMenuAt(view ? at : undefined); setPaneActions(id) }} onSplit={direction => void split(direction, target)} onFork={() => void fork(target)} onContinued={id => void openNewPane(id).catch(error => setNotice(errorText(error)))} onReorder={ids => { if (owner) update(current => ({ paneOrder: { ...current.paneOrder, [owner.id]: reorderPanes(groupSessions(panes).find(item => item.id === owner.id)!.panes, current.paneOrder[owner.id], ids) } })) }} micOk={!prefs.voiceOff} chime={prefs.voiceSound} readAloud={prefs.readAloud} handsFree={prefs.handsFree} slot={slot} running={running} />
   }
   // Layouts (layouts.ts, layouts.css): the grid shows on the wide workspace screen only. Home, Files, Share and the
@@ -799,13 +801,13 @@ function App() {
         {owner && owner.panes.length > 1 && <button type="button" className="icon-button" aria-label={`Show all panes of ${owner.name}`} title={`Show all panes of ${owner.name}`} onClick={() => showSession(owner)}><LayoutDashboard size={17} /></button>}
         <button type="button" className="icon-button" aria-label={words.newRight} title={words.tmux ? 'New pane right (tmux split, opens in a new slot)' : 'New tab, opens in a new slot'} onClick={() => void split('right')}><SquareSplitHorizontal size={17} /></button>
         <button type="button" className="icon-button" aria-label={words.newBelow} title={words.tmux ? 'New pane below (tmux split, opens in a new slot)' : 'New tab below, opens in a new slot'} onClick={() => void split('down')}><SquareSplitVertical size={17} /></button>
-        <OldestButton items={waiting} sessions={sessions} selected={openId} onOpen={openPane} />
+        <OldestButton items={waiting} sessions={sessions} selected={openId} onOpen={openPane} onDeck={() => setDeck(true)} />
         <InboxButton count={inbox.length} open={desk.inbox} onToggle={() => setDesk({ inbox: !desk.inbox })} />
       </>}
       panelTools={<PanelTools desk={desk} pane={pane} setPanels={setPanels} onSideChat={() => void sideChat()} />}
       panels={<PanelColumn api={api} desk={desk} pane={pane} setPanels={setPanels} renderChat={id => { const target = panes.find(item => item.id === id); return target ? chatFor(target) : null }} />} /> : chatFor(pane)) : null}
     {pane && view && wide && <BrowserFloat api={api} pane={pane} onDock={() => { if (!hasPanel(panelCols(desk), 'browser')) togglePanelKind(setPanels, 'browser') }} onClose={() => { if (hasPanel(panelCols(desk), 'browser')) togglePanelKind(setPanels, 'browser') }} />}
-    {showPanel('waiting') && <WaitingPanel api={api} cards={groups.needs} asks={prefs.attention && waiting.length ? <WaitingBox items={waiting} sessions={sessions} selected={openId} limit={0} sort={waitSort} onOpen={openPane} /> : undefined} edge={lookShown.grid.columns.some(column => (column.top === 'waiting' || column.bottom === 'waiting') && (column.main !== 'sessions' || desk.sidebar))} onOpen={openPane} onUpdate={() => void refresh()} />}
+    {showPanel('waiting') && <WaitingPanel api={api} cards={groups.needs} asks={prefs.attention && waiting.length ? <WaitingBox items={waiting} sessions={sessions} selected={openId} limit={0} sort={waitSort} onOpen={openPane} onDeck={() => setDeck(true)} /> : undefined} edge={lookShown.grid.columns.some(column => (column.top === 'waiting' || column.bottom === 'waiting') && (column.main !== 'sessions' || desk.sidebar))} onOpen={openPane} onUpdate={() => void refresh()} />}
     {showPanel('status') && <StatusColumn groups={groups} panes={panes} sessions={sessions} selected={openId} onOpen={openPane} />}
     {home && <Home api={api} groups={groups} asks={waiting} sessions={sessions} sort={waitSort} hasAgents={hasAgents(panes)} loaded={!!data} loading={loading} error={error} onRetry={() => void refresh()} onOpen={openPane} onMarkRead={markRead} onUpdate={() => void refresh()} onNew={() => setNewSession(true)} onMenu={() => setDrawer(true)} onBacklog={() => setBacklog(true)} />}
     {files && <Explorer api={api} panes={panes} pane={pane} target={filesTarget} onTarget={() => setFilesTarget(null)} onAddToMessage={addToMessage} onTerminalHere={terminalHere} onPin={pinTarget} />}
@@ -831,6 +833,7 @@ function App() {
         busy: !!agentBrowser?.agents.some(agent => agent.tabs.length), asking: asks.length > 0,
       } : undefined} />}
     {browserSheet && pane && <BrowserSheet api={api} pane={pane} onClose={() => setBrowserSheet(false)} />}
+    {deck && <ActionDeck api={api} items={waiting} sessions={sessions} onOpen={openPane} onClose={() => setDeck(false)} onUpdate={() => void refresh()} />}
     {liveMode && <Live api={api} panes={panes} selected={pane} commands={commands.filter(item => !item.label.includes('Live mode'))} onClose={() => setLive(false)} onBacklog={() => setBacklog(true)} reveal={liveReveal} from={liveFrom} />}
     {view && <Inbox api={api} items={inbox} sessions={sessions} selected={openId} open={desk.inbox} onToggle={() => { if (!home) setDesk({ inbox: !desk.inbox }) }} onOpen={openPane} onUpdate={() => void refresh()} />}
     {panelsOn && <PanelHandles grid={lookShown.grid} closed={panelsClosed}

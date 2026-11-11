@@ -4,7 +4,7 @@ export const SETTINGS_GROUPS = [
   { id: 'appearance', title: 'Appearance', description: 'Layout, style, theme, colors and text size', icon: Palette },
   { id: 'workspace', title: 'Sessions & chat', description: 'Default folder, sidebar and chat behavior', icon: FolderOpen },
   { id: 'voice', title: 'Voice & alerts', description: 'Microphone, read aloud and notifications', icon: Bell },
-  { id: 'agents', title: 'Agents & browser', description: 'Codex helper and the shared browser', icon: Bot },
+  { id: 'agents', title: 'Agents & browser', description: 'Autonomy, reviewers, Codex helper and the shared browser', icon: Bot },
   { id: 'system', title: 'About & system', description: 'Updates, resources and reload', icon: SlidersHorizontal },
 ] as const
 export type SettingsGroup = typeof SETTINGS_GROUPS[number]['id']

@@ -1,7 +1,7 @@
 // Attention mode (server/attention.py): the sidebar "Waiting on you" box, the header "Open the oldest" button (a pill
 // with a bottom sheet on a phone), the Handled and Remind me tomorrow chips under the last reply, and the daily summary setting.
 import { useEffect, useId, useRef, useState } from 'react'
-import { ArrowDownWideNarrow, ArrowUpNarrowWide, Check, Clock, Hand, X } from 'lucide-react'
+import { ArrowDownWideNarrow, ArrowUpNarrowWide, Check, Clock, GalleryVerticalEnd, Hand, X } from 'lucide-react'
 import type { WaitOrder } from './prefs'
 import type { Api, Ask, Pane } from './api'
 import { errorText } from './api'
@@ -30,7 +30,7 @@ export function SortButton({ order, onOrder, className = '' }: WaitSort & { clas
 
 /** The tabs that wait on you, oldest first. limit: rows before "+N more" (0 shows all). No asks: no box.
  *  variant "list": the sidebar form, a plain section inside the session list's scroll area, one line of text per row. */
-export function WaitingBox({ items, sessions, selected, limit = 3, variant = 'box', sort, onOpen }: { items: Waiting[]; sessions: Session[]; selected?: string; limit?: number; variant?: 'box' | 'list'; sort?: WaitSort; onOpen: (pane: Pane) => void }) {
+export function WaitingBox({ items, sessions, selected, limit = 3, variant = 'box', sort, onOpen, onDeck }: { items: Waiting[]; sessions: Session[]; selected?: string; limit?: number; variant?: 'box' | 'list'; sort?: WaitSort; onOpen: (pane: Pane) => void; onDeck?: () => void }) {
   const now = useNow()
   const id = useId()
   const [all, setAll] = useState(false)
@@ -39,14 +39,16 @@ export function WaitingBox({ items, sessions, selected, limit = 3, variant = 'bo
   const sorted = ordered(items, sort?.order)
   const shown = limit && !all ? sorted.slice(0, limit) : sorted
   return <section className={list ? 'waiting-box waiting-list' : 'waiting-box'} aria-labelledby={id}>
-    <h2 className="waiting-title" id={id}><Hand size={list ? 13 : 14} aria-hidden="true" />Waiting on you<span className="waiting-count">{list ? '· ' : ''}{items.length}</span>{sort && <SortButton {...sort} />}</h2>
+    <h2 className="waiting-title" id={id}><Hand size={list ? 13 : 14} aria-hidden="true" />Waiting on you<span className="waiting-count">{list ? '· ' : ''}{items.length}</span>{sort && <SortButton {...sort} />}{onDeck && (list
+      ? <button type="button" className="icon-button waiting-sort" aria-label="Answer one by one" title="Answer one by one" onClick={onDeck}><GalleryVerticalEnd size={15} aria-hidden="true" /></button>
+      : <button type="button" className="waiting-deck-button" onClick={onDeck}>One by one</button>)}</h2>
     {shown.map(({ pane, ask }) => {
       const session = sessions.find(item => item.id === pane.tmux_session)
       const name = chatTitle(pane, session), waited = age(ask.since, now)
       const seen = `${session && session.name !== name ? `${session.name} · ` : ''}${seenText(ask)}`
       return <button key={pane.id} type="button" className="waiting-row" aria-current={selected === pane.id ? 'page' : undefined} title={list ? seen : undefined}
-        aria-label={`${name}, waited ${waited}, ${seenText(ask).toLowerCase()}`} onClick={() => onOpen(pane)}>
-        <span className={ask.opened ? 'waiting-dot opened' : 'waiting-dot'} aria-hidden="true" />
+        aria-label={`${ask.urgent ? 'Urgent: ' : ''}${name}, waited ${waited}, ${seenText(ask).toLowerCase()}`} onClick={() => onOpen(pane)}>
+        <span className={`${ask.opened ? 'waiting-dot opened' : 'waiting-dot'}${ask.urgent ? ' urgent' : ''}`} aria-hidden="true" />
         <span className="waiting-name">{name}</span>
         <span className={now - ask.since >= LATE ? 'waiting-age late' : 'waiting-age'}>{waited}</span>
         {ask.next && <span className="waiting-next">{ask.next}</span>}
@@ -58,7 +60,7 @@ export function WaitingBox({ items, sessions, selected, limit = 3, variant = 'bo
 }
 
 /** Desktop: "Open the oldest" opens the tab that waited longest. compact (phone): a pill that opens the full list. */
-export function OldestButton({ items, sessions, selected, compact = false, sort, onOpen }: { items: Waiting[]; sessions: Session[]; selected?: string; compact?: boolean; sort?: WaitSort; onOpen: (pane: Pane) => void }) {
+export function OldestButton({ items, sessions, selected, compact = false, sort, onOpen, onDeck }: { items: Waiting[]; sessions: Session[]; selected?: string; compact?: boolean; sort?: WaitSort; onOpen: (pane: Pane) => void; onDeck?: () => void }) {
   const [sheet, setSheet] = useState(false)
   if (!items.length) return null
   const count = items.length
@@ -68,17 +70,17 @@ export function OldestButton({ items, sessions, selected, compact = false, sort,
       title={compact ? 'Waiting on you' : 'Open the tab that waited longest'} onClick={() => compact ? setSheet(true) : onOpen(items[0].pane)}>
       <Hand size={16} aria-hidden="true" />{!compact && <span className="oldest-label">Open the oldest</span>}<span className="oldest-count" aria-hidden="true">{count > 99 ? '99+' : count}</span>
     </button>
-    {sheet && <WaitingSheet items={items} sessions={sessions} selected={selected} sort={sort} onOpen={onOpen} onClose={() => setSheet(false)} />}
+    {sheet && <WaitingSheet items={items} sessions={sessions} selected={selected} sort={sort} onOpen={onOpen} onDeck={onDeck && (() => { setSheet(false); onDeck() })} onClose={() => setSheet(false)} />}
   </>
 }
 
-function WaitingSheet({ items, sessions, selected, sort, onOpen, onClose }: { items: Waiting[]; sessions: Session[]; selected?: string; sort?: WaitSort; onOpen: (pane: Pane) => void; onClose: () => void }) {
+function WaitingSheet({ items, sessions, selected, sort, onOpen, onDeck, onClose }: { items: Waiting[]; sessions: Session[]; selected?: string; sort?: WaitSort; onOpen: (pane: Pane) => void; onDeck?: () => void; onClose: () => void }) {
   const modal = useModal(true, onClose)
   const { ref } = modal
   useEffect(() => { ref.current?.querySelector<HTMLButtonElement>('.waiting-row')?.focus() }, [ref])
   return <dialog {...modal} className="sheet waiting-sheet" aria-label="Waiting on you">
     <span className="waiting-grab" aria-hidden="true" />
-    <WaitingBox items={items} sessions={sessions} selected={selected} limit={0} sort={sort} onOpen={pane => { onClose(); onOpen(pane) }} />
+    <WaitingBox items={items} sessions={sessions} selected={selected} limit={0} sort={sort} onDeck={onDeck} onOpen={pane => { onClose(); onOpen(pane) }} />
     <button type="button" className="secondary waiting-close" onClick={onClose}><X size={16} aria-hidden="true" />Close</button>
   </dialog>
 }

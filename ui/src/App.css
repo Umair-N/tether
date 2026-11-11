@@ -1836,3 +1836,24 @@ button.live-chip:active { background: var(--line); }
 .voice-field { display: flex; flex: 1; flex-wrap: wrap; align-items: flex-start; gap: 6px; min-width: 0; }
 .voice-field > input, .voice-field > textarea { flex: 1; min-width: 0; width: 0; }
 .voice-field > .error { flex-basis: 100%; }
+
+/* Autonomy level (Autonomy.tsx): one named row per level. */
+.autonomy-levels { display: grid; gap: 2px; margin: 8px 0 0; padding: 0; border: 0; }
+.autonomy-levels .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.autonomy-level { position: relative; display: grid; grid-template-columns: 28px 1fr; align-items: start; gap: 10px; padding: 10px 12px; border: 1px solid transparent; border-radius: 10px; cursor: pointer; }
+.autonomy-level:hover { background: var(--hover); }
+.autonomy-level input { position: absolute; opacity: 0; pointer-events: none; }
+.autonomy-level-number { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--line); font-size: 13px; font-variant-numeric: tabular-nums; color: var(--muted); }
+.autonomy-level-text { display: grid; gap: 2px; min-width: 0; }
+.autonomy-level-text strong { font-weight: 600; color: var(--text); }
+.autonomy-level-text small { color: var(--muted); font-size: 13px; line-height: 1.4; }
+.autonomy-level:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.autonomy-level:has(input:checked) .autonomy-level-number { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.autonomy-level:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.autonomy-levels:disabled .autonomy-level { opacity: .55; cursor: default; }
+.settings-group .reviewer-tier { border-top: 1px solid var(--line); padding-top: 10px; }
+.settings-group .reviewer-tier legend { float: none !important; width: auto !important; font-weight: 600; font-size: 14px !important; }
+.settings-group .reviewer-tier .setting-note { margin: 2px 0 6px; }
+.reviewer-tier .project-size-row { margin: 8px 0; }
+.reviewer-tier .project-size-row label { width: 72px; flex: none; }
+.autonomy-level:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }

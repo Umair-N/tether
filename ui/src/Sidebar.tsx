@@ -214,6 +214,7 @@ type Carry = { session: string; pane?: string; chat?: PastChat }
 // The server's answer to a merge: the session that now holds the moved panes, for the rename prompt.
 type Moved = { session: string; name: string; pane: string }
 interface Props {
+  onDeck?: () => void
   api: Api
   sessions: Session[]
   selected: string | undefined
@@ -254,7 +255,7 @@ interface Props {
   onAddPane?: (session: Session, at: Anchor) => void
 }
 
-export function Sidebar({ api, sessions, selected, prefs, update, loaded, error, onRetry, onReload, onOpen, onNew, onActions, onPaneActions, onPastChat, onSettings, onBacklog, onClose, slots, drag, onCommandMenu, onMessageAll, marks, onMarks, onOpenShell, onShellsEnded, onAddPane, archivedTabs, onRestoreTab }: Props) {
+export function Sidebar({ onDeck, api, sessions, selected, prefs, update, loaded, error, onRetry, onReload, onOpen, onNew, onActions, onPaneActions, onPastChat, onSettings, onBacklog, onClose, slots, drag, onCommandMenu, onMessageAll, marks, onMarks, onOpenShell, onShellsEnded, onAddPane, archivedTabs, onRestoreTab }: Props) {
   const host = useHost()
   const [query, setQuery] = useState('')
   const [reorder, setReorder] = useState<Section | null>(null)
@@ -418,7 +419,7 @@ export function Sidebar({ api, sessions, selected, prefs, update, loaded, error,
     {organizing && <OrganizeMenu api={api} sessions={sessions.filter(session => !isArchived(session, prefs.archived))} prefs={prefs} update={update} at={organizing.at} onClose={() => setOrganizing(null)} />}
     <nav className="session-groups" aria-label="Sessions">
       {/* eslint-disable-next-line react-hooks/purity -- Sample snooze expiry on each existing render without adding a clock or delaying it. */}
-      {prefs.attention && !search && <WaitingBox variant="list" sort={{ order: prefs.waitingOrder ?? 'oldest', onOrder: waitingOrder => update(() => ({ waitingOrder })) }} items={waitingAsks(sessions.flatMap(item => item.panes), Date.now() / 1000)} sessions={sessions} selected={selected} onOpen={onOpen} />}
+      {prefs.attention && !search && <WaitingBox variant="list" sort={{ order: prefs.waitingOrder ?? 'oldest', onOrder: waitingOrder => update(() => ({ waitingOrder })) }} items={waitingAsks(sessions.flatMap(item => item.panes), Date.now() / 1000)} sessions={sessions} selected={selected} onOpen={onOpen} onDeck={onDeck} />}
       {error && <div className="sidebar-error" role="alert"><span>{loaded ? 'Could not refresh sessions.' : 'Could not load sessions.'} {error}</span><RetryButton onRetry={onRetry} /></div>}
       {openingChat && <div className="past-opening" role="status">Opening {openingChat}…</div>}
       {mergeError && <div className="sidebar-error" role="alert">{mergeError}<button onClick={() => setMergeError('')}>Dismiss</button></div>}

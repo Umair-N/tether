@@ -16,7 +16,10 @@ import review_links
 from terminal_input import PROFILE_NAME, UUID, new_window_after
 
 
-CLAUDE_MODELS = [('fable', 'Fable'), ('opus', 'Opus'), ('sonnet', 'Sonnet'), ('haiku', 'Haiku')]
+CLAUDE_MODELS = [('fable', 'Fable'), ('opus', 'Opus'), ('sonnet', 'Sonnet'), ('haiku', 'Haiku'),
+                 ('claude-fable-5-2', 'Fable 5.2'), ('claude-opus-5-5', 'Opus 5.5'), ('claude-sonnet-5-5', 'Sonnet 5.5'),
+                 ('claude-haiku-5-5', 'Haiku 5.5')]
+EFFORTS = ('low', 'medium', 'high', 'xhigh', 'max')
 
 
 def task_models(home=None):
@@ -58,6 +61,8 @@ def validate(body, entries, models=None):
         models = task_models() if models is None else models
         if not isinstance(model, str) or model not in [row['id'] for row in models.get(body['agent'], [])]:
             raise ValueError('Choose a model from the list.')
+    if body.get('effort') is not None and body['effort'] not in EFFORTS:
+        raise ValueError('Choose an effort from the list.')
     review = normalize_review(body.get('review', False))
     if 'worktree' in body and review == 'new':
         raise ValueError("A reviewer tab stays in this tab's folder, so it can see the work. Turn off the new worktree or the new tab review.")
@@ -177,16 +182,20 @@ def _check_profile(profile):
         raise ValueError('Choose a supported Codex provider.')
 
 
-def launch_command(entry, agent, path, name, *, context=False, profile=None, model=None):
+def launch_command(entry, agent, path, name, *, context=False, profile=None, model=None, effort=None):
     if agent == 'claude':
         command = 'claude'
         if model is not None:
             command += f' --model {shlex.quote(model)}'
+        if effort is not None:
+            command += f' --effort {shlex.quote(effort)}'
     else:
         _check_profile(profile)
         command = 'codex' + (f' -p {shlex.quote(profile)}' if profile is not None else '')
         if model is not None:
             command += f' -m {shlex.quote(model)}'
+        if effort is not None:
+            command += f' -c {shlex.quote("model_reasoning_effort=" + effort)}'
     return command + f' "$(cat {shlex.quote(str(path))})"'
 
 
@@ -218,7 +227,8 @@ def start(entry, body, folder, run=subprocess.run, recent=lambda: [], *, cwd=Non
     prompt = (reviewer_prompt(entry, body['message'], recent_text) if review == 'new' else
               prompt_text(entry, body['message'], agent, context=context, review=review == 'source', recent=recent_text))
     path = write_prompt(prompt)
-    command = launch_command(entry, agent, path, name, context=context, profile=profile, model=body.get('model'))
+    command = launch_command(entry, agent, path, name, context=context, profile=profile, model=body.get('model'),
+                             effort=body.get('effort'))
     # The pty buffers input even while the new shell starts.
     run([paths.TMUX, 'send-keys', '-t', pane, '-l', command], check=True, capture_output=True, timeout=5)
     run([paths.TMUX, 'send-keys', '-t', pane, 'Enter'], check=True, capture_output=True, timeout=5)

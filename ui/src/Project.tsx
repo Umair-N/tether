@@ -7,6 +7,7 @@ import { ApiError, errorText } from './api'
 import type { Api, GroupInfo } from './api'
 import { useModal } from './hooks'
 import { ProjectCodexLevel } from './CodexLevel'
+import { ProjectAutonomy } from './Autonomy'
 import type { Session } from './Sidebar'
 
 // The session's project (server: projects.py). Agents that start in the session get its text: Claude through a
@@ -170,6 +171,8 @@ export function ProjectSheet({ api, session, group, mark, pin, onChanged, onClos
         </li>)}</ul> : <p className="hint">No notes yet. Agents save project facts here, and you review them.</p>}
         {fresh > 0 && <div className="sheet-buttons project-row-end"><button type="button" className="secondary" disabled={pending} onClick={() => void post('seen', {})}>Mark all as read</button></div>}
       </section>
+
+      <ProjectAutonomy api={api} project={project.id} />
 
       <ProjectCodexLevel api={api} project={project.id} panes={session.panes.map(item => item.id)} />
 

@@ -31,6 +31,8 @@ def arguments(argv):
     actions = parser.add_subparsers(dest='action', required=True)
     start = actions.add_parser('start')
     start.add_argument('--agent', choices=('claude', 'codex'))
+    start.add_argument('--model')
+    start.add_argument('--effort')
     review = start.add_mutually_exclusive_group()
     review.add_argument('--review-it', action='store_true')
     review.add_argument('--reviews-me', action='store_true')
@@ -63,7 +65,7 @@ def arguments(argv):
             parser.error('a task is required unless --reviews-me is set')
         body.update(message=message, context=args.context,
                     review='new' if args.reviews_me else 'source' if args.review_it else False)
-        for key in ('agent', 'name', 'cwd', 'worktree', 'group'):
+        for key in ('agent', 'model', 'effort', 'name', 'cwd', 'worktree', 'group'):
             value = getattr(args, key)
             if value is not None:
                 body[key] = os.path.abspath(value) if key == 'cwd' else value

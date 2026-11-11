@@ -10,13 +10,16 @@ import hashlib
 import json
 import os
 import re
+import sys
 import tempfile
 import threading
 import time
 from pathlib import Path
 
+import decisions
 import needs
 import paths
+import urgent_ping
 from notification_priority import status_line
 
 PREFIX = '/mobile/api/attention'
@@ -28,6 +31,7 @@ AGENTS = ('claude', 'codex', 'antigravity')
 ENDED = ('Idle', 'Stopped')  # the turn is over, so the transcript's last reply is final
 PANE = re.compile(r'^%\d{1,6}$')
 NEXT = re.compile(r'^(?:[-•>]\s*)?Next:\s*(.+)$', re.I)
+URGENT = re.compile(r'^(?:[-•>]\s*)?\**Urgent:\**\s*(.+)$', re.I)
 
 
 def _clip(text):
@@ -42,6 +46,15 @@ def reply_ask(reply):
     plain = [line for line in plain if line]
     found = next((match[1] for match in map(NEXT.match, reversed(plain)) if match), None)
     return status, _clip(found if found is not None else (plain[-1] if plain else ''))
+
+
+def urgent_text(reply):
+    """The last Urgent: question, without Markdown emphasis, or None."""
+    for line in reversed(str(reply or '').splitlines()):
+        match = URGENT.match(line.strip().replace('`', ''))
+        if match:
+            return _clip(re.sub(r'[*`]', '', match[1])) or None
+    return None
 
 
 def _digest(text):
@@ -61,8 +74,9 @@ class Attention:
     """The asks, by pane id. seen holds, per pane, the last reply read (so a restart does not raise it again) and the
     prompt you last dismissed. checked (memory only) is the turn end each pane's reply was last read for."""
 
-    def __init__(self, path=None, clock=time.time):
+    def __init__(self, path=None, clock=time.time, on_urgent=urgent_ping.send):
         self.path, self.clock = Path(path or paths.ATTENTION), clock
+        self.on_urgent = on_urgent
         self.lock = threading.Lock()
         self.checked, self.quiet = {}, {}
         data = self._load()
@@ -100,7 +114,8 @@ class Attention:
 
     @staticmethod
     def public(ask):
-        return {key: ask.get(key) for key in ('pane', 'thread', 'since', 'next', 'kind', 'opened', 'snoozed_until')}
+        return dict({key: ask.get(key) for key in ('pane', 'thread', 'since', 'next', 'kind', 'opened', 'snoozed_until')},
+                    urgent=ask.get('urgent', False))
 
     def ask(self, pane, thread=None):
         """The pane's ask for the session list, or None. Snoozed asks are included; snoozed_until says until when."""
@@ -186,6 +201,7 @@ class Attention:
         """A finished turn's reply. A reply already read changes nothing, so a restart does not raise it again."""
         now = self.clock() if now is None else now
         key = _digest(reply)
+        notify = None
         with self.lock:
             seen = self.seen.setdefault(pane, {'thread': thread})
             if not reply or seen.get('reply') == key:
@@ -194,15 +210,25 @@ class Attention:
             status, text = reply_ask(reply)
             ask = self.asks.get(pane)
             if status == 'yes':
+                urgent = urgent_text(reply)
+                is_new_urgent = urgent and (not ask or not ask.get('urgent') or ask.get('reply') != key)
                 if ask:
-                    ask.update(kind='reply', next=text, opened=False, reply=key)  # keeps its first `since`
+                    ask.update(kind='reply', next=urgent or text, urgent=bool(urgent), opened=False, reply=key)
                 else:
-                    self._start(pane, thread, 'reply', text, now, key)
+                    self._start(pane, thread, 'reply', urgent or text, now, key)
+                    self.asks[pane]['urgent'] = bool(urgent)
+                if is_new_urgent:
+                    notify = self.public(self.asks[pane])
             elif ask and ask['kind'] == 'reply':
                 del self.asks[pane]  # a new turn without "Needs you: yes": you answered it, here or in the terminal
-            return True
+        if notify is not None:
+            try:
+                self.on_urgent(dict(notify))
+            except Exception:  # A notification must never stop observation.
+                pass
+        return True
 
-    def clear(self, pane, thread=None, save=True):
+    def clear(self, pane, thread=None, save=True, answer=None):
         """You answered the pane (any write that submits text to it). Returns True when an ask cleared."""
         with self.lock:
             ask = self.asks.get(pane)
@@ -212,7 +238,12 @@ class Attention:
             self._forget(pane, ask)
             if save:
                 self._save()
-            return True
+        if (ask.get('urgent') or ask['kind'] == 'reply') and isinstance(answer, str) and answer.strip():
+            try:
+                decisions.record(ask['next'], answer)
+            except OSError as exc:
+                print(f'Could not record an attention answer: {exc}', file=sys.stderr)
+        return True
 
     def _forget(self, pane, ask):
         if ask['kind'] != 'reply':

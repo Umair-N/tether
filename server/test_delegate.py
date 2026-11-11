@@ -27,6 +27,14 @@ def body(**extra):
 
 
 class ValidationTests(unittest.TestCase):
+    def test_optional_effort_must_be_supported(self):
+        source = entry()
+        for effort in (None, 'low', 'medium', 'high', 'xhigh', 'max'):
+            self.assertIs(delegate.validate(body(effort=effort), [source]), source)
+        for effort in ('auto', 'ultra', '', False, 1, [], {}, 'high; command'):
+            with self.subTest(effort=effort), self.assertRaisesRegex(ValueError, '^Choose an effort from the list\\.$'):
+                delegate.validate(body(effort=effort), [source])
+
     def test_optional_model_must_be_listed_for_the_target_agent(self):
         models = {'claude': [{'id': 'opus', 'label': 'Opus'}],
                   'codex': [{'id': 'test-codex', 'label': 'Test Codex'}]}
@@ -271,7 +279,17 @@ class LaunchTests(unittest.TestCase):
             with self.subTest(profile=profile), self.assertRaises(ValueError):
                 delegate.launch_command(entry(), 'codex', path, name, profile=profile)
 
-    def test_start_passes_model_for_every_review_mode_and_agent(self):
+    def test_commands_pass_and_quote_effort(self):
+        path = self.root / 'prompt.md'
+        suffix = f' "$(cat {shlex.quote(str(path))})"'
+        for effort in ('high', "x; $(danger) 'quoted'"):
+            self.assertEqual(delegate.launch_command(entry(), 'claude', path, 'Task', model='opus', effort=effort),
+                             'claude --model opus --effort ' + shlex.quote(effort) + suffix)
+            self.assertEqual(delegate.launch_command(entry(), 'codex', path, 'Task', profile='foundry',
+                                                     model='test', effort=effort),
+                             'codex -p foundry -m test -c ' + shlex.quote('model_reasoning_effort=' + effort) + suffix)
+
+    def test_start_passes_model_and_effort_for_every_review_mode_and_agent(self):
         for agent in ('claude', 'codex'):
             for review in (False, 'source', 'new'):
                 with self.subTest(agent=agent, review=review), \
@@ -279,8 +297,10 @@ class LaunchTests(unittest.TestCase):
                         patch.object(delegate.codex_provider, 'launch_profile', return_value=None), \
                         patch.object(delegate.review_links, 'add'), \
                         patch.object(delegate, 'launch_command', return_value='launch') as launch:
-                    delegate.start(entry(), body(agent=agent, review=review, model='selected'), '/project', run=Mock())
+                    delegate.start(entry(), body(agent=agent, review=review, model='selected', effort='high'),
+                                   '/project', run=Mock())
                     self.assertEqual(launch.call_args.kwargs['model'], 'selected')
+                    self.assertEqual(launch.call_args.kwargs['effort'], 'high')
 
     def test_prompt_files_are_private_unique_and_old_files_are_pruned(self):
         directory = self.root / 'delegate'
