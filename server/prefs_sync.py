@@ -66,10 +66,10 @@ def save(changes):
     if not isinstance(changes, dict) or not changes:
         raise ValueError('Invalid preferences.')
     for key, value in changes.items():
-        if key not in KEYS or not isinstance(value, KEYS[key]) or (KEYS[key] is int and isinstance(value, bool)):
-            raise ValueError('Invalid preference: %s.' % key)
         if key == 'sessionFolder':
             session_folder(value)
+        if key not in KEYS or not isinstance(value, KEYS[key]) or (KEYS[key] is int and isinstance(value, bool)):
+            raise ValueError('Invalid preference: %s.' % key)
         if key == 'files.pinned' and not (len(value) <= MAX_PINNED_FILES and all(isinstance(item, str) and 0 < len(item) <= 1024 for item in value)):
             raise ValueError('Invalid preference: %s.' % key)
         if key == 'sidePins':
@@ -108,30 +108,33 @@ def save(changes):
         stored = load()
         prefs = stored['prefs']
         for key, value in changes.items():
-            if key == 'colors':
-                value = {item: color for item, color in value.items()
-                         if isinstance(item, str) and re.fullmatch(r'[$%][0-9]+', item)
-                         and isinstance(color, str) and color in ('red', 'orange', 'yellow', 'green', 'blue', 'purple')}
-            if key == 'groups':
-                value = [{'id': item['id'], 'name': item['name'].strip()} for item in value
-                         if isinstance(item, dict) and isinstance(item.get('id'), str) and GROUP_ID.fullmatch(item['id'])
-                         and isinstance(item.get('name'), str) and 1 <= len(item['name'].strip()) <= 40][:20]
-            if key == 'groupOf':
-                value = {item: group for item, group in value.items()
-                         if isinstance(item, str) and re.fullmatch(r'\$[0-9]+', item)
-                         and isinstance(group, str) and GROUP_ID.fullmatch(group)}
-            if key == 'seen':
-                merged = dict(prefs.get('seen') or {})
-                for pane, at in value.items():
-                    if isinstance(at, (int, float)) and not isinstance(at, bool) and at > merged.get(pane, 0):
-                        merged[pane] = at
-                # Keep the newest marks so the file stays small.
-                value = dict(sorted(merged.items(), key=lambda item: item[1])[-MAX_SEEN:])
-            if key == 'drafts':
-                value = merge_drafts(prefs.get('drafts') or {}, value)
-            if key == 'repos':
-                value = merge_repos(prefs.get('repos') or {}, value)
-            prefs[key] = value
+            try:
+                if key == 'colors':
+                    value = {item: color for item, color in value.items()
+                             if isinstance(item, str) and re.fullmatch(r'[$%][0-9]+', item)
+                             and isinstance(color, str) and color in ('red', 'orange', 'yellow', 'green', 'blue', 'purple')}
+                if key == 'groups':
+                    value = [{'id': item['id'], 'name': item['name'].strip()} for item in value
+                             if isinstance(item, dict) and isinstance(item.get('id'), str) and GROUP_ID.fullmatch(item['id'])
+                             and isinstance(item.get('name'), str) and 1 <= len(item['name'].strip()) <= 40][:20]
+                if key == 'groupOf':
+                    value = {item: group for item, group in value.items()
+                             if isinstance(item, str) and re.fullmatch(r'\$[0-9]+', item)
+                             and isinstance(group, str) and GROUP_ID.fullmatch(group)}
+                if key == 'seen':
+                    merged = dict(prefs.get('seen') or {})
+                    for pane, at in value.items():
+                        if isinstance(at, (int, float)) and not isinstance(at, bool) and at > merged.get(pane, 0):
+                            merged[pane] = at
+                    # Keep the newest marks so the file stays small.
+                    value = dict(sorted(merged.items(), key=lambda item: item[1])[-MAX_SEEN:])
+                if key == 'drafts':
+                    value = merge_drafts(prefs.get('drafts') or {}, value)
+                if key == 'repos':
+                    value = merge_repos(prefs.get('repos') or {}, value)
+                prefs[key] = value
+            except (TypeError, ValueError):
+                raise ValueError('Invalid preference: %s.' % key) from None
         stored['version'] += 1
         FILE.parent.mkdir(parents=True, exist_ok=True)
         temporary = FILE.with_suffix('.tmp')

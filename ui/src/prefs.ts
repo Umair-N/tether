@@ -108,6 +108,24 @@ function load(): Prefs {
 
 const SYNCED = ['pinned', 'sidePins', 'order', 'paneOrder', 'sort', 'colors', 'groups', 'groupOf', 'groupBy', 'seen', 'collapsed', 'showPaths', 'tmuxWords', 'liveReplyPreview', 'voiceOff', 'voiceSound', 'theme', 'scheme', 'drafts', 'archived', 'archivedTabs', 'hosts', 'layout', 'autoResume', 'attention', 'waitingOrder', 'imagePromptTuned'] as const
 type Shared = Partial<Pick<Prefs, typeof SYNCED[number]>>
+const PENDING_KEY = 'tmux-chat.prefs.pending'
+
+export function loadPending(): Shared {
+  try {
+    const pending: unknown = JSON.parse(localStorage.getItem(PENDING_KEY) ?? '{}')
+    if (!pending || typeof pending !== 'object' || Array.isArray(pending)) return {}
+    return Object.fromEntries(Object.entries(pending).filter(([key]) => SYNCED.some(synced => synced === key))) as Shared
+  } catch { return {} }
+}
+
+export function savePending(pending: Shared): void {
+  try {
+    const kept = Object.fromEntries(Object.entries(pending).filter(([key]) => SYNCED.some(synced => synced === key)))
+    if (Object.keys(kept).length) localStorage.setItem(PENDING_KEY, JSON.stringify(kept))
+    else localStorage.removeItem(PENDING_KEY)
+  } catch { /* private mode: keep it for this visit only */ }
+}
+
 interface Stored { prefs: Shared; version: number }
 const PULL_MS = 20000
 
@@ -138,8 +156,10 @@ export function usePrefs() {
   const [prefs, setPrefs] = useState<Prefs>(load)
   const latest = useRef(prefs)
   const version = useRef(-1)  // the server copy this device has; -1 = not read yet
-  const pending = useRef<Shared>({})  // changed here, not saved yet
+  const pending = useRef<Shared>(loadPending())  // changed here, not saved yet
   const busy = useRef(false)
+  const sending = useRef<Shared>({})  // sent, no answer yet; kept on disk until the server takes it
+  const persist = useCallback(() => savePending({ ...sending.current, ...pending.current }), [])
   const timer = useRef(0)
   const flushRef = useRef<() => Promise<void>>(async () => {})
 
@@ -154,7 +174,7 @@ export function usePrefs() {
       const newer = Object.entries(local).filter(([pane, draft]) =>
         draft.at > (incoming.drafts?.[pane]?.at ?? 0) && (draft.text || pane in incoming.drafts!))
       for (const [pane, draft] of newer) merged[pane] = draft
-      if (newer.length > 0) { pending.current.drafts = merged; window.clearTimeout(timer.current); timer.current = window.setTimeout(() => void flushRef.current(), 400) }
+      if (newer.length > 0) { pending.current.drafts = merged; persist(); window.clearTimeout(timer.current); timer.current = window.setTimeout(() => void flushRef.current(), 400) }
       incoming.drafts = merged
     }
     if (!Object.keys(incoming).length) return
@@ -165,23 +185,26 @@ export function usePrefs() {
       latest.current = next
       return next
     })
-  }, [])
+  }, [persist])
 
   const flush = useCallback(async function flush() {
     if (busy.current || !Object.keys(pending.current).length) return
     busy.current = true
     const changes = pending.current
     pending.current = {}
+    sending.current = changes
     if (changes.drafts) changes.drafts = keptDrafts(changes.drafts)
-    try { apply(await request<Stored>('prefs', { changes })) } catch (error) {
+    try { apply(await request<Stored>('prefs', { changes })); sending.current = {}; persist() } catch (error) {
+      sending.current = {}
       const rejected = rejectedKeep(changes, error)
       const kept = rejected ?? changes
       pending.current = { ...kept, ...pending.current }
+      persist()
       if (rejected !== null && error instanceof ApiError) console.warn('Preference save rejected:', error.status, error.message)
     }
     busy.current = false
     if (Object.keys(pending.current).length) timer.current = window.setTimeout(flush, 2000)
-  }, [apply])
+  }, [apply, persist])
   useLayoutEffect(() => { flushRef.current = flush }, [flush])
 
   const pull = useCallback(async () => {
@@ -193,13 +216,14 @@ export function usePrefs() {
       // A device's first sync adds its own choices to the shared copy, so nothing set before sync is lost.
       if (!firstSyncDone()) {
         pending.current = stored.version === 0 ? pick(latest.current) : joined(stored.prefs, latest.current)
+        persist()
         try { localStorage.setItem(SYNCED_KEY, '1') } catch { /* private mode: merge again next visit, which is harmless */ }
         void flush()
         return
       }
       if (stored.version !== version.current) apply(stored)
     } catch { /* offline: keep this device's copy */ }
-  }, [apply, flush])
+  }, [apply, flush, persist])
 
   useEffect(() => {
     void pull()
@@ -216,10 +240,11 @@ export function usePrefs() {
       store(next)
       latest.current = next
       for (const key of SYNCED) if (JSON.stringify(next[key]) !== JSON.stringify(current[key])) (pending.current as Record<string, unknown>)[key] = next[key]
+      persist()
       window.clearTimeout(timer.current)
       timer.current = window.setTimeout(flush, 400)
       return next
     })
-  }, [flush])
+  }, [flush, persist])
   return [prefs, update] as const
 }

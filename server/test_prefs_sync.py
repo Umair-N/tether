@@ -42,6 +42,31 @@ class PrefsSyncTests(unittest.TestCase):
                     prefs_sync.save({'sessionFolder': value})
         self.assertEqual(prefs_sync.load()['version'], 0)
 
+    def test_bad_entries_name_the_key_and_do_not_save_the_batch(self):
+        for key, value in (('drafts', {'%1': {'text': 5, 'at': 1}}),
+                           ('repos', {'/project': [42]}),
+                           ('waitingOrder', 'sideways')):
+            with self.subTest(key=key):
+                with self.assertRaisesRegex(ValueError, rf'^Invalid preference: {key}\.$'):
+                    prefs_sync.save({'theme': 'dark', key: value})
+                self.assertEqual(prefs_sync.load(), {'prefs': {}, 'version': 0})
+                self.assertFalse(prefs_sync.FILE.exists())
+        original = prefs_sync.save({'theme': 'light'})
+        contents = prefs_sync.FILE.read_bytes()
+        with self.assertRaisesRegex(ValueError, r'^Invalid preference: drafts\.$'):
+            prefs_sync.save({'theme': 'dark', 'drafts': {'%1': {}}})
+        self.assertEqual(prefs_sync.load(), original)
+        self.assertEqual(prefs_sync.FILE.read_bytes(), contents)
+
+    def test_session_folder_keeps_its_validation_message(self):
+        for value, message in (('relative/path', r'^Use an absolute folder path'),
+                               (42, r'^Use an absolute folder path'),
+                               (str(Path(self.folder.name) / 'missing'), r'^The default session folder is unavailable\.')):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, message):
+                prefs_sync.save({'theme': 'dark', 'sessionFolder': value})
+        self.assertEqual(prefs_sync.load(), {'prefs': {}, 'version': 0})
+        self.assertFalse(prefs_sync.FILE.exists())
+
     def test_empty_store_is_version_zero(self):
         self.assertEqual(prefs_sync.load(), {'prefs': {}, 'version': 0})
 

@@ -3,11 +3,11 @@ const { readFileSync } = require('node:fs')
 const { runInNewContext } = require('node:vm')
 const ts = require('typescript')
 
-function load(name, imports = {}) {
+function load(name, imports = {}, globals = {}) {
   const exports = {}
   runInNewContext(ts.transpileModule(readFileSync(`src/${name}.ts`, 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
-  }).outputText, { exports, require: name => {
+  }).outputText, { ...globals, exports, require: name => {
     assert.ok(Object.hasOwn(imports, name), `Unexpected import: ${name}`)
     return imports[name]
   } })
@@ -15,7 +15,40 @@ function load(name, imports = {}) {
 }
 
 const api = load('api')
-const { rejectedKeep } = load('prefs', { react: {}, './api': api, './layouts': { DEFAULT_LOOK: {} } })
+const imports = { react: {}, './api': api, './layouts': { DEFAULT_LOOK: {} } }
+const pendingKey = 'tmux-chat.prefs.pending'
+function storage() {
+  const items = new Map()
+  return {
+    getItem: key => items.get(key) ?? null,
+    setItem: (key, value) => items.set(key, value),
+    removeItem: key => items.delete(key),
+  }
+}
+const localStorage = storage()
+const { rejectedKeep, loadPending, savePending } = load('prefs', imports, { localStorage })
+const plain = value => JSON.parse(JSON.stringify(value))
+savePending({ order: ['a'] })
+assert.deepEqual(plain(loadPending()), { order: ['a'] })
+savePending({})
+assert.equal(localStorage.getItem(pendingKey), null)
+for (const value of ['{"unknown":true}', '{broken', 'null', '[]', '42', '"text"']) {
+  localStorage.setItem(pendingKey, value)
+  assert.deepEqual(plain(loadPending()), {})
+}
+localStorage.setItem(pendingKey, '{"order":["a"],"unknown":true}')
+assert.deepEqual(plain(loadPending()), { order: ['a'] })
+savePending({ order: ['a'], unknown: true })
+assert.deepEqual(JSON.parse(localStorage.getItem(pendingKey)), { order: ['a'] })
+const blocked = load('prefs', imports, { localStorage: {
+  getItem: () => { throw new Error('Blocked') },
+  setItem: () => { throw new Error('Blocked') },
+  removeItem: () => { throw new Error('Blocked') },
+} })
+assert.deepEqual(plain(blocked.loadPending()), {})
+assert.doesNotThrow(() => blocked.savePending({ order: ['a'] }))
+assert.doesNotThrow(() => blocked.savePending({}))
+console.log('Prefs pending: round trip, removal, invalid data and blocked storage pass')
 const changes = Object.freeze({ waitingOrder: 'newest', theme: 'dark' })
 const kept = error => {
   const result = rejectedKeep(changes, error)
@@ -47,18 +80,28 @@ visit(source)
 assert.ok(flush)
 async function testFlush(error, newer, expected, retries, warns) {
   const pending = { current: { ...changes } }
+  const localStorage = storage()
+  const { loadPending, savePending } = load('prefs', imports, { localStorage })
+  savePending(pending.current)
   const busy = { current: false }
+  const sending = { current: {} }
+  const persist = () => savePending({ ...sending.current, ...pending.current })
   const calls = []
   const timers = []
   const warnings = []
   const context = {
-    pending, busy, timer: { current: 0 }, rejectedKeep, ApiError: api.ApiError,
+    pending, busy, sending, persist, timer: { current: 0 }, rejectedKeep, savePending, ApiError: api.ApiError,
     request: async (path, body) => {
       calls.push({ path, body: JSON.parse(JSON.stringify(body)) })
+      // The sent batch stays on disk until the server answers, so closing the page mid-request loses nothing.
+      assert.deepEqual(plain(loadPending()), plain(changes))
       pending.current = { ...newer }
-      throw error
+      persist()
+      assert.deepEqual(plain(loadPending()), plain({ ...changes, ...newer }))
+      if (error) throw error
+      return { prefs: { ...changes }, version: 1 }
     },
-    apply: () => assert.fail('A rejected request must not apply preferences'),
+    apply: stored => { assert.equal(error, null); assert.equal(stored.version, 1) },
     console: { warn: (...args) => warnings.push(args) },
     window: { setTimeout: (callback, delay) => { timers.push({ callback, delay }); return 1 } },
   }
@@ -68,6 +111,8 @@ async function testFlush(error, newer, expected, retries, warns) {
   await context.flush()
   assert.deepEqual(calls, [{ path: 'prefs', body: { changes } }])
   assert.deepEqual(JSON.parse(JSON.stringify(pending.current)), expected)
+  assert.deepEqual(plain(loadPending()), expected)
+  if (!Object.keys(expected).length) assert.equal(localStorage.getItem(pendingKey), null)
   assert.equal(busy.current, false)
   assert.equal(timers.length, retries)
   if (retries) assert.equal(timers[0].delay, 2000)
@@ -75,6 +120,7 @@ async function testFlush(error, newer, expected, retries, warns) {
   if (warns) assert.deepEqual(warnings[0].slice(1), [error.status, error.message])
 }
 Promise.all([
+  testFlush(null, {}, {}, 0, 0),
   testFlush(new api.ApiError(400, 'Invalid preference: waitingOrder.'), {}, { theme: 'dark' }, 1, 1),
   testFlush(new api.ApiError(400, 'Invalid preference: waitingOrder.'),
     { waitingOrder: 'oldest', theme: 'light' }, { waitingOrder: 'oldest', theme: 'light' }, 1, 1),
