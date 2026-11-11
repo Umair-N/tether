@@ -63,9 +63,11 @@ def main():
                                        f'raw.githubusercontent.com/incmak/tether/{tag}/', path.read_text()))
                 files.append(name)
         env = dict(os.environ, SHELL='/bin/bash', TETHER_REAL_BROWSER_TEST='1')
+        # The Python tests load ui/src TypeScript, so install the UI packages first.
+        run(['npm', 'ci'], worktree / 'ui', timeout=1200)
         run(['python3', '-m', 'unittest', 'discover', '-q'], worktree / 'server',
             env=env, timeout=1200)
-        run(['/bin/bash', '-c', 'npm ci && npx tsc -b && npx eslint . && npm run build'],
+        run(['/bin/bash', '-c', 'npx tsc -b && npx eslint . && npm run build'],
             worktree / 'ui', timeout=1200)
         run(['git', 'add', '--', *files], worktree)
         run(['git', 'commit', '-m', f'Release {args.version}'], worktree)

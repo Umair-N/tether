@@ -1,6 +1,7 @@
 """Mobile transcript and message bridge to one existing Codex CLI thread."""
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+import gzip
 import hashlib
 import json
 import logging
@@ -1067,12 +1068,16 @@ CHAT_UI_ROOT = Path(os.environ.get('TMUX_CHAT_DIST', str(Path(__file__).resolve(
 CHAT_UI_TYPES = {'.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png',
                  '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.ico': 'image/x-icon', '.woff2': 'font/woff2',
                  '.wasm': 'application/wasm', '.mjs': 'text/javascript', '.onnx': 'application/octet-stream'}
+CHAT_UI_TEXT_TYPES = {'.html', '.js', '.mjs', '.css', '.svg', '.json', '.webmanifest'}
+CHAT_UI_GZIP_CACHE = {}
+CHAT_UI_GZIP_LOCK = threading.Lock()
+CHAT_UI_GZIP_LIMIT = 64 * 1024 * 1024
 
 
 class Handler(BaseHTTPRequestHandler):
     timeout = 60  # a client that stalls mid-request must not hold a thread forever
 
-    def respond(self, status, body, content_type='application/json', cache='no-store'):
+    def respond(self, status, body, content_type='application/json', cache='no-store', headers=None):
         data = body if isinstance(body, bytes) else body.encode() if isinstance(body, str) else json.dumps(body).encode()
         if (self.command in ('POST', 'DELETE') and status < 300 and self.path.split('?', 1)[0] in TMUX_WRITES
                 and not getattr(self, 'keep_sessions', False)):
@@ -1082,6 +1087,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Length', str(len(data)))
         self.send_header('Cache-Control', cache)
         self.send_header('X-Content-Type-Options', 'nosniff')
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(data)
 
@@ -1322,7 +1329,36 @@ class Handler(BaseHTTPRequestHandler):
             return
         kind = CHAT_UI_TYPES.get(target.suffix, 'application/octet-stream')
         cache = 'max-age=31536000, immutable' if target.parent.name == 'assets' else 'no-cache'
-        self.respond(200, target.read_bytes(), kind, cache)
+        headers = {}
+        encodings = {}
+        if target.suffix in CHAT_UI_TEXT_TYPES:
+            headers['Vary'] = 'Accept-Encoding'
+            for token in self.headers.get('Accept-Encoding', '').split(','):
+                encoding, *parameters = token.split(';')
+                quality = 1.0
+                for parameter in parameters:
+                    name, separator, value = parameter.strip().partition('=')
+                    if name.lower() == 'q':
+                        try:
+                            quality = float(value) if separator else 0.0
+                        except ValueError:
+                            quality = 0.0
+                encodings[encoding.strip().lower()] = quality
+        if headers and 0 < encodings.get('gzip', encodings.get('*', 0)) <= 1 and target.stat().st_size >= 1024:
+            with CHAT_UI_GZIP_LOCK:
+                info = target.stat()
+                key = (target.resolve(), info.st_mtime_ns, info.st_size)
+                data = CHAT_UI_GZIP_CACHE.get(key)
+                if data is None:
+                    data = gzip.compress(target.read_bytes(), compresslevel=6, mtime=0)
+                    if sum(map(len, CHAT_UI_GZIP_CACHE.values())) + len(data) > CHAT_UI_GZIP_LIMIT:
+                        CHAT_UI_GZIP_CACHE.clear()
+                    if len(data) <= CHAT_UI_GZIP_LIMIT:
+                        CHAT_UI_GZIP_CACHE[key] = data
+            headers['Content-Encoding'] = 'gzip'
+        else:
+            data = target.read_bytes()
+        self.respond(200, data, kind, cache, headers=headers)
 
     def do_GET(self):
         path = self.path.split('?', 1)[0]

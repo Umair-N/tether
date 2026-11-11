@@ -81,7 +81,9 @@ class ProjectTests(unittest.TestCase):
         self.assertIn(str(projects.bundle(PID) / 'notes'), text)
         self.assertNotIn('## Instructions', text)
         self.assertIn('@chat_icon', text)  # agents learn to set their tab icon
-        self.assertLess(len(text), 3000)
+        # Count the notes path at its real length, not the length of the test temp folder.
+        real = text.replace(str(projects.bundle(PID)), f'/srv/user/.tether/projects/{PID}')
+        self.assertLess(len(real), 3000)
         self.assertIn('not evidence of absence', text)
         self.assertLess(text.index('## Naming tabs'), text.index('## Claims of absence'))
         self.assertLess(text.index('## Claims of absence'), text.index('## New tabs and reviewers'))
