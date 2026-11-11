@@ -47,6 +47,7 @@ function fixtures(state) {
     'browser/agents': { enabled: false, available: false, reason: 'Fixture browser off', agents: [], asks: [] },
     'browser/signed/access': { browser: 'signed', requests: [], grants: [], ended: [] },
     usage: { claude: null, codex: null },
+    subagents: { main: { model: null, context: null, title: null }, agents: [], tasks: [] },
   }
 }
 
@@ -145,6 +146,59 @@ function inspectOverlays(selector) {
   }
   return { textErrors: [...new Set(textErrors)], controlErrors: [...new Set(controlErrors)],
     textLines, controls, overflow: document.documentElement.scrollWidth > innerWidth }
+}
+
+// Runs in the browser. Bubbles must stay clickable and clear of neighbouring controls.
+function inspectBubbles() {
+  const errors = []
+  const visible = el => {
+    for (let at = el; at; at = at.parentElement) {
+      const s = getComputedStyle(at)
+      if (at.hidden || s.display === 'none' || s.visibility === 'hidden' || Number(s.opacity) === 0) return false
+    }
+    return true
+  }
+  const describe = el => {
+    const parts = []
+    for (let at = el; at && parts.length < 3; at = at.parentElement) {
+      parts.push(at.tagName.toLowerCase() + [...at.classList].map(c => `.${c}`).join(''))
+    }
+    return parts.join(' < ')
+  }
+  const bounds = r => `(${Math.round(r.left)}-${Math.round(r.right)}, ${Math.round(r.top)}-${Math.round(r.bottom)})`
+  const targets = []
+  for (const el of document.querySelectorAll('.status-stack, .composer')) {
+    if (!visible(el)) continue
+    const r = el.getBoundingClientRect()
+    if (el.matches('.composer')) { targets.push({ name: 'composer', r }); continue }
+    if (!el.querySelector(':scope > .status-content:not([hidden])')) continue
+    targets.push({ name: 'status card', r })
+    if (el.offsetWidth - el.clientWidth - el.clientLeft * 2 > 0) {
+      targets.push({ name: 'status card scrollbar', r: {
+        left: r.left + el.clientLeft + el.clientWidth, right: r.right - el.clientLeft,
+        top: r.top, bottom: r.bottom,
+      } })
+    }
+  }
+  const menu = document.querySelector('.attach-layer:popover-open, .mode-menu')
+  const bubbles = [...document.querySelectorAll('.agent-bubble')].filter(visible)
+  for (const bubble of bubbles) {
+    const label = bubble.getAttribute('aria-label'), r = bubble.getBoundingClientRect()
+    if (!menu) {
+      const top = document.elementFromPoint((r.left + r.right) / 2, (r.top + r.bottom) / 2)
+      if (top !== bubble && !bubble.contains(top)) {
+        errors.push(`bubble "${label}" hit test returns ${top ? describe(top) : 'null'}`)
+      }
+    }
+    for (const target of targets) {
+      const t = target.r
+      if (Math.min(r.right, t.right) - Math.max(r.left, t.left) > 0.5 &&
+          Math.min(r.bottom, t.bottom) - Math.max(r.top, t.top) > 0.5) {
+        errors.push(`bubble "${label}" ${bounds(r)} overlaps ${target.name} ${bounds(t)}`)
+      }
+    }
+  }
+  return { bubbles: bubbles.length, errors }
 }
 
 async function main() {
@@ -262,11 +316,9 @@ async function main() {
           await page.waitForFunction(() => { const el = document.querySelector('.status-stack'); return Math.abs(el.scrollTop - (el.scrollHeight - el.clientHeight) / 2) <= 1 && el.scrollTop > 0 })
         }
         if (state === 'approval') await page.waitForSelector('.status-chip[aria-expanded=true][aria-controls$="-action"]')
-        if (['heads-open', 'jump'].includes(state)) {
-          await page.waitForSelector('.agent-bubble:not(.side-pin-bubble)')
-          await page.waitForSelector('.side-pin-bubble')
-          bubbleCases.add(name)
-        }
+        await page.waitForSelector('.agent-bubble:not(.side-pin-bubble)')
+        await page.waitForSelector('.side-pin-bubble')
+        bubbleCases.add(name)
         await page.evaluate(() => document.fonts.ready)
         await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
         await page.screenshot({ path: path.join(SHOTS, `${name}.png`) })
@@ -275,6 +327,8 @@ async function main() {
         check(`${name} A text (${result.textLines} lines)`, result.textLines ? result.textErrors : ['No visible floating text'])
         check(`${name} B controls (${result.controls})`, result.controls ? result.controlErrors : ['No visible floating controls'])
         check(`${name} C page overflow`, result.overflow ? ['documentElement.scrollWidth exceeds innerWidth'] : [])
+        const { bubbles: n, errors } = await page.evaluate(inspectBubbles)
+        check(`${name} D bubbles (${n})`, n ? errors : ['No visible bubbles'])
         if (pageErrors.length > errorStart) check(`${name} runtime`, pageErrors.slice(errorStart))
       } catch (error) {
         await page.screenshot({ path: path.join(SHOTS, `${name}.png`) }).catch(() => {})
@@ -284,7 +338,7 @@ async function main() {
     check('fixture coverage', [...unexpected].map(endpoint => `Unmocked request: ${endpoint}`))
     console.log(`Fixture endpoints: ${[...endpoints].sort().join(', ')}`)
     const missing = states.filter(state => !triggered.has(state))
-    console.log(`States not triggered: ${missing.length ? missing.join(', ') + ' (setup failed; see setup checks)' : 'none'}. Right-edge bubbles: agent and side-pin triggered in ${bubbleCases.size}/12 heads-open/jump cases.`)
+    console.log(`States not triggered: ${missing.length ? missing.join(', ') + ' (setup failed; see setup checks)' : 'none'}. Right-edge bubbles: agent and side-pin triggered in ${bubbleCases.size}/${cases} cases with both bubbles.`)
   } catch (error) { check('runner', [error.message]) }
   finally {
     if (page) await page.close().catch(() => {})
