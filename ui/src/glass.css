@@ -91,8 +91,12 @@
 .app-shell[data-surface="glass"] :is(.agent-pop, .attach-menu, .keys-menu, .browser-menu, .sm-panel, .live-popover, .suggest, .selection-backlog, .jump-button, .update-banner, .resume-notice, .fx-uploads, .look-trial) {
   background: var(--g-pop); border-color: var(--g-edge); -webkit-backdrop-filter: blur(20px) saturate(170%); backdrop-filter: blur(20px) saturate(170%);
 }
-/* Sticky strips (the status grip and rail) used --bg to cover what scrolls under them. */
+/* Sticky strips (the status grip and rail) used --bg to cover what scrolls under them. With no card open nothing
+   scrolls under them, so they stay clear over the glass. With a card open, the stack is one solid card and the strips
+   paint that same fill: card text scrolls under the chips, never through them. */
 .app-shell[data-surface="glass"] :is(.status-grip, .status-rail) { background: transparent; }
+.app-shell[data-surface="glass"] .status-stack:has(> .status-content:not([hidden])) { padding: 0 8px; border: 1px solid var(--g-edge); border-radius: var(--radius-lg); background: var(--g-pop); box-shadow: var(--g-shadow); }
+.app-shell[data-surface="glass"] .status-stack:has(> .status-content:not([hidden])) > :is(.status-grip, .status-rail) { background: var(--g-pop); }
 /* Settings and other sheets: one glass card. The side list and search sit on it, not in their own boxes. */
 .app-shell[data-surface="glass"] .sheet { background: var(--g-solid); }
 /* Overlays (the phone drawer, dialogs, sheets, popovers) sit over content, not over the backdrop: they keep the
