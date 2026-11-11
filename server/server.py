@@ -1635,6 +1635,10 @@ class Handler(BaseHTTPRequestHandler):
                 query = parse_qs(urlsplit(self.path).query)
                 config = choose(query.get('session', [None])[0])
                 self.respond(200, subagents.detail(config, query.get('id', [''])[0]))
+            elif path == '/mobile/api/subagent-task':
+                query = parse_qs(urlsplit(self.path).query)
+                config = choose(query.get('session', [None])[0])
+                self.respond(200, subagents.task(config, query.get('id', [''])[0]))
             elif path == '/mobile/api/subagent-tool':
                 query = parse_qs(urlsplit(self.path).query)
                 config = choose(query.get('session', [None])[0])

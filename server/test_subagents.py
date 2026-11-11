@@ -20,11 +20,18 @@ class SubagentTests(unittest.TestCase):
         self.main = self.root / 'session.jsonl'
         self.folder = self.root / 'session' / 'subagents'
         self.folder.mkdir(parents=True)
-        self.config = {'agent': 'claude', 'transcript': str(self.main)}
+        self.config = {'agent': 'claude', 'transcript': str(self.main),
+                       'owner_pid': 123, 'process_start': '456'}
         self.now = 1800000000
+        self.owner_start = self.enterContext(patch.object(subagents, 'process_start', return_value='456'))
+        self.start_ms = self.enterContext(patch.object(subagents.procinfo, 'start_ms',
+                                                     return_value=(self.now - 300) * 1000))
         self.clock = patch.object(subagents.time, 'time', return_value=self.now)
         self.clock.start()
         self.addCleanup(self.clock.stop)
+        self.enterContext(patch.object(subagents, '_fd_links', return_value=[]))
+        subagents._tasks_cache.clear()
+        self.addCleanup(subagents._tasks_cache.clear)
         subagents._cache.clear()
         self.addCleanup(subagents._cache.clear)
         self.write(self.main, [self.record('assistant', 'main', model='main-model', usage={
@@ -66,7 +73,7 @@ class SubagentTests(unittest.TestCase):
 
     def test_running_finished_stopped_and_elapsed_time(self):
         self.agent('running', age=900)
-        self.agent('stopped', age=901)
+        self.agent('stopped', meta={'stoppedByUser': True}, age=901)
         self.agent('finished', meta={'finished': True}, age=1000)
         entries = {entry['id']: entry for entry in subagents.listing(self.config)['agents']}
         self.assertEqual(entries['running']['state'], 'running')
@@ -78,6 +85,62 @@ class SubagentTests(unittest.TestCase):
             self.assertEqual(entries[identifier]['seconds'], 30)
         self.assertIsNone(subagents.detail(self.config, 'running')['report'])
         self.assertIsNone(subagents.detail(self.config, 'stopped')['report'])
+
+    def test_live_owner_keeps_two_hour_old_log_running(self):
+        self.agent(age=2 * 60 * 60)
+        self.assertEqual(subagents.listing(self.config)['agents'][0]['state'], 'running')
+        self.owner_start.assert_called_once_with(123)
+        self.start_ms.assert_called_once_with('456')
+
+    def test_agent_from_before_owner_started_is_stopped(self):
+        self.agent(records=[self.record('user', 'Old agent', seconds=-360)])
+        entry = subagents.listing(self.config)['agents'][0]
+        self.assertEqual(entry['state'], 'stopped')
+        self.assertEqual(entry['summary'], 'Claude exited before this agent finished.')
+
+    def test_owner_start_allows_five_seconds_of_clock_skew(self):
+        self.agent('within', records=[self.record('user', 'Within tolerance', seconds=-305)])
+        self.agent('outside', records=[self.record('user', 'Outside tolerance', seconds=-306)])
+        entries = {entry['id']: entry for entry in subagents.listing(self.config)['agents']}
+        self.assertEqual(entries['within']['state'], 'running')
+        self.assertEqual(entries['outside']['state'], 'stopped')
+        self.owner_start.assert_called_once_with(123)
+
+    def test_changed_owner_stops_cached_agent_without_file_changes(self):
+        self.agent()
+        self.assertEqual(subagents.listing(self.config)['agents'][0]['state'], 'running')
+        self.owner_start.return_value = '789'
+        entry = subagents.listing(self.config)['agents'][0]
+        self.assertEqual(entry['state'], 'stopped')
+        self.assertEqual(entry['summary'], 'Claude exited before this agent finished.')
+
+    def test_missing_or_pending_owner_stops_agent(self):
+        self.agent()
+        for missing in ('owner_pid', 'process_start'):
+            config = dict(self.config)
+            del config[missing]
+            with self.subTest(missing=missing):
+                self.assertEqual(subagents.listing(config)['agents'][0]['state'], 'stopped')
+        self.assertEqual(subagents.listing(dict(self.config, pending_conversation=True))['agents'][0]['state'],
+                         'stopped')
+        self.owner_start.assert_not_called()
+        self.start_ms.assert_not_called()
+
+    def test_owner_lookup_errors_stop_agent(self):
+        self.agent()
+        for reader in (self.owner_start, self.start_ms):
+            for error in (OSError, ValueError):
+                with self.subTest(reader=reader, error=error):
+                    reader.side_effect = error('unavailable')
+                    self.assertEqual(subagents.listing(self.config)['agents'][0]['state'], 'stopped')
+                    reader.side_effect = None
+
+    def test_live_owner_with_unknown_agent_start_is_running(self):
+        self.agent(records=[{'type': 'user', 'message': {'content': 'No timestamp'}}], age=7200)
+        entry = subagents.listing(self.config)['agents'][0]
+        self.assertEqual(entry['state'], 'running')
+        self.assertIsNone(entry['started'])
+        self.assertIsNone(entry['seconds'])
 
     def notification(self, identifier, status, summary='Task result'):
         return (f'<task-notification>\n<task-id>{identifier}</task-id>\n'
@@ -310,7 +373,7 @@ class SubagentTests(unittest.TestCase):
                        {'agent': 'claude'}, {'agent': 'claude', 'transcript': ''},
                        dict(self.config, transcript=str(self.root / 'missing.jsonl'))):
             with self.subTest(config=config):
-                self.assertEqual(subagents.listing(config), {'main': {'model': None, 'context': None, 'title': None}, 'agents': []})
+                self.assertEqual(subagents.listing(config), {'main': {'model': None, 'context': None, 'title': None}, 'agents': [], 'tasks': []})
                 with self.assertRaises(ValueError):
                     subagents.detail(config, 'abc')
 
@@ -410,7 +473,9 @@ class SubagentTests(unittest.TestCase):
         self.agent(age=899)
         self.assertEqual(subagents.detail(self.config, 'abc')['state'], 'running')
         with patch.object(subagents.time, 'time', return_value=self.now + 2):
-            self.assertEqual(subagents.detail(self.config, 'abc')['state'], 'stopped')
+            entry = subagents.detail(self.config, 'abc')
+            self.assertEqual(entry['state'], 'running')
+            self.assertEqual(entry['seconds'], 122)
 
     def test_cache_is_bounded_and_response_mutation_does_not_change_it(self):
         self.agent()
@@ -450,6 +515,306 @@ class SubagentTests(unittest.TestCase):
             with patch.object(server, 'choose', return_value=self.config):
                 handler.do_GET()
             handler.respond.assert_called_once_with(503, {'error': 'The conversation is currently unavailable.'})
+
+
+class ProcessTasksTests(unittest.TestCase):
+    stamp = SubagentTests.stamp
+    record = SubagentTests.record
+    write = SubagentTests.write
+    agent = SubagentTests.agent
+    notification = SubagentTests.notification
+
+    def setUp(self):
+        SubagentTests.setUp(self)
+        self.old = '11111111-1111-1111-1111-111111111111'
+        self.new = '22222222-2222-2222-2222-222222222222'
+        self.project = self.root / 'projects' / 'project'
+        self.folder = self.project / self.new / 'subagents'
+        self.folder.mkdir(parents=True)
+        self.old_folder = self.project / self.old / 'subagents'
+        self.old_folder.mkdir(parents=True)
+        self.main = self.project / f'{self.new}.jsonl'
+        self.first = self.project / f'{self.old}.jsonl'
+        self.write(self.main, [])
+        self.write(self.first, [])
+        self.config.update(transcript=str(self.main), thread=self.new)
+        self.tmp = self.root / 'claude-tmp'
+        self.tasks = self.tmp / 'cwd-slug' / self.old / 'tasks'
+        self.tasks.mkdir(parents=True)
+        self.enterContext(patch.object(subagents, 'TASKS_TMP', self.tmp))
+        self.enterContext(patch.object(subagents, 'PROJECTS', self.project.parent))
+        self.fds = self.enterContext(patch.object(subagents, '_fd_links', return_value=[self.tasks]))
+
+    def old_agent(self, identifier='abc', *, meta=None):
+        path = self.old_folder / f'agent-{identifier}.jsonl'
+        self.write(path, [self.record('user', 'Original prompt', seconds=-200),
+                          self.record('assistant', 'Old step', seconds=-190)])
+        if meta is not None:
+            path.with_suffix('.meta.json').write_text(json.dumps(meta))
+        (self.tasks / f'{identifier}.output').symlink_to(path)
+        return path
+
+    def task_start(self, identifier, *, name='Bash', command='sleep 600', description='Wait', seconds=-100):
+        tool_id = 'tool-' + identifier
+        call = self.record('assistant', [{'type': 'tool_use', 'id': tool_id, 'name': name,
+                                         'input': {'command': command, 'description': description}}], seconds=seconds)
+        result = self.record('user', [{'type': 'tool_result', 'tool_use_id': tool_id, 'content': 'background'}], seconds=seconds)
+        result['toolUseResult'] = {('taskId' if name == 'Monitor' else 'backgroundTaskId'): identifier}
+        return [call, result]
+
+    def output(self, identifier, text='', seconds=-20):
+        path = self.tasks / f'{identifier}.output'
+        path.write_bytes(text.encode() if isinstance(text, str) else text)
+        os.utime(path, (self.now + seconds, self.now + seconds))
+        return path
+
+    def listed_tasks(self):
+        return {item['id']: item for item in subagents.listing(self.config)['tasks']}
+
+    def test_link_to_new_session_before_any_write_finds_middle_session_lines(self):
+        # Seen live: /clear points the link at the new session at once; the agent's lines stay in the
+        # session between the first and the current one.
+        middle = self.project / '33333333-3333-3333-3333-333333333333' / 'subagents'
+        middle.mkdir(parents=True)
+        path = middle / 'agent-mid.jsonl'
+        self.write(path, [self.record('user', 'Middle prompt', seconds=-200),
+                          self.record('assistant', 'Middle step', seconds=-190)])
+        path.with_suffix('.meta.json').write_text(json.dumps({'description': 'Middle wait'}))
+        (self.tasks / 'mid.output').symlink_to(self.project / self.new / 'subagents' / 'agent-mid.jsonl')
+        agents = {item['id']: item for item in subagents.listing(self.config)['agents']}
+        self.assertEqual(agents['mid']['state'], 'running')
+        self.assertEqual(agents['mid']['description'], 'Middle wait')
+        self.assertEqual(subagents.detail(self.config, 'mid')['prompt'], 'Middle prompt')
+
+    def test_silent_old_agent_survives_clear_and_can_be_opened(self):
+        path = self.old_agent(meta={'description': 'Wait'})
+        self.assertEqual([item['id'] for item in subagents.listing(self.config)['agents']], ['abc'])
+        self.assertEqual(subagents.detail(self.config, 'abc')['prompt'], 'Original prompt')
+        self.assertEqual(subagents._path(self.config, 'abc'), path)
+        # A new chat need not have its own subagents folder yet.
+        self.folder.rmdir()
+        self.assertEqual(subagents.detail(self.config, 'abc')['state'], 'running')
+
+    def test_split_agent_combines_prompt_steps_usage_meta_and_tool_results(self):
+        old = self.old_agent(meta={'description': 'Old description', 'model': 'old'})
+        self.write(old, [self.record('user', 'Original prompt', seconds=-200), self.record('assistant', [
+            {'type': 'text', 'text': 'Old step'},
+            {'type': 'tool_use', 'id': 'read-old', 'name': 'Read', 'input': {'file_path': 'a.py'}}], seconds=-190)])
+        new = self.agent(records=[self.record('user', [
+            {'type': 'tool_result', 'tool_use_id': 'read-old', 'content': 'Read result'}]),
+            self.record('assistant', 'New step', usage={'input_tokens': 25})],
+            meta={'description': 'New description'})
+        (self.tasks / 'abc.output').unlink()
+        (self.tasks / 'abc.output').symlink_to(new)
+        detail = subagents.detail(self.config, 'abc')
+        self.assertEqual(detail['prompt'], 'Original prompt')
+        self.assertEqual([step.get('text') for step in detail['steps'] if step['kind'] == 'text'], ['Old step', 'New step'])
+        self.assertEqual(detail['description'], 'New description')
+        self.assertEqual(detail['tokens'], 25)
+        self.assertEqual(detail['tools'], 1)
+        self.assertEqual(detail['steps'][1]['status'], 'complete')
+        self.assertEqual(subagents.tool(self.config, 'abc', 'read-old')['status'], 'complete')
+
+    def test_current_agent_joins_first_session_file_without_output_symlink(self):
+        self.old_agent()
+        (self.tasks / 'abc.output').unlink()
+        self.agent(records=[self.record('assistant', 'Current step')])
+        detail = subagents.detail(self.config, 'abc')
+        self.assertEqual(detail['prompt'], 'Original prompt')
+        self.assertEqual([step['text'] for step in detail['steps']], ['Old step', 'Current step'])
+
+    def test_finished_old_agent_is_excluded_but_current_finished_is_kept(self):
+        self.old_agent(meta={'finished': True})
+        self.agent('current', meta={'finished': True})
+        self.assertEqual([item['id'] for item in subagents.listing(self.config)['agents']], ['current'])
+        with self.assertRaises(ValueError):
+            subagents.detail(self.config, 'abc')
+
+    def test_old_agent_terminal_notification_excludes_it(self):
+        self.old_agent()
+        self.write(self.main, [self.record('user', self.notification('abc', 'killed'))])
+        self.assertEqual(subagents.listing(self.config)['agents'], [])
+
+    def test_agent_symlink_must_match_id_and_projects_layout(self):
+        old = self.old_agent()
+        (self.tasks / 'abc.output').unlink()
+        (self.tasks / 'other.output').symlink_to(old)
+        outside = self.root / 'agent-escape.jsonl'
+        self.write(outside, [self.record('user', 'private')])
+        (self.tasks / 'escape.output').symlink_to(outside)
+        self.assertEqual(subagents.listing(self.config)['agents'], [])
+
+    def test_task_footers_and_live_owner(self):
+        records = []
+        cases = [('shell00', '[exited with code 0]', 'finished'),
+                 ('shell02', '[exited with code 2]', 'failed'),
+                 ('shell03', '[killed]', 'stopped'), ('shell04', '', 'running')]
+        for identifier, footer, _ in cases:
+            records.extend(self.task_start(identifier))
+            self.output(identifier, 'output\n' + footer + '\n')
+        self.write(self.main, records)
+        tasks = self.listed_tasks()
+        for identifier, footer, state in cases:
+            self.assertEqual(tasks[identifier]['state'], state)
+            self.assertEqual(tasks[identifier]['seconds'], 80 if footer else 100)
+            self.assertEqual(tasks[identifier]['ended'], self.stamp(-20) if footer else None)
+            self.assertEqual(tasks[identifier]['summary'], footer if state in ('failed', 'stopped') else None)
+        self.owner_start.return_value = 'dead'
+        self.assertEqual(self.listed_tasks(), {})
+        self.assertIsNone(subagents._tasks_dir(self.config))
+
+    def test_footer_precedes_notification_and_notification_is_secondary(self):
+        self.output('shell01', '[killed]')
+        self.output('shell02', '')
+        self.write(self.main, self.task_start('shell01') + self.task_start('shell02') + [
+            self.record('user', self.notification('shell01', 'completed')),
+            self.record('user', self.notification('shell02', 'failed', 'Notification failure'))])
+        tasks = self.listed_tasks()
+        self.assertEqual(tasks['shell01']['state'], 'stopped')
+        self.assertEqual(tasks['shell01']['summary'], '[killed]')
+        self.assertEqual(tasks['shell02']['state'], 'failed')
+        self.assertEqual(tasks['shell02']['summary'], 'Notification failure')
+
+    def test_monitor_in_old_running_agent_has_parent_and_kind(self):
+        old = self.old_agent()
+        with old.open('a') as stream:
+            stream.write(''.join(json.dumps(record) + '\n' for record in self.task_start(
+                'monitor1', name='Monitor', description='Watch events', command='tail -f events')))
+        self.output('monitor1', '[killed]')
+        task = self.listed_tasks()['monitor1']
+        self.assertEqual((task['kind'], task['parent'], task['description'], task['command']),
+                         ('monitor', 'abc', 'Watch events', 'tail -f events'))
+
+    def test_foreground_call_before_clear_becomes_task_after_clear(self):
+        old = self.old_agent()
+        new = self.agent(records=[self.record('assistant', 'New session')])
+        call, start = self.task_start('split01', description='Moved command', command='sleep 900')
+        with old.open('a') as stream:
+            stream.write(json.dumps(call) + '\n')
+        with new.open('a') as stream:
+            stream.write(json.dumps(start) + '\n')
+        self.output('split01', '[exited with code 0]')
+        task = self.listed_tasks()['split01']
+        self.assertEqual(task['command'], 'sleep 900')
+        self.assertEqual(task['description'], 'Moved command')
+        self.assertEqual(task['parent'], 'abc')
+
+    def test_earlier_chat_keeps_only_running_tasks_and_skips_foreground_files(self):
+        self.write(self.first, self.task_start('older01') + self.task_start('older02'))
+        self.output('older01', '[exited with code 0]')
+        self.output('older02')
+        # Output files with no start record are foreground Bash calls, not background tasks.
+        self.output('unknown1')
+        self.output('unknown2', '[killed]')
+        tasks = self.listed_tasks()
+        self.assertEqual(set(tasks), {'older02'})
+        self.assertEqual(tasks['older02']['command'], 'sleep 600')
+
+    def test_project_scan_requires_recent_mtime_and_tasks_dir_reference(self):
+        third = self.project / '33333333-3333-3333-3333-333333333333.jsonl'
+        unrelated = self.project / '44444444-4444-4444-4444-444444444444.jsonl'
+        ancient = self.project / '55555555-5555-5555-5555-555555555555.jsonl'
+        self.write(third, [self.record('user', str(self.tasks))] + self.task_start('third01'))
+        self.write(unrelated, self.task_start('other01'))
+        self.write(ancient, [self.record('user', str(self.tasks))] + self.task_start('oldest1'))
+        for path in (third, unrelated):
+            os.utime(path, (self.now, self.now))
+        os.utime(ancient, (self.now - 1000, self.now - 1000))
+        for identifier in ('third01', 'other01', 'oldest1'):
+            self.output(identifier)
+        original = Path.open
+        def read(path, *args, **kwargs):
+            self.assertNotEqual(path, ancient, 'An older unrelated transcript must never be opened')
+            return original(path, *args, **kwargs)
+        with patch.object(Path, 'open', read):
+            tasks = self.listed_tasks()
+        self.assertEqual(tasks['third01']['command'], 'sleep 600')
+        # Starts in unrelated or older transcripts are not read, so those files are not tasks.
+        self.assertNotIn('other01', tasks)
+        self.assertNotIn('oldest1', tasks)
+
+    def test_fd_cache_expires_and_glob_fallback_validates_uuid(self):
+        self.assertEqual(subagents._tasks_dir(self.config), self.tasks)
+        self.assertEqual(subagents._tasks_dir(self.config), self.tasks)
+        self.fds.assert_called_once()
+        fallback = self.tmp / 'cwd-slug' / self.new / 'tasks'
+        fallback.mkdir(parents=True)
+        self.fds.return_value = []
+        with patch.object(subagents.time, 'monotonic', return_value=subagents.time.monotonic() + 31):
+            self.assertEqual(subagents._tasks_dir(self.config), fallback)
+        subagents._tasks_cache.clear()
+        self.assertIsNone(subagents._tasks_dir(dict(self.config, thread='../*')))
+
+    def test_fd_directory_must_have_valid_layout_and_owned_root(self):
+        outside = self.root / 'outside' / self.old / 'tasks'
+        outside.mkdir(parents=True)
+        self.fds.return_value = [outside, self.tasks.parent]
+        self.assertIsNone(subagents._tasks_dir(self.config))
+        subagents._tasks_cache.clear()
+        with patch.object(subagents.os, 'getuid', return_value=-1):
+            self.assertIsNone(subagents._tasks_dir(self.config))
+
+    def test_task_output_tail_cut_and_escape_refusals(self):
+        self.write(self.main, self.task_start('shell01') + self.task_start('short01'))
+        self.output('shell01', b'a' * (64 * 1024) + b'\xfftail\n')
+        detail = subagents.task(self.config, 'shell01')
+        self.assertTrue(detail['output_cut'])
+        self.assertTrue(detail['output'].endswith('�tail\n'))
+        self.output('short01', 'short')
+        self.assertFalse(subagents.task(self.config, 'short01')['output_cut'])
+        (self.tasks / 'linked1.output').symlink_to(self.tasks / 'short01.output')
+        for identifier in ('../shell01', '', 'linked1', 'unknown', None):
+            with self.subTest(identifier=identifier), self.assertRaisesRegex(ValueError, subagents._UNAVAILABLE):
+                subagents.task(self.config, identifier)
+
+    def test_task_cache_reuses_reads_and_handles_append_partial_and_rewrite(self):
+        self.output('shell01')
+        records = self.task_start('shell01')
+        self.write(self.main, records[:1])
+        self.assertNotIn('shell01', self.listed_tasks())
+        text = json.dumps(records[1])
+        with self.main.open('a') as stream:
+            stream.write(text[:40])
+        self.assertNotIn('shell01', self.listed_tasks())
+        with self.main.open('a') as stream:
+            stream.write(text[40:] + '\n')
+        self.assertEqual(self.listed_tasks()['shell01']['command'], 'sleep 600')
+        with patch.object(Path, 'open', side_effect=AssertionError('Unchanged files must stay cached')):
+            self.assertEqual(self.listed_tasks()['shell01']['command'], 'sleep 600')
+        self.write(self.main, [])
+        self.assertNotIn('shell01', self.listed_tasks())
+
+    def test_tasks_are_bounded_oldest_first_and_command_is_bounded(self):
+        records = []
+        for index in range(43):
+            identifier = f'task{index:03}'
+            records.extend(self.task_start(identifier, seconds=-200 + index, command='x' * 2100))
+            self.output(identifier)
+        self.write(self.main, records)
+        tasks = list(self.listed_tasks().values())
+        self.assertEqual([item['id'] for item in tasks], [f'task{index:03}' for index in range(3, 43)])
+        self.assertEqual(len(tasks[0]['command']), 2000)
+
+    def test_task_route_selects_config_requires_auth_and_handles_unknown(self):
+        self.write(self.main, self.task_start('shell01'))
+        self.output('shell01', 'hello')
+        handler = object.__new__(server.Handler)
+        handler.path = '/mobile/api/subagent-task?session=%2512&id=shell01'
+        handler.deny = Mock(return_value=False)
+        handler.respond = Mock()
+        with patch.object(server, 'choose', return_value=self.config) as choose:
+            handler.do_GET()
+            choose.assert_called_once_with('%12')
+        self.assertEqual(handler.respond.call_args.args[1]['output'], 'hello')
+        handler.deny.return_value = True
+        with patch.object(server, 'choose') as choose:
+            handler.do_GET()
+            choose.assert_not_called()
+        handler.deny.return_value = False
+        handler.path = '/mobile/api/subagent-task?id=../bad'
+        with patch.object(server, 'choose', return_value=self.config):
+            handler.do_GET()
+        self.assertEqual(handler.respond.call_args.args, (503, {'error': 'The conversation is currently unavailable.'}))
 
 
 if __name__ == '__main__':
