@@ -1,4 +1,5 @@
 """Mobile transcript and message bridge to one existing Codex CLI thread."""
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import hashlib
 import json
@@ -239,11 +240,14 @@ def settings():
 
 STATUS_CACHE = {}  # entry id -> (when, status)
 STATUS_LOCK = threading.Lock()
+STATUS_PANE_LOCKS = {}
 
 
 def shared_status(entry):
     """live_status for the session list and the monitor, which would otherwise each re-read the pane every few seconds."""
     with STATUS_LOCK:
+        pane_lock = STATUS_PANE_LOCKS.setdefault(entry['id'], threading.Lock())
+    with pane_lock:
         when, status = STATUS_CACHE.get(entry['id'], (0.0, None))
         if time.monotonic() - when > 1:
             try:
@@ -317,12 +321,20 @@ def forget_sessions():
         SESSIONS_CACHE[0] = 0.0
 
 
+SESSION_ROW_POOL = ThreadPoolExecutor(max_workers=6, thread_name_prefix='session-row')
+
+
 def session_row(entry):
     """One pane in the session list. `needs` is a one-line summary when the pane waits on the user (the desktop "Needs you" list)."""
     status = shared_status(entry)
     return dict({key: entry.get(key) for key in ('id', 'tmux_session', 'label', 'agent', 'thread', 'writable', 'pane_name', 'tmux_pane_name', 'pane_icon', 'agent_name', 'codex_profile', 'worktree', 'group')},
                 dir=home_path(tab_folder(entry)), **status, **timeline(entry['id']), needs=needs.summary(status),
                 ask=attention.STORE.ask(entry['id'], entry.get('thread')))
+
+
+def session_rows(entries):
+    """Build session rows concurrently, preserving discovery order."""
+    return list(SESSION_ROW_POOL.map(session_row, entries))
 
 
 def files_sessions():
@@ -1611,14 +1623,14 @@ class Handler(BaseHTTPRequestHandler):
             elif friday_proxy.handles(path):
                 friday_proxy.get(self)
             elif live_mode.handles(path):
-                live_mode.get(self, lambda: [session_row(entry) for entry in sessions()])
+                live_mode.get(self, lambda: session_rows(sessions()))
             elif attention.handles(path):
                 attention.get(self)
             elif path == '/mobile/api/stream':
                 query = parse_qs(urlsplit(self.path).query)
                 self.stream_chat(query.get('session', [None])[0], query.get('mode') == ['shell'], window_limit(query), preview=query.get('preview') == ['1'])
             elif path == '/mobile/api/sessions':
-                rows = [session_row(entry) for entry in sessions()]
+                rows = session_rows(sessions())
                 try:
                     links = review_links.reviewed_by()
                     paused = review_links.paused()
