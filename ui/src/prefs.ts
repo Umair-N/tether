@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { request } from './api'
+import { ApiError, request } from './api'
 import type { GroupBy, SessionGroup, SortBy } from './Organize'
 import { DEFAULT_LOOK } from './layouts'
 import type { Look, SavedLook } from './layouts'
@@ -125,6 +125,15 @@ function joined(shared: Shared, local: Prefs): Shared {
 }
 const pick = (prefs: Prefs) => Object.fromEntries(SYNCED.map(key => [key, prefs[key]])) as Shared
 
+// null retries the whole batch; otherwise only the returned keys go back into pending.
+export function rejectedKeep(changes: Record<string, unknown>, error: unknown): Record<string, unknown> | null {
+  if (!(error instanceof ApiError) || error.status < 400 || error.status >= 500
+    || [401, 403, 408, 429].includes(error.status)) return null
+  const match = /^Invalid preference: (.+)\.$/.exec(error.message)
+  if (!match || !Object.prototype.hasOwnProperty.call(changes, match[1])) return {}
+  return Object.fromEntries(Object.entries(changes).filter(([key]) => key !== match[1]))
+}
+
 export function usePrefs() {
   const [prefs, setPrefs] = useState<Prefs>(load)
   const latest = useRef(prefs)
@@ -164,7 +173,12 @@ export function usePrefs() {
     const changes = pending.current
     pending.current = {}
     if (changes.drafts) changes.drafts = keptDrafts(changes.drafts)
-    try { apply(await request<Stored>('prefs', { changes })) } catch { pending.current = { ...changes, ...pending.current } /* offline: try again on the next change or pull */ }
+    try { apply(await request<Stored>('prefs', { changes })) } catch (error) {
+      const rejected = rejectedKeep(changes, error)
+      const kept = rejected ?? changes
+      pending.current = { ...kept, ...pending.current }
+      if (rejected !== null && error instanceof ApiError) console.warn('Preference save rejected:', error.status, error.message)
+    }
     busy.current = false
     if (Object.keys(pending.current).length) timer.current = window.setTimeout(flush, 2000)
   }, [apply])

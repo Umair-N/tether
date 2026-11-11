@@ -56,6 +56,19 @@ class PrefsSyncTests(unittest.TestCase):
         # The page syncs 'scheme' with every first save; refusing it failed every prefs save from that device.
         self.assertEqual(prefs_sync.save({'scheme': 'claude', 'theme': 'dark'})['prefs'], {'scheme': 'claude', 'theme': 'dark'})
 
+    def test_waiting_order_round_trip(self):
+        for value in ('newest', 'oldest'):
+            with self.subTest(value=value):
+                stored = prefs_sync.save({'waitingOrder': value})
+                self.assertEqual(stored['prefs']['waitingOrder'], value)
+                self.assertEqual(prefs_sync.load(), stored)
+
+    def test_invalid_waiting_order_does_not_save(self):
+        for value in ('sideways', 42):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, r'^Invalid preference: waitingOrder\.$'):
+                prefs_sync.save({'waitingOrder': value})
+        self.assertEqual(prefs_sync.load()['version'], 0)
+
     def test_sidebar_preferences_round_trip(self):
         values = {'colors': {'$6': 'red', '%12': 'purple'},
                   'groups': [{'id': 'project-1', 'name': ' Project '}],

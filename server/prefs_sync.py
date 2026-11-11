@@ -20,7 +20,7 @@ FILE = paths.CACHE / 'prefs.json'
 KEYS = {'pinned': list, 'sidePins': list, 'order': list, 'paneOrder': dict, 'sort': str, 'seen': dict, 'collapsed': dict,
         'showPaths': bool, 'tmuxWords': bool, 'liveReplyPreview': bool, 'voiceOff': bool, 'voiceSound': bool, 'theme': str, 'scheme': str, 'drafts': dict,
         'archived': dict, 'archivedTabs': dict, 'autoResume': bool, 'layout': dict, 'repos': dict, 'files.pinned': list, 'hosts': list, 'sessionFolder': str,
-        'colors': dict, 'groups': list, 'groupOf': dict, 'groupBy': str, 'attention': bool, 'imagePromptTuned': bool}
+        'colors': dict, 'groups': list, 'groupOf': dict, 'groupBy': str, 'waitingOrder': str, 'attention': bool, 'imagePromptTuned': bool}
 GROUP_ID = re.compile(r'[a-z0-9-]{1,40}')
 MAX_SEEN = 500
 MAX_DRAFTS = 200
@@ -102,6 +102,8 @@ def save(changes):
                 urls.add(normalized)
         if key == 'groupBy' and value not in ('custom', 'folder', 'agent', 'none'):
             raise ValueError('Invalid preference: groupBy.')
+        if key == 'waitingOrder' and value not in ('oldest', 'newest'):
+            raise ValueError('Invalid preference: waitingOrder.')
     with _lock:
         stored = load()
         prefs = stored['prefs']
