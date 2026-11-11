@@ -1,7 +1,8 @@
+import { RetryButton } from './Retry'
 import { Loading, SkeletonRows } from './Skeleton'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { ArrowDown, ArrowUp, AtSign, BookMarked, ChevronLeft, ChevronRight, Copy, CopyPlus, Download, File, Folder, FolderInput, FolderOpen, FolderPlus, Image as ImageIcon, LayoutGrid, List, Lock, MessageCircle, MoreHorizontal, Package, Pencil, Plus, RotateCw, Search, SquareTerminal, Trash2, Upload, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, AtSign, BookMarked, ChevronLeft, ChevronRight, Copy, CopyPlus, Download, File, Folder, FolderInput, FolderOpen, FolderPlus, Image as ImageIcon, LayoutGrid, List, Lock, MessageCircle, MoreHorizontal, Package, Pencil, Plus, Search, SquareTerminal, Trash2, Upload, X } from 'lucide-react'
 import { ApiError, errorText } from './api'
 import type { Api, Pane } from './api'
 import { needsYou, paneTitle } from './Sidebar'
@@ -172,18 +173,19 @@ export function Explorer({ api, panes, pane, target, onTarget, onAddToMessage, o
   }, [secrets])
 
   // The folder listing, or the search results under this folder. Sort and filters run on the server.
-  const [listing, setListing] = useState<{ key: string; data?: FileList | FileSearch; error?: string; status?: number } | null>(null)
-  const listKey = `${cwd}|${hidden}|${sort}|${asc}|${search}|${secrets.on}|${reloadTick}`
+  const [listing, setListing] = useState<{ key: string; attempt: number; data?: FileList | FileSearch; error?: string; status?: number } | null>(null)
+  const listKey = `${cwd}|${hidden}|${sort}|${asc}|${search}|${secrets.on}`
   useEffect(() => {
     const controller = new AbortController()
     const url = search ? filesUrl.search(cwd, search, hidden) : filesUrl.list(cwd, hidden, sort, asc)
     api<FileList | FileSearch>(url, undefined, controller.signal).then(
-      data => { setListing({ key: listKey, data }); if ('secrets' in data) takeSecrets(data.secrets) },
-      failure => { if (!controller.signal.aborted) setListing({ key: listKey, error: errorText(failure), status: failure instanceof ApiError ? failure.status : 0 }) })
+      data => { if (controller.signal.aborted) return; setListing({ key: listKey, attempt: reloadTick, data }); if ('secrets' in data) takeSecrets(data.secrets) },
+      failure => { if (!controller.signal.aborted) setListing({ key: listKey, attempt: reloadTick, error: errorText(failure), status: failure instanceof ApiError ? failure.status : 0 }) })
     return () => controller.abort()
-  }, [api, cwd, hidden, sort, asc, search, listKey, takeSecrets])
-  const current = listing?.key === listKey ? listing : null
-  const loadingList = !current
+  }, [api, cwd, hidden, sort, asc, search, listKey, reloadTick, takeSecrets])
+  // Keep a failed load mounted during retries; other reloads keep their loading state.
+  const current = listing?.key === listKey && (listing.attempt === reloadTick || listing.error) ? listing : null
+  const loadingList = !current || current.attempt !== reloadTick
   const entries = useMemo(() => { const data = current?.data; return data ? 'hits' in data ? data.hits : data.entries : [] }, [current])
   const rows: Row[] = useMemo(() => entries.map(entry => {
     const full = entry.path ?? joinPath(cwd, entry.name)
@@ -560,7 +562,7 @@ export function Explorer({ api, panes, pane, target, onTarget, onAddToMessage, o
           {failed ? <div className="fx-empty" role="alert">
               <p>{failed}</p>
               <div className="fx-empty-actions">
-                <button type="button" className="fx-tb" onClick={() => setReloadTick(n => n + 1)}><RotateCw size={13} aria-hidden="true" />Try again</button>
+                <RetryButton className="fx-tb" busy={loadingList} onRetry={() => setReloadTick(n => n + 1)} />
                 {cwd !== '~' && <button type="button" className="fx-tb" onClick={() => go('~')}>Go to Home</button>}
               </div>
             </div>

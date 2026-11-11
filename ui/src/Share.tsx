@@ -1,3 +1,4 @@
+import { RetryButton } from './Retry'
 import { Bone, Loading, Skeleton } from './Skeleton'
 // Share: your own file store in Tether. Library grid by day, a preview pane, an upload queue and a "From agents" strip.
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -225,7 +226,7 @@ export function Share({ wide, onAddToMessage }: { wide: boolean; onAddToMessage?
     return () => stop.abort()
   }, [load])
   useEffect(() => { const stop = new AbortController(); void loadAgents(stop.signal); return () => stop.abort() }, [loadAgents])
-  const refresh = () => { void load(); void loadAgents() }
+  const refresh = () => { void loadAgents(); return load() }
   useEffect(() => { const stop = new AbortController(); listUploads(stop.signal).then(setUnfinished, () => {}); return () => stop.abort() }, [])
   const update = useCallback((changed: ShareFile) => {
     setFiles(list => list.map(f => f.id === changed.id ? changed : f))
@@ -399,7 +400,7 @@ export function Share({ wide, onAddToMessage }: { wide: boolean; onAddToMessage?
         </section>)}
         {loading && !files.length && <Skeleton label="Loading files…" className="sh-skeleton"><span className="sh-day"><Bone w="5em" /></span>
           <ul className="sh-grid" aria-hidden="true">{Array.from({ length: 6 }, (_, index) => <li key={index}><Bone className="sh-tile" /></li>)}</ul></Skeleton>}
-        {error && <p className="sh-empty error" role="alert">{error} <button type="button" className="link-button" onClick={refresh}>Try again</button></p>}
+        {error && <p className="sh-empty error" role="alert">{error} <RetryButton onRetry={refresh} /></p>}
         {!loading && !error && !files.length && <p className="sh-empty">{empty}</p>}
         {next && <div ref={more} className="sh-more" aria-hidden="true" />}
       </div>

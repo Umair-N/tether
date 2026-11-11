@@ -1,8 +1,9 @@
+import { RetryButton } from './Retry'
 import { Bone, Loading, SkeletonRows } from './Skeleton'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { ArrowUpDown, BookMarked, Camera, ChevronLeft, ClipboardCopy, CopyPlus, Download, File, Folder, FolderInput, FolderOutput, FolderPlus, Image as ImageIcon, Lock, MessageSquarePlus, MoreHorizontal, Package, Pencil, Plus, RotateCw, Search, SlidersHorizontal, Trash2, Upload, X } from 'lucide-react'
-import { ApiError, errorText } from './api'
+import { ArrowUpDown, BookMarked, Camera, ChevronLeft, ClipboardCopy, CopyPlus, Download, File, Folder, FolderInput, FolderOutput, FolderPlus, Image as ImageIcon, Lock, MessageSquarePlus, MoreHorizontal, Package, Pencil, Plus, Search, SlidersHorizontal, Trash2, Upload, X } from 'lucide-react'
+import { ApiError, errorText, reach } from './api'
 import type { Api } from './api'
 import { useModal } from './hooks'
 import { baseName, crumbs, filesUrl, formatModified, formatSize, gitText, joinPath, kindLabel, parentOf, readSecrets, shapeOf } from './files'
@@ -51,7 +52,7 @@ const leftOut = (count: number | undefined) => count ? ` ${count} secret ${count
 
 /** A JSON POST for writes. Copy, move and trash of a big folder can take longer than the usual 10 s. */
 async function write<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(`/mobile/api/${path}`, {
+  const response = await reach(`/mobile/api/${path}`, {
     method: 'POST', credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json', 'X-Codex-Mobile': '1' },
     body: JSON.stringify(body), signal: AbortSignal.timeout(300000),
@@ -155,17 +156,18 @@ export function ExplorerPhone({ api, target, onTarget, chatName, onAddToChat, on
   const minutesLeft = Math.max(1, Math.ceil((secrets.expires - now) / 60000))
 
   // The folder, or search hits under it. Sort runs on the server.
-  const [listing, setListing] = useState<{ key: string; data?: FileList | FileSearch; error?: string } | null>(null)
-  const listKey = `${cwd}|${hidden}|${sort.key}|${sort.asc}|${search}|${secrets.on}|${tick}`
+  const [listing, setListing] = useState<{ key: string; attempt: number; data?: FileList | FileSearch; error?: string } | null>(null)
+  const listKey = `${cwd}|${hidden}|${sort.key}|${sort.asc}|${search}|${secrets.on}`
   useEffect(() => {
     const controller = new AbortController()
     const url = search ? filesUrl.search(cwd, search, hidden) : filesUrl.list(cwd, hidden, sort.key, sort.asc)
     api<FileList | FileSearch>(url, undefined, controller.signal).then(
-      data => { setListing({ key: listKey, data }); if ('secrets' in data) takeSecrets(data.secrets) },
-      failure => { if (!controller.signal.aborted) setListing({ key: listKey, error: errorText(failure) }) })
+      data => { if (controller.signal.aborted) return; setListing({ key: listKey, attempt: tick, data }); if ('secrets' in data) takeSecrets(data.secrets) },
+      failure => { if (!controller.signal.aborted) setListing({ key: listKey, attempt: tick, error: errorText(failure) }) })
     return () => controller.abort()
-  }, [api, cwd, hidden, sort.key, sort.asc, search, listKey, takeSecrets])
-  const current = listing?.key === listKey ? listing : null
+  }, [api, cwd, hidden, sort.key, sort.asc, search, listKey, tick, takeSecrets])
+  // Keep a failed load mounted during retries; other reloads keep their loading state.
+  const current = listing?.key === listKey && (listing.attempt === tick || listing.error) ? listing : null
   const rows: Row[] = useMemo(() => {
     const data = current?.data
     const entries = data ? 'hits' in data ? data.hits : data.entries : []
@@ -270,11 +272,11 @@ export function ExplorerPhone({ api, target, onTarget, chatName, onAddToChat, on
         {selecting ? <button type="button" className="xp-sort" onClick={() => setSelected(picked.length ? [] : shown.filter(row => !row.secret).map(row => row.full))}>{picked.length ? 'Clear' : 'Select all'}</button>
           : !search && <button type="button" className="xp-sort" aria-label={`Sort: ${sort.label}. Tap to change.`} onClick={() => setStored(old => ({ ...old, sort: (old.sort + 1) % SORTS.length }))}><ArrowUpDown size={15} aria-hidden="true" />{sort.label}</button>}
       </div>
-      <div className={`xp-list${selecting ? ' selecting' : ''}`} aria-busy={!current || undefined}>
+      <div className={`xp-list${selecting ? ' selecting' : ''}`} aria-busy={!current || current.attempt !== tick || undefined}>
         {current?.error ? <div className="xp-empty" role="alert">
             <p>{current.error}</p>
             <div className="xp-empty-actions">
-              <button type="button" className="secondary" onClick={reload}><RotateCw size={15} aria-hidden="true" />Try again</button>
+              <RetryButton className="secondary" busy={!current || current.attempt !== tick} onRetry={reload} />
               {cwd !== '~' && <button type="button" className="secondary" onClick={() => go('~')}>Go to Home</button>}
             </div>
           </div>

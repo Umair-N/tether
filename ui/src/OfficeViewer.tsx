@@ -2,7 +2,7 @@ import { Loading } from './Skeleton'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Download, FolderOpen, Pencil, X } from 'lucide-react'
 import type { WorkBook } from 'xlsx'
-import { errorText, request } from './api'
+import { errorText, NetworkError, reach, request } from './api'
 import { useModal } from './hooks'
 import { useHost, useOfficeEditing } from './host'
 
@@ -56,7 +56,7 @@ export function OfficeViewer({ file, close, onShow }: { file: OfficeFile | null;
     const abort = new AbortController()
     const kind = suffixOf(file.path)
     const load = async () => {
-      const response = await fetch(file.url, { signal: abort.signal })
+      const response = await reach(file.url, { signal: abort.signal })
       if (!response.ok) throw new Error(((await response.json().catch(() => null)) as { error?: string } | null)?.error ?? 'Tether cannot open this file.')
       if (Number(response.headers.get('Content-Length')) > MAX_BYTES) throw new Error('This file is too large to show (50 MB at most). Download it instead.')
       const data = await response.arrayBuffer()
@@ -68,7 +68,7 @@ export function OfficeViewer({ file, close, onShow }: { file: OfficeFile | null;
       return { data }
     }
     load().then(result => setState({ url: file.url, ...result }),
-      failure => { if (!abort.signal.aborted) setState({ url: file.url, ...(failure instanceof TypeError ? { unreachable: true } : { error: String(failure.message) }) }) })
+      failure => { if (!abort.signal.aborted) setState({ url: file.url, ...(failure instanceof NetworkError ? { unreachable: true } : { error: String(failure.message) }) }) })
     return () => abort.abort()
   }, [file, editingNow, round])
   const current = file && state?.url === file.url && !editingNow ? state : null

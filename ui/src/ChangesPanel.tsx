@@ -1,3 +1,4 @@
+import { RetryButton } from './Retry'
 import { Loading } from './Skeleton'
 import { useCallback, useEffect, useId, useState } from 'react'
 import { ArrowDown, ArrowUp, ChevronRight, GitBranch } from 'lucide-react'
@@ -143,17 +144,17 @@ function FileRow({ file, open, toggle, api, query }: { file: ChangedFile; open: 
 const body = (diff: string) => { const lines = diff.replace(/\n$/, '').split('\n'); const first = lines.findIndex(line => line.startsWith('@@')); return first < 0 ? lines : lines.slice(first) }
 
 function FileDiffView({ id, api, query, label }: { id: string; api: Api; query: string; label: string }) {
-  const [state, setState] = useState<{ query: string; diff?: FileDiff; error?: string; final?: boolean } | null>(null)
+  const [state, setState] = useState<{ query: string; diff?: FileDiff; error?: string; final?: boolean; attempt: number } | null>(null)
   const [attempt, setAttempt] = useState(0)
   useEffect(() => {
     const controller = new AbortController()
     api<FileDiff>(`repo/diff?${query}`, undefined, controller.signal)
-      .then(diff => setState({ query, diff }), failure => { if (!controller.signal.aborted) setState({ query, error: errorText(failure), final: failure instanceof ApiError && failure.status === 404 }) })
+      .then(diff => { if (!controller.signal.aborted) setState({ query, diff, attempt }) }, failure => { if (!controller.signal.aborted) setState({ query, attempt, error: errorText(failure), final: failure instanceof ApiError && failure.status === 404 }) })
     return () => controller.abort()
   }, [api, query, attempt])
   const current = state?.query === query ? state : null
   return <div id={id} className="repo-diff">
-    {current?.error ? <p className="repo-note" role="alert">{current.error}{!current.final && <> <button type="button" className="repo-retry" onClick={() => setAttempt(attempt + 1)}>Retry</button></>}</p>
+    {current?.error ? <p className="repo-note" role="alert">{current.error}{!current.final && <> <RetryButton label="Retry" className="repo-retry" busy={current.attempt !== attempt} onRetry={() => setAttempt(attempt + 1)} /></>}</p>
       : !current?.diff ? <Loading className="repo-note" label="Loading diff…" />
       : current.diff.note && !current.diff.diff ? <p className="repo-note">{current.diff.note}</p>
       : <pre tabIndex={0} aria-label={`Changes in ${label}`}><code>{body(current.diff.diff).map((line, at) =>

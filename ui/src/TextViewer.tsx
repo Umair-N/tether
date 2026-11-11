@@ -6,6 +6,7 @@ import type { Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useModal } from './hooks'
 import { useHost } from './host'
+import { NetworkError, reach } from './api'
 import { saveText, SaveError, sha256Hex } from './textEdit'
 import type { EditorHandle } from './textEdit'
 import './TextEditor.css'
@@ -38,7 +39,7 @@ type Editing = { url: string; view: EditView; seed: string; base: string; mount:
 type SaveState = { status: 'idle' | 'saving' | 'saved' } | { status: 'error'; message: string } | { status: 'conflict' }
 
 async function load(url: string, signal?: AbortSignal): Promise<{ text: string; bytes: Uint8Array; editable: boolean }> {
-  const response = await fetch(url, { signal, cache: 'no-store' })
+  const response = await reach(url, { signal, cache: 'no-store' })
   if (!response.ok) throw new Error(((await response.json().catch(() => null)) as { error?: string } | null)?.error ?? 'Tether cannot open this file.')
   const bytes = new Uint8Array(await response.arrayBuffer())
   try { return { text: new TextDecoder('utf-8', { fatal: true }).decode(bytes), bytes, editable: true } }
@@ -73,7 +74,7 @@ export function TextViewer({ file, close, onShow }: { file: TextFile | null; clo
     const abort = new AbortController()
     load(file.url, abort.signal)
       .then(({ text, bytes, editable }) => setState({ url: file.url, text, lines: split(text), bytes, editable }),
-        failure => { if (!abort.signal.aborted) setState({ url: file.url, ...(failure instanceof TypeError ? { unreachable: true } : { error: String(failure.message) }) }) })
+        failure => { if (!abort.signal.aborted) setState({ url: file.url, ...(failure instanceof NetworkError ? { unreachable: true } : { error: String(failure.message) }) }) })
     return () => abort.abort()
   }, [file])
   // Warn before the tab closes with unsaved edits.

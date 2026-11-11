@@ -1,10 +1,11 @@
 import { BacklogButton } from './Backlog'
-import { SkeletonRows, Spinner } from './Skeleton'
+import { Bone, SkeletonRows, Spinner } from './Skeleton'
+import { RetryButton } from './Retry'
 import { rememberCount, rememberedCount } from './skeletonCounts'
 import { needsYou, isDone } from './paneState'
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
-import { Archive, ArchiveRestore, Asterisk, BarChart3, BookMarked, BookOpen, Bug, Cpu, Database, FileText, FlaskConical, GitBranch, Globe, LayoutDashboard, MessageSquare, MessagesSquare, Mic, Palette, Rocket, Server, Shield, Sparkles, Wrench, Zap, ChevronRight, Code2, GripVertical, Layers, Pin, PinOff, Plus, RefreshCw, Search, Settings, SlidersHorizontal, Terminal, Trash2, X } from 'lucide-react'
+import { Archive, ArchiveRestore, Asterisk, BarChart3, BookMarked, BookOpen, Bug, Cpu, Database, FileText, FlaskConical, GitBranch, Globe, LayoutDashboard, MessageSquare, MessagesSquare, Mic, Palette, Rocket, Server, Shield, Sparkles, Wrench, Zap, ChevronRight, Code2, GripVertical, Layers, Pin, PinOff, Plus, RefreshCw, RotateCw, Search, Settings, SlidersHorizontal, Terminal, Trash2, X } from 'lucide-react'
 import { KeepChoice, keepNeeded } from './Project'
 import { FolderMenu } from './SelectMenu'
 import type { Keep, ProjectMark, ProjectMarks } from './Project'
@@ -219,8 +220,11 @@ interface Props {
   prefs: Prefs
   update: (change: (current: Prefs) => Partial<Prefs>) => void
   loading: boolean
+  /** The server has answered the session list at least once. Until then counts are unknown, not 0. */
+  loaded: boolean
   error: string
-  onRetry: () => void
+  onRetry: () => unknown
+  onReload: () => void
   onOpen: (pane: Pane) => void
   onNew: () => void
   onActions: (session: Session, remove?: boolean, at?: Anchor) => void
@@ -250,7 +254,7 @@ interface Props {
   onAddPane?: (session: Session, at: Anchor) => void
 }
 
-export function Sidebar({ api, sessions, selected, prefs, update, loading, error, onRetry, onOpen, onNew, onActions, onPaneActions, onPastChat, onSettings, onBacklog, onClose, slots, drag, onCommandMenu, onMessageAll, marks, onMarks, onOpenShell, onShellsEnded, onAddPane, archivedTabs, onRestoreTab }: Props) {
+export function Sidebar({ api, sessions, selected, prefs, update, loaded, error, onRetry, onReload, onOpen, onNew, onActions, onPaneActions, onPastChat, onSettings, onBacklog, onClose, slots, drag, onCommandMenu, onMessageAll, marks, onMarks, onOpenShell, onShellsEnded, onAddPane, archivedTabs, onRestoreTab }: Props) {
   const host = useHost()
   const [query, setQuery] = useState('')
   const [reorder, setReorder] = useState<Section | null>(null)
@@ -379,9 +383,9 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
   // Keep each group's size for the next first paint of the skeleton.
   const groupSizes = groups.map(group => `${group.key}:${group.items.length}`).join(',')
   useEffect(() => {
-    if (loading || search) return
+    if (!loaded || search) return
     groupSizes.split(',').forEach(item => { const [key, count] = item.split(':'); rememberCount(`sidebar.${key}`, Number(count)) })
-  }, [loading, search, groupSizes])
+  }, [loaded, search, groupSizes])
   const closedAtFirst = (key: Section) => key === 'past' || key === 'archived'
   const toggle = (key: Section) => update(current => ({ collapsed: { ...current.collapsed, [key]: !(current.collapsed[key] ?? closedAtFirst(key)) } }))
   const isOpen = (key: Section) => !!search || !(prefs.collapsed[key] ?? closedAtFirst(key))
@@ -415,17 +419,17 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
     <nav className="session-groups" aria-label="Sessions">
       {/* eslint-disable-next-line react-hooks/purity -- Sample snooze expiry on each existing render without adding a clock or delaying it. */}
       {prefs.attention && !search && <WaitingBox variant="list" sort={{ order: prefs.waitingOrder ?? 'oldest', onOrder: waitingOrder => update(() => ({ waitingOrder })) }} items={waitingAsks(sessions.flatMap(item => item.panes), Date.now() / 1000)} sessions={sessions} selected={selected} onOpen={onOpen} />}
-      {error && <div className="sidebar-error" role="alert">{error}<button onClick={onRetry}>Retry</button></div>}
+      {error && <div className="sidebar-error" role="alert"><span>{loaded ? 'Could not refresh sessions.' : 'Could not load sessions.'} {error}</span><RetryButton onRetry={onRetry} /></div>}
       {openingChat && <div className="past-opening" role="status">Opening {openingChat}…</div>}
       {mergeError && <div className="sidebar-error" role="alert">{mergeError}<button onClick={() => setMergeError('')}>Dismiss</button></div>}
       {groups.map(group => <section key={group.key} className={group.key === 'needs' ? 'group needs-group' : 'group'}>
         <div className="group-head">
-          <button className="group-toggle" aria-expanded={isOpen(group.key)} onClick={() => toggle(group.key)}>{group.title}<span className="group-count">· {group.items.length + (group.key === 'archived' ? hiddenTabs.length : 0)}</span>{group.key === 'archived' && !isOpen('archived') && [...group.items.map(session => session.panes), ...hiddenTabs.map(pane => [pane])].some(list => status(list, prefs.seen, selected).kind === 'approval') && <span className="state-dot approval" role="img" aria-label="An archived session needs you" />}<ChevronRight size={14} className="chevron" /></button>
+          <button className="group-toggle" aria-expanded={isOpen(group.key)} onClick={() => toggle(group.key)}>{group.title}{loaded ? <span className="group-count">· {group.items.length + (group.key === 'archived' ? hiddenTabs.length : 0)}</span> : !error && <span className="group-count" aria-hidden="true"><Bone w="1.4em" /></span>}{group.key === 'archived' && !isOpen('archived') && [...group.items.map(session => session.panes), ...hiddenTabs.map(pane => [pane])].some(list => status(list, prefs.seen, selected).kind === 'approval') && <span className="state-dot approval" role="img" aria-label="An archived session needs you" />}<ChevronRight size={14} className="chevron" /></button>
           {isOpen(group.key) && group.items.length > 1 && !search && manual && group.key !== 'archived' && group.key !== 'needs' && <button className="group-edit" onClick={() => setReorder(reorder === group.key ? null : group.key)}>{reorder === group.key ? 'Done' : 'Reorder'}</button>}
         </div>
         {isOpen(group.key) && group.key === 'archived' && !group.items.length ? null : isOpen(group.key) && (group.items.length
           ? <SessionList items={group.items} reorder={reorder === group.key} selected={selected} prefs={prefs} update={update} onOpen={onOpen} onActions={onActions} onPaneActions={onPaneActions} onMove={ids => moveWithin(group.items, ids)} pinned={group.key === 'pinned'} slots={slots ?? []} canDrag={!!drag} api={api} carry={carry} onCarry={startCarry} onDrop={dropOn} onHold={holdStart} touchOver={touchOver} renaming={renameRow} onRenamed={renamed} marks={marks} onAddPane={onAddPane} />
-          : loading ? <SkeletonRows count={rememberedCount(`sidebar.${group.key}`, 2, 6)} label="Finding sessions…" className="sidebar-skeleton" meta={false} />
+          : !loaded ? !error && <SkeletonRows count={rememberedCount(`sidebar.${group.key}`, 2, 6)} label="Finding sessions…" className="sidebar-skeleton" meta={false} />
           : <p className="group-empty">{group.key === 'terminals' ? 'No plain terminals. Create one with New session.' : 'Nothing here yet.'}</p>)}
         {isOpen(group.key) && group.key === 'archived' && hiddenTabs.length > 0 && <ul className="archived-tabs">{hiddenTabs.map(pane => <li key={pane.id}>
           <button type="button" className="archived-tab-open" onMouseEnter={clipTitle} onClick={() => onOpen(pane)} onContextMenu={event => { event.preventDefault(); onPaneActions(pane, anchorOf(event)) }}>{dot(status([pane], prefs.seen, selected))}<span className="pane-child-name">{[paneTitle(pane), shownIndex(pane)].filter(Boolean).join(' ')} · {sessionName(pane)}</span></button>
@@ -445,9 +449,16 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
       <RunningNow sessions={sessions} selected={selected} onOpen={onOpen} />
       <UpdateBanner />
       <Usage api={api} />
-      <div className="footer-row"><HostMenu host={host} hosts={prefs.hosts ?? []} onChange={hosts => update(() => ({ hosts }))} /><button className="icon-button" aria-label="Settings" onClick={onSettings}><Settings size={18} /></button></div>
+      <div className="footer-row"><HostMenu host={host} hosts={prefs.hosts ?? []} onChange={hosts => update(() => ({ hosts }))} /><ReloadButton onReload={onReload} /><button className="icon-button" aria-label="Settings" title="Settings" onClick={onSettings}><Settings size={18} /></button></div>
     </footer>
   </div>
+}
+
+// Reload Tether, always one tap away in the drawer footer. The spinner paints before the page goes.
+function ReloadButton({ onReload }: { onReload: () => void }) {
+  const [busy, setBusy] = useState(false)
+  return <button type="button" className="icon-button reload-button" aria-label={busy ? 'Reloading Tether' : 'Reload Tether'} title="Reload Tether · unsent drafts stay" aria-busy={busy} disabled={busy}
+    onClick={() => { setBusy(true); requestAnimationFrame(() => requestAnimationFrame(onReload)) }}>{busy ? <Spinner size={18} /> : <RotateCw size={18} />}</button>
 }
 
 // A book on sessions whose project gives agents context. Amber when an agent there started with an older version.
@@ -676,7 +687,7 @@ function PastChats({ api, search, showPaths, onPick, sessions, drag, onCarry, on
     </div>
     {failure && <p className="error cp-error" role="alert">{failure}</p>}
     {removed.bar}
-    {error ? <div className="sidebar-error" role="alert">{error}<button onClick={() => void refresh()}>Retry</button></div>
+    {error ? <div className="sidebar-error" role="alert"><span>Could not load past chats. {error}</span><RetryButton onRetry={refresh} /></div>
       : loading && !chats.length ? <SkeletonRows count={5} label="Loading past chats…" className="past-skeleton" />
       : !chats.length ? <p className="group-empty">{filtered ? 'No past chats match.' : 'No past chats found.'}{filtered && <> <button type="button" className="link-button" onClick={() => { setText(''); setAgent('all'); setDir('') }}>Clear filters</button></>}</p>
       : <ul className="session-list past-list">{chats.map(chat => <li key={chat.agent + chat.id}><div className="session-row"><button className="session-main" {...dragProps(chat)} onClick={() => onPick(chat)} onTouchStart={event => onHold(event, carryFor(chat), chat.title || 'Untitled chat', () => onPick(chat))}>

@@ -205,13 +205,14 @@ export class ApiError extends Error {
 export type Api = <T>(path: string, body?: unknown, signal?: AbortSignal, method?: 'DELETE', timeout?: number) => Promise<T>
 export async function request<T>(path: string, body?: unknown, signal?: AbortSignal, method?: 'DELETE', timeout = 10000): Promise<T> {
   const raw = typeof Blob !== 'undefined' && body instanceof Blob  // background uploads send the image bytes as is
-  const response = await fetch(`/mobile/api/${path}`, {
+  const init: RequestInit = {
     method: method ?? (body === undefined ? 'GET' : 'POST'),
     credentials: 'same-origin',
     headers: body === undefined ? undefined : { 'Content-Type': raw ? body.type || 'application/octet-stream' : 'application/json', 'X-Codex-Mobile': '1' },
     body: body === undefined ? undefined : raw ? body : JSON.stringify(body),
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout),
-  })
+  }
+  const response = await reach(`/mobile/api/${path}`, init)
   const data = await response.json().catch(error => {
     if (response.ok && path.split('?')[0] === 'footer') throw error
     return {}
@@ -226,8 +227,40 @@ export const SESSION_NAME_HELP = 'Use 1–64 letters, numbers, spaces, hyphens, 
 /** A chat the agent can copy with its history: Claude or Codex, after its first message. */
 export const canFork = (pane: Pane) => (pane.agent === 'claude' || pane.agent === 'codex') && !!pane.thread
 
+/** fetch() rejected: the browser could not reach Tether (offline, server down, connection dropped). */
+export class NetworkError extends Error {
+  readonly cause: unknown
+  constructor(cause: unknown) {
+    super('Tether cannot reach the server. Check the connection.')
+    this.name = 'NetworkError'
+    this.cause = cause
+  }
+}
+
+/** fetch(), but a rejection from fetch() itself (no answer at all) becomes a NetworkError.
+ *  Timeouts and aborts keep their own names. Use it wherever a failure can reach errorText. */
+export async function reach(input: RequestInfo | URL, init?: RequestInit) {
+  try {
+    return await fetch(input, init)
+  } catch (error) {
+    if (error instanceof TypeError) throw new NetworkError(error)
+    throw error
+  }
+}
+
+/** A failure in words a person can act on. The browser's own texts ("signal timed out", "Failed to fetch") never show.
+ *  Only a real network failure (NetworkError, or the browser is offline) says "cannot reach".
+ *  A built-in code error (TypeError, ReferenceError, …) is a bug in Tether: it says so and goes to the console.
+ *  An Error that Tether throws on purpose keeps its own message. */
 export function errorText(error: unknown) {
-  return error instanceof Error ? error.message : 'Could not connect. Please try again.'
+  const name = error instanceof Error || (typeof DOMException !== 'undefined' && error instanceof DOMException) ? error.name : ''
+  if (name === 'TimeoutError') return 'Tether took too long to answer.'
+  if (name === 'AbortError') return 'The request was stopped.'
+  if (error instanceof NetworkError || (typeof navigator !== 'undefined' && navigator.onLine === false)) return 'Tether cannot reach the server. Check the connection.'
+  const codeError = [TypeError, ReferenceError, RangeError, SyntaxError, EvalError, URIError].some(kind => error instanceof kind)
+  if (!codeError && error instanceof Error && error.message) return error.message
+  console.error('Tether app error:', error)
+  return `Something went wrong in Tether.${error instanceof Error && error.message ? ` (${error.name}: ${error.message})` : ''}`
 }
 export interface CatalogItem { name: string; description: string; kind: 'builtin' | 'skill' | 'command'; aliases?: string[] }
 export interface Catalog { commands: CatalogItem[]; plugins: { name: string; source: string; enabled: boolean }[]; mcp: { name: string; source: string }[]; note: string }

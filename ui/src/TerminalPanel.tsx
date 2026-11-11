@@ -1,3 +1,4 @@
+import { RetryButton } from './Retry'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { errorText } from './api'
 import type { PanelBodyProps } from './panels'
@@ -12,9 +13,10 @@ export function TerminalPanel({ api, pane, item, onItem }: PanelBodyProps) {
   const [shell, setShell] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [attempt, setAttempt] = useState(0)
-  const [requestFor, setRequestFor] = useState({ api, id: item.id, attempt })
-  if (requestFor.api !== api || requestFor.id !== item.id || requestFor.attempt !== attempt) {
-    setRequestFor({ api, id: item.id, attempt }); setError('')
+  const [busy, setBusy] = useState(false)
+  const [requestFor, setRequestFor] = useState({ api, id: item.id })
+  if (requestFor.api !== api || requestFor.id !== item.id) {
+    setRequestFor({ api, id: item.id }); setError('')
   }
   // The request reads these once per attempt. A changed focus or a saved shell id does not start another shell.
   const latest = useRef({ pane: pane.id, item, onItem })
@@ -31,13 +33,13 @@ export function TerminalPanel({ api, pane, item, onItem }: PanelBodyProps) {
     }
     request.then(id => {
       if (!live) return
-      setShell(id)
+      setShell(id); setError(''); setBusy(false)
       const own = latest.current.item
       if (own.pane !== id || own.fresh) latest.current.onItem({ pane: id, fresh: undefined })
-    }, failure => { if (live) setError(errorText(failure)) })
+    }, failure => { if (live) { setError(errorText(failure)); setBusy(false) } })
     return () => { live = false }
   }, [api, item.id, attempt])
-  if (error) return <div className="panel-empty" role="alert"><p><strong>Could not start a shell.</strong></p><p>{error}</p><button type="button" className="secondary" onClick={() => setAttempt(attempt + 1)}>Try again</button></div>
+  if (error) return <div className="panel-empty" role="alert"><p><strong>Could not start a shell.</strong></p><p>{error}</p><RetryButton className="secondary" busy={busy} onRetry={() => { setBusy(true); setAttempt(attempt + 1) }} /></div>
   if (!shell) return <div className="panel-empty"><p role="status">Starting a shell…</p></div>
   return <div className="terminal-panel"><LiveTerminal key={shell} paneId={shell} onChat={() => {}} shell /></div>
 }

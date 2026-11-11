@@ -1,3 +1,4 @@
+import { RetryButton } from './Retry'
 import { useEffect, useRef, useState } from 'react'
 import { SquareTerminal } from 'lucide-react'
 import { copyText } from './clipboard'
@@ -118,6 +119,7 @@ function hideResizeOverlay(doc: Document) {
 export function LiveTerminal({ paneId, onChat, shell = false, fixed = false }: { paneId: string; onChat: () => void; shell?: boolean; fixed?: boolean }) {
   const [status, setStatus] = useState<'checking' | 'ok' | 'down'>('checking')
   const [attempt, setAttempt] = useState(0)
+  const [busy, setBusy] = useState(false)
   const [width, setWidth] = useState<number | null>(null)
   const view = 'pane'  // one pane per tmux window: no window view, no zoom switch
   const arg = fixed ? paneId : 'z' + paneId
@@ -160,7 +162,7 @@ export function LiveTerminal({ paneId, onChat, shell = false, fixed = false }: {
   }
   useEffect(() => {
     let live = true
-    fetch('/terminal/live/', { credentials: 'same-origin' }).then(response => { if (live) setStatus(response.ok ? 'ok' : 'down') }, () => { if (live) setStatus('down') })
+    fetch('/terminal/live/', { credentials: 'same-origin' }).then(response => { if (live) { setStatus(response.ok ? 'ok' : 'down'); setBusy(false) } }, () => { if (live) { setStatus('down'); setBusy(false) } })
     return () => { live = false }
   }, [attempt])
   if (status === 'ok') return <div className="live-terminal-wrap">
@@ -186,7 +188,7 @@ export function LiveTerminal({ paneId, onChat, shell = false, fixed = false }: {
     <p className={`terminal-copied${dragCopied ? ' shown' : ''}`} role="status">{dragCopied ? 'Copied to clipboard' : ''}</p></div>
   return <div className="live-terminal-empty">{status === 'checking' ? <p role="status">Connecting to the terminal…</p> : <>
     <SquareTerminal size={28} strokeWidth={1.4} /><p><strong>The live terminal is not running.</strong></p><p>On the server, run <code>python3 ~/apps/mobile_tmux_public/deploy/install.py</code>.</p>
-    <div>{!shell && <button type="button" className="secondary" onClick={onChat}>Back to chat</button>}<button type="button" className="primary" onClick={() => { setStatus('checking'); setAttempt(attempt + 1) }}>Try again</button></div></>}</div>
+    <div>{!shell && <button type="button" className="secondary" onClick={onChat}>Back to chat</button>}<RetryButton className="primary" busy={busy} onRetry={() => { setBusy(true); setAttempt(attempt + 1) }} /></div></>}</div>
 }
 
 // Claude draws a text block and writes it to the transcript at almost the same moment, so most previews last under a second.

@@ -248,7 +248,8 @@ label.broadcast-row:hover { background: var(--hover); }
 }
 .sidebar-footer { border-top: 1px solid var(--line); padding: 10px 8px 0 18px; padding-bottom: max(4px, env(safe-area-inset-bottom)); font-size: 12px; color: var(--muted); }
 .footer-row { display: flex; gap: 8px; align-items: center; }
-.footer-row .icon-button { margin-left: auto; }
+.footer-row > .icon-button { margin-left: auto; }
+.footer-row > .reload-button + .icon-button { margin-left: 0; }
 .usage { list-style: none; margin: 0 10px 4px 0; padding: 0; display: grid; gap: 6px; }
 .meter { display: grid; grid-template-columns: 3.6em 1.6em 1fr 2.8em 2.2em; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
 .meter.empty { grid-template-columns: 3.6em 1fr; }
@@ -366,6 +367,8 @@ button.stop-button:not(:disabled):hover { background: var(--muted); }
 @keyframes breathe { 50% { opacity: .3; } }
 .sidebar-empty, .sidebar-error { padding: 12px 22px; color: var(--muted); font-size: 14px; line-height: 1.6; }
 .sidebar-error button, .inline-error button { text-decoration: underline; padding: 0 12px; }
+.sidebar-error .retry { display: flex; margin-top: 2px; }
+.sidebar-error .retry-button { padding: 0; text-decoration: none; }
 .chat-panel { display: flex; flex-direction: column; position: relative; flex: 1; min-width: 0; }
 .chat-header { display: flex; align-items: center; min-height: 83px; gap: 12px; padding: max(12px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 12px max(10px, env(safe-area-inset-left)); border-bottom: 1px solid var(--line); z-index: 2; }
 .chat-title { min-width: 0; }

@@ -1,5 +1,5 @@
 // Client for the Share file store: GET/POST /mobile/api/share/... (server/share_api.py).
-import { ApiError, request } from './api'
+import { ApiError, reach, request } from './api'
 
 export type ShareKind = 'image' | 'video' | 'audio' | 'pdf' | 'text' | 'other'
 /** 'you' for your uploads, 'agent:NAME' for files an agent put in Share. */
@@ -27,7 +27,7 @@ export function listShare(options: { kind?: ShareFilter; q?: string; source?: 'a
 }
 
 export const textPreview = async (id: string, signal?: AbortSignal) => {
-  const response = await fetch(`${BASE}raw/${encodeURIComponent(id)}?text=1`, { credentials: 'same-origin', signal })
+  const response = await reach(`${BASE}raw/${encodeURIComponent(id)}?text=1`, { credentials: 'same-origin', signal })
   if (!response.ok) throw new ApiError(response.status, 'Could not load the text.')
   return response.text()
 }
@@ -65,7 +65,7 @@ export function uploadShare(file: File, meta: UploadMeta, onProgress: (sent: num
 }
 
 export async function putThumb(id: string, blob: Blob) {
-  const response = await fetch(`${BASE}thumb/${encodeURIComponent(id)}`, {
+  const response = await reach(`${BASE}thumb/${encodeURIComponent(id)}`, {
     method: 'POST', credentials: 'same-origin', body: blob,
     headers: { 'Content-Type': blob.type, 'X-Codex-Mobile': '1' },
   })

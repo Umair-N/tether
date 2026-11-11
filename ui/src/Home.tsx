@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
+import { RetryButton } from './Retry'
 import { groupOf, placeName } from './groups'
 import type { FocusEvent as ReactFocusEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 import { Check, Hand, Menu, Plus, Terminal } from 'lucide-react'
@@ -146,7 +147,7 @@ function Blank({ title, text, children, onMenu }: { title: string; text: string;
 
 export function Home({ api, groups: all, asks = [], sessions = [], sort, hasAgents, loaded, loading, error, onRetry, onOpen, onMarkRead, onUpdate, onNew, onMenu, onBacklog }: {
   api: Api; groups: HomeGroups; asks?: Waiting[]; sessions?: Session[]; sort?: WaitSort; hasAgents: boolean; loaded: boolean; loading: boolean; error: string
-  onRetry: () => void; onOpen: (pane: Pane) => void; onMarkRead: (panes: string[]) => void; onUpdate: () => void; onNew: () => void; onMenu: () => void; onBacklog?: () => void
+  onRetry: () => unknown; onOpen: (pane: Pane) => void; onMarkRead: (panes: string[]) => void; onUpdate: () => void; onNew: () => void; onMenu: () => void; onBacklog?: () => void
 }) {
   const root = useRef<HTMLElement>(null)
   // A tab that waits on you shows in Waiting on you only, not again in Done.
@@ -206,7 +207,7 @@ export function Home({ api, groups: all, asks = [], sessions = [], sort, hasAgen
   }
 
   // The first paint, before any list has come back, and a server that never answered.
-  if (!loaded && !loading) return <Blank title="Tether cannot reach the server" text={error || 'The session list did not load.'} onMenu={onMenu}><button type="button" className="secondary home-blank-action" onClick={onRetry}>Try again</button></Blank>
+  if (!loaded && !loading) return <Blank title="Could not load sessions" text={error || 'The session list did not load.'} onMenu={onMenu}><span className="home-blank-action"><RetryButton onRetry={onRetry} className="secondary" /></span></Blank>
   if (loaded && !hasAgents) return <Blank title="Space for your next task." text="No agent is running. Open a session, or start something new." onMenu={onMenu}><button type="button" className="primary home-blank-action" onClick={onNew}><Plus size={18} />New session</button></Blank>
 
   return <section className="home" ref={root} aria-label="Home" onFocus={onFocus}>
@@ -226,7 +227,7 @@ export function Home({ api, groups: all, asks = [], sessions = [], sort, hasAgen
         </div>}
       </header>
       {loaded && onBacklog && <BacklogNews api={api} onOpen={onBacklog} />}
-      {error && loaded && <p className="home-stale" role="alert"><span>Tether cannot refresh this list. {error}</span><button type="button" className="ghost sm" onClick={onRetry}>Try again</button></p>}
+      {error && loaded && <p className="home-stale" role="alert"><span>Could not refresh this list. {error}</span><RetryButton onRetry={onRetry} className="ghost sm" /></p>}
       <div className={`home-board${loaded ? '' : ' loading skeleton'}`} aria-busy={!loaded}>
         {loaded && asks.length > 0 && <AsksGroup items={asks} sessions={sessions} sort={sort} onOpen={onOpen} />}
         {GROUPS.map(group => {

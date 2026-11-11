@@ -1,3 +1,4 @@
+import { RetryButton } from './Retry'
 import { Spinner } from './Skeleton'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
@@ -705,7 +706,7 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
   </div>
 
   if (!loaded) return <div className="browser-panel"><p className="browser-empty">{active ? (which === 'signed' ? 'Starting Google Chrome…' : which === 'chrome' ? 'Connecting to your Chrome…' : 'Starting the browser…') : ''}</p></div>
-  if (failure && !tabs.length) return <div className="browser-panel"><div className="browser-empty"><p>{failure}</p><button type="button" className="browser-text-button" onClick={() => { setLoaded(false); void load() }}>Try again</button>
+  if (failure && !tabs.length) return <div className="browser-panel"><div className="browser-empty"><p>{failure}</p><RetryButton className="browser-text-button" onRetry={load} />
     {which !== 'test' && <button type="button" className="browser-text-button" onClick={() => onSwitch('test')}>Use the test browser</button>}</div></div>
 
   // Your Chrome opens tabs only through Allow, so an empty Chrome view is the pairing card.

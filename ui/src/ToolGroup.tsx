@@ -1,3 +1,4 @@
+import { RetryButton } from './Retry'
 import { Loading } from './Skeleton'
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { Bot, ChevronRight, CircleAlert, Code2, Eye, Globe, ListTodo, LoaderCircle, Search, SquarePen, Terminal, Wrench } from 'lucide-react'
@@ -37,15 +38,16 @@ function ToolRow({ tool, api, session, live, onOpen }: { tool: ToolSummary; api:
   const [detail, setDetail] = useState<ToolDetail | null>(null)
   const [error, setError] = useState('')
   const [attempt, setAttempt] = useState(0)
+  const [busy, setBusy] = useState(false)
   const id = useId()
-  const request = [open, api, session, tool.id, tool.is_error, tool.status, attempt]
+  const request = [open, api, session, tool.id, tool.is_error, tool.status]
   const [previousRequest, setPreviousRequest] = useState(request)
   if (request.some((value, at) => !Object.is(value, previousRequest[at]))) { setPreviousRequest(request); if (open) setError('') }
   useEffect(() => {
     if (!open) return
     const controller = new AbortController()
     void api<ToolDetail>(`tool?session=${encodeURIComponent(session)}&id=${encodeURIComponent(tool.id)}`, undefined, controller.signal)
-      .then(value => { if (!controller.signal.aborted) setDetail(value) }).catch(reason => { if (!controller.signal.aborted) setError(errorText(reason)) })
+      .then(value => { if (!controller.signal.aborted) { setDetail(value); setError(''); setBusy(false) } }).catch(reason => { if (!controller.signal.aborted) { setError(errorText(reason)); setBusy(false) } })
     return () => controller.abort()
   }, [open, api, session, tool.id, tool.is_error, tool.status, attempt])
   return <li className="tool-item">
@@ -54,7 +56,7 @@ function ToolRow({ tool, api, session, live, onOpen }: { tool: ToolSummary; api:
       <StepTime tool={tool} live={live} />{(tool.is_error || detail?.is_error) && <span className="tool-error">Error</span>}<ChevronRight className="chevron" size={15} aria-hidden="true" />
     </button>
     {open && <div id={id}>
-      {error ? <p role="alert">{error} <button type="button" onClick={() => setAttempt(attempt + 1)}>Retry</button></p> : !detail ? <Loading label="Loading tool detail…" /> : <>
+      {error ? <p role="alert">{error} <RetryButton label="Retry" className="" busy={busy} onRetry={() => { setBusy(true); setAttempt(attempt + 1) }} /></p> : !detail ? <Loading label="Loading tool detail…" /> : <>
         <LiveDetail label={`${tool.name} detail`}><code>{detail.detail.split('\n').map((line, index) => <span key={index} className={detail.format === 'diff' ? line.startsWith('+') ? 'diff-add' : line.startsWith('-') ? 'diff-remove' : '' : ''}>{line}{'\n'}</span>)}</code></LiveDetail>
         {detail.status === 'pending' && <p role="status">Result pending or unavailable.</p>}
         {detail.truncated && <p className="tool-cut">Detail truncated.</p>}

@@ -1,3 +1,4 @@
+import { RetryButton } from './Retry'
 import { noticeAction } from './noticeActions'
 import { terminalText } from './terminalText'
 import { ShellOutput } from './ShellOutput'
@@ -841,7 +842,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
       : <PaneTabs ref={tabs} session={session} pane={pane} onOpenPane={onOpenPane} onPaneActions={onPaneActions} onSplit={onSplit} onReorder={onReorder} onDropGroup={onDropGroup} api={api} onUpdate={onUpdate} micOk={micOk} chime={chime} onNotice={setToast} />)}
     {term && data?.attention?.askBridge && <AskBar agent={agentNames[activePane.agent]} disabled={!writable || acting} onOpen={() => setTerm(false)} onTerminal={() => askAnswer(data.attention!.askBridge!, null)} />}
     {term ? <LiveTerminal paneId={activePane.id} onChat={() => setTerm(false)} /> : <>
-    {(offline || (error && data)) && <div className="reconnect-banner" role="status"><WifiOff size={15} /><span>{offline ? 'You are offline. Tether reconnects when the network is back.' : `Cannot reach ${host}. Reconnecting…`}</span><button type="button" onClick={() => void refresh()}>Retry now</button></div>}
+    {(offline || (error && data)) && <div className="reconnect-banner" role="status"><WifiOff size={15} /><span>{offline ? 'You are offline. Tether reconnects when the network is back.' : `Cannot reach ${host}. Reconnecting…`}</span><RetryButton label="Retry now" className="" onRetry={refresh} /></div>}
     {data && activePane.agent === 'shell' && <div className="start-options"><button disabled={!writable || acting} onClick={() => void start('claude')}>Start Claude<ChevronRight size={16} /></button><button disabled={!writable || acting} onClick={() => void start('codex')}><span>Start Codex<FoundryTag api={api} /></span><ChevronRight size={16} /></button></div>}
     <div className="chat-pager"><div className="chat-page" ref={page}>
     <ThreadPrimitive.Root className={opening ? 'thread opening' : 'thread'}><div className="chat-scroll" ref={viewport} onTouchStart={swipeStart} onTouchMove={event => { pullMove(event); swipeMove(event) }} onTouchEnd={swipeEnd} onTouchCancel={swipeCancel} onScroll={() => {
@@ -849,7 +850,7 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
       if (view && hold.current && Date.now() < hold.current.until && Math.abs(view.scrollTop - hold.current.top) > 2) return
       if (view) { hold.current = null; sticky.current = view.scrollHeight - view.scrollTop - view.clientHeight < 90; setJump(!sticky.current); scrollByPane.set(pane.id, { top: view.scrollTop, limit, bottom: sticky.current }) }
     }}><div className="messages" ref={content}>
-      {error && !data && <div className="inline-error" role="alert">{error}<button onClick={() => void refresh()}>Retry</button></div>}
+      {error && !data && <div className="inline-error" role="alert">{error}<RetryButton label="Retry" className="" onRetry={refresh} /></div>}
       {loading && <Skeleton label="Loading conversation…" className="sk-chat">
         <Bone className="sk-ask" /><div className="sk-answer"><span><Bone w="94%" /></span><span><Bone w="88%" /></span><span><Bone w="61%" /></span></div>
         <Bone className="sk-ask" w="32%" /><div className="sk-answer"><span><Bone w="90%" /></span><span><Bone w="47%" /></span></div>

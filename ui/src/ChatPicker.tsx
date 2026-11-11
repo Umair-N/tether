@@ -1,3 +1,4 @@
+import { RetryButton } from './Retry'
 import { Spinner, SkeletonRows } from './Skeleton'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowRightToLine, Search, TerminalSquare, X } from 'lucide-react'
@@ -198,7 +199,7 @@ export function ChatPicker({ api, exclude, here, onChat, onTab, onMove, disabled
     {failure && <p className="error cp-error" role="alert">{failure}</p>}
     {removed.bar}
     <div className="cp-list" tabIndex={-1}>
-      {history.error && source !== 'tabs' && <p className="error cp-error" role="alert">{history.error} <button type="button" className="link-button" onClick={() => void history.refresh()}>Retry</button></p>}
+      {history.error && source !== 'tabs' && <p className="error cp-error" role="alert">{history.error} <RetryButton label="Retry" onRetry={history.refresh} /></p>}
       {shownTabs.length > 0 && <section><h3>Open tabs</h3><ul>{shownTabs.map(pane => <li key={pane.id}>
         <button type="button" className="cp-main" disabled={!!busy} onClick={() => onTab(pane)}>
           <span className="cp-icon"><AgentIcon agent={pane.agent} icon={pane.pane_icon} size={15} /></span>
