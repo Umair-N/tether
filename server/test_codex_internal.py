@@ -52,6 +52,41 @@ class InternalMessageTests(unittest.TestCase):
         row['payload']['content'] = [{'type': 'input_image', 'image_url': 'data:image/png;base64,private'}]
         self.assertEqual(self.parse(row)[0]['text'], '[Image attachment]')
 
+    def image_record(self, count=1, extra=None):
+        content = []
+        for number in range(1, count + 1):
+            content.extend([
+                {'type': 'input_text', 'text': f' <image name=[Image #{number}] path="/uploads/image{number}.png"> '},
+                {'type': 'input_image', 'image_url': 'data:image/png;base64,private'},
+                {'type': 'input_text', 'text': ' </image> '},
+            ])
+        content.append({'type': 'input_text', 'text': ' '.join(f'[Image #{n}]' for n in range(1, count + 1))})
+        if extra is not None:
+            content.append({'type': 'input_text', 'text': extra})
+        row = record('', ['user.text'] * len(content), 'user')
+        row['payload']['content'] = content
+        row['payload']['internal_chat_message_metadata_passthrough']['content_item_metadata'] *= len(content)
+        return row
+
+    def test_pasted_image_uses_bare_path(self):
+        messages = self.parse(self.image_record())
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0]['role'], 'user')
+        self.assertEqual(messages[0]['text'], '/uploads/image1.png')
+
+    def test_pasted_image_keeps_typed_text(self):
+        self.assertEqual(self.parse(self.image_record(extra='fix this'))[0]['text'], '/uploads/image1.png\nfix this')
+
+    def test_two_pasted_images_use_bare_paths(self):
+        self.assertEqual(self.parse(self.image_record(2))[0]['text'], '/uploads/image1.png\n/uploads/image2.png')
+
+    def test_pasted_image_removes_only_matching_inline_placeholders(self):
+        self.assertEqual(self.parse(self.image_record(extra='fix [Image #1]this [Image #9]'))[0]['text'],
+                         '/uploads/image1.png\nfix this [Image #9]')
+
+    def test_image_placeholders_without_tags_stay_visible(self):
+        self.assertEqual(self.parse(record('[Image #1]', ['user.text'], 'user'))[0]['text'], '[Image #1]')
+
     def test_agent_message_is_peer_and_encrypted_content_is_never_displayed(self):
         row = {'type': 'response_item', 'payload': {'type': 'agent_message', 'author': {'role': 'worker'},
             'content': [{'type': 'input_text', 'text': 'Review passed.'}, {'type': 'encrypted_content', 'encrypted_content': 'secret'}]}}

@@ -35,7 +35,8 @@ class SuggestGroupsTests(unittest.TestCase):
         groups = [{'name': ' Project ', 'sessions': ['$6', '$9']}, {'name': 'Single', 'sessions': ['$12']}]
         with patch.dict(os.environ, TETHER_LLM_URL='http://model.test/'):
             result = self.suggest(groups)
-        self.assertEqual(result, {'groups': [dict(groups[0], name='Project'), groups[1]], 'source': 'llm'})
+        self.assertEqual(result, {'groups': [dict(groups[0], name='Project'),
+                                              {'name': 'Other', 'sessions': ['$12']}], 'source': 'llm'})
         request = self.urlopen.call_args.args[0]
         self.assertEqual((request.full_url, request.get_method()), ('http://model.test/v1/chat/completions', 'POST'))
         self.assertEqual(request.get_header('Content-type'), 'application/json')
@@ -44,6 +45,8 @@ class SuggestGroupsTests(unittest.TestCase):
         self.assertEqual(body['max_tokens'], 1024)
         self.assertEqual(body['temperature'], 0.2)
         self.assertIn('2–8 groups', body['messages'][0]['content'])
+        self.assertIn('Every group must have 2 or more sessions.', body['messages'][0]['content'])
+        self.assertIn('Do not just repeat one session name', body['messages'][0]['content'])
         self.assertIn('Web app: 3 8 12', body['messages'][0]['content'])
         self.assertEqual(body['messages'][1]['content'],
                          '6 | Session | project | First chat\n'
@@ -56,13 +59,13 @@ class SuggestGroupsTests(unittest.TestCase):
         self.reply('Project: 6 9, $6 99\n- Single: 12\n')
         self.assertEqual(suggest_groups.suggest({'sessions': self.entries}),
                          {'groups': [{'name': 'Project', 'sessions': ['$6', '$9']},
-                                     {'name': 'Single', 'sessions': ['$12']}], 'source': 'llm'})
+                                     {'name': 'Other', 'sessions': ['$12']}], 'source': 'llm'})
 
     def test_compact_output_uses_existing_group_shape_and_validation(self):
         self.reply('{"g":[{"n":" Project ","s":["$6","$9","$6","$99"]},{"n":"Single","s":["$12"]}]}')
         self.assertEqual(suggest_groups.suggest({'sessions': self.entries}),
                          {'groups': [{'name': 'Project', 'sessions': ['$6', '$9']},
-                                     {'name': 'Single', 'sessions': ['$12']}], 'source': 'llm'})
+                                     {'name': 'Other', 'sessions': ['$12']}], 'source': 'llm'})
 
     def test_json_with_extra_text_uses_model_groups(self):
         groups = [{'name': 'Project', 'sessions': ['$6', '$9', '$12']}]
@@ -97,28 +100,53 @@ class SuggestGroupsTests(unittest.TestCase):
                 self.assertEqual(suggest_groups.suggest({'sessions': self.entries})['source'], 'folder')
 
     def test_unknown_ids_duplicates_missing_sessions_and_empty_groups(self):
-        result = self.suggest([{'name': ' Project ', 'sessions': ['$6', '$unknown', '$6', None, []]},
+        result = self.suggest([{'name': ' Project ', 'sessions': ['$6', '$9', '$unknown', '$6', None, []]},
                                {'name': 'Duplicate', 'sessions': ['$6']},
                                {'name': ' ', 'sessions': ['$9']}, {'name': 'Empty', 'sessions': []}])
-        self.assertEqual(result, {'groups': [{'name': 'Project', 'sessions': ['$6']},
-                                             {'name': 'Other', 'sessions': ['$9', '$12']}], 'source': 'llm'})
+        self.assertEqual(result, {'groups': [{'name': 'Project', 'sessions': ['$6', '$9']},
+                                             {'name': 'Other', 'sessions': ['$12']}], 'source': 'llm'})
 
     def test_names_are_trimmed_and_capped_at_forty(self):
         result = self.suggest([{'name': '  ' + 'n' * 50 + '  ', 'sessions': ['$6', '$9', '$12']}])
         self.assertEqual(result['groups'][0]['name'], 'n' * 40)
 
     def test_at_most_eight_groups_including_missing_sessions(self):
-        entries = [session('$' + str(index)) for index in range(12)]
-        groups = [{'name': 'Group ' + str(index), 'sessions': [item['id']]} for index, item in enumerate(entries)]
+        entries = [session('$' + str(index)) for index in range(24)]
+        groups = [{'name': 'Group ' + str(index), 'sessions': [entries[index]['id'], entries[index + 1]['id']]}
+                  for index in range(0, len(entries), 2)]
         result = self.suggest(groups, entries)
         self.assertEqual(len(result['groups']), 8)
-        self.assertEqual(result['groups'][-1], {'name': 'Other', 'sessions': ['$7', '$8', '$9', '$10', '$11']})
+        self.assertEqual(result['groups'][-1], {'name': 'Other', 'sessions': [item['id'] for item in entries[14:]]})
         self.assertEqual([identifier for group in result['groups'] for identifier in group['sessions']],
                          [item['id'] for item in entries])
 
     def test_missing_sessions_reuse_other_group(self):
-        result = self.suggest([{'name': 'Other', 'sessions': ['$6']}])
-        self.assertEqual(result['groups'], [{'name': 'Other', 'sessions': ['$6', '$9', '$12']}])
+        entries = [session('$' + str(index)) for index in range(6)]
+        result = self.suggest([{'name': 'Project', 'sessions': ['$0', '$1']},
+                               {'name': 'Other', 'sessions': ['$2', '$3']},
+                               {'name': 'Single', 'sessions': ['$4', '$0']}], entries)
+        self.assertEqual(result, {'groups': [{'name': 'Project', 'sessions': ['$0', '$1']},
+                                             {'name': 'Other', 'sessions': ['$2', '$3', '$4', '$5']}],
+                                  'source': 'llm'})
+
+    def test_observed_singleton_reply_uses_folder_fallback(self):
+        self.reply('CI Audit: 1\nEdgar submission live integration and fixes: 26\nFriday test: 19\n'
+                   'Goals and Cleanup: 27\nRelease: 13\nReview to Improve app: 29\nTether: 0\n'
+                   'Triage: 16\nedgarization-31-oct: 5\nweekly-reporting: 8')
+        identifiers = [1, 26, 19, 27, 13, 29, 0, 16, 5, 8, 30, 31, 32, 33, 34]
+        entries = [session('$' + str(identifier)) for identifier in identifiers]
+        self.assertEqual(suggest_groups.suggest({'sessions': entries}),
+                         {'groups': [{'name': 'project', 'sessions': [item['id'] for item in entries]}],
+                          'source': 'folder'})
+
+    def test_only_other_model_group_uses_unique_folder_fallback(self):
+        entries = [session('$1', '/one'), session('$2', '/two'), session('$3', '/three')]
+        for groups in ([], [{'name': 'Other', 'sessions': ['$1', '$2', '$3']}],
+                       [{'name': 'One', 'sessions': ['$1']}, {'name': 'Two', 'sessions': ['$2']}]):
+            with self.subTest(groups=groups):
+                self.assertEqual(self.suggest(groups, entries),
+                                 {'groups': [{'name': 'Other', 'sessions': ['$1', '$2', '$3']}],
+                                  'source': 'folder'})
 
     def test_folder_fallback_handles_root_empty_paths_and_last_segment(self):
         entries = [session('$1', '/a/shared'), session('$2', '/b/shared/'), session('$3', '/'),
@@ -153,7 +181,8 @@ class SuggestGroupsTests(unittest.TestCase):
     def test_two_hundred_sessions_are_accepted(self):
         entries = [session('$' + str(index)) for index in range(200)]
         result = self.suggest([], entries)
-        self.assertEqual(result['groups'], [{'name': 'Other', 'sessions': [item['id'] for item in entries]}])
+        self.assertEqual(result, {'groups': [{'name': 'project', 'sessions': [item['id'] for item in entries]}],
+                                  'source': 'folder'})
 
     def test_bad_requests_and_size_limits_never_call_model(self):
         bad = [None, [], {}, {'sessions': None}, {'sessions': {}},

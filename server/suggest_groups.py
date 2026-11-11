@@ -11,6 +11,7 @@ BODY_LIMIT = 4 * 1024 * 1024
 MODEL_TIMEOUT = 90
 PROMPT = """Input is one session per line: id | name | folder | chat1; chat2; chat3. Empty parts are omitted.
 Make 2–8 groups by project or purpose. Use short names of 1–3 words.
+Every group must have 2 or more sessions. Do not just repeat one session name as a group name.
 Reply with one line per group and nothing else: the group name, a colon, then its session ids.
 Example reply:
 Web app: 3 8 12
@@ -56,6 +57,8 @@ def validate(output, entries):
                 seen.add(identifier)
         if members:
             groups.append({'name': name, 'sessions': members})
+    groups = [group for group in groups if len(group['sessions']) > 1]
+    seen = {identifier for group in groups for identifier in group['sessions']}
     missing = [item['id'] for item in entries if item['id'] not in seen]
     if missing:
         # Reserve room for Other while keeping every session exactly once.
@@ -132,6 +135,8 @@ def suggest(body):
         with urllib.request.urlopen(request, timeout=MODEL_TIMEOUT) as response:
             output = json.loads(response.read())['choices'][0]['message']['content']
         groups = validate(parse_output(output), entries)
+        if not any(group['name'] != 'Other' and len(group['sessions']) > 1 for group in groups):
+            raise ValueError('No useful model groups.')
         return {'groups': groups, 'source': 'llm'}
     except (OSError, ValueError, KeyError, IndexError, TypeError, RecursionError):
         return {'groups': folders(entries), 'source': 'folder'}

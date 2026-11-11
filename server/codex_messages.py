@@ -1,5 +1,10 @@
 """Classify Codex message content by provenance, without treating runtime context as a user prompt."""
 
+import re
+
+IMAGE_TAG = re.compile(r'\s*<image name=\[Image #(\d+)\] path="([^"]+)">\s*')
+IMAGE_PLACEHOLDER = re.compile(r'\[Image #(\d+)\]')
+
 TEXT = ('input_text', 'output_text', 'text')
 GOALS = {'goal.internal_context': ('Goal continuation', 'Codex continues toward the active goal.'),
          'user.goal': ('Goal updated', 'The goal or its status changed.'),
@@ -15,6 +20,11 @@ def parts(payload):
     meta = meta if isinstance(meta, dict) else {}
     kinds, origins = meta.get('content_item_kinds'), meta.get('content_item_metadata')
     aligned = isinstance(kinds, list) and isinstance(origins, list) and len(kinds) == len(origins) == len(content)
+    image_tags = {index: match for index, part in enumerate(content)
+                  if isinstance(part, dict) and part.get('type') == 'input_text'
+                  and isinstance(part.get('text'), str) and (match := IMAGE_TAG.fullmatch(part['text']))}
+    image_numbers = {match[1] for match in image_tags.values()}
+    image_end = None
     result = []
     for index, part in enumerate(content):
         if not isinstance(part, dict):
@@ -31,6 +41,18 @@ def parts(payload):
                 result.append({'role': 'assistant', 'kind': 'notice', 'title': title, 'text': text})
                 continue
         text = part.get('text')
+        if index in image_tags:
+            text = image_tags[index][2]
+            image_end = index
+        elif part.get('type') == 'input_image' and index - 1 in image_tags:
+            image_end = index
+            continue
+        elif part.get('type') == 'input_text' and isinstance(text, str) and image_tags:
+            if text.strip() == '</image>' and image_end is not None and index == image_end + 1:
+                continue
+            if re.fullmatch(r'(?:\[Image #\d+\]\s*)+', text.strip()):
+                continue
+            text = IMAGE_PLACEHOLDER.sub(lambda match: '' if match[1] in image_numbers else match[0], text)
         if part.get('type') in TEXT and isinstance(text, str) and text.strip():
             # Unknown metadata and literal user examples stay visible.
             result.append({'role': payload.get('role'), 'text': text, '_user': user})
