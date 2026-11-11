@@ -1,6 +1,6 @@
 import { Spinner } from './Skeleton'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowUp, Mic, Paperclip, Square, X } from 'lucide-react'
+import { ArrowUp, ChevronDown, Mic, Paperclip, Square, X } from 'lucide-react'
 import { errorText } from './api'
 import type { Api, Pane } from './api'
 import { useModal, usePopover } from './hooks'
@@ -20,6 +20,11 @@ interface TaskFile { path: string; name: string; url?: string }
 const WORKERS: Worker[] = ['claude', 'codex']
 const REVIEWS: [Review, string][] = [['off', 'Off'], ['source', 'This tab reviews'], ['new', 'New tab reviews']]
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+interface TaskModel { id: string; label: string }
+type TaskModels = Record<Worker, TaskModel[]>
+// The model list comes from the server (claude aliases, the Codex model cache). Keep the last list for an instant first paint.
+const cachedTaskModels = (): TaskModels | null => { try { return JSON.parse(localStorage.getItem('tether.newTask.models') ?? 'null') as TaskModels | null } catch { return null } }
+const lastModel = (agent: Worker) => { try { return localStorage.getItem(`tether.newTask.model.${agent}`) ?? '' } catch { return '' } }
 const lastWorker = () => { try { return localStorage.getItem('tether.newTask.agent') === 'codex' ? 'codex' : 'claude' } catch { return 'claude' } }
 
 // The + on the tab strip: a task for a new tab. The server opens the tab beside this one, starts the agent with the
@@ -33,6 +38,11 @@ export function NewTask({ api, pane, at, onClose, onEmpty, onCreated, onOpen, on
   const [text, setText] = useState('')
   const [agent, setAgent] = useState<Worker>(lastWorker)
   const [review, setReview] = useState<Review>('off')
+  const [models, setModels] = useState<TaskModels | null>(cachedTaskModels)
+  // '' = the agent's own default. A remembered model that left the list falls back to the default.
+  const [picked, setPicked] = useState<Record<Worker, string>>(() => ({ claude: lastModel('claude'), codex: lastModel('codex') }))
+  const choices = models?.[agent] ?? []
+  const model = choices.some(item => item.id === picked[agent]) ? picked[agent] : ''
   const [context, setContext] = useState(false)
   const [worktree, setWorktree] = useState<string | null>(null)
   // A reviewer stays in this tab's folder: on a clean branch it could not see the work under review.
@@ -50,6 +60,14 @@ export function NewTask({ api, pane, at, onClose, onEmpty, onCreated, onOpen, on
   } })
   const { listening, transcribing, seconds, canRecord } = dictation
   useEffect(() => () => controller.current?.abort(), [])
+  useEffect(() => {
+    const abort = new AbortController()
+    api<TaskModels>('task-models', {}, abort.signal).then(result => {
+      setModels(result)
+      try { localStorage.setItem('tether.newTask.models', JSON.stringify(result)) } catch { /* private mode */ }
+    }).catch(() => { /* keep the cached list; Default always works */ })
+    return () => abort.abort()
+  }, [api])
   useEffect(() => { const made = urls.current; return () => made.forEach(url => URL.revokeObjectURL(url)) }, [])
   // A phone keyboard would cover the popover: focus the field only with a mouse or trackpad.
   useEffect(() => { if (typeof matchMedia === 'function' && matchMedia('(pointer: fine)').matches) field.current?.focus() }, [])
@@ -91,8 +109,8 @@ export function NewTask({ api, pane, at, onClose, onEmpty, onCreated, onOpen, on
       // The text goes first: the server names the tab from the first line.
       const message = [task.trim(), files.map(file => file.path).join(' ')].filter(Boolean).join('\n\n')
       if (!message && review !== 'new') { setError('Type a task first.'); setPending(false); field.current?.focus(); return }
-      const result = await api<{ pane: string; name: string; worktree?: MadeWorktree }>('delegate', { session: pane.id, thread: pane.thread, agent, message, context: context && canContext, review: review === 'off' ? false : review, ...(!task.trim() && files.length ? { name: files[0].name } : {}), ...(branch !== null ? { worktree: branch } : {}) }, abort.signal, undefined, branch !== null ? WORKTREE_TIMEOUT : undefined)
-      try { localStorage.setItem('tether.newTask.agent', agent) } catch { /* private mode */ }
+      const result = await api<{ pane: string; name: string; worktree?: MadeWorktree }>('delegate', { session: pane.id, thread: pane.thread, agent, message, context: context && canContext, review: review === 'off' ? false : review, ...(model ? { model } : {}), ...(!task.trim() && files.length ? { name: files[0].name } : {}), ...(branch !== null ? { worktree: branch } : {}) }, abort.signal, undefined, branch !== null ? WORKTREE_TIMEOUT : undefined)
+      try { localStorage.setItem('tether.newTask.agent', agent); localStorage.setItem(`tether.newTask.model.${agent}`, model) } catch { /* private mode */ }
       onCreated(result.pane, result.worktree)
     } catch (error) {
       if (!abort.signal.aborted) { setError(errorText(error)); setPending(false) }
@@ -136,6 +154,13 @@ export function NewTask({ api, pane, at, onClose, onEmpty, onCreated, onOpen, on
               <AgentIcon agent={choice} size={14} />{agentNames[choice]}
             </button>)}
           </div>
+          {choices.length > 0 && <label className="task-model" title="Model for the new tab">
+            <select aria-label={`${agentNames[agent]} model`} value={model} disabled={pending} onChange={event => { const value = event.target.value; setPicked(current => ({ ...current, [agent]: value })) }}>
+              <option value="">Default</option>
+              {choices.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
+            </select>
+            <ChevronDown size={13} aria-hidden="true" />
+          </label>}
           <span className="composer-status" aria-live="polite">{listening ? <><span className="task-rec-word">Recording </span>{Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')}</> : transcribing ? 'Converting…' : ''}</span>
           {micOk && canRecord && (transcribing
             ? <button type="button" className="icon-button mic active" aria-label="Stop converting and keep the live text" disabled={pending} onClick={() => dictation.cancelConverting()}><X size={19} /></button>
@@ -159,7 +184,7 @@ export function NewTask({ api, pane, at, onClose, onEmpty, onCreated, onOpen, on
       </div>}
       {(error || dictation.error) && <p className="error task-error" role="alert">{error || dictation.error}</p>}
       <button className="primary task-create" disabled={pending || uploading > 0}>
-        <span>{pending ? `Starting ${agentNames[agent]}…` : 'Create'}</span>{pending ? <Spinner size={16} /> : <ArrowUp size={16} />}
+        <span>{pending ? `Starting ${choices.find(item => item.id === model)?.label ?? agentNames[agent]}…` : 'Create'}</span>{pending ? <Spinner size={16} /> : <ArrowUp size={16} />}
       </button>
     </form>}
   </dialog>

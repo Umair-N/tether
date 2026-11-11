@@ -27,6 +27,24 @@ def body(**extra):
 
 
 class ValidationTests(unittest.TestCase):
+    def test_optional_model_must_be_listed_for_the_target_agent(self):
+        models = {'claude': [{'id': 'opus', 'label': 'Opus'}],
+                  'codex': [{'id': 'test-codex', 'label': 'Test Codex'}]}
+        source = entry()
+        for agent, model in (('claude', 'opus'), ('codex', 'test-codex')):
+            with self.subTest(agent=agent):
+                self.assertIs(delegate.validate(body(agent=agent, model=model), [source], models=models), source)
+        for model in ('unknown', 'test-codex', '', False, 1, [], {}):
+            with self.subTest(model=model), self.assertRaisesRegex(ValueError, '^Choose a model from the list\\.$'):
+                delegate.validate(body(model=model), [source], models=models)
+        with patch.object(delegate, 'task_models', return_value=models) as load:
+            delegate.validate(body(model='opus'), [source])
+            load.assert_called_once_with()
+        with patch.object(delegate, 'task_models') as load:
+            for request in (body(), body(model=None)):
+                self.assertIs(delegate.validate(request, [source], models={}), source)
+            load.assert_not_called()
+
     def test_worktree_refuses_new_reviewer_but_accepts_source_reviewer(self):
         source = entry()
         with self.assertRaises(ValueError) as raised:
@@ -102,6 +120,36 @@ class ValidationTests(unittest.TestCase):
             with self.subTest(source=source), self.assertRaisesRegex(ValueError, 'Review needs'):
                 delegate.validate(body(review=True), [source])
         delegate.validate(body(thread=None, review=True), [entry(thread=None)])
+
+
+class TaskModelsTests(unittest.TestCase):
+    def test_cache_filters_hidden_models_sorts_priority_and_falls_back_to_slug(self):
+        with tempfile.TemporaryDirectory() as home, \
+                patch.object(delegate.codex_provider, 'chosen', return_value='plan'):
+            cache = Path(home) / '.codex' / 'models_cache.json'
+            cache.parent.mkdir()
+            cache.write_text(json.dumps({'models': [
+                {'slug': 'later', 'display_name': 'Later', 'visibility': 'list', 'priority': 5},
+                {'slug': 'hidden', 'visibility': 'hide', 'priority': 0},
+                {'slug': 'first', 'visibility': 'list', 'priority': 1},
+            ]}))
+            expected = {'claude': [{'id': model, 'label': label} for model, label in delegate.CLAUDE_MODELS],
+                        'codex': [{'id': 'first', 'label': 'first'}, {'id': 'later', 'label': 'Later'}]}
+            self.assertEqual(delegate.task_models(home), expected)
+            with patch.object(delegate.codex_provider, 'chosen', return_value='foundry'):
+                self.assertEqual(delegate.task_models(home), dict(expected, codex=[]))
+
+    def test_missing_or_invalid_cache_returns_no_codex_models(self):
+        with tempfile.TemporaryDirectory() as home, \
+                patch.object(delegate.codex_provider, 'chosen', return_value='plan'):
+            self.assertEqual(delegate.task_models(home)['codex'], [])
+            cache = Path(home) / '.codex' / 'models_cache.json'
+            cache.parent.mkdir()
+            for content in ('invalid JSON', '{}', '{"models": null}', '{"models": [null]}',
+                            '{"models": [{"visibility": "list"}]}'):
+                with self.subTest(content=content):
+                    cache.write_text(content)
+                    self.assertEqual(delegate.task_models(home)['codex'], [])
 
 
 class LaunchTests(unittest.TestCase):
@@ -211,9 +259,28 @@ class LaunchTests(unittest.TestCase):
         self.assertEqual(delegate.launch_command(entry(), 'claude', path, name, context=True), 'claude' + suffix)
         self.assertEqual(delegate.launch_command(entry(), 'codex', path, name), 'codex' + suffix)
         self.assertEqual(delegate.launch_command(entry(), 'codex', path, name, profile='foundry'), 'codex -p foundry' + suffix)
+        model = "model's $(danger); name"
+        for agent, prefix in (('claude', 'claude --model '), ('codex', 'codex -m ')):
+            with self.subTest(agent=agent):
+                self.assertEqual(delegate.launch_command(entry(), agent, path, name, model=model),
+                                 prefix + shlex.quote(model) + suffix)
+                self.assertEqual(delegate.launch_command(entry(), agent, path, name, model=None), agent + suffix)
+        self.assertEqual(delegate.launch_command(entry(), 'codex', path, name, profile='foundry', model=model),
+                         'codex -p foundry -m ' + shlex.quote(model) + suffix)
         for profile in ('bad;command', '', 1):
             with self.subTest(profile=profile), self.assertRaises(ValueError):
                 delegate.launch_command(entry(), 'codex', path, name, profile=profile)
+
+    def test_start_passes_model_for_every_review_mode_and_agent(self):
+        for agent in ('claude', 'codex'):
+            for review in (False, 'source', 'new'):
+                with self.subTest(agent=agent, review=review), \
+                        patch.object(delegate, 'new_window_after', return_value='%13'), \
+                        patch.object(delegate.codex_provider, 'launch_profile', return_value=None), \
+                        patch.object(delegate.review_links, 'add'), \
+                        patch.object(delegate, 'launch_command', return_value='launch') as launch:
+                    delegate.start(entry(), body(agent=agent, review=review, model='selected'), '/project', run=Mock())
+                    self.assertEqual(launch.call_args.kwargs['model'], 'selected')
 
     def test_prompt_files_are_private_unique_and_old_files_are_pruned(self):
         directory = self.root / 'delegate'
@@ -287,6 +354,27 @@ class LaunchTests(unittest.TestCase):
 
 
 class EndpointTests(unittest.TestCase):
+    def test_task_models_needs_no_body_and_preserves_auth_guards(self):
+        handler = object.__new__(server.Handler)
+        handler.path = '/mobile/api/task-models'
+        handler.command = 'POST'
+        handler.headers = {'Host': 'phone.test', 'Origin': 'http://phone.test', 'X-Codex-Mobile': '1'}
+        handler.deny = Mock(return_value=False)
+        handler.respond = Mock()
+        models = {'claude': [{'id': 'opus', 'label': 'Opus'}], 'codex': []}
+        with patch.object(delegate, 'task_models', return_value=models) as load:
+            handler.do_POST()
+            handler.respond.assert_called_once_with(200, models)
+            load.assert_called_once_with()
+            load.reset_mock()
+            for headers in ({'Origin': 'https://evil.test'}, {'X-Codex-Mobile': ''}):
+                self.assertEqual(self.request({}, headers=headers, path=handler.path)[0], 403)
+            handler.deny.return_value = True
+            handler.respond.reset_mock()
+            handler.do_POST()
+            handler.respond.assert_not_called()
+            load.assert_not_called()
+
     def request(self, payload, headers=None, denied=False, path='/mobile/api/delegate'):
         handler = object.__new__(server.Handler)
         handler.path = path

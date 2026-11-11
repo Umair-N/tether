@@ -1,5 +1,7 @@
 """Validate and launch a task in a new window beside its source chat."""
+import json
 import os
+from pathlib import Path
 import re
 import shlex
 import subprocess
@@ -14,6 +16,22 @@ import review_links
 from terminal_input import PROFILE_NAME, UUID, new_window_after
 
 
+CLAUDE_MODELS = [('fable', 'Fable'), ('opus', 'Opus'), ('sonnet', 'Sonnet'), ('haiku', 'Haiku')]
+
+
+def task_models(home=None):
+    codex = []
+    if codex_provider.chosen() != 'foundry':
+        try:
+            rows = json.loads((Path(home or paths.HOME) / '.codex' / 'models_cache.json').read_text())['models']
+            codex = [{'id': row['slug'], 'label': row.get('display_name') or row['slug']}
+                     for row in sorted((row for row in rows if row.get('visibility') == 'list'),
+                                       key=lambda row: row.get('priority', 0))]
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            pass
+    return {'claude': [{'id': model, 'label': label} for model, label in CLAUDE_MODELS], 'codex': codex}
+
+
 def normalize_review(value):
     if value is False:
         return None
@@ -24,7 +42,7 @@ def normalize_review(value):
     raise ValueError('Context and review must be true or false.')
 
 
-def validate(body, entries):
+def validate(body, entries, models=None):
     pane = body.get('session')
     if not isinstance(pane, str) or not re.fullmatch(r'%[0-9]+', pane):
         raise ValueError('Select a chat tab for the new task.')
@@ -35,6 +53,11 @@ def validate(body, entries):
         raise ValueError('This tab changed conversations. Reload it and try again.')
     if body.get('agent') not in ('claude', 'codex'):
         raise ValueError('Choose Claude or Codex for the new task.')
+    model = body.get('model')
+    if model is not None:
+        models = task_models() if models is None else models
+        if not isinstance(model, str) or model not in [row['id'] for row in models.get(body['agent'], [])]:
+            raise ValueError('Choose a model from the list.')
     review = normalize_review(body.get('review', False))
     if 'worktree' in body and review == 'new':
         raise ValueError("A reviewer tab stays in this tab's folder, so it can see the work. Turn off the new worktree or the new tab review.")
@@ -154,12 +177,16 @@ def _check_profile(profile):
         raise ValueError('Choose a supported Codex provider.')
 
 
-def launch_command(entry, agent, path, name, *, context=False, profile=None):
+def launch_command(entry, agent, path, name, *, context=False, profile=None, model=None):
     if agent == 'claude':
         command = 'claude'
+        if model is not None:
+            command += f' --model {shlex.quote(model)}'
     else:
         _check_profile(profile)
         command = 'codex' + (f' -p {shlex.quote(profile)}' if profile is not None else '')
+        if model is not None:
+            command += f' -m {shlex.quote(model)}'
     return command + f' "$(cat {shlex.quote(str(path))})"'
 
 
@@ -191,7 +218,7 @@ def start(entry, body, folder, run=subprocess.run, recent=lambda: [], *, cwd=Non
     prompt = (reviewer_prompt(entry, body['message'], recent_text) if review == 'new' else
               prompt_text(entry, body['message'], agent, context=context, review=review == 'source', recent=recent_text))
     path = write_prompt(prompt)
-    command = launch_command(entry, agent, path, name, context=context, profile=profile)
+    command = launch_command(entry, agent, path, name, context=context, profile=profile, model=body.get('model'))
     # The pty buffers input even while the new shell starts.
     run([paths.TMUX, 'send-keys', '-t', pane, '-l', command], check=True, capture_output=True, timeout=5)
     run([paths.TMUX, 'send-keys', '-t', pane, 'Enter'], check=True, capture_output=True, timeout=5)
