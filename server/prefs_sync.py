@@ -104,7 +104,7 @@ def save(changes):
             raise ValueError('Invalid preference: groupBy.')
         if key == 'waitingOrder' and value not in ('oldest', 'newest'):
             raise ValueError('Invalid preference: waitingOrder.')
-        if key == 'mainModel' and value not in ('none', 'claude', 'codex'):
+        if key == 'mainModel' and value not in ('auto', 'none', 'claude', 'codex'):
             raise ValueError('Invalid preference: mainModel.')
     with _lock:
         stored = load()

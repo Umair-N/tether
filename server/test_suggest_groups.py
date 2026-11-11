@@ -53,6 +53,16 @@ class SuggestGroupsTests(unittest.TestCase):
         self.which.assert_not_called()
         self.popen.assert_not_called()
 
+    def test_auto_uses_first_installed_agent_else_local_model(self):
+        for installed, expected in ((('claude', 'codex'), 'claude'), (('codex',), 'codex'), ((), 'llm')):
+            with self.subTest(installed=installed):
+                self.popen.reset_mock()
+                self.which.side_effect = lambda name: '/bin/' + name if name in installed else None
+                self.popen.side_effect = self.agent_process
+                self.reply('Project: 6 9')
+                self.assertEqual(suggest_groups.suggest({'sessions': self.entries, 'agent': 'auto'})['source'], expected)
+                self.assertEqual(self.popen.call_count, 1 if installed else 0)
+
     def test_claude_agent_uses_exact_command(self):
         for extra in ({'agent': 'claude'},):
             with self.subTest(extra=extra):

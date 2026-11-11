@@ -14,6 +14,8 @@ BODY_LIMIT = 4 * 1024 * 1024
 # The local model runs on the CPU. Output tokens cost most, so the reply is one short line per group.
 MODEL_TIMEOUT = 90
 AGENT_TIMEOUT = 45
+# Agent CLIs in the order Automatic tries them. Add a new agent here and in agent_output.
+AGENTS = ('claude', 'codex')
 PROMPT = """Input is one session per line: id | name | folder | chat1; chat2; chat3. Empty parts are omitted.
 Make 2–8 groups by project or purpose. Use short names of 1–3 words.
 Every group must have 2 or more sessions. Do not just repeat one session name as a group name.
@@ -162,14 +164,16 @@ def agent_output(agent, executable, entries):
 
 def suggest(body):
     entries = sessions(body)
-    # The main AI model from Settings. Without one, the local model and folders work as before.
+    # The main AI model from Settings. auto: the first installed agent CLI. none or missing: the local model, then folders.
     agent = body.get('agent')
     if agent is not None and not isinstance(agent, str):
         raise ValueError('Invalid agent.')
     if not entries:
         return {'groups': [], 'source': 'folder'}
     try:
-        executable = shutil.which(agent) if agent in ('claude', 'codex') else None
+        if agent == 'auto':
+            agent = next((name for name in AGENTS if shutil.which(name)), None)
+        executable = shutil.which(agent) if agent in AGENTS else None
         if executable:
             return {'groups': output_groups(agent_output(agent, executable, entries), entries), 'source': agent}
     except (OSError, ValueError, KeyError, IndexError, TypeError, RecursionError, subprocess.TimeoutExpired):

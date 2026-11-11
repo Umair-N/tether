@@ -95,7 +95,7 @@ class PrefsSyncTests(unittest.TestCase):
         self.assertEqual(prefs_sync.load()['version'], 0)
 
     def test_main_model_round_trip_and_rejects_unknown(self):
-        for value in ('claude', 'codex', 'none'):
+        for value in ('auto', 'claude', 'codex', 'none'):
             with self.subTest(value=value):
                 self.assertEqual(prefs_sync.save({'mainModel': value})['prefs']['mainModel'], value)
         for value in ('gpt', 7):

@@ -66,10 +66,10 @@ export interface Prefs {
   look: Look
   myLook: SavedLook | null
   imagePromptTuned?: boolean
-  /** Settings › Main AI model: the agent CLI that Tether's own helpers (Suggest groups) use. none: the local model only. */
+  /** Settings › Main AI model: the agent CLI that Tether's own helpers (Suggest groups) use. auto: the first installed agent. none: the local model only. */
   mainModel: MainModel
 }
-export type MainModel = 'none' | 'claude' | 'codex'
+export type MainModel = 'auto' | 'none' | 'claude' | 'codex'
 export interface Host { name: string; url: string }
 export interface DesktopLayout { count: 1 | 2 | 3 | 4; panes: string[]; focus: number; cols: Record<string, number[]>; row: number; inbox: boolean; sidebar: boolean; /** With 2 slots: one above the other. */ stack?: boolean; /** Panes of other sessions that the user placed in this layout. */ guests?: string[]
   /** The right-hand panel column. Absent in older prefs: no panels open. */ panels?: PanelLayout }
@@ -85,7 +85,7 @@ export interface ArchivedTab { thread: string | null; dir: string }
 export interface SidePin { pane: string; note?: string }
 const KEY = 'tmux-chat.prefs.v1'
 const CLEARED_KEEP = 2 * 86400  // Match CLEARED_KEEP in server/prefs_sync.py (seconds).
-const DEFAULTS: Prefs = { autoResume: true, pinned: [], sidePins: [], order: [], collapsed: { past: true }, expanded: {}, selected: null, lastPane: {}, voiceOff: false, voiceSound: true, readAloud: false, handsFree: false, agentBubble: true, panelSizes: {}, panelsClosed: {}, liveReplyPreview: true, theme: 'system', scheme: 'claude', textSize: 'default', showPaths: false, tmuxWords: false, sort: 'smart', colors: {}, groups: [], groupOf: {}, groupBy: 'agent', attention: true, waitingOrder: 'oldest', seen: {}, paneOrder: {}, drafts: {}, archived: {}, archivedTabs: {}, hosts: [], layout: {}, look: DEFAULT_LOOK, myLook: null, imagePromptTuned: true, mainModel: 'none' }
+const DEFAULTS: Prefs = { autoResume: true, pinned: [], sidePins: [], order: [], collapsed: { past: true }, expanded: {}, selected: null, lastPane: {}, voiceOff: false, voiceSound: true, readAloud: false, handsFree: false, agentBubble: true, panelSizes: {}, panelsClosed: {}, liveReplyPreview: true, theme: 'system', scheme: 'claude', textSize: 'default', showPaths: false, tmuxWords: false, sort: 'smart', colors: {}, groups: [], groupOf: {}, groupBy: 'agent', attention: true, waitingOrder: 'oldest', seen: {}, paneOrder: {}, drafts: {}, archived: {}, archivedTabs: {}, hosts: [], layout: {}, look: DEFAULT_LOOK, myLook: null, imagePromptTuned: true, mainModel: 'auto' }
 
 function keptDrafts(drafts: Record<string, Draft>) {
   const now = Date.now() / 1000
