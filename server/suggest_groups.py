@@ -1,14 +1,19 @@
-"""Suggest sidebar groups with the local model, or use folder names on failure."""
+"""Suggest sidebar groups with an agent, the local model, or folder names."""
 import json
 import os
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 import re
+import shutil
+import signal
+import subprocess
+import tempfile
 import urllib.request
 
 PATH = '/mobile/api/suggest-groups'
 BODY_LIMIT = 4 * 1024 * 1024
 # The local model runs on the CPU. Output tokens cost most, so the reply is one short line per group.
 MODEL_TIMEOUT = 90
+AGENT_TIMEOUT = 45
 PROMPT = """Input is one session per line: id | name | folder | chat1; chat2; chat3. Empty parts are omitted.
 Make 2–8 groups by project or purpose. Use short names of 1–3 words.
 Every group must have 2 or more sessions. Do not just repeat one session name as a group name.
@@ -120,10 +125,55 @@ def parse_output(output):
     return value
 
 
+def output_groups(output, entries):
+    groups = validate(parse_output(output), entries)
+    if not any(group['name'] != 'Other' and len(group['sessions']) > 1 for group in groups):
+        raise ValueError('No useful model groups.')
+    return groups
+
+
+def agent_output(agent, executable, entries):
+    with tempfile.TemporaryDirectory(prefix='tether-groups-') as folder:
+        outfile = Path(folder) / 'groups.txt'
+        content = model_input(entries)
+        if agent == 'claude':
+            command = [executable, '-p', '--model', 'haiku', '--tools', '', '--setting-sources', '',
+                       '--strict-mcp-config', '--no-session-persistence', '--system-prompt', PROMPT]
+        else:
+            command = [executable, 'exec', '--skip-git-repo-check', '--ephemeral', '-s', 'read-only',
+                       '-c', 'model_reasoning_effort=low', '-o', str(outfile), '--', PROMPT + '\n\n' + content]
+        process = subprocess.Popen(command, cwd=folder,
+                                   stdin=subprocess.PIPE if agent == 'claude' else subprocess.DEVNULL,
+                                   stdout=subprocess.PIPE if agent == 'claude' else subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, text=True, start_new_session=True)
+        try:
+            output, _ = process.communicate(input=content if agent == 'claude' else None, timeout=AGENT_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
+            raise
+        if process.returncode:
+            raise ValueError('Agent failed to suggest groups.')
+        return output if agent == 'claude' else outfile.read_text(encoding='utf-8')
+
+
 def suggest(body):
     entries = sessions(body)
+    # The main AI model from Settings. Without one, the local model and folders work as before.
+    agent = body.get('agent')
+    if agent is not None and not isinstance(agent, str):
+        raise ValueError('Invalid agent.')
     if not entries:
         return {'groups': [], 'source': 'folder'}
+    try:
+        executable = shutil.which(agent) if agent in ('claude', 'codex') else None
+        if executable:
+            return {'groups': output_groups(agent_output(agent, executable, entries), entries), 'source': agent}
+    except (OSError, ValueError, KeyError, IndexError, TypeError, RecursionError, subprocess.TimeoutExpired):
+        pass
     try:
         # Match live_mode.summary's OpenAI request and disable model thinking.
         url = os.environ.get('TETHER_LLM_URL', 'http://127.0.0.1:7687').rstrip('/')
@@ -134,9 +184,7 @@ def suggest(body):
                                          headers={'Content-Type': 'application/json'}, method='POST')
         with urllib.request.urlopen(request, timeout=MODEL_TIMEOUT) as response:
             output = json.loads(response.read())['choices'][0]['message']['content']
-        groups = validate(parse_output(output), entries)
-        if not any(group['name'] != 'Other' and len(group['sessions']) > 1 for group in groups):
-            raise ValueError('No useful model groups.')
+        groups = output_groups(output, entries)
         return {'groups': groups, 'source': 'llm'}
     except (OSError, ValueError, KeyError, IndexError, TypeError, RecursionError):
         return {'groups': folders(entries), 'source': 'folder'}

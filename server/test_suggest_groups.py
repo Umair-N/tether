@@ -1,8 +1,10 @@
-"""Group suggestions use fake HTTP responses and socket-free route fixtures."""
+"""Group suggestions use fake processes, HTTP responses and socket-free route fixtures."""
 import io
 import json
 import os
 from pathlib import Path
+import signal
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -21,6 +23,8 @@ def session(identifier, folder='/work/project', **extra):
 class SuggestGroupsTests(unittest.TestCase):
     def setUp(self):
         self.urlopen = self.enterContext(patch('urllib.request.urlopen'))
+        self.which = self.enterContext(patch('suggest_groups.shutil.which', return_value=None))
+        self.popen = self.enterContext(patch('suggest_groups.subprocess.Popen'))
         self.entries = [session('$6'), session('$9', '/other/project/'), session('$12', '/work/single')]
 
     def reply(self, output):
@@ -30,6 +34,147 @@ class SuggestGroupsTests(unittest.TestCase):
     def suggest(self, groups, entries=None):
         self.reply(json.dumps({'groups': groups}))
         return suggest_groups.suggest({'sessions': self.entries if entries is None else entries})
+
+    def agent_process(self, command, **kwargs):
+        folder = Path(kwargs['cwd'])
+        self.assertTrue(folder.is_dir())
+        self.assertEqual(list(folder.iterdir()), [])
+        if '-o' in command:
+            outfile = Path(command[command.index('-o') + 1])
+            self.assertEqual(outfile.parent, folder)
+            outfile.write_text('Project: 6 9', encoding='utf-8')
+        return Mock(returncode=0, pid=12345, communicate=Mock(return_value=('Project: 6 9', None)))
+
+    def test_no_main_agent_setting_skips_agents(self):
+        for extra in ({}, {'agent': None}, {'agent': ''}, {'agent': 'unknown'}):
+            with self.subTest(extra=extra):
+                self.reply('Project: 6 9')
+                self.assertEqual(suggest_groups.suggest({'sessions': self.entries, **extra})['source'], 'llm')
+        self.which.assert_not_called()
+        self.popen.assert_not_called()
+
+    def test_claude_agent_uses_exact_command(self):
+        for extra in ({'agent': 'claude'},):
+            with self.subTest(extra=extra):
+                self.which.reset_mock()
+                self.popen.reset_mock()
+                self.which.return_value = '/bin/claude'
+                self.popen.side_effect = self.agent_process
+                result = suggest_groups.suggest({'sessions': self.entries, **extra})
+                self.assertEqual(result, {'groups': [{'name': 'Project', 'sessions': ['$6', '$9']},
+                                                    {'name': 'Other', 'sessions': ['$12']}], 'source': 'claude'})
+                self.which.assert_called_once_with('claude')
+                self.popen.assert_called_once()
+                command = self.popen.call_args.args[0]
+                folder = self.popen.call_args.kwargs['cwd']
+                self.assertEqual(command, ['/bin/claude', '-p', '--model', 'haiku', '--tools', '',
+                                           '--setting-sources', '', '--strict-mcp-config',
+                                           '--no-session-persistence', '--system-prompt', suggest_groups.PROMPT])
+                self.assertEqual(self.popen.call_args.kwargs,
+                                 dict(cwd=folder, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                      stderr=subprocess.DEVNULL, text=True, start_new_session=True))
+                self.assertFalse(Path(folder).exists())
+        self.urlopen.assert_not_called()
+
+    def test_claude_receives_session_data_as_text_stdin(self):
+        self.which.return_value = '/bin/claude'
+        process = Mock(returncode=0, communicate=Mock(return_value=('Project: 6 9', None)))
+        self.popen.return_value = process
+        self.entries[0]['name'] = '$(touch nope); `whoami`'
+        suggest_groups.suggest({'sessions': self.entries, 'agent': 'claude'})
+        process.communicate.assert_called_once_with(input=suggest_groups.model_input(self.entries), timeout=45)
+        self.assertEqual(suggest_groups.AGENT_TIMEOUT, 45)
+        self.assertNotIn(self.entries[0]['name'], self.popen.call_args.args[0])
+
+    def test_codex_command_uses_devnull_and_reads_output_file(self):
+        self.which.return_value = '/bin/codex'
+        # stdout must be ignored: Codex writes the answer to the -o file.
+        process = Mock(returncode=0, communicate=Mock(return_value=(None, None)))
+
+        def launch(command, **kwargs):
+            self.agent_process(command, **kwargs)
+            return process
+
+        self.popen.side_effect = launch
+        result = suggest_groups.suggest({'sessions': self.entries, 'agent': 'codex'})
+        self.assertEqual(result, {'groups': [{'name': 'Project', 'sessions': ['$6', '$9']},
+                                            {'name': 'Other', 'sessions': ['$12']}], 'source': 'codex'})
+        self.which.assert_called_once_with('codex')
+        self.popen.assert_called_once()
+        folder = self.popen.call_args.kwargs['cwd']
+        self.assertEqual(self.popen.call_args.args[0],
+                         ['/bin/codex', 'exec', '--skip-git-repo-check', '--ephemeral', '-s', 'read-only',
+                          '-c', 'model_reasoning_effort=low', '-o', str(Path(folder) / 'groups.txt'), '--',
+                          suggest_groups.PROMPT + '\n\n' + suggest_groups.model_input(self.entries)])
+        self.assertEqual(self.popen.call_args.kwargs,
+                         dict(cwd=folder, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL, text=True, start_new_session=True))
+        process.communicate.assert_called_once_with(input=None, timeout=45)
+        self.assertFalse(Path(folder).exists())
+        self.urlopen.assert_not_called()
+
+    def test_main_agent_not_installed_uses_local_model(self):
+        for main in ('claude', 'codex'):
+            with self.subTest(main=main):
+                self.which.reset_mock()
+                self.reply('Project: 6 9')
+                self.assertEqual(suggest_groups.suggest({'sessions': self.entries, 'agent': main})['source'], 'llm')
+                self.which.assert_called_once_with(main)
+        self.popen.assert_not_called()
+
+    def test_agent_timeout_kills_process_group_then_uses_local_model(self):
+        for agent in ('claude', 'codex'):
+            for missing_process in (False, True):
+                with self.subTest(agent=agent, missing_process=missing_process):
+                    self.which.reset_mock()
+                    self.which.return_value = '/bin/' + agent
+                    process = Mock(pid=12345)
+                    process.communicate.side_effect = subprocess.TimeoutExpired(agent, 45)
+                    self.popen.return_value = process
+                    self.reply('Project: 6 9')
+                    with patch('suggest_groups.os.killpg',
+                               side_effect=ProcessLookupError() if missing_process else None) as killpg:
+                        result = suggest_groups.suggest({'sessions': self.entries, 'agent': agent})
+                    self.assertEqual(result['source'], 'llm')
+                    killpg.assert_called_once_with(12345, signal.SIGKILL)
+                    process.wait.assert_called_once_with()
+                    self.which.assert_called_once_with(agent)
+                    self.assertFalse(Path(self.popen.call_args.kwargs['cwd']).exists())
+
+    def test_agent_failures_use_local_model_without_trying_other_agent(self):
+        self.which.return_value = '/bin/claude'
+        for output, code in (('Project: 6 9', 1), ('broken', 0), ('{"groups":null}', 0),
+                             ('One: 6\nTwo: 9\nThree: 12', 0)):
+            with self.subTest(output=output, code=code):
+                self.which.reset_mock()
+                self.popen.return_value = Mock(returncode=code, communicate=Mock(return_value=(output, None)))
+                self.reply('Local: 6 9')
+                result = suggest_groups.suggest({'sessions': self.entries, 'agent': 'claude'})
+                self.assertEqual(result['source'], 'llm')
+                self.assertEqual(result['groups'][0]['name'], 'Local')
+                self.which.assert_called_once_with('claude')
+        self.popen.side_effect = OSError('could not start')
+        self.assertEqual(suggest_groups.suggest({'sessions': self.entries, 'agent': 'claude'})['source'], 'llm')
+
+    def test_agent_singletons_then_local_singletons_use_folders(self):
+        self.which.return_value = '/bin/claude'
+        output = 'One: 6\nTwo: 9\nThree: 12'
+        self.popen.return_value = Mock(returncode=0, communicate=Mock(return_value=(output, None)))
+        self.reply(output)
+        self.assertEqual(suggest_groups.suggest({'sessions': self.entries, 'agent': 'claude'}),
+                         {'groups': [{'name': 'project', 'sessions': ['$6', '$9']},
+                                     {'name': 'Other', 'sessions': ['$12']}], 'source': 'folder'})
+        self.popen.assert_called_once()
+        self.urlopen.assert_called_once()
+
+    def test_non_string_agent_is_rejected_before_any_attempt(self):
+        for agent in (1, True, [], {}):
+            for entries in ([], self.entries):
+                with self.subTest(agent=agent, entries=entries), self.assertRaises(ValueError):
+                    suggest_groups.suggest({'sessions': entries, 'agent': agent})
+        self.which.assert_not_called()
+        self.popen.assert_not_called()
+        self.urlopen.assert_not_called()
 
     def test_good_output_request_settings_and_timeout(self):
         groups = [{'name': ' Project ', 'sessions': ['$6', '$9']}, {'name': 'Single', 'sessions': ['$12']}]
@@ -200,6 +345,7 @@ class SuggestGroupsTests(unittest.TestCase):
 class RouteTests(unittest.TestCase):
     def setUp(self):
         self.urlopen = self.enterContext(patch('urllib.request.urlopen', side_effect=TimeoutError()))
+        self.enterContext(patch('suggest_groups.shutil.which', return_value=None))
 
     def test_authenticated_route_and_model_failure_return_200(self):
         value = handler(suggest_groups.PATH, {'sessions': [session('$6')]})

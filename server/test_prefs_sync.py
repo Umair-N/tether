@@ -94,6 +94,14 @@ class PrefsSyncTests(unittest.TestCase):
                 prefs_sync.save({'waitingOrder': value})
         self.assertEqual(prefs_sync.load()['version'], 0)
 
+    def test_main_model_round_trip_and_rejects_unknown(self):
+        for value in ('claude', 'codex', 'none'):
+            with self.subTest(value=value):
+                self.assertEqual(prefs_sync.save({'mainModel': value})['prefs']['mainModel'], value)
+        for value in ('gpt', 7):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, r'^Invalid preference: mainModel\.$'):
+                prefs_sync.save({'mainModel': value})
+
     def test_sidebar_preferences_round_trip(self):
         values = {'colors': {'$6': 'red', '%12': 'purple'},
                   'groups': [{'id': 'project-1', 'name': ' Project '}],
