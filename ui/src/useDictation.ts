@@ -3,6 +3,21 @@ import { errorText } from './api'
 import { playChime, prepareChime } from './sound'
 import { stopSpeaking } from './speech'
 
+interface SpeechRecognizer {
+  continuous: boolean
+  interimResults: boolean
+  lang: string
+  maxAlternatives: number
+  onresult: ((event: { results: ArrayLike<{ isFinal: boolean; [index: number]: { transcript: string } }> }) => void) | null
+  onend: (() => void) | null
+  onerror: ((event: { error: string }) => void) | null
+  start: () => void
+  stop: () => void
+  abort: () => void
+}
+type SpeechConstructor = new () => SpeechRecognizer
+let speechBroken = false
+
 interface DictationOptions {
   text: string
   setText: (text: string) => void
@@ -12,13 +27,14 @@ interface DictationOptions {
   onFinished?: () => void
 }
 
-// Record once for both task and chat input. Live text is a preview; send waits for the final pass.
+// Share browser speech and the recorder fallback between task and chat input.
 export function useDictation({ text, setText, chime, handsFree, onHandsFreeDone, onFinished }: DictationOptions) {
   const [listening, setListening] = useState(false)
   const [transcribing, setTranscribing] = useState(false)
   const [seconds, setSeconds] = useState(0)
   const [error, setError] = useState('')
   const recorder = useRef<MediaRecorder | null>(null)
+  const stopSpeech = useRef<(() => void) | null>(null)
   const finalDraft = useRef<Promise<string> | null>(null)
   const converting = useRef<AbortController | null>(null)
   const cleanupRecording = useRef<(() => void) | null>(null)
@@ -30,11 +46,103 @@ export function useDictation({ text, setText, chime, handsFree, onHandsFreeDone,
     return () => { disposed.current = true; cleanupRecording.current?.() }
   }, [])
   async function toggle() {
+    if (stopSpeech.current) { stopSpeech.current(); return }
     if (recorder.current) { if (recorder.current.state !== 'inactive') recorder.current.stop(); return }
     stopSpeaking()
     setError('')
     if (chime) { prepareChime(); await playChime() }
     if (disposed.current) return
+    const Recognition = speechConstructor()
+    if (Recognition && !speechBroken) startSpeech(Recognition)
+    else await startRecorder()
+  }
+  function startSpeech(Recognition: SpeechConstructor) {
+    const base = textNow.current.trimEnd()
+    let finish: (text: string) => void = () => undefined
+    const final = new Promise<string>(resolve => { finish = resolve })
+    finalDraft.current = final
+    void final.then(() => { if (finalDraft.current === final) finalDraft.current = null })
+    let recognition: SpeechRecognizer
+    let earlier = '', committed = '', interim = '', received = false, stopped = false, done = false, restarts = 0
+    let pause: number | undefined
+    const started = Date.now()
+    const join = (...parts: string[]) => parts.filter(Boolean).join(' ')
+    const words = () => join(earlier, committed, interim).replace(/(?<=\S) slash (?=\S)/gi, '/')
+    const detach = () => { recognition.onresult = null; recognition.onend = null; recognition.onerror = null }
+    const cleanup = () => {
+      done = true
+      window.clearInterval(timer); window.clearTimeout(pause)
+      stopSpeech.current = null; cleanupRecording.current = null
+      if (recognition) { detach(); recognition.abort() }
+    }
+    const complete = (message?: string) => {
+      if (done) return
+      const spoken = words(), next = join(base, spoken)
+      cleanup(); setText(next); finish(next); setListening(false)
+      if (message !== undefined) setError(message)
+      else if (!spoken && !handsFree) setError('No speech heard. Tap the mic and speak.')
+      onFinished?.()
+      if (handsFree && spoken && next !== base) onHandsFreeDone?.()
+    }
+    const stop = () => {
+      if (done || stopped) return
+      stopped = true
+      recognition.stop()
+      // Some browsers never fire onend after stop; finish with the words so far.
+      window.clearTimeout(pause); pause = window.setTimeout(() => complete(), 1500)
+    }
+    const fallback = () => {
+      speechBroken = true
+      cleanup(); setListening(false)
+      // A submit may already hold the speech promise. Resolve it with the recorder's final text.
+      void startRecorder().then(() => {
+        const next = finalDraft.current
+        if (next && next !== final) void next.then(finish)
+        else finish(base)
+      })
+    }
+    const attach = () => {
+      recognition.continuous = true; recognition.interimResults = true
+      recognition.lang = navigator.language || 'en-US'; recognition.maxAlternatives = 1
+      recognition.onresult = event => {
+        const finals: string[] = [], partials: string[] = []
+        for (const result of Array.from(event.results)) (result.isFinal ? finals : partials).push(result[0].transcript.trim())
+        committed = join(...finals); interim = join(...partials); received = true
+        setText(join(base, words()))
+        if (handsFree) { window.clearTimeout(pause); pause = window.setTimeout(stop, 1800) }
+      }
+      recognition.onend = () => {
+        if (done) return
+        if (stopped || restarts >= 20) { complete(); return }
+        earlier = join(earlier, committed, interim); committed = ''; interim = ''; restarts++
+        try { recognition.start() } catch {
+          detach()
+          try { recognition = new Recognition(); attach(); recognition.start() } catch { complete() }
+        }
+      }
+      recognition.onerror = ({ error }) => {
+        if (done || error === 'aborted' || error === 'no-speech') return
+        if (received) { complete(); return }
+        if (error === 'not-allowed') { complete('Allow microphone access for this site, then try again.'); return }
+        if (error === 'audio-capture') {
+          speechBroken = true
+          complete('Could not start the microphone. Close other apps that use it, then try again.'); return
+        }
+        if (['service-not-allowed', 'network', 'language-not-supported'].includes(error)) { fallback(); return }
+        complete()
+      }
+    }
+    const timer = window.setInterval(() => {
+      const elapsed = Math.floor((Date.now() - started) / 1000)
+      setSeconds(elapsed); if (elapsed >= 180) stop()
+    }, 250)
+    if (handsFree) pause = window.setTimeout(stop, 8000)
+    stopSpeech.current = stop
+    cleanupRecording.current = () => { cleanup(); finish(base) }
+    setSeconds(0); setListening(true)
+    try { recognition = new Recognition(); attach(); recognition.start() } catch { fallback() }
+  }
+  async function startRecorder() {
     let stream: MediaStream
     try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }) } catch (failure) {
       setError(failure instanceof DOMException && failure.name === 'NotAllowedError' ? 'Allow microphone access for this site, then try again.' : 'Could not start the microphone. Close other apps that use it, then try again.')
@@ -45,13 +153,11 @@ export function useDictation({ text, setText, chime, handsFree, onHandsFreeDone,
     const type = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4'].find(kind => MediaRecorder.isTypeSupported(kind))
     const active = new MediaRecorder(stream, type ? { mimeType: type } : undefined)
     const chunks: Blob[] = []
-    // eslint-disable-next-line react-hooks/purity -- This event callback samples the recording start after microphone access, never during render.
     const started = Date.now()
     // Live text: about every 1.5 s, send the audio so far to the fast model and show its rough text in the box.
     // The accurate model replaces it after stop.
     const base = textNow.current.trimEnd()
     // One id per recording: the server converts finished sentences while the user speaks, so stop only waits for the rest.
-    // eslint-disable-next-line react-hooks/purity -- Generate a fresh fallback ID when this event callback starts a recording.
     const recording = crypto.randomUUID?.() ?? `${started}-${Math.random().toString(36).slice(2)}`
     let finish: (text: string) => void = () => undefined
     const final = new Promise<string>(resolve => { finish = resolve })
@@ -124,15 +230,20 @@ export function useDictation({ text, setText, chime, handsFree, onHandsFreeDone,
       return { text: textNow.current, ok: false }
     } finally { window.clearTimeout(limit); converting.current = null; setTranscribing(false); onFinished?.() }
   }
-  const canRecord = typeof MediaRecorder !== 'undefined' && !!navigator.mediaDevices?.getUserMedia
+  const canRecord = !!speechConstructor() || (typeof MediaRecorder !== 'undefined' && !!navigator.mediaDevices?.getUserMedia)
   return {
     listening, transcribing, seconds, error, setError, canRecord,
-    active: () => !!recorder.current,
+    active: () => !!stopSpeech.current || !!recorder.current,
     toggle,
     cancelConverting: () => converting.current?.abort(),
-    stop: () => { if (recorder.current && recorder.current.state !== 'inactive') recorder.current.stop() },
+    stop: () => { stopSpeech.current?.(); if (recorder.current && recorder.current.state !== 'inactive') recorder.current.stop() },
     finalText: () => finalDraft.current,
   }
+}
+
+function speechConstructor() {
+  const speech = window as unknown as { SpeechRecognition?: SpeechConstructor; webkitSpeechRecognition?: SpeechConstructor }
+  return speech.SpeechRecognition ?? speech.webkitSpeechRecognition
 }
 
 // Listen to the mic level. After speech, 1.8 s of quiet calls done. No speech in the first 8 s also calls done.
