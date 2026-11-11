@@ -52,7 +52,7 @@ function environment(label = '') {
   let now = 0, nextTimer = 1
   const timers = new Map(), records = [], calls = [], streams = []
   const response = text => ({ ok: true, headers: { get: () => 'application/json' }, json: async () => ({ text }) })
-  const env = { calls, records, streams, timers, result: '', focus: 0, chimes: [], spoken: 0, fine: true }
+  const env = { calls, records, streams, timers, result: '', focus: 0, chimes: [], spoken: 0, fine: true, logs: [] }
   const stream = () => {
     const track = { label, stops: 0, stop() { this.stops++ } }
     const value = { track, getAudioTracks: () => [track], getTracks: () => [track] }
@@ -67,6 +67,7 @@ function environment(label = '') {
   }
   const setTimer = (fn, ms) => { const id = nextTimer++; timers.set(id, { fn, ms }); return id }
   env.globals = {
+    console: { info: (...args) => env.logs.push(args) },
     Date: { now: () => now }, crypto: { randomUUID: () => 'fake-recording' }, MediaRecorder: Recorder,
     navigator: { mediaDevices: { getUserMedia: async () => env.acquire ? env.acquire.promise : stream() } },
     window: { setInterval: setTimer, setTimeout: setTimer, clearInterval: id => timers.delete(id), clearTimeout: id => timers.delete(id) },
@@ -192,10 +193,15 @@ async function main() {
   const noSpeechEnv = speechEnvironment(), noSpeech = setup(noSpeechEnv)
   await noSpeech.render().toggle(); const noSpeechFinal = noSpeech.render().finalText()
   noSpeechEnv.recognitions[0].error('no-speech'); noSpeech.render().stop()
-  assert.equal(await noSpeechFinal, ''); assert.equal(noSpeech.render().error, 'No speech heard. Tap the mic and speak.')
+  assert.equal(await noSpeechFinal, '')
+  assert.equal(noSpeech.render().error, 'No speech heard. Tap the mic and speak. (speech: start e:no-speech stop end)')
+  assert.deepEqual(noSpeechEnv.logs, [['[dictation]', 'start e:no-speech stop end']])
+  await noSpeech.render().toggle()
+  assert.equal(noSpeechEnv.recognitions.length, 1); assert.equal(noSpeechEnv.records.length, 1)
+  noSpeech.h.unmount(); assert.equal(noSpeechEnv.timers.size, 0)
   console.log('Speech: hands-free pause resets and sends once, hands-free silence stays quiet, manual silence shows an error pass')
 
-  for (const error of ['service-not-allowed', 'network', 'language-not-supported']) {
+  for (const error of ['service-not-allowed', 'network', 'language-not-supported', 'not-allowed', 'audio-capture', 'unknown']) {
     const env = speechEnvironment(), s = setup(env, { text: 'Base' })
     env.result = 'fallback words'
     await s.render().toggle(); const final = s.render().finalText()
@@ -208,20 +214,6 @@ async function main() {
     await s.render().toggle(); assert.equal(env.recognitions.length, 1); assert.equal(env.records.length, 2)
     s.h.unmount(); await flush(); assert.equal(env.timers.size, 0)
   }
-  for (const error of ['not-allowed', 'audio-capture']) {
-    const env = speechEnvironment(), s = setup(env, { text: 'Base ' })
-    await s.render().toggle(); const final = s.render().finalText()
-    env.recognitions[0].error(error)
-    assert.equal(await final, 'Base'); assert.equal(s.text(), 'Base')
-    assert.equal(s.render().error, error === 'not-allowed'
-      ? 'Allow microphone access for this site, then try again.'
-      : 'Could not start the microphone. Close other apps that use it, then try again.')
-    assert.equal(s.render().active(), false); assert.equal(env.records.length, 0); assert.equal(env.timers.size, 0)
-    await s.render().toggle()
-    assert.equal(env.recognitions.length, error === 'not-allowed' ? 2 : 1)
-    assert.equal(env.records.length, error === 'not-allowed' ? 0 : 1)
-    s.h.unmount(); await flush()
-  }
   for (const error of ['network', 'not-allowed', 'service-not-allowed', 'audio-capture']) {
     const env = speechEnvironment(), s = setup(env)
     await s.render().toggle(); const final = s.render().finalText()
@@ -229,7 +221,51 @@ async function main() {
     assert.equal(await final, 'keep these words'); assert.equal(env.records.length, 0)
     assert.equal(env.timers.size, 0); assert.equal(env.focus, 1)
   }
-  console.log('Speech: same-toggle fallback, later toggles skip speech, permission/capture errors and partial text preservation pass')
+  console.log('Speech: same-toggle fallback, later toggles skip speech, errors before results and partial text preservation pass')
+
+  for (const error of [null, 'no-speech', 'aborted']) {
+    const env = speechEnvironment(), s = setup(env, { text: 'Base' })
+    env.result = 'recorder words'
+    await s.render().toggle(); const final = s.render().finalText(), speech = env.recognitions[0]
+    if (error) speech.error(error)
+    speech.end(); await flush()
+    {
+      assert.equal(env.records.length, 0); assert.equal(speech.starts, 2)
+      speech.end(); assert.equal(env.records.length, 0); assert.equal(speech.starts, 3)
+      speech.end(); await flush(); assert.equal(env.records.length, 1)
+    }
+    assert.equal(speech.aborts, 1); assert.equal(env.logs.length, 0)
+    assert.equal(s.render().error, ''); assert(s.render().listening)
+    env.advance(1000); env.records[0].data(); s.render().stop()
+    assert.equal(await final, 'Base recorder words'); assert.equal(env.timers.size, 0)
+  }
+  console.log('Speech: three unasked empty ends fall back; no-speech or aborted alone allows restart pass')
+
+  for (const safety of [false, true]) {
+    const env = speechEnvironment(), s = setup(env)
+    await s.render().toggle(); const final = s.render().finalText(), speech = env.recognitions[0]
+    if (safety) speech.stop = () => { speech.stops++ }
+    s.render().stop()
+    if (safety) env.fire(1500)
+    assert.equal(await final, '')
+    const trail = `start stop ${safety ? 'timeout' : 'end'}`
+    assert.equal(s.render().error, `No speech heard. Tap the mic and speak. (speech: ${trail})`)
+    assert.deepEqual(env.logs, [['[dictation]', trail]])
+    assert.equal(env.records.length, 0); assert.equal(env.timers.size, 0)
+    await s.render().toggle(); assert.equal(env.records.length, 1)
+    s.h.unmount(); assert.equal(env.timers.size, 0)
+  }
+  const trailEnv = speechEnvironment(), traced = setup(trailEnv)
+  await traced.render().toggle(); const trailFinal = traced.render().finalText(), trailSpeech = trailEnv.recognitions[0]
+  for (let n = 0; n < 30; n++) trailSpeech.error('aborted')
+  trailSpeech.end(); trailSpeech.result(['words', true]); traced.render().stop()
+  assert.equal(await trailFinal, 'words'); assert.equal(trailEnv.logs.length, 1)
+  const tokens = trailEnv.logs[0][1].split(' ')
+  assert.equal(tokens.length, 24)
+  assert.equal(tokens.slice(-6).join(' '), 'end restart start r1 stop end')
+  assert(tokens.slice(0, -6).every(token => token === 'e:aborted'))
+  assert.equal(trailEnv.timers.size, 0)
+  console.log('Speech: manual empty stop uses recorder next tap; timeout, result, restart and aborted trails log once and cap at 24 pass')
 
   for (const close of [false, true]) {
     const env = speechEnvironment(), s = setup(env, { text: 'Base' })

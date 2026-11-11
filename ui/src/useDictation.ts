@@ -64,6 +64,9 @@ export function useDictation({ text, setText, chime, handsFree, onHandsFreeDone,
     void final.then(() => { if (finalDraft.current === final) finalDraft.current = null })
     let recognition: SpeechRecognizer
     let earlier = '', committed = '', interim = '', received = false, stopped = false, done = false, restarts = 0
+    let failed = false, emptyEnds = 0
+    const trail: string[] = []
+    const trace = (token: string) => { trail.push(token); if (trail.length > 24) trail.shift() }
     let pause: number | undefined
     const started = Date.now()
     const join = (...parts: string[]) => parts.filter(Boolean).join(' ')
@@ -77,19 +80,23 @@ export function useDictation({ text, setText, chime, handsFree, onHandsFreeDone,
     }
     const complete = (message?: string) => {
       if (done) return
+      if (!received && !stopped && (failed || emptyEnds >= 3)) { fallback(); return }
+      if (!received && stopped) { speechBroken = true; message = undefined }
+      console.info('[dictation]', trail.join(' '))
       const spoken = words(), next = join(base, spoken)
       cleanup(); setText(next); finish(next); setListening(false)
       if (message !== undefined) setError(message)
-      else if (!spoken && !handsFree) setError('No speech heard. Tap the mic and speak.')
+      else if (!spoken && !handsFree) setError(`No speech heard. Tap the mic and speak. (speech: ${trail.join(' ')})`)
       onFinished?.()
       if (handsFree && spoken && next !== base) onHandsFreeDone?.()
     }
     const stop = () => {
       if (done || stopped) return
+      trace('stop')
       stopped = true
       recognition.stop()
       // Some browsers never fire onend after stop; finish with the words so far.
-      window.clearTimeout(pause); pause = window.setTimeout(() => complete(), 1500)
+      window.clearTimeout(pause); pause = window.setTimeout(() => { trace('timeout'); complete() }, 1500)
     }
     const fallback = () => {
       speechBroken = true
@@ -105,6 +112,7 @@ export function useDictation({ text, setText, chime, handsFree, onHandsFreeDone,
       recognition.continuous = true; recognition.interimResults = true
       recognition.lang = navigator.language || 'en-US'; recognition.maxAlternatives = 1
       recognition.onresult = event => {
+        trace('r' + event.results.length)
         const finals: string[] = [], partials: string[] = []
         for (const result of Array.from(event.results)) (result.isFinal ? finals : partials).push(result[0].transcript.trim())
         committed = join(...finals); interim = join(...partials); received = true
@@ -112,15 +120,22 @@ export function useDictation({ text, setText, chime, handsFree, onHandsFreeDone,
         if (handsFree) { window.clearTimeout(pause); pause = window.setTimeout(stop, 1800) }
       }
       recognition.onend = () => {
+        trace('end')
         if (done) return
+        if (!stopped) emptyEnds++
+        if (!received && !stopped && (failed || emptyEnds >= 3)) { fallback(); return }
         if (stopped || restarts >= 20) { complete(); return }
         earlier = join(earlier, committed, interim); committed = ''; interim = ''; restarts++
-        try { recognition.start() } catch {
+        trace('restart')
+        try { recognition.start(); trace('start') } catch {
           detach()
-          try { recognition = new Recognition(); attach(); recognition.start() } catch { complete() }
+          trace('restart')
+          try { recognition = new Recognition(); attach(); recognition.start(); trace('start') } catch { complete() }
         }
       }
       recognition.onerror = ({ error }) => {
+        trace('e:' + error)
+        if (error !== 'aborted' && error !== 'no-speech') failed = true  // a late start gives no-speech; 3 empty ends catch a dead service
         if (done || error === 'aborted' || error === 'no-speech') return
         if (received) { complete(); return }
         if (error === 'not-allowed') { complete('Allow microphone access for this site, then try again.'); return }
@@ -128,7 +143,6 @@ export function useDictation({ text, setText, chime, handsFree, onHandsFreeDone,
           speechBroken = true
           complete('Could not start the microphone. Close other apps that use it, then try again.'); return
         }
-        if (['service-not-allowed', 'network', 'language-not-supported'].includes(error)) { fallback(); return }
         complete()
       }
     }
@@ -140,7 +154,7 @@ export function useDictation({ text, setText, chime, handsFree, onHandsFreeDone,
     stopSpeech.current = stop
     cleanupRecording.current = () => { cleanup(); finish(base) }
     setSeconds(0); setListening(true)
-    try { recognition = new Recognition(); attach(); recognition.start() } catch { fallback() }
+    try { recognition = new Recognition(); attach(); recognition.start(); trace('start') } catch { fallback() }
   }
   async function startRecorder() {
     let stream: MediaStream
