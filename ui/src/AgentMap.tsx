@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { ArrowLeft, ChevronRight, X } from 'lucide-react'
 import { errorText } from './api'
 import type { Api, ToolSummary } from './api'
@@ -14,7 +15,9 @@ import './AgentMap.css'
 // subagent transcripts beside the session transcript, read by the server.
 export type AgentState = 'running' | 'finished' | 'failed' | 'stopped'
 export interface SubAgent { id: string; description: string; type: string; model: string | null; effort: string | null; background: boolean; state: AgentState; started: string | null; ended: string | null; seconds: number | null; tokens: number | null; tools: number; depth: number; parent: string | null; summary: string | null }
-export interface SubAgents { main: { model: string | null; context: number | null; title: string | null }; agents: SubAgent[] }
+export interface BgTask { id: string; kind: 'shell' | 'monitor'; description: string | null; command: string | null; state: AgentState; started: string | null; ended: string | null; seconds: number | null; parent: string | null; summary: string | null }
+export interface SubAgents { main: { model: string | null; context: number | null; title: string | null }; agents: SubAgent[]; tasks?: BgTask[] }
+interface TaskDetail extends BgTask { output: string; output_cut?: boolean }
 type Step = { kind: 'text'; text: string } | ({ kind: 'tool' } & ToolSummary)
 interface AgentDetail extends SubAgent { prompt: string; steps: Step[]; steps_cut?: boolean; report: string | null }
 
@@ -35,22 +38,30 @@ export function useSubAgents(api: Api, session: string, enabled: boolean) {
   const [fast, setFast] = useState(false)
   const fetcher = useCallback((signal: AbortSignal) => enabled
     ? api<SubAgents>(`subagents?session=${encodeURIComponent(session)}`, undefined, signal).then(value => ({ ...value, session }))
-    : Promise.resolve({ main: { model: null, context: null, title: null }, agents: [], session }), [api, session, enabled])
+    : Promise.resolve({ main: { model: null, context: null, title: null }, agents: [], tasks: [], session }), [api, session, enabled])
   const { data, error, refresh } = usePolling<SubAgents & { session: string }>(fetcher, fast ? 4000 : 15000)
   // A pane switch keeps the old list until the new one loads; never show another pane's agents.
   const list = enabled && data?.session === session ? data : undefined
-  const running = list?.agents.filter(agent => agent.state === 'running').length ?? 0
+  const running = (list?.agents.filter(agent => agent.state === 'running').length ?? 0) + (list?.tasks?.filter(task => task.state === 'running').length ?? 0)
   // The poll interval follows the newest list (state adjusted during render, not in an effect).
   if (fast !== running > 0) setFast(running > 0)
   return { data: list, error, refresh, running }
 }
 
+const count = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
+// A task's name: its description, else the first line of its command.
+const taskName = (task: BgTask) => task.description || task.command?.split('\n')[0] || task.id
+
+// The pill counts agents (running ones first); a session with only background tasks counts those.
 export function AgentPill({ list, onOpen }: { list: SubAgents | undefined; onOpen: () => void }) {
-  const total = list?.agents.length ?? 0
-  if (!total) return null
-  const running = list!.agents.filter(agent => agent.state === 'running').length
-  const label = running ? `${running} ${running === 1 ? 'agent' : 'agents'}` : `${total} ${total === 1 ? 'agent' : 'agents'}`
-  return <button type="button" className={`pill agent-pill ${running ? 'running' : ''}`} aria-haspopup="dialog" aria-label={`${label}${running ? ' running' : ''}. Open the agent map`} onClick={onOpen}>
+  const agents = list?.agents ?? [], tasks = list?.tasks ?? []
+  if (!agents.length && !tasks.length) return null
+  const busyAgents = agents.filter(agent => agent.state === 'running').length
+  const busyTasks = tasks.filter(task => task.state === 'running').length
+  const running = busyAgents + busyTasks
+  const label = agents.length ? count(busyAgents || agents.length, 'agent') : count(busyTasks || tasks.length, 'task')
+  const labelRunning = agents.length ? busyAgents > 0 : busyTasks > 0
+  return <button type="button" className={`pill agent-pill ${running ? 'running' : ''}`} aria-haspopup="dialog" aria-label={`${label}${labelRunning ? ' running' : ''}. Open the agent map`} onClick={onOpen}>
     <span className={`agent-dot ${running ? 'running' : 'finished'}`} aria-hidden="true" />{label}
   </button>
 }
@@ -63,38 +74,56 @@ export function AgentMap({ api, session, list, onClose }: { api: Api; session: s
   const [open, setOpen] = useState<string | null>(null)
   const modal = useModal(true, onClose)
   const agents = list?.agents ?? []
+  const tasks = list?.tasks ?? []
   const running = agents.filter(agent => agent.state === 'running').length
+  const busyTasks = tasks.filter(task => task.state === 'running').length
   const chosen = agents.find(agent => agent.id === open)
-  return <dialog {...modal} className="sheet agent-map" aria-labelledby="agent-map-title">
-    {chosen ? <AgentView api={api} session={session} agent={chosen} onBack={() => setOpen(null)} onClose={onClose} /> : <>
+  const chosenTask = chosen ? undefined : tasks.find(task => task.id === open)
+  const owner = (id: string | null | undefined) => id ? agents.find(agent => agent.id === id) : undefined
+  return <dialog {...modal} className={`sheet agent-map ${chosen || chosenTask ? 'agent-detail' : ''}`} aria-labelledby="agent-map-title">
+    {chosen ? <AgentView key={chosen.id} api={api} session={session} agent={chosen} parent={owner(chosen.parent)} onBack={() => setOpen(null)} onClose={onClose} />
+      : chosenTask ? <TaskView key={chosenTask.id} api={api} session={session} task={chosenTask} parent={owner(chosenTask.parent)} onBack={() => setOpen(null)} onClose={onClose} /> : <>
       <div className="sheet-heading"><h2 id="agent-map-title">Agent map</h2><button type="button" className="icon-button" aria-label="Close" onClick={onClose}><X /></button></div>
-      <p className="sheet-sub">{facts(`${agents.length} ${agents.length === 1 ? 'agent' : 'agents'}`, running > 0 && `${running} running`)}</p>
-      <div className="agent-tree">
-        <div className="agent-node main"><span className={`agent-dot ${running ? 'running' : 'finished'}`} aria-hidden="true" /><span className="agent-node-text"><strong>{list?.main.title || 'Main agent'}</strong><small>{facts(modelName(list?.main.model), list?.main.context != null && `${tokenText(list.main.context)} in context`)}</small></span></div>
-        <Children agents={agents} parent={null} onOpen={setOpen} />
-      </div>
+      {agents.length > 0 && <>
+        <p className="sheet-sub">{facts(count(agents.length, 'agent'), running > 0 && `${running} running`, 'select an agent for details')}</p>
+        <div className="agent-tree">
+          <div className="agent-branch">
+            <div className="agent-node main"><span className="agent-dot" aria-hidden="true" /><span className="agent-node-text"><strong>{list?.main.title || 'Main agent'}</strong><small>{facts(modelName(list?.main.model), list?.main.context != null && `${tokenText(list.main.context)} in context`)}</small></span></div>
+            <Children agents={agents} parent={null} onOpen={setOpen} />
+          </div>
+        </div>
+      </>}
+      {tasks.length > 0 && <section className="agent-tasks" aria-labelledby="agent-tasks-title">
+        <p className="sheet-sub" id="agent-tasks-title">{facts(count(tasks.length, 'background task'), busyTasks > 0 && `${busyTasks} running`, 'select a task for details')}</p>
+        <ul>{tasks.map(task => <li key={task.id}>
+          <button type="button" className="agent-node" onClick={() => setOpen(task.id)}>
+            <Dot state={task.state} />
+            <span className="agent-node-text"><strong className={task.description ? '' : 'mono'}>{taskName(task)}</strong><small>{facts(task.kind, task.seconds != null && formatElapsed(task.seconds))}</small></span>
+          </button>
+        </li>)}</ul>
+      </section>}
     </>}
   </dialog>
 }
 
-// Each agent sits under the agent that spawned it; an agent whose parent is unknown sits under the main agent.
+// Each agent sits beside (wide screens) or under (phones) the agent that spawned it; an agent whose parent is unknown
+// sits with the main agent.
 function Children({ agents, parent, onOpen }: { agents: SubAgent[]; parent: string | null; onOpen: (id: string) => void }) {
   const known = new Set(agents.map(agent => agent.id))
   const here = agents.filter(agent => parent === null ? !agent.parent || !known.has(agent.parent) : agent.parent === parent)
   if (!here.length) return null
   return <ul className="agent-children" aria-label={parent === null ? 'Spawned agents' : undefined}>
-    {here.map(agent => <li key={agent.id}>
+    {here.map(agent => <li key={agent.id}><div className="agent-branch">
       <button type="button" className="agent-node" onClick={() => onOpen(agent.id)}>
         <Dot state={agent.state} />
-        <span className="agent-node-text"><strong>{agent.description || agent.type}</strong><small>{facts(agent.seconds != null && formatElapsed(agent.seconds), tokenText(agent.tokens), modelName(agent.model))}</small></span>
-        <ChevronRight size={15} className="chevron" aria-hidden="true" />
+        <span className="agent-node-text"><strong>{agent.description || agent.type}</strong><small>{facts(agent.seconds != null && formatElapsed(agent.seconds), tokenText(agent.tokens))}</small></span>
       </button>
       <Children agents={agents} parent={agent.id} onOpen={onOpen} />
-    </li>)}
+    </div></li>)}
   </ul>
 }
 
-function AgentView({ api, session, agent, onBack, onClose }: { api: Api; session: string; agent: SubAgent; onBack: () => void; onClose: () => void }) {
+function AgentView({ api, session, agent, parent, onBack, onClose }: { api: Api; session: string; agent: SubAgent; parent: SubAgent | undefined; onBack: () => void; onClose: () => void }) {
   const [detail, setDetail] = useState<AgentDetail | null>(null)
   const [error, setError] = useState('')
   const [attempt, setAttempt] = useState(0)
@@ -117,36 +146,107 @@ function AgentView({ api, session, agent, onBack, onClose }: { api: Api; session
     return () => controller.abort()
   }, [api, session, agent.id, agent.state, agent.tools, attempt])
   const shown = detail ?? agent
+  const title = shown.description || shown.type
   const tools = detail?.steps.filter((step): step is Step & { kind: 'tool' } => step.kind === 'tool') ?? []
   const path = (call: string) => `subagent-tool?session=${encodeURIComponent(session)}&agent=${encodeURIComponent(agent.id)}&id=${encodeURIComponent(call)}`
   const live = shown.state === 'running'
+  const heading = (back: () => void, label: string, text: ReactNode) => <div className="sheet-heading">
+    <button type="button" className="icon-button" aria-label={label} onClick={back}><ArrowLeft /></button>
+    <h2 id="agent-map-title" className="agent-title">{text}</h2>
+    <button type="button" className="icon-button" aria-label="Close" onClick={onClose}><X /></button>
+  </div>
+  if (transcript && detail) return <>
+    {heading(() => setTranscript(false), 'Back to the agent', 'Transcript')}
+    <p className="agent-meta">{title}</p>
+    <ol className="agent-steps">
+      {detail.steps_cut && <li className="hint">Earlier steps are not shown.</li>}
+      {detail.steps.map((step, index) => step.kind === 'text'
+        ? <li key={index} className="agent-step-text">{step.text}</li>
+        : <li key={index} className={`agent-step-tool ${step.is_error ? 'failed' : ''}`}><strong>{step.name}</strong> <span>{step.description || step.title}</span></li>)}
+      {detail.report && <li className="agent-step-text">{detail.report}</li>}
+    </ol>
+  </>
   return <>
-    <div className="sheet-heading">
-      <button type="button" className="icon-button" aria-label="Back to the agent map" onClick={onBack}><ArrowLeft /></button>
-      <h2 id="agent-map-title" className="agent-title"><Dot state={shown.state} />{shown.description || shown.type}</h2>
-      <button type="button" className="icon-button" aria-label="Close" onClick={onClose}><X /></button>
+    {heading(onBack, 'Back to the agent map', <><Dot state={shown.state} />{title}</>)}
+    <div className="agent-meta">
+      <p className="agent-facts">{facts(STATE_LABEL[shown.state], shown.type, modelName(shown.model), shown.effort, shown.background && 'background')}</p>
+      <p>Spawned by {parent ? parent.description || parent.type : 'the main agent'}</p>
+      <p className="agent-numbers">{facts(shown.seconds != null && formatElapsed(shown.seconds), tokenText(shown.tokens))}</p>
     </div>
-    <p className="agent-facts">{facts(STATE_LABEL[shown.state], shown.type, modelName(shown.model), shown.effort, shown.background && 'background')}<br />
-      {facts(shown.seconds != null && formatElapsed(shown.seconds), tokenText(shown.tokens), `${shown.tools} tool ${shown.tools === 1 ? 'call' : 'calls'}`)}</p>
     {error ? <p role="alert">{error} <RetryButton label="Retry" className="" busy={busy} onRetry={() => { setBusy(true); setAttempt(attempt + 1) }} /></p>
       : !detail ? <Loading label="Loading agent…" /> : <div className="agent-body">
         {(shown.state === 'failed' || shown.state === 'stopped') && shown.summary && <p className="agent-summary">{shown.summary}</p>}
-        {detail.report && <section aria-label="Report"><h3>Report</h3><pre className="agent-text" tabIndex={0}>{detail.report}</pre></section>}
-        <details><summary>Prompt</summary><pre className="agent-text" tabIndex={0}>{detail.prompt}</pre></details>
-        <details open={!detail.report}><summary>Tool calls ({tools.length})</summary>
-          {tools.length ? <div className="tool-row tool-group agent-tools"><ul className="tool-list">{tools.map((tool, index) => <ToolRow key={`${tool.id}:${index}`} tool={tool} api={api} session={session} live={live} onOpen={() => {}} path={path(tool.id)} />)}</ul></div> : <p className="hint">No tool calls yet.</p>}
-        </details>
-        <details open={transcript} onToggle={event => setTranscript(event.currentTarget.open)}><summary>Transcript</summary>
-          {transcript && <ol className="agent-steps">
-            {detail.steps_cut && <li className="hint">Earlier steps are not shown.</li>}
-            {detail.steps.map((step, index) => step.kind === 'text'
-              ? <li key={index} className="agent-step-text">{step.text}</li>
-              : <li key={index} className={`agent-step-tool ${step.is_error ? 'failed' : ''}`}><strong>{step.name}</strong> <span>{step.description || step.title}</span></li>)}
-          </ol>}
+        {detail.report && <div className="agent-report" aria-label="Report">{detail.report}</div>}
+        <details className="agent-section"><summary><ChevronRight size={16} aria-hidden="true" />Prompt</summary><pre className="agent-text" tabIndex={0}>{detail.prompt}</pre></details>
+        <details className="agent-section" open={!detail.report}><summary><ChevronRight size={16} aria-hidden="true" />Tool calls ({tools.length})</summary>
+          {tools.length ? <div className="tool-row tool-group agent-tools"><ul className="tool-list">{tools.map((tool, index) => <ToolRow key={`${tool.id}:${index}`} tool={tool} api={api} session={session} live={live} onOpen={() => {}} path={path(tool.id)} compact />)}</ul></div> : <p className="hint">No tool calls yet.</p>}
         </details>
       </div>}
+    <div className="agent-actions">
+      <button type="button" className="secondary" disabled={!detail} onClick={() => setTranscript(true)}>Open transcript</button>
+      {live && <button type="button" className="secondary agent-stop" disabled={stopping} onClick={() => void stop()}>{stopping ? 'Stopping…' : 'Stop agent'}</button>}
+      {stopError && <p role="alert">{stopError}</p>}
+    </div>
+  </>
+}
+
+// One background shell or monitor: its command, its output (live while it runs), and Stop task.
+function TaskView({ api, session, task, parent, onBack, onClose }: { api: Api; session: string; task: BgTask; parent: SubAgent | undefined; onBack: () => void; onClose: () => void }) {
+  const [detail, setDetail] = useState<TaskDetail | null>(null)
+  const [error, setError] = useState('')
+  const [attempt, setAttempt] = useState(0)
+  const [busy, setBusy] = useState(false)
+  const [stopping, setStopping] = useState(false)
+  const [stopError, setStopError] = useState('')
+  const [tick, setTick] = useState(0)
+  const live = task.state === 'running'
+  // The output grows while the task runs: reload every 3 s, and once more when the state changes.
+  useEffect(() => {
+    if (!live) return
+    const timer = window.setInterval(() => setTick(value => value + 1), 3000)
+    return () => window.clearInterval(timer)
+  }, [live])
+  useEffect(() => {
+    const controller = new AbortController()
+    void api<TaskDetail>(`subagent-task?session=${encodeURIComponent(session)}&id=${encodeURIComponent(task.id)}`, undefined, controller.signal)
+      .then(value => { if (!controller.signal.aborted) { setDetail(value); setError(''); setBusy(false) } })
+      .catch(reason => { if (!controller.signal.aborted) { setError(errorText(reason)); setBusy(false) } })
+    return () => controller.abort()
+  }, [api, session, task.id, task.state, tick, attempt])
+  const stop = async () => {
+    setStopping(true); setStopError('')
+    try { await api('subagent-stop', { session, id: task.id }) } catch (reason) { setStopError(errorText(reason)) }
+    setStopping(false)
+  }
+  const shown = detail ?? task
+  // Keep the newest output in view, the way a terminal does, unless the reader scrolled up.
+  const output = useRef<HTMLPreElement>(null)
+  const pinned = useRef(true)
+  useLayoutEffect(() => { if (output.current && pinned.current) output.current.scrollTop = output.current.scrollHeight }, [detail?.output])
+  const onScroll = () => { const node = output.current; if (node) pinned.current = node.scrollHeight - node.scrollTop - node.clientHeight < 40 }
+  return <>
+    <div className="sheet-heading">
+      <button type="button" className="icon-button" aria-label="Back to the agent map" onClick={onBack}><ArrowLeft /></button>
+      <h2 id="agent-map-title" className={`agent-title ${shown.description ? '' : 'mono'}`}><Dot state={shown.state} />{taskName(shown)}</h2>
+      <button type="button" className="icon-button" aria-label="Close" onClick={onClose}><X /></button>
+    </div>
+    <div className="agent-meta">
+      <p className="agent-facts">{facts(STATE_LABEL[shown.state], shown.kind, 'background')}</p>
+      <p>Started by {parent ? parent.description || parent.type : 'the main agent'}</p>
+      <p className="agent-numbers">{shown.seconds != null && formatElapsed(shown.seconds)}</p>
+    </div>
+    <div className="agent-body">
+      {(shown.state === 'failed' || shown.state === 'stopped') && shown.summary && <p className="agent-summary">{shown.summary}</p>}
+      {shown.command && <details className="agent-section" open={Boolean(shown.description) || undefined}><summary><ChevronRight size={16} aria-hidden="true" />Command</summary><pre className="agent-text" tabIndex={0}>{shown.command}</pre></details>}
+      <details className="agent-section" open><summary><ChevronRight size={16} aria-hidden="true" />Output</summary>
+        {error ? <p role="alert">{error} <RetryButton label="Retry" className="" busy={busy} onRetry={() => { setBusy(true); setAttempt(attempt + 1) }} /></p>
+          : !detail ? <Loading label="Loading output…" />
+          : detail.output ? <pre ref={output} onScroll={onScroll} className="agent-text agent-output" tabIndex={0} aria-label="Output">{detail.output_cut ? '…\n' : ''}{detail.output}</pre>
+          : <p className="hint">No output yet.</p>}
+      </details>
+    </div>
     {live && <div className="agent-actions">
-      <button type="button" className="secondary agent-stop" disabled={stopping} onClick={() => void stop()}>{stopping ? 'Stopping…' : 'Stop agent'}</button>
+      <button type="button" className="secondary agent-stop" disabled={stopping} onClick={() => void stop()}>{stopping ? 'Stopping…' : 'Stop task'}</button>
       {stopError && <p role="alert">{stopError}</p>}
     </div>}
   </>

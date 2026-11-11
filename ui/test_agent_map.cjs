@@ -18,6 +18,13 @@ const agents = [
   agent('a3', 'Check the deploy script', 'stopped', { summary: 'Agent "Check the deploy script" was stopped by user' }),
   agent('a4', 'Read the hooks folder', 'finished', { parent: 'a2', depth: 2, tools: 0 }),
 ]
+const task = (id, kind, description, command, state, extra = {}) => ({ id, kind, description, command, state, started: iso(128), ended: state === 'running' ? null : iso(10),
+  seconds: 128, parent: null, summary: null, ...extra })
+const tasks = [
+  task('b1', 'shell', 'Run the server tests', 'cd server && python3 -m unittest discover -q', 'running'),
+  task('b2', 'monitor', null, 'tail -f build.log | grep --line-buffered ERROR', 'stopped', { summary: '[killed]', parent: 'a2', seconds: 21 }),
+]
+const taskOutput = id => ({ ...tasks.find(item => item.id === id), output: Array.from({ length: 80 }, (_, i) => `line ${i + 1}`).join('\n'), output_cut: true })
 const tools = [{ kind: 'tool', id: 't1', name: 'Bash', title: 'ls server', is_error: false, status: 'complete' },
   { kind: 'tool', id: 't2', name: 'Read', title: 'server/subagents.py', is_error: true, status: 'complete' }]
 const detail = id => ({ ...agents.find(item => item.id === id), prompt: 'Find the three best remote browser products.\n\nReport prices.',
@@ -28,7 +35,7 @@ const fixture = {
   sessions: { sessions: [pane], default_thread: pane.thread },
   chat: { messages, busy: true, thread: pane.thread, agent: 'claude', writable: true, session: pane.id, earlier: 0, limit: 100, state: 'Working', approval: null },
   footer: { observed: true, model: 'Opus 5.5', mode: 'default', notices: [] },
-  subagents: { main: { model: 'claude-opus-5-5', context: 91452, title: 'Build the agent map' }, agents },
+  subagents: { main: { model: 'claude-opus-5-5', context: 91452, title: 'Build the agent map' }, agents, tasks },
   'subagent-tool': { id: 't1', name: 'Bash', title: 'ls server', is_error: false, status: 'complete', detail: '$ ls server\nserver.py\nsubagents.py', format: 'text', truncated: false, images: 0 },
   prefs: { prefs: {}, version: 1 }, 'projects/marks': {}, 'projects/backlog': { text: '' }, 'side-shells': { shells: [] },
   update: { current: '0.0.0', latest: '0.0.0', available: false }, host: { name: 'Test server', office: false },
@@ -71,6 +78,7 @@ async function main() {
       if (url.pathname.includes('/api/')) {
         const endpoint = url.pathname.split('/api/')[1]
         if (request.method() !== 'GET') { posts.push({ endpoint, body: request.postDataJSON() }); return route.fulfill({ json: { ok: true, state: 'stopped' } }) }
+        if (endpoint === 'subagent-task') return route.fulfill({ json: taskOutput(url.searchParams.get('id')) })
         if (endpoint === 'subagent') return route.fulfill({ json: detail(url.searchParams.get('id')) })
         if (!(endpoint in fixture)) unexpected.add(endpoint)
         if (endpoint === 'stream') return route.fulfill({ status: 204, body: '' })
@@ -108,14 +116,29 @@ async function main() {
       check(`${at} no page overflow (map)`, !(await overflow()))
       await page.screenshot({ path: path.join(SHOTS, `map-${width}.png`) })
       await map.getByRole('button', { name: /Research remote browser/ }).click()
-      await map.getByRole('heading', { name: /Report/ }).waitFor()
+      await map.locator('.agent-report').waitFor()
       check(`${at} finished detail facts`, (await map.locator('.agent-facts').innerText()).includes('Finished · general-purpose · Sonnet 5.5 · medium · background'))
+      check(`${at} spawned by the main agent`, await map.getByText('Spawned by the main agent').isVisible())
+      check(`${at} time and tokens line`, (await map.locator('.agent-numbers').innerText()).trim() === '5m 40s · 87.0k tokens')
+      check(`${at} report is plain text`, (await map.locator('.agent-report').innerText()).startsWith('Three products fit.'))
       check(`${at} finished has no Stop`, await map.getByRole('button', { name: 'Stop agent' }).count() === 0)
       await map.getByText('Tool calls (2)').click()
+      check(`${at} file tool shows the file name`, (await map.locator('.tool-inline code').innerText()).trim() === 'subagents.py')
       await map.getByText('ls server').click()
-      await map.getByText('subagents.py').first().waitFor()
+      await map.locator('.agent-tools pre').getByText('server.py').waitFor()
       check(`${at} tool row opens subagent tool details`, true)
+      check(`${at} tool rows reachable`, await onTop('.agent-tools .tool-toggle'))
       await page.screenshot({ path: path.join(SHOTS, `detail-finished-${width}.png`) })
+      await map.getByRole('button', { name: 'Open transcript' }).click()
+      await map.locator('.agent-steps').getByText('Starting with the server folder.').waitFor()
+      check(`${at} transcript view`, await map.getByRole('heading', { name: 'Transcript' }).isVisible())
+      await page.screenshot({ path: path.join(SHOTS, `transcript-${width}.png`) })
+      await map.getByRole('button', { name: 'Back to the agent' , exact: true }).click()
+      await map.locator('.agent-report').waitFor()
+      await map.getByRole('button', { name: 'Back to the agent map' }).click()
+      await map.getByRole('button', { name: /Read the hooks folder/ }).click()
+      await map.getByText('Spawned by Audit the chat composer').waitFor()
+      check(`${at} nested agent names its parent`, true)
       await map.getByRole('button', { name: 'Back to the agent map' }).click()
       await map.getByRole('button', { name: /Check the deploy script/ }).click()
       await map.getByText('was stopped by user').waitFor()
@@ -132,6 +155,31 @@ async function main() {
       await page.waitForTimeout(300)
       const sent = posts.slice(before).find(post => post.endpoint === 'subagent-stop')
       check(`${at} Stop posts session and id`, sent && sent.body.session === '%1' && sent.body.id === 'a2', JSON.stringify(posts.slice(before)))
+      // Background tasks: listed under the tree; a task opens its command and output; Stop task posts its id.
+      await map.getByRole('button', { name: 'Back to the agent map' }).click()
+      check(`${at} tasks heading`, (await map.locator('#agent-tasks-title').innerText()).startsWith('2 background tasks · 1 running'))
+      check(`${at} task row facts`, await map.locator('.agent-tasks').getByText('shell · 2m 08s').isVisible())
+      check(`${at} task without description shows its command`, await map.locator('.agent-tasks strong.mono').getByText('tail -f build.log').isVisible())
+      check(`${at} task rows reachable`, await onTop('.agent-tasks .agent-node'))
+      await page.screenshot({ path: path.join(SHOTS, `map-tasks-${width}.png`) })
+      await map.getByRole('button', { name: /Run the server tests/ }).click()
+      const out = map.getByLabel('Output')
+      await out.waitFor()
+      check(`${at} task facts`, (await map.locator('.agent-facts').innerText()).startsWith('Running · shell · background'))
+      check(`${at} task command shown`, await map.locator('pre.agent-text').first().innerText() === 'cd server && python3 -m unittest discover -q')
+      check(`${at} output starts at its end`, await out.evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight < 2))
+      check(`${at} Stop task reachable`, await onTop('.agent-stop'))
+      check(`${at} no page overflow (task)`, !(await overflow()))
+      await page.screenshot({ path: path.join(SHOTS, `task-running-${width}.png`) })
+      const beforeTask = posts.length
+      await map.getByRole('button', { name: 'Stop task' }).click()
+      await page.waitForTimeout(300)
+      const sentTask = posts.slice(beforeTask).find(post => post.endpoint === 'subagent-stop')
+      check(`${at} Stop task posts its id`, sentTask && sentTask.body.id === 'b1', JSON.stringify(posts.slice(beforeTask)))
+      await map.getByRole('button', { name: 'Back to the agent map' }).click()
+      await map.getByRole('button', { name: /tail -f build.log/ }).click()
+      await map.getByText('Started by Audit the chat composer').waitFor()
+      check(`${at} stopped task: summary, no Stop`, await map.getByText('[killed]').isVisible() && await map.getByRole('button', { name: 'Stop task' }).count() === 0)
       await page.keyboard.press('Escape')
       await map.waitFor({ state: 'hidden' })
       check(`${at} Esc closes the map`, true)

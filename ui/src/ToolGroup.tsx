@@ -34,7 +34,10 @@ function LiveDetail({ children, label }: { children: React.ReactNode; label: str
 }
 
 // `path` reads the detail from another endpoint (a subagent's transcript); the default is the pane's own transcript.
-export function ToolRow({ tool, api, session, live, onOpen, path }: { tool: ToolSummary; api: Api; session: string; live: boolean; onOpen: () => void; path?: string }) {
+const FILE_TOOLS = new Set(['Read', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+
+// `compact` is the agent map's one-line row: the tool name, then what it did (a file tool shows the file name).
+export function ToolRow({ tool, api, session, live, onOpen, path, compact = false }: { tool: ToolSummary; api: Api; session: string; live: boolean; onOpen: () => void; path?: string; compact?: boolean }) {
   const [open, setOpen] = useState(false)
   const [detail, setDetail] = useState<ToolDetail | null>(null)
   const [error, setError] = useState('')
@@ -54,8 +57,10 @@ export function ToolRow({ tool, api, session, live, onOpen, path }: { tool: Tool
   }, [open, api, source, tool.id, tool.is_error, tool.status, attempt])
   return <li className="tool-item">
     <button type="button" className="tool-toggle" aria-expanded={open} aria-controls={id} onClick={() => { setOpen(!open); onOpen() }}>
-      <ToolIcon name={tool.name} failed={!!(tool.is_error || detail?.is_error)} running={live && tool.status === 'pending'} /><span className="tool-text"><strong>{tool.description || tool.name}</strong>{tool.title && tool.title !== tool.description && <span className="tool-title">{tool.title}</span>}</span>
-      <StepTime tool={tool} live={live} />{(tool.is_error || detail?.is_error) && <span className="tool-error">Error</span>}<ChevronRight className="chevron" size={15} aria-hidden="true" />
+      {compact
+        ? <span className="tool-inline"><strong>{tool.name}</strong>{FILE_TOOLS.has(tool.name) && tool.title ? <code title={tool.title}>{tool.title.split('/').pop()}</code> : <span>{tool.description || tool.title}</span>}</span>
+        : <><ToolIcon name={tool.name} failed={!!(tool.is_error || detail?.is_error)} running={live && tool.status === 'pending'} /><span className="tool-text"><strong>{tool.description || tool.name}</strong>{tool.title && tool.title !== tool.description && <span className="tool-title">{tool.title}</span>}</span></>}
+      {!compact && <StepTime tool={tool} live={live} />}{(tool.is_error || detail?.is_error) && <span className="tool-error">Error</span>}<ChevronRight className="chevron" size={15} aria-hidden="true" />
     </button>
     {open && <div id={id}>
       {error ? <p role="alert">{error} <RetryButton label="Retry" className="" busy={busy} onRetry={() => { setBusy(true); setAttempt(attempt + 1) }} /></p> : !detail ? <Loading label="Loading tool detail…" /> : <>
