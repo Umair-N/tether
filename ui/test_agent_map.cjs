@@ -1,8 +1,9 @@
 // Agent map check against an existing build. Every API request stays in this page's fixtures; no terminal is touched.
-// Run: cd ui && PW_CORE=<playwright folder> DIST=<build> node test_agent_map.cjs
+// Run: cd ui && npm run test:ui (or node test_agent_map.cjs against an existing build).
 const http = require('node:http')
 const fs = require('node:fs/promises')
 const path = require('node:path')
+const { getBrowser } = require('./browser_test_helper.cjs')
 
 const DIST = path.resolve(process.env.DIST || path.join(__dirname, 'dist'))
 const SHOTS = process.env.SHOTS || path.resolve(__dirname, '../.release-work/2026-11-11/agent-map/shots')
@@ -45,8 +46,6 @@ const fixture = {
 }
 
 async function main() {
-  if (!process.env.TETHER_CDP_URL) { console.log('agent map: FAIL (TETHER_CDP_URL is not set)'); process.exitCode = 1; return }
-  const { chromium } = require(process.env.PW_CORE || 'playwright')
   let browser, page, server, failed = 0
   const posts = [], pageErrors = [], unexpected = new Set()
   const check = (name, ok, why = '') => { if (ok) console.log(`ok ${name}`); else { failed++; console.log(`FAIL ${name} ${why}`) } }
@@ -64,7 +63,7 @@ async function main() {
     })
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
     const origin = `http://127.0.0.1:${server.address().port}`
-    browser = await chromium.connectOverCDP(process.env.TETHER_CDP_URL)
+    browser = await getBrowser()
     const context = browser.contexts()[0]
     if (!context || context.pages().length >= 3) throw new Error('Shared browser has no context or already has three tabs')
     page = await context.newPage()

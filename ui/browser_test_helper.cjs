@@ -15,10 +15,10 @@ function sharedEndpoint(env = process.env) {
     if (error.code === 'ENOENT') return null
     throw new Error('Cannot read Tether browser config. Repair agent-browser.json or set TETHER_CDP_URL.')
   }
-  if (config.enabled !== true) throw new Error('Tether agent browser is disabled. Enable it in Tether before running UI tests.')
-  if (!Number.isInteger(config.port) || config.port < 1 || config.port > 65535 || !/^[A-Za-z0-9_-]{43}$/.test(config.token)) {
+  if (!config || typeof config.enabled !== 'boolean' || !Number.isInteger(config.port) || config.port < 1 || config.port > 65535 || !/^[A-Za-z0-9_-]{43}$/.test(config.token)) {
     throw new Error('Invalid Tether browser config. Repair agent-browser.json or set TETHER_CDP_URL.')
   }
+  if (!config.enabled) throw new Error('Tether agent browser is disabled. Enable it in Tether before running UI tests.')
   return { url: `ws://127.0.0.1:${config.port}/cdp/${config.token}`, source: 'Tether browser config' }
 }
 

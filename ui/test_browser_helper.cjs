@@ -19,6 +19,8 @@ try {
   assert.equal(sharedEndpoint({ MOBILE_TMUX_CONFIG: configDir }).source, 'Tether browser config')
   fs.writeFileSync(configPath, '{')
   assert.throws(() => sharedEndpoint(env), /Cannot read Tether browser config/)
+  fs.writeFileSync(configPath, 'null')
+  assert.throws(() => sharedEndpoint(env), /Invalid Tether browser config/)
   for (const invalid of [{ enabled: false }, { port: 0 }, { port: '29123' }, { token: '../private' }]) {
     fs.writeFileSync(configPath, JSON.stringify({ ...config, ...invalid }))
     assert.throws(() => sharedEndpoint(env), /disabled|Invalid Tether browser config/)

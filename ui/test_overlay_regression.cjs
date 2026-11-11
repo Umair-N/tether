@@ -2,6 +2,7 @@
 const http = require('node:http')
 const fs = require('node:fs/promises')
 const path = require('node:path')
+const { getBrowser } = require('./browser_test_helper.cjs')
 
 const DIST = path.resolve(process.env.DIST || path.join(__dirname, 'dist'))
 const SHOTS = process.env.SHOTS || path.resolve(__dirname, '../.release-work/2026-11-11/overlay-regression/shots')
@@ -202,19 +203,6 @@ function inspectBubbles() {
 }
 
 async function main() {
-  // A check that passes without a browser proves nothing: no shared test browser is a failure, never a skip.
-  if (!process.env.TETHER_CDP_URL) {
-    console.log('overlay regression: FAIL (no shared test browser: TETHER_CDP_URL is not set)')
-    process.exitCode = 1
-    return
-  }
-  // Playwright is not a UI dependency: PW_CORE names its folder, else a global install is used. Missing is a failure too.
-  let chromium
-  try { ({ chromium } = require(process.env.PW_CORE || 'playwright')) } catch (error) {
-    console.log(`overlay regression: FAIL (Playwright not found: set PW_CORE to its folder; ${error.message.split('\n')[0]})`)
-    process.exitCode = 1
-    return
-  }
   let browser, page, server, passed = 0, failed = 0, cases = 0
   const endpoints = new Set(), unexpected = new Set(), pageErrors = []
   const triggered = new Set(), bubbleCases = new Set()
@@ -243,7 +231,7 @@ async function main() {
     })
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
     const origin = `http://127.0.0.1:${server.address().port}`
-    browser = await chromium.connectOverCDP(process.env.TETHER_CDP_URL)
+    browser = await getBrowser()
     const context = browser.contexts()[0]
     if (!context || context.pages().length >= 3) throw new Error('Shared browser has no context or already has three tabs')
     page = await context.newPage()
