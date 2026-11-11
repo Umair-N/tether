@@ -1,3 +1,4 @@
+// Setup, browser discovery, and CI coverage: ../notes/ui-tests-self-contained.md
 const fs = require('node:fs')
 const path = require('node:path')
 const { spawnSync } = require('node:child_process')
