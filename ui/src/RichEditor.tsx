@@ -7,8 +7,10 @@ import StarterKit from '@tiptap/starter-kit'
 import { Markdown } from '@tiptap/markdown'
 import { TableKit } from '@tiptap/extension-table'
 import { TaskItem, TaskList } from '@tiptap/extension-list'
-import type { Node as ProseNode } from '@tiptap/pm/model'
 import type { EditorProps } from './textEdit'
+
+// StarterKit's trailing node adds an empty last paragraph on the first transaction, which only adds trailing newlines; a file ends with one newline.
+const markdownOf = (editor: Editor) => editor.getMarkdown().replace(/\n*$/, '\n')
 
 /** Links may be web addresses, mail, anchors or paths. Script and data URLs are refused. */
 const unsafeLink = (href: string) => /^\s*(javascript|data|vbscript|file):/i.test(href)
@@ -115,8 +117,10 @@ function Toolbar({ editor }: { editor: Editor }) {
 export default function RichEditor({ initial, path, handleRef, onDirty, onSave }: EditorProps) {
   const latest = useRef({ onDirty, onSave })
   useLayoutEffect(() => { latest.current = { onDirty, onSave } })
-  const clean = useRef<ProseNode | null>(null)
+  // Normalisation plugins change the doc without changing the Markdown text.
+  const cleanMarkdown = useRef<string | null>(null)
   const dirty = useRef(false)
+  const dirtyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const editor = useEditor({
     extensions: [
       StarterKit.configure({ underline: false, link: { openOnClick: false, autolink: true, isAllowedUri: (url, ctx) => !unsafeLink(url) && ctx.defaultValidate(url) } }),
@@ -135,18 +139,31 @@ export default function RichEditor({ initial, path, handleRef, onDirty, onSave }
         return false
       },
     },
-    onCreate: ({ editor: e }) => { clean.current = e.state.doc },
     onUpdate: ({ editor: e }) => {
-      const next = !!clean.current && !e.state.doc.eq(clean.current)
-      if (next !== dirty.current) { dirty.current = next; latest.current.onDirty(next) }
+      if (dirtyTimer.current !== null) return
+      dirtyTimer.current = setTimeout(() => {
+        dirtyTimer.current = null
+        // An editor can update before its mount effect stores the clean Markdown; it has no edits yet.
+        if (cleanMarkdown.current === null) return
+        const next = markdownOf(e) !== cleanMarkdown.current
+        if (next !== dirty.current) { dirty.current = next; latest.current.onDirty(next) }
+      }, 150)
     },
   })
   useEffect(() => {
+    cleanMarkdown.current = markdownOf(editor)
     handleRef.current = {
-      text: () => editor.getMarkdown(),
-      saved: () => { clean.current = editor.state.doc; if (dirty.current) { dirty.current = false; latest.current.onDirty(false) } },
+      text: () => markdownOf(editor),
+      saved: () => {
+        cleanMarkdown.current = markdownOf(editor)
+        if (dirtyTimer.current !== null) { clearTimeout(dirtyTimer.current); dirtyTimer.current = null }
+        if (dirty.current) { dirty.current = false; latest.current.onDirty(false) }
+      },
     }
-    return () => { handleRef.current = null }
+    return () => {
+      handleRef.current = null
+      if (dirtyTimer.current !== null) { clearTimeout(dirtyTimer.current); dirtyTimer.current = null }
+    }
   }, [editor, handleRef])
   return <div className="rich-editor">
     <Toolbar editor={editor} />
