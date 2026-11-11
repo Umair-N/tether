@@ -8,6 +8,8 @@ import type { Api, BrowserAvailability, BrowserId, Pane } from './api'
 import { usePaneLabel, WATCH_EVENT } from './AgentBrowser'
 import { useHost } from './host'
 import { MacPairing } from './MacPairing'
+import { openLive } from './liveStream'
+import type { LiveStream } from './liveStream'
 import './BrowserPanel.css'
 
 // Same shape as PanelProps in src/panels.ts (frame lane); kept here until the lanes merge.
@@ -278,6 +280,37 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
     if (settle.current) clearTimeout(settle.current)
     settle.current = setTimeout(reset, 350)  // no frame took the rest: the page reached its end
   }
+  // Draw at most once per display frame: pictures that arrive together show only the newest.
+  const drawQueued = useRef(false)
+  function drawSoon() {
+    if (drawQueued.current) return
+    drawQueued.current = true
+    requestAnimationFrame(() => { drawQueued.current = false; draw() })
+  }
+  // A decoded picture from either stream. It replaces the last one and keeps the scroll prediction in step.
+  function show(bitmap: ImageBitmap, message: { width: number; height: number; scrollOffsetX?: number; scrollOffsetY?: number }, gen: number) {
+    const canvas = canvasRef.current
+    if (!canvas || notingRef.current || gen !== streamGen.current) { bitmap.close(); return }
+    if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) { canvas.width = bitmap.width; canvas.height = bitmap.height }
+    const id = tabRef.current?.id ?? null
+    if (scrolls.current.tab !== id) { scrolls.current = { tab: id, works: false }; ahead.current = { x: 0, y: 0, at: 0, confirmed: false } }
+    const before = painted.current
+    const x = message.scrollOffsetX, y = message.scrollOffsetY
+    if (typeof x === 'number' && typeof y === 'number' && before && before.width === message.width) {
+      const movedX = x - before.x, movedY = y - before.y
+      if ((movedX || movedY) && performance.now() - ahead.current.at < 1000) scrolls.current.works = true
+      // Keep only the predicted scroll the page has not done yet; never overshoot past zero.
+      const rest = (left: number, moved: number) => left > 0 ? Math.max(0, left - moved) : left < 0 ? Math.min(0, left - moved) : 0
+      if (movedX || movedY) ahead.current = { ...ahead.current, x: rest(ahead.current.x, movedX), y: rest(ahead.current.y, movedY), confirmed: true }
+    } else ahead.current = { x: 0, y: 0, at: ahead.current.at, confirmed: false }
+    const resized = !before || before.bitmap.width !== bitmap.width || before.bitmap.height !== bitmap.height
+    before?.bitmap.close()
+    painted.current = typeof x === 'number' && typeof y === 'number' ? { bitmap, x, y, width: message.width } : { bitmap, x: 0, y: 0, width: message.width }
+    if (typeof x !== 'number' || typeof y !== 'number') scrolls.current.works = false
+    // A resize clears the canvas, so draw now; otherwise wait for the display frame.
+    if (resized) draw(); else drawSoon()
+    setFrame(old => old && old.width === message.width && old.height === message.height ? old : { width: message.width, height: message.height })
+  }
   async function paint() {
     decoding.current = true
     while (pending.current) {
@@ -288,27 +321,7 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
         const binary = atob(message.jpeg)
         const bytes = new Uint8Array(binary.length)
         for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index)
-        const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/jpeg' }))
-        const canvas = canvasRef.current
-        if (canvas && !notingRef.current && gen === streamGen.current) {
-          if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) { canvas.width = bitmap.width; canvas.height = bitmap.height }
-          const id = tabRef.current?.id ?? null
-          if (scrolls.current.tab !== id) { scrolls.current = { tab: id, works: false }; ahead.current = { x: 0, y: 0, at: 0, confirmed: false } }
-          const before = painted.current
-          const x = message.scrollOffsetX, y = message.scrollOffsetY
-          if (typeof x === 'number' && typeof y === 'number' && before && before.width === message.width) {
-            const movedX = x - before.x, movedY = y - before.y
-            if ((movedX || movedY) && performance.now() - ahead.current.at < 1000) scrolls.current.works = true
-            // Keep only the predicted scroll the page has not done yet; never overshoot past zero.
-            const rest = (left: number, moved: number) => left > 0 ? Math.max(0, left - moved) : left < 0 ? Math.min(0, left - moved) : 0
-            if (movedX || movedY) ahead.current = { ...ahead.current, x: rest(ahead.current.x, movedX), y: rest(ahead.current.y, movedY), confirmed: true }
-          } else ahead.current = { x: 0, y: 0, at: ahead.current.at, confirmed: false }
-          before?.bitmap.close()
-          painted.current = typeof x === 'number' && typeof y === 'number' ? { bitmap, x, y, width: message.width } : { bitmap, x: 0, y: 0, width: message.width }
-          if (typeof x !== 'number' || typeof y !== 'number') scrolls.current.works = false
-          draw()
-          setFrame(old => old && old.width === message.width && old.height === message.height ? old : { width: message.width, height: message.height })
-        } else bitmap.close()
+        show(await createImageBitmap(new Blob([bytes], { type: 'image/jpeg' })), message, gen)
       } catch { /* skip a frame that does not decode */ }
     }
     decoding.current = false
@@ -318,14 +331,37 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
   const streamWidth = Math.min(2560, Math.max(160, Math.ceil(stage.width * devicePixelRatio / 64) * 64))
   const streamHeight = Math.min(2560, Math.max(160, Math.ceil(stage.height * devicePixelRatio / 64) * 64))
   const [retry, setRetry] = useState(0)
+  // 'live': one WebSocket for pictures (H.264 when the browser can decode it), input and acks (liveStream.ts).
+  // 'sse': the older EventSource stream with POSTed input, used when the live socket cannot connect.
+  const [transport, setTransport] = useState<'live' | 'sse'>(() => typeof WebSocket === 'function' ? 'live' : 'sse')
+  const socketRef = useRef<{ stream: LiveStream; tab: string } | null>(null)
   useEffect(() => {
     if (!active || !visible || !tabId || noting || !stage.width) return
     const gen = ++streamGen.current
     let again = 0
+    const query = `tab=${encodeURIComponent(tabId)}&w=${streamWidth}&h=${streamHeight}&cssw=${Math.max(1, stage.width)}&cssh=${Math.max(1, stage.height)}${which === 'test' ? '' : `&browser=${which}`}`
+    if (transport === 'live') {
+      const stream = openLive(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/mobile/api/browser/live?${query}`, {
+        onPicture: (bitmap, meta) => { setLive(true); show(bitmap, meta, gen) },
+        onTabs: state => apply(state as BrowserState),
+        onClosed: () => void load(),
+        onOpen: () => setLive(true),
+        onError: text => setStatus(text),
+        // A socket that never connected: this server has no live route or blocks it, so use the older stream.
+        onEnd: opened => {
+          setLive(false)
+          if (socketRef.current?.stream === stream) socketRef.current = null
+          if (!opened) { setTransport('sse'); return }
+          again = window.setTimeout(() => { again = 0; void load(); setRetry(count => count + 1) }, 1000)
+        },
+      })
+      socketRef.current = { stream, tab: tabId }
+      return () => { stream.close(); clearTimeout(again); streamGen.current++; if (socketRef.current?.stream === stream) socketRef.current = null }
+    }
     // The server sends the next frame only after this panel confirms the previous ones, so frames never queue
     // in the network and the picture stays close to the input.
     const sid = Array.from(crypto.getRandomValues(new Uint8Array(12)), byte => byte.toString(16).padStart(2, '0')).join('')
-    const source = new EventSource(`/mobile/api/browser/stream?tab=${encodeURIComponent(tabId)}&w=${streamWidth}&h=${streamHeight}&cssw=${Math.max(1, stage.width)}&cssh=${Math.max(1, stage.height)}&sid=${sid}${which === 'test' ? '' : `&browser=${which}`}`)
+    const source = new EventSource(`/mobile/api/browser/stream?${query}&sid=${sid}`)
     source.addEventListener('frame', event => {
       if (gen !== streamGen.current) return
       const message = JSON.parse((event as MessageEvent).data)
@@ -346,8 +382,8 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
         if (source.readyState === EventSource.CLOSED) setRetry(count => count + 1)
       }, 2000)
     }
-    return () => { source.close(); clearTimeout(again); streamGen.current++; pending.current = null }
-  }, [active, visible, tabId, noting, streamWidth, streamHeight, stage.width > 0, retry]) // eslint-disable-line react-hooks/exhaustive-deps
+    return () => { source.close(); clearTimeout(again); streamGen.current++; pending.current = null } // eslint-disable-line react-hooks/exhaustive-deps
+  }, [active, visible, tabId, noting, streamWidth, streamHeight, stage.width > 0, retry, transport]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Input: queue events, merge moves and wheel turns, and send one batch per animation frame.
   const queue = useRef<Gesture[]>([])
@@ -370,6 +406,12 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
   async function flush() {
     const target = queueTab.current
     if (sending.current || !queue.current.length || !target) return
+    // The live socket keeps input in order with no request per batch.
+    const socket = socketRef.current
+    if (socket?.tab === target && socket.stream.ready()) {
+      while (queue.current.length) socket.stream.input(queue.current.splice(0, 200))
+      return
+    }
     sending.current = true
     const events = queue.current.splice(0, 200)
     try { await api('browser/input', { tab: target, events }) } catch (error) { setStatus(errorText(error)) } finally {

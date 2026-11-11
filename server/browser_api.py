@@ -8,6 +8,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import browser
 import browser_cdp
+import browser_live
 import agent_browser_setup
 import mac_browser
 
@@ -102,6 +103,10 @@ def get(handler, the_browser=None, the_proxy=None, the_setup=None, signed_browse
             if 'sid' in query:
                 css['sid'] = query['sid'][0]
             stream(handler, the_browser, query.get('tab', [''])[0], _int(query, 'w', 1280), _int(query, 'h', 800), browser_id, **css)
+        elif name == 'live':
+            css = {'css_size': (_int(query, 'cssw', 0), _int(query, 'cssh', 0))} if 'cssw' in query or 'cssh' in query else {}
+            browser_live.serve(handler, the_browser, query.get('tab', [''])[0], _int(query, 'w', 1280),
+                               _int(query, 'h', 800), browser_id, codec=query.get('codec', ['jpeg'])[0], **css)
         else:
             handler.respond(404, _tag({'error': 'Not found'}, browser_id))
     except browser.BrowserError as exc:

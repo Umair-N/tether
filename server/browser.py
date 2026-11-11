@@ -802,7 +802,7 @@ class Browser:
             self.conn.call('Page.stopScreencast', session=tab.session)
             tab.casting = None
         self.conn.call('Page.startScreencast', {'format': 'jpeg', 'quality': QUALITY, 'maxWidth': size[0], 'maxHeight': size[1],
-                                                'everyNthFrame': 1}, tab.session)
+                                                'everyNthFrame': 1, 'maxFramesInFlight': 6}, tab.session)
         tab.casting = size
 
     def _restart_cast(self, tab):
