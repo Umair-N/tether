@@ -19,8 +19,8 @@ from test_browser import FakeHandler
 
 
 def playwright_modules():
-    candidates = [Path(p) for p in os.environ.get('NODE_PATH', '').split(os.pathsep) if p]
-    candidates += sorted((Path.home() / '.npm/_npx').glob('*/node_modules'))
+    candidates = [Path(__file__).resolve().parent.parent / 'ui/node_modules']
+    candidates += [Path(p) for p in os.environ.get('NODE_PATH', '').split(os.pathsep) if p]
     return next((str(p) for p in candidates if (p / 'playwright-core').is_dir()), None)
 
 
@@ -66,7 +66,7 @@ const readline = require('readline');
 
 
 @unittest.skipUnless(browser.find_chrome() and shutil.which('node') and playwright_modules(),
-                     'Chromium and cached playwright-core are required')
+                     'Chromium, node, and ui/npm ci are required')
 class RealBridgeDeviceTests(unittest.TestCase):
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory(prefix='tether-device-test-')

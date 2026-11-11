@@ -582,7 +582,7 @@ const {chromium} = require('playwright-core');
 
 
 @unittest.skipUnless(browser.find_signed_chrome() and shutil.which('Xvfb') and shutil.which('node') and playwright_modules(),
-                     'Google Chrome, Xvfb, node, and cached playwright-core are required')
+                     'Google Chrome, Xvfb, node, and ui/npm ci are required')
 class RealSignedAccessTests(Requests, unittest.TestCase):
     def test_allow_playwright_navigation_end_and_token_refusal(self):
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer

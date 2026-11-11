@@ -384,11 +384,11 @@ class RealContextTests(GrantHarness, unittest.TestCase):
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         self.assertEqual(json.loads(run.stdout), {'ok': True, 'mode': mode})
 
-    @unittest.skipUnless(shutil.which('node') and playwright_modules(), 'Cached playwright-core is required')
+    @unittest.skipUnless(shutil.which('node') and playwright_modules(), 'Node and ui/npm ci are required')
     def test_two_sequential_playwright_clients(self):
         self.playwright('sequential')
 
-    @unittest.skipUnless(shutil.which('node') and playwright_modules(), 'Cached playwright-core is required')
+    @unittest.skipUnless(shutil.which('node') and playwright_modules(), 'Node and ui/npm ci are required')
     def test_two_concurrent_playwright_clients_and_disconnect(self):
         self.playwright('concurrent')
 

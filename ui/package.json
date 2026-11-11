@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:ui": "npm run build && node run_ui_tests.cjs"
   },
   "dependencies": {
     "@aiden0z/pptx-renderer": "^1.4.0",
@@ -51,6 +52,7 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.7",
     "globals": "^16.0.0",
+    "playwright-core": "1.56.1",
     "tailwindcss": "^4.3.3",
     "typescript": "~5.8.3",
     "typescript-eslint": "^8.30.1",

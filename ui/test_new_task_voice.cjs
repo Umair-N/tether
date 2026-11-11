@@ -117,7 +117,11 @@ function taskSetup(env) {
     './keys': { keyLabel: () => 'Alt+V' }, './useDictation': { useDictation: s.useDictation }, './NewTask.css': {},
   }, env.globals)
   const props = {
-    api: async (path, body) => { requests.push({ path, body }); return { pane: 'fake-new' } },
+    api: async (path, body) => {
+      if (path === 'task-models') return { claude: [], codex: [] }
+      assert.equal(path, 'delegate')
+      requests.push({ path, body }); return { pane: 'fake-new' }
+    },
     pane: { id: 'fake-source', agent: 'codex', thread: null }, at: { x: 0, y: 0 }, micOk: true, chime: false,
     onCreated: id => created.push(id), onClose() {}, onEmpty() {}, onOpen() {}, onMoved() {},
   }
