@@ -20,7 +20,8 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y tmux
       - run: cd server && python3 -m unittest discover -q
   ui:
-    runs-on: ubuntu-latest
+    # Match the OS supported by the pinned Playwright browser/dependency bundle.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
