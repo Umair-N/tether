@@ -295,6 +295,10 @@ label.broadcast-row:hover { background: var(--hover); }
 .pane-tab-name { max-width: 18ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Composer + menu and stop button */
 .attach-container { position: relative; }
+/* The + sheet's layer is a popover in the top layer: no z-index of a chat overlay can paint over it. */
+.attach-layer { position: fixed; inset: 0; width: auto; height: auto; max-width: none; max-height: none; margin: 0; padding: 0; border: 0; background: transparent; color: inherit; overflow: visible; }
+.attach-layer > .attach-backdrop { display: block; position: absolute; inset: 0; }
+.attach-layer > .attach-menu { position: fixed; left: var(--attach-left, 16px); bottom: var(--attach-bottom, 72px); }
 .attach-menu { position: absolute; bottom: 52px; left: 0; z-index: 5; width: max-content; min-width: 264px; max-width: calc(100vw - 48px); padding: 6px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: 0 6px 24px #0000001f; }
 .attach-menu > button { display: flex; align-items: center; gap: 12px; width: 100%; min-height: var(--control-lg); padding: 0 12px; border-radius: var(--radius); font-size: 15px; white-space: nowrap; text-align: left; }
 .attach-menu button svg { flex: none; }
@@ -305,7 +309,7 @@ label.broadcast-row:hover { background: var(--hover); }
 .attach-tiles button:hover > span, .attach-tiles button:focus-visible > span { background: var(--line); }
 @media (max-width: 600px) {
   .attach-backdrop { display: block; position: fixed; inset: 0; z-index: 40; background: #00000059; }
-  .attach-menu { position: fixed; inset: auto 0 0; z-index: 41; width: auto; max-width: none; max-height: 85dvh; overflow-y: auto; padding: 10px 16px max(16px, env(safe-area-inset-bottom)); border: 0; border-top: 1px solid var(--line); border-radius: var(--radius-xl) var(--radius-xl) 0 0; box-shadow: 0 -8px 32px #00000033; animation: attach-up .18s ease-out; }
+  .attach-menu, .attach-layer > .attach-menu { position: fixed; inset: auto 0 0; z-index: 41; width: auto; max-width: none; max-height: 85dvh; overflow-y: auto; padding: 10px 16px max(16px, env(safe-area-inset-bottom)); border: 0; border-top: 1px solid var(--line); border-radius: var(--radius-xl) var(--radius-xl) 0 0; box-shadow: 0 -8px 32px #00000033; animation: attach-up .18s ease-out; }
   .attach-grip { display: block; width: 36px; height: 4px; margin: 0 auto 14px; border-radius: 2px; background: var(--line); }
   .attach-tiles { gap: 10px; padding-bottom: 14px; margin-bottom: 8px; }
   .attach-tiles button { font-size: 15px; gap: 8px; }
@@ -568,6 +572,22 @@ dialog::backdrop { background: #11110e66; opacity: calc(1 - var(--sheet-progress
 .notice-line { display: flex; gap: 8px; margin: 12px 0; padding: 0 5px; font-size: 13px; line-height: 1.5; color: var(--muted); }
 .notice-line > svg { flex: none; margin-top: 2px; }
 .notice-line strong { font-weight: 600; }
+/* A quiet watcher cycle: one muted line, the full rows one tap away. */
+.watch-row { margin: 6px 0; }
+.watch-row > summary { display: flex; align-items: center; gap: 7px; min-height: 32px; padding: 0 5px; border-radius: var(--radius); list-style: none; cursor: pointer; font-size: 12.5px; color: var(--muted); }
+.watch-row > summary::-webkit-details-marker { display: none; }
+.watch-row > summary:hover { color: var(--text); }
+.watch-row > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.watch-row > summary > svg { flex: none; opacity: .75; }
+.watch-what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.watch-row > summary time { flex: none; font-variant-numeric: tabular-nums; opacity: .8; }
+.watch-row > summary .chevron { flex: none; margin-left: auto; transition: transform .15s ease-out; }
+.watch-row[open] > summary .chevron { transform: rotate(90deg); }
+.watch-members { margin: 2px 0 8px 11px; padding-left: 12px; border-left: 1px solid var(--line); }
+.watch-reply { margin: 8px 0; font-size: 14px; line-height: 1.5; }
+.watch-reply p { margin: 0 0 6px; }
+@media (pointer: coarse) { .watch-row > summary { min-height: 40px; } }
+@media (prefers-reduced-motion: reduce) { .watch-row > summary .chevron { transition: none; } }
 .compact-row pre { white-space: pre-wrap; max-height: 60dvh; font-family: inherit; font-size: 13px; line-height: 1.5; }
 
 /* After a swipe, the new pane slides in from the side it came from. */

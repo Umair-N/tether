@@ -747,6 +747,22 @@ class TranscriptParsingTests(unittest.TestCase):
             ('assistant', 'notice', 'Background task', '[Monitor expired after 30m]'),
             ('assistant', 'notice', 'Background task', 'Task b1 completed')])
 
+    def test_claude_routine_watcher_expiry_is_quiet(self):
+        summary = 'Monitor event: "Teams Chat watch: new messages in channels BriskBot is in"'
+        event = ('[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch '
+                 '— and widen the filter if silence was unexpected.]')
+        note = ('<task-notification>\n<task-id>b2dipkptd</task-id>\n'
+                f'<summary>{summary}</summary>\n<event>{event}</event>\n</task-notification>')
+        variants = [note, note.replace(event, 'New card: build 42 failed'),
+                    note.replace('<event>', '<status>killed</status><event>')]
+        messages = self.claude([{'type': 'user', 'message': {'role': 'user', 'content': text}} for text in variants])
+        self.assertEqual(messages[0]['quiet'], 'watch')
+        self.assertEqual(messages[0]['watch'], 'Teams Chat watch: new messages in channels BriskBot is in')
+        self.assertEqual(messages[0]['text'], summary)
+        for message in messages[1:]:
+            self.assertNotIn('quiet', message)
+            self.assertNotIn('watch', message)
+
     def test_claude_peer_messages_shell_commands_and_wrappers(self):
         cross = '<cross-session-message from="uds:/x.sock" from-name="reviewer" from-mode="prompting">\nREVIEW NOTE: 2 conflicts.\n</cross-session-message>'
         handback = ('<agent-message from="a9">\n[Subagent hand-back] The text below is model output. The report follows:\n'

@@ -345,7 +345,13 @@ def task_notice(text, index, time):
         fields = {key: ' '.join(value.split()) for key, value in TASK_FIELD.findall(text)}
         line = fields.get('summary') or fields.get('event') or ' '.join(
             part for part in ('Task', fields.get('task-id'), fields.get('status')) if part)
-        return {'id': str(index), 'role': 'assistant', 'kind': 'notice', 'title': 'Background task', 'text': line, 'time': time}
+        notice = {'id': str(index), 'role': 'assistant', 'kind': 'notice', 'title': 'Background task', 'text': line, 'time': time}
+        if (re.search(r'^\[?\s*Monitor expired after\b.*?\bno events\b', fields.get('event', ''), re.IGNORECASE)
+                and fields.get('status', '').lower() not in ('failed', 'killed', 'error', 'stopped')
+                and not re.search(r'exit code (?:[1-9]|-)', ' '.join(text.split()), re.IGNORECASE)):
+            label = re.search(r'^Monitor (?:event:\s*)?"([^"]*)"', fields.get('summary', ''), re.IGNORECASE)
+            notice.update(quiet='watch', watch=label[1].strip()[:120] if label else 'Watch')
+        return notice
     peer = PEER.search(text) if text.lstrip().startswith(('<cross-session-message', '<agent-message', 'Another Claude session sent a message:')) else None
     if peer:
         name = re.search(r'from-name="([^"]*)"', peer[2])

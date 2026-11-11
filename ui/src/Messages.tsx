@@ -2,7 +2,7 @@ import { terminalText } from './terminalText'
 import { shellCommand } from './shellCommand'
 import { copyText } from './clipboard'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Blocks, Clock3, Layers, Check, Copy, Share2, ChevronRight, X, MessageSquare, Info, ShieldAlert, Square, Volume2, Eye, ClipboardPlus } from 'lucide-react'
+import { Blocks, RefreshCw, Clock3, Layers, Check, Copy, Share2, ChevronRight, X, MessageSquare, Info, ShieldAlert, Square, Volume2, Eye, ClipboardPlus } from 'lucide-react'
 import { MessagePrimitive } from '@assistant-ui/react'
 import type { ThreadMessageLike } from '@assistant-ui/react'
 import { MarkdownTextPrimitive } from '@assistant-ui/react-markdown'
@@ -88,7 +88,23 @@ function TerminalSnapshot({ text, shell }: { text: string; shell: boolean }) {
     <CopyButton text={text} label="Copy terminal output" className="copy-chip" />
   </div>
 }
-export function Message({ id, role, kind, title, text, count, time, tools, api, session, actions = true, images, imageKey, live, runningShown }: { live?: boolean; runningShown?: boolean; images?: number; imageKey?: string; actions?: boolean; id: string; role: string; kind?: unknown; title?: string; text: string; count?: unknown; time?: string; tools?: ToolSummary[]; api: Api; session: string }) {
+// A watcher that expired with nothing to report, re-armed by the agent, shows as one quiet line. The notice, the re-arm
+// and the agent's short reply stay one tap away. foldWatchCycles (watchCycles.ts) decides what counts as quiet.
+export type WatchRun = { members: ChatMessage[]; watches: string[]; cycles: number; rearmed: boolean }
+const watchName = (label: string) => label.split(':')[0].trim() || label
+function WatchGroup({ id, run, time, api, session }: { id: string; run: WatchRun; time?: string; api: Api; session: string }) {
+  const names = [...new Set(run.watches.map(watchName))]
+  const what = run.cycles > 1 ? `${run.cycles} quiet cycles · ${names.join(', ')}` : `${names[0] ?? 'Watch'} · no events · ${run.rearmed ? 're-armed' : 'ended'}`
+  const when = stamp(time)
+  return <details className="watch-row" data-msg-id={id}>
+    <summary><RefreshCw size={13} aria-hidden="true" /><span className="watch-what">{what}</span>{when && <time dateTime={time}>{run.cycles > 1 ? `last ${when}` : when}</time>}<ChevronRight className="chevron" size={14} aria-hidden="true" /></summary>
+    <div className="watch-members">{run.members.map(item => item.kind
+      ? <Message key={item.id} api={api} session={session} actions={false} id={item.id} role={item.role} kind={item.kind} title={item.title} text={item.text} count={item.count} time={item.time} tools={item.tools} />
+      : <div key={item.id} className="watch-reply" data-msg-id={item.id}>{item.text.split(/\n\s*\n/).map((part, at) => <p key={at}><Linked text={part.trim()} /></p>)}<MessageActions text={item.text} time={item.time} /></div>)}</div>
+  </details>
+}
+export function Message({ id, role, kind, title, text, count, time, tools, api, session, actions = true, images, imageKey, live, runningShown, watch }: { watch?: WatchRun; live?: boolean; runningShown?: boolean; images?: number; imageKey?: string; actions?: boolean; id: string; role: string; kind?: unknown; title?: string; text: string; count?: unknown; time?: string; tools?: ToolSummary[]; api: Api; session: string }) {
+  if (kind === 'watch' && watch) return <WatchGroup id={id} run={watch} time={time} api={api} session={session} />
   // A line Claude Code prints between turns: a hook that blocked it, a "while you were away" recap, a notice.
   if (kind === 'notice' && title) {
     const icon = title.endsWith('hook blocked') ? <ShieldAlert size={15} /> : title === 'While you were away' ? <Clock3 size={15} /> : <Info size={15} />
@@ -275,7 +291,8 @@ function QuoteBlock(props: React.ComponentProps<'blockquote'>) {
 export function Markdown() { return <MarkdownTextPrimitive remarkPlugins={[remarkGfm, remarkPaths]} smooth={false} components={{ CodeHeader, code: InlineCode, a: Link, blockquote: QuoteBlock }} /> }
 export const convertMessage = (message: ChatMessage): ThreadMessageLike => ({
   id: message.id, role: message.role, content: message.text,
-  metadata: { custom: { kind: message.kind, title: message.title, count: message.count, tools: message.tools, text: message.text, time: message.time, images: message.images, imageKey: message.image_key } },
+  metadata: { custom: { kind: message.kind, title: message.title, count: message.count, tools: message.tools, text: message.text, time: message.time, images: message.images, imageKey: message.image_key,
+    watch: message.kind === 'watch' ? { members: message.members ?? [], watches: message.watches ?? [], cycles: message.cycles ?? 1, rearmed: !!message.rearmed } : undefined } },
 })
 
 // Phone photos are large and carry location data: re-draw JPEG/HEIC photos (this drops the metadata) and shrink big images.

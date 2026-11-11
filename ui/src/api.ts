@@ -104,7 +104,13 @@ export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
   text: string
-  kind?: 'actions' | 'terminal' | 'notice' | 'peer'
+  kind?: 'actions' | 'terminal' | 'notice' | 'peer' | 'watch'
+  quiet?: string
+  watch?: string
+  members?: ChatMessage[]
+  watches?: string[]
+  cycles?: number
+  rearmed?: boolean
   title?: string
   tools?: ToolSummary[]
   count?: string

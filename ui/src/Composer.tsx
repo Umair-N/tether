@@ -4,6 +4,7 @@ import { keyLabel } from './keys'
 import { history, loadHistory, remember } from './history'
 import { chatTitle } from './Sidebar'
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { placeAttachLayer } from './attachLayer'
 import { ArrowUp, Blocks, Camera, CornerDownLeft, FolderOpen, Smartphone, ImagePlus, Mic, Paperclip, Plus, Square, X, AtSign, Slash } from 'lucide-react'
 import { errorText } from './api'
 import type { Api, Pane } from './api'
@@ -80,6 +81,16 @@ export function Composer({ onTerminalEscape, api, pane, thread, disabled, onSend
     const dismiss = (event: MouseEvent) => { if (!menuRef.current?.contains(event.target as Node)) setMenu(false) }
     document.addEventListener('click', dismiss)
     return () => document.removeEventListener('click', dismiss)
+  }, [menu])
+  // The sheet sits in the top layer, above every chat overlay on every layout (attachLayer.ts).
+  const layer = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const box = layer.current, anchor = menuRef.current
+    if (!menu || !box || !anchor) return
+    const place = () => placeAttachLayer(box, anchor, innerHeight)
+    place()
+    window.addEventListener('resize', place)
+    return () => window.removeEventListener('resize', place)
   }, [menu])
   // Start a "/" or "@" suggestion from the menu: "/" only works at the start, "@" goes after the text.
   function insertTrigger(mark: '@' | '/') {
@@ -267,7 +278,7 @@ export function Composer({ onTerminalEscape, api, pane, thread, disabled, onSend
       <input ref={photos} type="file" multiple accept="image/*,video/*" hidden onChange={event => { const chosen = Array.from(event.target.files ?? []); event.target.value = ''; void attach(chosen) }} />
       <input ref={camera} type="file" accept="image/*" capture="environment" hidden onChange={event => { const chosen = Array.from(event.target.files ?? []); event.target.value = ''; void attach(chosen) }} />
       <button type="button" className="icon-button attach" aria-label="Add photos and files" aria-expanded={menu} disabled={disabled || sending || !!uploading} onClick={() => setMenu(!menu)}><Plus size={21} /></button>
-      {menu && <><div className="attach-backdrop" aria-hidden="true" onClick={() => setMenu(false)} /><div className="attach-menu" role="menu" aria-label="Add to message" onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); setMenu(false) } }}>
+      {menu && <div className="attach-layer" popover="manual" ref={layer}><div className="attach-backdrop" aria-hidden="true" onClick={() => setMenu(false)} /><div className="attach-menu" role="menu" aria-label="Add to message" onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); setMenu(false) } }}>
         <span className="attach-grip" aria-hidden="true" />
         <div className="attach-tiles">
           <button role="menuitem" type="button" onClick={() => { setMenu(false); photos.current?.click() }}><span><ImagePlus size={24} /></span>Gallery</button>
@@ -281,7 +292,7 @@ export function Composer({ onTerminalEscape, api, pane, thread, disabled, onSend
           <button role="menuitem" type="button" onClick={() => insertTrigger('/')}><Slash size={18} />Commands & skills</button>
           <button role="menuitem" type="button" onClick={() => { setMenu(false); onTools() }}><Blocks size={18} />Plugins & MCP</button>
         </>}
-      </div></>}
+      </div></div>}
     </div>}{!uploading && !listening && !transcribing && options}<span className="composer-status" aria-live="polite">{uploading || (listening ? `Recording ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}` : transcribing ? 'Converting…' : pane.agent === 'shell' ? 'Terminal input' : shellMode ? 'Shell mode' : '')}</span>{!draft && !files.length && !pastes.length && pane.agent !== 'shell' && !listening && !transcribing && !uploading && <span className="composer-keys" aria-hidden="true"><span><kbd>↵</kbd> send</span><span><kbd>⇧↵</kbd> new line</span><span><kbd>/</kbd> commands</span><span><kbd>!</kbd> shell</span></span>}</div><div>
       {micOk && canRecord && (transcribing
         ? <button type="button" className="icon-button mic active" aria-label="Stop converting and keep the live text" onClick={() => dictation.cancelConverting()}><X size={19} /></button>
