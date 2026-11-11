@@ -41,11 +41,28 @@ class SuggestGroupsTests(unittest.TestCase):
         self.assertEqual(request.get_header('Content-type'), 'application/json')
         body = json.loads(request.data)
         self.assertEqual(body['chat_template_kwargs'], {'enable_thinking': False})
+        self.assertEqual(body['max_tokens'], 1024)
+        self.assertEqual(body['temperature'], 0.2)
         self.assertIn('2–8 groups', body['messages'][0]['content'])
-        self.assertIn('JSON only', body['messages'][0]['content'])
-        self.assertEqual(json.loads(body['messages'][1]['content']), {'sessions': self.entries})
+        self.assertIn('Web app: 3 8 12', body['messages'][0]['content'])
+        self.assertEqual(body['messages'][1]['content'],
+                         '6 | Session | project | First chat\n'
+                         '9 | Session | project | First chat\n'
+                         '12 | Session | single | First chat')
         self.assertEqual(suggest_groups.MODEL_TIMEOUT, 90)
         self.assertEqual(self.urlopen.call_args.kwargs['timeout'], suggest_groups.MODEL_TIMEOUT)
+
+    def test_line_output_maps_ids_and_uses_validation(self):
+        self.reply('Project: 6 9, $6 99\n- Single: 12\n')
+        self.assertEqual(suggest_groups.suggest({'sessions': self.entries}),
+                         {'groups': [{'name': 'Project', 'sessions': ['$6', '$9']},
+                                     {'name': 'Single', 'sessions': ['$12']}], 'source': 'llm'})
+
+    def test_compact_output_uses_existing_group_shape_and_validation(self):
+        self.reply('{"g":[{"n":" Project ","s":["$6","$9","$6","$99"]},{"n":"Single","s":["$12"]}]}')
+        self.assertEqual(suggest_groups.suggest({'sessions': self.entries}),
+                         {'groups': [{'name': 'Project', 'sessions': ['$6', '$9']},
+                                     {'name': 'Single', 'sessions': ['$12']}], 'source': 'llm'})
 
     def test_json_with_extra_text_uses_model_groups(self):
         groups = [{'name': 'Project', 'sessions': ['$6', '$9', '$12']}]
@@ -62,7 +79,9 @@ class SuggestGroupsTests(unittest.TestCase):
                     'source': 'folder'}
         for output in ('not JSON', '```json\n{}\n```', 'null', '[]', '{}', '{"groups":null}',
                        '{"groups":[null]}', '{"groups":[{"name":2,"sessions":[]}]}',
-                       '{"groups":[{"name":"Project","sessions":{}}]}', '[' * 2000):
+                       '{"groups":[{"name":"Project","sessions":{}}]}', '[' * 2000,
+                       '{"g":null}', '{"g":[null]}', '{"g":[{}]}',
+                       '{"g":[{"n":2,"s":[]}]}', '{"g":[{"n":"Project","s":{}}]}'):
             with self.subTest(output=output):
                 self.reply(output)
                 self.assertEqual(suggest_groups.suggest({'sessions': self.entries}), expected)
@@ -117,8 +136,19 @@ class SuggestGroupsTests(unittest.TestCase):
         entries = [session('$6', '  /' + 'd' * 200 + '  ', name='  ' + 'n' * 200 + '  ',
                            chats=['  ' + 'c' * 200 + '  '] * 12)]
         self.suggest([], entries)
-        sent = json.loads(json.loads(self.urlopen.call_args.args[0].data)['messages'][1]['content'])['sessions'][0]
-        self.assertEqual(sent, session('$6', '/' + 'd' * 119, name='n' * 120, chats=['c' * 120] * 12))
+        stored = suggest_groups.sessions({'sessions': entries})[0]
+        self.assertEqual(stored, session('$6', '/' + 'd' * 119, name='n' * 120, chats=['c' * 120] * 12))
+        sent = json.loads(self.urlopen.call_args.args[0].data)['messages'][1]['content']
+        self.assertEqual(sent, '6 | ' + 'n' * 120 + ' | ' + 'd' * 119 + ' | ' + '; '.join(['c' * 40] * 3))
+
+    def test_compact_input_cleans_values_drops_empty_and_duplicate_chats(self):
+        entries = [session('$12', '/work/pro|ject\n\r/', name='Ses|sion\n\r',
+                           chats=['Session', '', '|\n\r', 'First| chat\n\r', 'x' * 50, 'Third', 'Fourth']),
+                   session('$13', '/', name='|\n\r', chats=['', '|'])]
+        self.suggest([], entries)
+        sent = json.loads(self.urlopen.call_args.args[0].data)['messages'][1]['content']
+        self.assertEqual(sent, '12 | Session | project | First chat; ' + 'x' * 40 + '; Third\n13')
+        self.assertEqual(entries[0]['name'], 'Ses|sion\n\r')
 
     def test_two_hundred_sessions_are_accepted(self):
         entries = [session('$' + str(index)) for index in range(200)]
