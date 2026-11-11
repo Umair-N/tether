@@ -15,6 +15,7 @@ function harness() {
       return [slots[id], value => { slots[id] = typeof value === 'function' ? value(slots[id]) : value }]
     },
     useRef(initial) { const id = cursor++; return slots[id] ??= { current: initial } },
+    useId() { const id = cursor++; return slots[id] ??= `fixture-${id}` },
     useEffect(fn, deps) {
       const id = cursor++, old = slots[id]
       if (!old || deps.some((dep, at) => dep !== old.deps[at])) pending.push(() => { old?.cleanup?.(); slots[id] = { deps, cleanup: fn() } })
@@ -41,8 +42,15 @@ function load(file, imports, globals = {}, suffix = '') {
 }
 async function main() {
   const writes = [], h = harness()
-  const component = load('src/Terminal.tsx', { react: h.hooks, './clipboard': { copyText: async value => writes.push(value) } }, {
+  let picked = null
+  const selectionListeners = new Set()
+  const component = load('src/Terminal.tsx', { react: h.hooks, './terminalRows': load('src/terminalRows.ts', {}), './clipboard': { copyText: async value => writes.push(value) } }, {
     localStorage: { getItem: () => null }, fetch: async () => ({ ok: true }),
+    window: { getSelection: () => picked },
+    document: {
+      addEventListener: (type, listener) => { assert.equal(type, 'selectionchange'); selectionListeners.add(listener) },
+      removeEventListener: (type, listener) => { assert.equal(type, 'selectionchange'); selectionListeners.delete(listener) },
+    },
   }).LiveTerminal
   const props = { paneId: '%fixture', onChat() {}, shell: true }
   let tree = h.render(component, props); await flush(); tree = h.render(component, props)
@@ -53,29 +61,31 @@ async function main() {
   ]
   const selectControl = button(tree, 'Select text')
   const iframe = find(tree, n => n.type === 'iframe')
-  iframe.props.ref.current = { contentWindow: { term: { rows: 3, buffer: { active: { viewportY: 10, getLine: row => lines[row - 10] } } } } }
+  iframe.props.ref.current = { contentWindow: { term: { rows: 3, cols: 80, buffer: { active: { viewportY: 10, getLine: row => lines[row - 10] } } } } }
   selectControl.props.onClick(); tree = h.render(component, props)
-  const field = find(tree, n => n.type === 'textarea')
+  const field = find(tree, n => n.type === 'pre')
   const snapshot = 'https://example.test/long-link\nsecond line'
-  assert.equal(field.props.value, snapshot)
-  assert.equal(field.props.readOnly, true)
+  assert.equal(field.props.children.props.text, snapshot)
+  assert.equal(field.props.contentEditable, undefined)
   assert.equal(find(tree, n => n.type === 'iframe').props.inert, true)
-  const selection = { value: snapshot, selectionStart: 0, selectionEnd: 29 }
-  field.props.ref.current = selection
-  field.props.onSelect({ currentTarget: selection }); tree = h.render(component, props)
+  const selectionNode = {}
+  field.props.ref.current = { contains: node => node === selectionNode }
+  picked = { isCollapsed: false, anchorNode: selectionNode, focusNode: selectionNode, toString: () => snapshot.slice(0, 29) }
+  selectionListeners.forEach(listener => listener()); tree = h.render(component, props)
   await button(tree, 'Copy selection').props.onClick(); await flush()
   assert.equal(writes[0], snapshot.slice(0, 29))
-  field.props.onPointerUp({ pointerType: 'mouse', currentTarget: selection }); await flush()
+  field.props.onPointerUp({ pointerType: 'mouse' }); await flush()
   assert.equal(writes.length, 2)
   lines = [{ isWrapped: false, translateToString: () => 'new output' }]
   tree = h.render(component, props)
-  assert.equal(find(tree, n => n.type === 'textarea').props.value, snapshot)
-  selection.selectionEnd = 0
-  field.props.onSelect({ currentTarget: selection }); tree = h.render(component, props)
+  assert.equal(find(tree, n => n.type === 'pre').props.children.props.text, snapshot)
+  picked.isCollapsed = true
+  selectionListeners.forEach(listener => listener()); tree = h.render(component, props)
   await button(tree, 'Copy all').props.onClick(); await flush()
   assert.equal(writes[2], snapshot)
   button(tree, 'Back to terminal').props.onClick(); tree = h.render(component, props)
-  assert.equal(nodes(tree).some(n => n.type === 'textarea'), false)
+  assert.equal(nodes(tree).some(n => n.type === 'pre'), false)
+  assert.equal(selectionListeners.size, 0)
   assert.equal(find(tree, n => n.type === 'iframe').props.inert, false)
   assert.equal(find(tree, n => n.type === 'iframe').key, iframe.key)
   console.log('PASS terminal viewport, wrapped links, frozen selection, mouse/phone copy controls and return')

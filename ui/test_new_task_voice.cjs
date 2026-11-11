@@ -39,6 +39,7 @@ function harness() {
       }
     },
   }
+  hooks.useLayoutEffect = hooks.useEffect
   return {
     hooks,
     render(fn) { cursor = 0; const result = fn(); const pending = effects; effects = []; pending.forEach(fn => fn()); return result },
@@ -112,6 +113,7 @@ function taskSetup(env) {
     react: s.h.hooks, './api': { errorText: error => error.message },
     './hooks': { useModal: () => ({}), usePopover: () => ({}) }, './Composer': { uploadFile() { throw new Error('Unexpected upload') } },
     './ChatPicker': { ChatPicker: () => null }, './Sidebar': { AgentIcon: () => null, agentNames: { claude: 'Claude', codex: 'Codex' } },
+    './Worktree': { WorktreeField: () => null },
     './keys': { keyLabel: () => 'Alt+V' }, './useDictation': { useDictation: s.useDictation }, './NewTask.css': {},
   }, env.globals)
   const props = {
