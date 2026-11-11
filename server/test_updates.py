@@ -174,7 +174,8 @@ async function scenario(payloads, expectedCalls, disabledStorage = false) {
       return data;
     }};
     if (name === 'react/jsx-runtime') return {jsx: (type, props) => ({type, props}), jsxs: (type, props) => ({type, props})};
-    if (name === 'lucide-react') return {X: 'X', LoaderCircle: 'LoaderCircle'};
+    if (name === 'lucide-react') return {X: 'X'};
+    if (name === './Skeleton') return {Spinner: 'Spinner'};
     throw Error(name);
   }};
   vm.runInNewContext(code, context);
@@ -577,7 +578,8 @@ async function scenario(replies, postError) {
     require: name => {
       if (name === 'react') return {useSyncExternalStore: (sub, get) => { subscribe = sub; snapshot = get; return get(); }};
       if (name === 'react/jsx-runtime') return {jsx: (type, props) => ({type, props}), jsxs: (type, props) => ({type, props})};
-      if (name === 'lucide-react') return {X: 'X', LoaderCircle: 'LoaderCircle'};
+      if (name === 'lucide-react') return {X: 'X'};
+    if (name === './Skeleton') return {Spinner: 'Spinner'};
       if (name === './api') return {errorText: error => error.message, request: async (path, body) => {
         if (body) { posts.push(body); if (postError) throw Error(postError); return {}; }
         const reply = replies.length > 1 ? replies.shift() : replies[0];
