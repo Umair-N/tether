@@ -1,0 +1,153 @@
+// Agent map check against an existing build. Every API request stays in this page's fixtures; no terminal is touched.
+// Run: cd ui && PW_CORE=<playwright folder> DIST=<build> node test_agent_map.cjs
+const http = require('node:http')
+const fs = require('node:fs/promises')
+const path = require('node:path')
+
+const DIST = path.resolve(process.env.DIST || path.join(__dirname, 'dist'))
+const SHOTS = process.env.SHOTS || path.resolve(__dirname, '../.release-work/2026-11-11/agent-map/shots')
+const sizes = [[390, 844], [1280, 900]]
+const now = Date.now()
+const iso = seconds => new Date(now - seconds * 1000).toISOString()
+const agent = (id, description, state, extra = {}) => ({ id, description, type: 'general-purpose', model: 'claude-sonnet-5-5', effort: 'medium',
+  background: true, state, started: iso(400), ended: state === 'running' ? null : iso(60), seconds: 340, tokens: 87012, tools: 2, depth: 1,
+  parent: null, summary: null, ...extra })
+const agents = [
+  agent('a1', 'Research remote browser products and compare their pricing pages', 'finished'),
+  agent('a2', 'Audit the chat composer', 'running', { model: 'claude-haiku-5-5', seconds: 95, tokens: 1200 }),
+  agent('a3', 'Check the deploy script', 'stopped', { summary: 'Agent "Check the deploy script" was stopped by user' }),
+  agent('a4', 'Read the hooks folder', 'finished', { parent: 'a2', depth: 2, tools: 0 }),
+]
+const tools = [{ kind: 'tool', id: 't1', name: 'Bash', title: 'ls server', is_error: false, status: 'complete' },
+  { kind: 'tool', id: 't2', name: 'Read', title: 'server/subagents.py', is_error: true, status: 'complete' }]
+const detail = id => ({ ...agents.find(item => item.id === id), prompt: 'Find the three best remote browser products.\n\nReport prices.',
+  steps: [{ kind: 'text', text: 'Starting with the server folder.' }, ...tools], report: id === 'a1' ? 'Three products fit. Browserbase is the cheapest at the volume you need.' : null })
+const messages = Array.from({ length: 12 }, (_, i) => ({ id: `m${i}`, role: i % 2 ? 'assistant' : 'user', text: `Message ${i + 1}.`, time: '2026-11-11T08:00:00Z' }))
+const pane = { id: '%1', tmux_session: '$1', label: 'Agent map test', agent: 'claude', dir: '/srv/project', state: 'Working', writable: true, thread: 'map-thread', approval: null }
+const fixture = {
+  sessions: { sessions: [pane], default_thread: pane.thread },
+  chat: { messages, busy: true, thread: pane.thread, agent: 'claude', writable: true, session: pane.id, earlier: 0, limit: 100, state: 'Working', approval: null },
+  footer: { observed: true, model: 'Opus 5.5', mode: 'default', notices: [] },
+  subagents: { main: { model: 'claude-opus-5-5', context: 91452, title: 'Build the agent map' }, agents },
+  'subagent-tool': { id: 't1', name: 'Bash', title: 'ls server', is_error: false, status: 'complete', detail: '$ ls server\nserver.py\nsubagents.py', format: 'text', truncated: false, images: 0 },
+  prefs: { prefs: {}, version: 1 }, 'projects/marks': {}, 'projects/backlog': { text: '' }, 'side-shells': { shells: [] },
+  update: { current: '0.0.0', latest: '0.0.0', available: false }, host: { name: 'Test server', office: false },
+  catalog: { commands: [], plugins: [], mcp: [], note: '' }, stream: {}, 'codex-runs': { pane: '%1', running: 0, runs: [] },
+  'browser/agents': { enabled: false, available: false, reason: 'off', agents: [], asks: [] },
+  'browser/signed/access': { browser: 'signed', requests: [], grants: [], ended: [] }, usage: { claude: null, codex: null },
+}
+
+async function main() {
+  if (!process.env.TETHER_CDP_URL) { console.log('agent map: FAIL (TETHER_CDP_URL is not set)'); process.exitCode = 1; return }
+  const { chromium } = require(process.env.PW_CORE || 'playwright')
+  let browser, page, server, failed = 0
+  const posts = [], pageErrors = [], unexpected = new Set()
+  const check = (name, ok, why = '') => { if (ok) console.log(`ok ${name}`); else { failed++; console.log(`FAIL ${name} ${why}`) } }
+  try {
+    await fs.mkdir(SHOTS, { recursive: true })
+    server = http.createServer(async (req, res) => {
+      const url = new URL(req.url, 'http://127.0.0.1')
+      const file = url.pathname === '/chat/' ? path.join(DIST, 'index.html') : path.resolve(DIST, '.' + decodeURIComponent(url.pathname.slice('/chat'.length)))
+      if (!url.pathname.startsWith('/chat/') || url.pathname.endsWith('/sw.js') || !(file === path.join(DIST, 'index.html') || file.startsWith(DIST + path.sep))) { res.writeHead(404); res.end(); return }
+      try {
+        const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.webmanifest': 'application/manifest+json' }
+        const bytes = await fs.readFile(file)
+        res.writeHead(200, { 'Content-Type': mime[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' }); res.end(bytes)
+      } catch { res.writeHead(404); res.end() }
+    })
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
+    const origin = `http://127.0.0.1:${server.address().port}`
+    browser = await chromium.connectOverCDP(process.env.TETHER_CDP_URL)
+    const context = browser.contexts()[0]
+    if (!context || context.pages().length >= 3) throw new Error('Shared browser has no context or already has three tabs')
+    page = await context.newPage()
+    page.setDefaultTimeout(10000)
+    page.on('pageerror', error => pageErrors.push(error.message))
+    await page.emulateMedia({ reducedMotion: 'reduce', colorScheme: 'light' })
+    await page.routeWebSocket('**/*', socket => socket.close())
+    await page.route('**/*', async route => {
+      const request = route.request(), url = new URL(request.url())
+      if (url.pathname.endsWith('/sw.js')) return route.fulfill({ status: 404, body: '' })
+      if (url.pathname.includes('/api/')) {
+        const endpoint = url.pathname.split('/api/')[1]
+        if (request.method() !== 'GET') { posts.push({ endpoint, body: request.postDataJSON() }); return route.fulfill({ json: { ok: true, state: 'stopped' } }) }
+        if (endpoint === 'subagent') return route.fulfill({ json: detail(url.searchParams.get('id')) })
+        if (!(endpoint in fixture)) unexpected.add(endpoint)
+        if (endpoint === 'stream') return route.fulfill({ status: 204, body: '' })
+        return route.fulfill({ json: fixture[endpoint] || {} })
+      }
+      if (url.origin === origin && url.pathname.startsWith('/chat/')) return route.continue()
+      unexpected.add(`${url.origin}${url.pathname}`)
+      return route.abort('blockedbyclient')
+    })
+    await page.addInitScript(() => {
+      if ('serviceWorker' in navigator) navigator.serviceWorker.register = () => Promise.reject(new Error('off'))
+      localStorage.clear()
+      localStorage.setItem('tmux-chat.prefs.synced', '1')
+      localStorage.setItem('tmux-chat.prefs.v1', JSON.stringify({ selected: '%1', theme: 'light', voiceOff: true, voiceSound: false }))
+    })
+    const overflow = () => page.evaluate(() => document.documentElement.scrollWidth > innerWidth)
+    const onTop = selector => page.evaluate(selector => [...document.querySelectorAll(selector)].filter(el => el.getClientRects().length).every(el => {
+      const r = el.getBoundingClientRect(), top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+      return top && (el === top || el.contains(top))
+    }), selector)
+    for (const [width, height] of sizes) {
+      const at = `${width}px`
+      await page.setViewportSize({ width, height })
+      await page.goto(`${origin}/chat/?session=%251`, { waitUntil: 'load' })
+      const pill = page.getByRole('button', { name: /1 agent running\. Open the agent map/ })
+      await pill.waitFor()
+      check(`${at} pill shows running count`, (await pill.innerText()).trim() === '1 agent')
+      await page.screenshot({ path: path.join(SHOTS, `pill-${width}.png`) })
+      await pill.click()
+      const map = page.locator('dialog.agent-map')
+      await map.waitFor()
+      check(`${at} map main node`, await map.getByText('Build the agent map').isVisible() && await map.getByText('Opus 5.5 · 91.5k tokens in context').isVisible())
+      check(`${at} nested child under its parent`, await map.locator('.agent-children .agent-children').getByText('Read the hooks folder').isVisible())
+      check(`${at} map rows reachable`, await onTop('.agent-map .agent-node'))
+      check(`${at} no page overflow (map)`, !(await overflow()))
+      await page.screenshot({ path: path.join(SHOTS, `map-${width}.png`) })
+      await map.getByRole('button', { name: /Research remote browser/ }).click()
+      await map.getByRole('heading', { name: /Report/ }).waitFor()
+      check(`${at} finished detail facts`, (await map.locator('.agent-facts').innerText()).includes('Finished · general-purpose · Sonnet 5.5 · medium · background'))
+      check(`${at} finished has no Stop`, await map.getByRole('button', { name: 'Stop agent' }).count() === 0)
+      await map.getByText('Tool calls (2)').click()
+      await map.getByText('ls server').click()
+      await map.getByText('subagents.py').first().waitFor()
+      check(`${at} tool row opens subagent tool details`, true)
+      await page.screenshot({ path: path.join(SHOTS, `detail-finished-${width}.png`) })
+      await map.getByRole('button', { name: 'Back to the agent map' }).click()
+      await map.getByRole('button', { name: /Check the deploy script/ }).click()
+      await map.getByText('was stopped by user').waitFor()
+      check(`${at} stopped detail shows summary`, true)
+      await map.getByRole('button', { name: 'Back to the agent map' }).click()
+      await map.getByRole('button', { name: /Audit the chat composer/ }).click()
+      const stop = map.getByRole('button', { name: 'Stop agent' })
+      await stop.waitFor()
+      check(`${at} Stop reachable`, await onTop('.agent-stop'))
+      check(`${at} no page overflow (detail)`, !(await overflow()))
+      await page.screenshot({ path: path.join(SHOTS, `detail-running-${width}.png`) })
+      const before = posts.length
+      await stop.click()
+      await page.waitForTimeout(300)
+      const sent = posts.slice(before).find(post => post.endpoint === 'subagent-stop')
+      check(`${at} Stop posts session and id`, sent && sent.body.session === '%1' && sent.body.id === 'a2', JSON.stringify(posts.slice(before)))
+      await page.keyboard.press('Escape')
+      await map.waitFor({ state: 'hidden' })
+      check(`${at} Esc closes the map`, true)
+    }
+    check('no unmocked requests', !unexpected.size, [...unexpected].join(', '))
+    check('no page errors', !pageErrors.length, pageErrors.join('; '))
+  } catch (error) {
+    if (page) await page.screenshot({ path: path.join(SHOTS, 'error.png') }).catch(() => {})
+    check('runner', false, error.message.split('\n')[0] + ' | ' + pageErrors.join('; '))
+  } finally {
+    if (page) await page.close().catch(() => {})
+    if (browser) await browser.close().catch(() => {})
+    if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) }
+    console.log(`agent map: ${failed ? 'FAIL' : 'PASS'}`)
+    if (failed) process.exitCode = 1
+  }
+}
+
+main()

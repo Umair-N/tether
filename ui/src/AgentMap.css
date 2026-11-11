@@ -1,0 +1,54 @@
+/* Agent map: the composer pill, the tree of agents, and one agent's detail. */
+.agent-pill { gap: 6px; }
+.agent-pill.running { color: var(--text); }
+.agent-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.agent-dot.running { background: var(--done); box-shadow: 0 0 0 3px color-mix(in srgb, var(--done) 22%, transparent); }
+.agent-dot.finished { background: color-mix(in srgb, var(--muted) 70%, transparent); }
+.agent-dot.failed, .agent-dot.stopped { background: var(--error); }
+@media (prefers-reduced-motion: no-preference) {
+  .agent-pill .agent-dot.running, .agent-node .agent-dot.running { animation: agent-pulse 1.6s ease-in-out infinite; }
+}
+@keyframes agent-pulse { 50% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--done) 10%, transparent); } }
+
+.sheet.agent-map { width: min(560px, 100%); }
+.agent-tree { display: grid; gap: 6px; }
+.agent-node {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); color: var(--text); text-align: left;
+}
+button.agent-node:hover { background: var(--hover); }
+button.agent-node:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.agent-node .chevron { flex: none; margin-left: auto; color: var(--muted); }
+.agent-node-text { display: grid; gap: 2px; min-width: 0; }
+.agent-node-text strong { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-node-text small { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Children hang from a rail under their parent, one short elbow per row. */
+.agent-children { display: grid; gap: 6px; margin: 0; padding: 0 0 0 22px; list-style: none; position: relative; }
+.agent-children::before { content: ''; position: absolute; left: 10px; top: -6px; bottom: 24px; border-left: 1px solid var(--line); }
+.agent-children > li { position: relative; display: grid; gap: 6px; }
+.agent-children > li::before { content: ''; position: absolute; left: -12px; top: 24px; width: 12px; border-top: 1px solid var(--line); }
+
+.agent-map .sheet-heading .agent-title { display: flex; align-items: flex-start; gap: 8px; min-width: 0; margin-right: auto; font-size: 17px; line-height: 1.35; overflow-wrap: anywhere; }
+.agent-map .agent-title .agent-dot { flex: none; margin-top: 0.5em; }
+.agent-facts { margin: 6px 0 12px; color: var(--muted); font-size: 13px; line-height: 1.6; font-variant-numeric: tabular-nums; }
+.agent-summary { margin: 0 0 10px; color: var(--error); font-size: 14px; }
+.agent-body { display: grid; gap: 10px; }
+.agent-body h3 { margin: 0 0 6px; font-size: 14px; font-weight: 600; }
+.agent-body summary { cursor: pointer; padding: 6px 0; font-size: 14px; font-weight: 500; }
+.agent-body summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--radius-sm); }
+.agent-text {
+  margin: 0; max-height: 40vh; overflow: auto; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--bg); font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.agent-steps { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; max-height: 50vh; overflow: auto; }
+.agent-step-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.5; }
+.agent-step-tool { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.agent-step-tool strong { color: var(--text); font-weight: 600; }
+.agent-step-tool.failed strong { color: var(--error); }
+.agent-actions { display: grid; gap: 8px; margin-top: 14px; }
+.agent-actions .agent-stop { width: 100%; color: var(--error); }
+.agent-actions p { margin: 0; color: var(--error); font-size: 13px; }
+
+/* The chat's tool rows, inside a sheet: keep the chat's code block look, not the sheet's inline code chips. */
+.agent-tools { margin: 4px 0 0; }
+.agent-tools pre code { padding: 0; border-radius: 0; background: none; font: inherit; overflow-wrap: normal; }

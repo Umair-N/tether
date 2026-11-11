@@ -25,6 +25,8 @@ from antigravity import snapshot as antigravity_snapshot, transcript_message as 
 from terminal_input import NAME_HELP, valid_name, fork_chat, new_window_after, DraftError, card_key, menu_choose, unqueue, clear_draft as terminal_clear_draft, type_text, live_status, capture, capture_screen, submit as terminal_submit, respond_approval, plan_menu, start_agent, create_session, shell_snapshot, shell_submit, verify
 from quota_notices import error_message, merge as merge_quota_notices
 import tool_details
+import subagents
+import subagent_stop
 import activity
 import broadcast
 import catalog
@@ -1589,6 +1591,18 @@ class Handler(BaseHTTPRequestHandler):
                 query = parse_qs(urlsplit(self.path).query)
                 config = choose(query.get('session', [None])[0])
                 self.respond(200, tool_details.lookup(config, query.get('id', [''])[0]))
+            elif path == '/mobile/api/subagents':
+                query = parse_qs(urlsplit(self.path).query)
+                config = choose(query.get('session', [None])[0])
+                self.respond(200, subagents.listing(config))
+            elif path == '/mobile/api/subagent':
+                query = parse_qs(urlsplit(self.path).query)
+                config = choose(query.get('session', [None])[0])
+                self.respond(200, subagents.detail(config, query.get('id', [''])[0]))
+            elif path == '/mobile/api/subagent-tool':
+                query = parse_qs(urlsplit(self.path).query)
+                config = choose(query.get('session', [None])[0])
+                self.respond(200, subagents.tool(config, query.get('agent', [''])[0], query.get('id', [''])[0]))
             elif path == '/mobile/api/chat':
                 query = parse_qs(urlsplit(self.path).query)
                 config = choose(query.get('session', [None])[0])
@@ -1725,7 +1739,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.respond(403, {'error': 'Reload the page and try again.'})
             return
         if not backgrounds.handles(self.path) and self.path not in ('/mobile/api/update', '/mobile/api/history/hide', '/mobile/api/file-check', '/mobile/api/ask-hook', '/mobile/api/ask-answer', '/mobile/api/ask-engage', '/mobile/api/message', '/mobile/api/broadcast', '/mobile/api/approval', '/mobile/api/menu', '/mobile/api/prompt-action', '/mobile/api/start', '/mobile/api/session', '/mobile/api/tmux-sessions', '/mobile/api/key', '/mobile/api/clear-draft', '/mobile/api/unqueue', '/mobile/api/mode', '/mobile/api/type',
-                         '/mobile/api/push/subscribe', '/mobile/api/push/unsubscribe', '/mobile/api/push/test', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/shortcuts', '/mobile/api/prefs', '/mobile/api/codex-provider', '/mobile/api/model-options', '/mobile/api/model', '/mobile/api/rename', '/mobile/api/merge', suggest_groups.PATH, '/mobile/api/shell', '/mobile/api/upload', '/mobile/api/transcribe', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/delegate', '/mobile/api/agent-tab', '/mobile/api/continue-preview', '/mobile/api/continue', '/mobile/api/review-stop', '/mobile/api/review-stalled', '/mobile/api/review-link', '/mobile/api/resume', '/mobile/api/auto-resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/refresh', '/mobile/api/accounts/switch') and not browser_api.handles(self.path) and not projects_api.handles(self.path) and not groups_api.handles(self.path) and not codex_level.handles(self.path) and not custom_layouts.handles(self.path) and not tts.handles(self.path) and not friday_proxy.handles(self.path) and not live_mode.handles(self.path) and not attention.handles(self.path):
+                         '/mobile/api/push/subscribe', '/mobile/api/push/unsubscribe', '/mobile/api/push/test', '/mobile/api/push/mute', '/mobile/api/push/level', '/mobile/api/push/settings', '/mobile/api/shortcuts', '/mobile/api/prefs', '/mobile/api/codex-provider', '/mobile/api/model-options', '/mobile/api/model', '/mobile/api/subagent-stop', '/mobile/api/rename', '/mobile/api/merge', suggest_groups.PATH, '/mobile/api/shell', '/mobile/api/upload', '/mobile/api/transcribe', '/mobile/api/split', '/mobile/api/fork', '/mobile/api/delegate', '/mobile/api/agent-tab', '/mobile/api/continue-preview', '/mobile/api/continue', '/mobile/api/review-stop', '/mobile/api/review-stalled', '/mobile/api/review-link', '/mobile/api/resume', '/mobile/api/auto-resume', '/mobile/api/pane-name', '/mobile/api/pane-icon', '/mobile/api/pane-icon/draw', '/mobile/api/stop-task', '/mobile/api/side-shell', '/mobile/api/side-shell/end', '/mobile/api/login/start', '/mobile/api/login/code', '/mobile/api/login/cancel', '/mobile/api/accounts/refresh', '/mobile/api/accounts/switch') and not browser_api.handles(self.path) and not projects_api.handles(self.path) and not groups_api.handles(self.path) and not codex_level.handles(self.path) and not custom_layouts.handles(self.path) and not tts.handles(self.path) and not friday_proxy.handles(self.path) and not live_mode.handles(self.path) and not attention.handles(self.path):
             self.respond(404, {'error': 'Not found'})
             return
         # Reject unauthenticated and cross-origin submissions.
@@ -2195,7 +2209,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(200, {'accepted': True})
                 return
             config = choose(body.get('session'))
-            if body.get('thread') != config.get('thread'):
+            if (self.path != '/mobile/api/subagent-stop' or 'thread' in body) and body.get('thread') != config.get('thread'):
                 self.respond(409, {'error': 'This session changed conversations. Reload its tab before sending.'})
                 return
             if self.path == '/mobile/api/message' and config['agent'] == 'shell' and body.get('mode') == 'shell':
@@ -2212,6 +2226,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if not config.get('writable'):
                 raise RuntimeError('Messaging is unavailable for this session.')
+            if self.path == '/mobile/api/subagent-stop':
+                with SEND_LOCK:
+                    result = subagent_stop.stop(config, body.get('id'))
+                self.respond(200, result)
+                return
             if self.path in ('/mobile/api/model-options', '/mobile/api/model'):
                 with SEND_LOCK:
                     if self.path == '/mobile/api/model-options':

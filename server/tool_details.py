@@ -157,20 +157,23 @@ def decode_image(result, index):
         raise ValueError('That image is no longer available.') from exc
 
 
-def find(config, identifier):
+def find(config, identifier, *, allow_sidechain=False):
     if not identifier:
         raise ValueError('Choose a tool call.')
     call, result = None, None
-    with open(config['transcript']) as stream:
+    with open(config['transcript'], 'rb') as stream:
         for line in stream:
             try:
                 record = json.loads(line)
-            except ValueError:
+            except (ValueError, UnicodeError, RecursionError):
+                continue
+            if not isinstance(record, dict):
                 continue
             if config['agent'] == 'claude':
-                if record.get('isSidechain') or record.get('isMeta') or record.get('type') not in ('assistant', 'user'):
+                if (record.get('isSidechain') and not allow_sidechain) or record.get('isMeta') or record.get('type') not in ('assistant', 'user'):
                     continue
-                parts = (record.get('message') or {}).get('content')
+                message = record.get('message')
+                parts = message.get('content') if isinstance(message, dict) else None
                 if not isinstance(parts, list):
                     continue
             elif config['agent'] == 'codex' and record.get('type') == 'response_item':

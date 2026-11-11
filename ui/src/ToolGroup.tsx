@@ -33,23 +33,25 @@ function LiveDetail({ children, label }: { children: React.ReactNode; label: str
   return <pre ref={ref} tabIndex={0} aria-label={label} onScroll={event => { const box = event.currentTarget; atEdge.current = box.scrollHeight - box.scrollTop - box.clientHeight <= 4 }}>{children}</pre>
 }
 
-function ToolRow({ tool, api, session, live, onOpen }: { tool: ToolSummary; api: Api; session: string; live: boolean; onOpen: () => void }) {
+// `path` reads the detail from another endpoint (a subagent's transcript); the default is the pane's own transcript.
+export function ToolRow({ tool, api, session, live, onOpen, path }: { tool: ToolSummary; api: Api; session: string; live: boolean; onOpen: () => void; path?: string }) {
   const [open, setOpen] = useState(false)
   const [detail, setDetail] = useState<ToolDetail | null>(null)
   const [error, setError] = useState('')
   const [attempt, setAttempt] = useState(0)
   const [busy, setBusy] = useState(false)
   const id = useId()
-  const request = [open, api, session, tool.id, tool.is_error, tool.status]
+  const source = path ?? `tool?session=${encodeURIComponent(session)}&id=${encodeURIComponent(tool.id)}`
+  const request = [open, api, source, tool.id, tool.is_error, tool.status]
   const [previousRequest, setPreviousRequest] = useState(request)
   if (request.some((value, at) => !Object.is(value, previousRequest[at]))) { setPreviousRequest(request); if (open) setError('') }
   useEffect(() => {
     if (!open) return
     const controller = new AbortController()
-    void api<ToolDetail>(`tool?session=${encodeURIComponent(session)}&id=${encodeURIComponent(tool.id)}`, undefined, controller.signal)
+    void api<ToolDetail>(source, undefined, controller.signal)
       .then(value => { if (!controller.signal.aborted) { setDetail(value); setError(''); setBusy(false) } }).catch(reason => { if (!controller.signal.aborted) { setError(errorText(reason)); setBusy(false) } })
     return () => controller.abort()
-  }, [open, api, session, tool.id, tool.is_error, tool.status, attempt])
+  }, [open, api, source, tool.id, tool.is_error, tool.status, attempt])
   return <li className="tool-item">
     <button type="button" className="tool-toggle" aria-expanded={open} aria-controls={id} onClick={() => { setOpen(!open); onOpen() }}>
       <ToolIcon name={tool.name} failed={!!(tool.is_error || detail?.is_error)} running={live && tool.status === 'pending'} /><span className="tool-text"><strong>{tool.description || tool.name}</strong>{tool.title && tool.title !== tool.description && <span className="tool-title">{tool.title}</span>}</span>

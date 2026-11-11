@@ -23,6 +23,7 @@ import { profileName } from './provider'
 import { FoundryTag } from './CodexProvider'
 import type { Session } from './Sidebar'
 import { ModelSheet, MuteItem, Tools, Usage } from './Sheets'
+import { AgentMap, AgentPill, useSubAgents } from './AgentMap'
 import { ImageViewer } from './ImageViewer'
 import { SentContent, sentContent, imagesOnly } from './SentImages'
 import type { Media } from './ImageViewer'
@@ -636,6 +637,8 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
   const [claudeFooter, setFooter] = useState<{ key: string; value: Footer }>(() => ({ key: footerId, value: footerCache.get(footerId) ?? {} }))
   const footer = activePane.agent === 'codex' ? data?.footer ?? {} : claudeFooter.key === footerId ? claudeFooter.value : footerCache.get(footerId) ?? {}
   const [usageSheet, setUsageSheet] = useState(false)
+  const [agentMap, setAgentMap] = useState(false)
+  const subAgents = useSubAgents(api, activePane.id, activePane.agent === 'claude')
   const [planSheet, setPlanSheet] = useState(false)
   const [modelSheet, setModelSheet] = useState(false)
   const [continueSheet, setContinueSheet] = useState(false)
@@ -925,11 +928,13 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
     ]} />
     {info && <SessionInfo pane={activePane} footer={footer} mode={MODES[currentMode]} onClose={() => setInfo(false)} />}
     {usageSheet && <Usage footer={footer} onClose={() => setUsageSheet(false)} />}
+    {agentMap && <AgentMap api={api} session={activePane.id} list={subAgents.data} onClose={() => setAgentMap(false)} />}
     {planSheet && <PlanUsage api={api} onClose={() => setPlanSheet(false)} />}
     {continueSheet && <ContinueWith api={api} pane={activePane} thread={data?.thread ?? null} idle={state === 'Idle' || state === 'Stopped'} onClose={() => setContinueSheet(false)} onCreated={id => { setContinueSheet(false); onContinued(id) }} />}
     {modelSheet && <ModelSheet onContinue={() => { setModelSheet(false); setContinueSheet(true) }} api={api} pane={activePane} thread={data?.thread ?? null} currentLabel={model} currentEffort={footer.effort} onClose={() => setModelSheet(false)} onDone={message => { setModelSheet(false); setToast(message); readFooter.current() }} />}
     <Composer onTerminalEscape={() => void sendKey('Escape')} options={activePane.agent === 'shell' ? undefined : <span className="composer-pills">
       <button type="button" className="pill" aria-label="Model and effort" disabled={!writable || state === 'Working'} onClick={() => setModelSheet(true)}><span className="pill-text">{model || 'Model'}</span>{footer.effort && <span className="pill-effort">· {footer.effort}</span>}<ChevronDown size={13} /></button>
+      <AgentPill list={subAgents.data} onOpen={() => setAgentMap(true)} />
       {activePane.agent === 'codex' && (footer.context || !!footer.windows?.length || creditsLabel(footer.credits)) && <button type="button" className="pill" aria-label="Usage and credits" aria-haspopup="dialog" onClick={() => setUsageSheet(true)}><Gauge size={13} />Usage</button>}
       {activePane.agent === 'claude' && (footer.observed || footer.status || footer.mode) && <span className="mode-container"><button type="button" className="pill" aria-label={`Mode: ${MODES[currentMode]}. Change mode`} aria-expanded={modeMenu} disabled={!writable || !!modeBusy} onClick={() => setModeMenu(!modeMenu)}><Gauge size={13} />{modeBusy ? `${MODES[modeBusy]}…` : MODES[currentMode]}</button>
         {modeMenu && <div className="attach-menu mode-menu" role="menu">{Object.entries(MODES).map(([key, label]) => <button key={key} role="menuitemradio" aria-checked={key === currentMode} type="button" onClick={() => void chooseMode(key)}>{label}{key === currentMode && <Check size={16} />}</button>)}</div>}</span>}
