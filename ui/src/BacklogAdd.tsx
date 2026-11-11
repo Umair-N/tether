@@ -1,4 +1,4 @@
-import { BacklogVoice } from './BacklogVoice'
+import { VoiceField } from './VoiceField'
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent, KeyboardEvent } from 'react'
 import { ClipboardPlus, X } from 'lucide-react'
@@ -49,10 +49,10 @@ export function BacklogAddSheet({ api, text, pane, onClose, onAdded }: { api: Ap
       </div>
       {pane && <p className="sheet-sub">From {tabName(pane)}</p>}
       <label htmlFor="backlog-add-item">Item</label>
-      <BacklogVoice label="backlog title" onBusyChange={setTitleVoice} value={item} setValue={setItem} multiline field={{ id: 'backlog-add-item', className: 'backlog-add-item', rows: 3, maxLength: 2000, disabled: busy,
+      <VoiceField label="backlog title" onBusyChange={setTitleVoice} value={item} setValue={setItem} multiline field={{ id: 'backlog-add-item', className: 'backlog-add-item', rows: 3, maxLength: 2000, disabled: busy,
         onKeyDown: event => { if (event.key === 'Enter' && !event.shiftKey && !event.metaKey && !event.ctrlKey) { event.preventDefault(); add() } } }} />
       <label htmlFor="backlog-add-details">Details <span className="backlog-add-hint">optional, one per line</span></label>
-      <BacklogVoice label="backlog details" onBusyChange={setDetailsVoice} value={details} setValue={setDetails} multiline fieldRef={detailsRef} field={{ id: 'backlog-add-details', className: 'backlog-add-details', rows: 4, maxLength: 4000, disabled: busy,
+      <VoiceField label="backlog details" onBusyChange={setDetailsVoice} value={details} setValue={setDetails} multiline fieldRef={detailsRef} field={{ id: 'backlog-add-details', className: 'backlog-add-details', rows: 4, maxLength: 4000, disabled: busy,
         placeholder: 'Why it matters, where to look, what done means' }} />
       {error && <p className="error" role="alert">{error}</p>}
       <div className="sheet-buttons">

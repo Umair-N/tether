@@ -12,13 +12,13 @@ type Props = {
 }
 
 // Keep the mic beside its field, including while an inline title is edited.
-export function BacklogVoice({ value, setValue, label, multiline, fieldRef, field, onLeave, onBusyChange }: Props) {
+export function VoiceField({ value, setValue, label, multiline, fieldRef, field, onLeave, onBusyChange }: Props) {
   const [prefs] = usePrefs()
   const dictation = useDictation({ text: value, setText: setValue, chime: prefs.voiceSound })
   const { listening, transcribing, canRecord } = dictation
   useEffect(() => { onBusyChange?.(listening || transcribing); return () => onBusyChange?.(false) }, [listening, transcribing, onBusyChange])
   const props = { ...field, value, readOnly: field.readOnly || listening || transcribing, onChange: (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setValue(event.target.value) }
-  return <div className="backlog-voice" onKeyDownCapture={event => { if ((listening || transcribing) && event.key === 'Enter' && (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)) { event.preventDefault(); event.stopPropagation() } }} onBlur={event => {
+  return <div className="voice-field" onKeyDownCapture={event => { if ((listening || transcribing) && event.key === 'Enter' && (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)) { event.preventDefault(); event.stopPropagation() } }} onBlur={event => {
     if (!event.currentTarget.contains(event.relatedTarget) && !listening && !transcribing) onLeave?.()
   }}>
     {multiline ? <textarea {...props} ref={fieldRef as Ref<HTMLTextAreaElement>} /> : <input {...props} ref={fieldRef as Ref<HTMLInputElement>} />}

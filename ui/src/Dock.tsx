@@ -1,5 +1,6 @@
+import { VoiceField } from './VoiceField'
 import { PermissionsPanel } from './Permissions'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { Search, Clock3, Check, Terminal, X, RefreshCw, Gauge, SquareTerminal, Layers } from 'lucide-react'
 import { TextMessagePartProvider } from '@assistant-ui/react'
 import { errorText, goalStatusLabel } from './api'
@@ -50,6 +51,8 @@ function InfoPanel({ info, disabled, onAction }: { info: Attention; disabled: bo
 export function ChoiceDock({ approval, attention, plan, agent, disabled, onChoose, onKey, onAction, onAsk, onAskEngage, onType, onFocusReply, permissionsTab }: { plan?: ChatData['plan']; approval: Approval | null; attention: Attention | null; agent: string; disabled: boolean; permissionsTab?: string | null
   onChoose: (kind: 'approval' | 'menu', option: Choice, approval: Approval | null, feedback?: string) => Promise<void>; onKey: (key: string) => unknown; onAction?: (action: PromptAction) => Promise<string | null>; onAsk?: (ask: AskBridge, answers: Record<string, string | string[]> | null) => Promise<string | null>; onAskEngage?: (ask: AskBridge) => Promise<number | null>; onType?: (text: string, loginUrl?: string) => Promise<boolean>; onFocusReply?: () => void }) {
   const [feedback, setFeedback] = useState('')
+  const [feedbackVoiceBusy, setFeedbackVoiceBusy] = useState(false)
+  const feedbackId = useId()
   const [code, setCode] = useState('')
   const [sending, setSending] = useState(false)
   const [codeSent, setCodeSent] = useState(false)
@@ -86,6 +89,7 @@ export function ChoiceDock({ approval, attention, plan, agent, disabled, onChoos
   // "Chat about this" closes the question so the user can talk it through: put them in the message box after it.
   const chat = (option: Choice) => !approval && option.text === 'Chat about this'
   const pick = async (option: Choice) => {
+    if (feedbackVoiceBusy) return
     if (option.free) { focusBox(); return }
     setPicked(option.id); try { await onChoose(kind, option, approval, option.id === keepPlanning?.id ? feedback.trim() || undefined : undefined) } finally { setPicked(null) }
     if (chat(option)) focusBox() }
@@ -116,10 +120,13 @@ export function ChoiceDock({ approval, attention, plan, agent, disabled, onChoos
         <ol className="ask-options">{item.options.map(option => <li key={option.label}><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</li>)}
           <li><strong>Type something</strong><small>Write your own answer in the terminal.</small></li><li><strong>Chat about this</strong></li></ol></div>)}
         {ask.length === 1 ? <p className="ask-hint">Press a number to choose. The pane is too short to show the whole question.</p> : <p className="ask-hint">The pane is too short to show the question, so this card cannot follow your answers. The terminal shows one question at a time: press a number to answer it, then the next one opens.{ask.some(item => item.multi) ? ' In a “choose one or more” question, a number ticks a box; press Question → when done.' : ''} Open the terminal view to see where you are.</p>}</div> : text && <div className={`choice-text ${approval || !options.length ? 'mono' : ''}`}>{approval || !options.length ? <PanelText text={text} /> : <Linked text={text} />}</div>}
-      {keepPlanning && <label className="plan-feedback">Keep planning — optional feedback<textarea value={feedback} onChange={event => setFeedback(event.target.value)} maxLength={10000} rows={2} disabled={disabled || picked !== null} placeholder="Tell Claude what to change" /></label>}
+      {keepPlanning && <div className="plan-feedback"><label htmlFor={feedbackId}>Keep planning — optional feedback</label>
+        <VoiceField multiline label="plan feedback" value={feedback} setValue={setFeedback} onBusyChange={setFeedbackVoiceBusy}
+          field={{ id: feedbackId, maxLength: 10000, rows: 2, disabled: disabled || picked !== null, placeholder: 'Tell Claude what to change' }} />
+      </div>}
       {current && current.total > 1 && options.length > 0 && <p className="ask-progress">Question {current.index + 1} of {current.total} · {current.header}{current.multi ? ' · choose one or more' : ''}</p>}
       {!picker && choice && options.length > 0 && <ChoiceMeta choice={choice} />}
-      {options.length > 0 && <div className="choice-options" role="list">{options.map(option => <button key={option.id} type="button" role="listitem" className={[option.selected ? 'current' : '', approval ? /^yes\b/i.test(option.text) ? 'accept' : /^no\b/i.test(option.text) ? 'decline' : '' : ''].filter(Boolean).join(' ')} disabled={disabled || picked !== null} onClick={() => void pick(option)}>
+      {options.length > 0 && <div className="choice-options" role="list">{options.map(option => <button key={option.id} type="button" role="listitem" className={[option.selected ? 'current' : '', approval ? /^yes\b/i.test(option.text) ? 'accept' : /^no\b/i.test(option.text) ? 'decline' : '' : ''].filter(Boolean).join(' ')} disabled={disabled || picked !== null || feedbackVoiceBusy} onClick={() => void pick(option)}>
         <span className="choice-number">{picked === option.id ? '…' : option.id}</span>{checkedById.has(option.id) && <Box checked={checkedById.get(option.id)!} multi={multiBox} />}{option.free
           ? <span><strong>Type your own answer</strong><small>{option.text === 'Type something.' ? 'Write it in the message box below, then send.' : `In the terminal now: “${option.text}”. Your answer from the message box replaces it.`}</small></span>
           : <span><strong>{checkedById.has(option.id) ? option.text.replace(/^\[[ ✔xX]\]\s+/, '') : option.text}</strong>{chat(option) ? <small>Close the question and talk it through in the message box.</small> : option.detail && <small>{option.detail}</small>}</span>}</button>)}</div>}

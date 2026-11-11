@@ -1802,3 +1802,7 @@ button.live-chip:active { background: var(--line); }
   .group-switch .group-name { max-width: 13ch; }
   .group-crumb { max-width: 16ch; }
 }
+
+.voice-field { display: flex; flex: 1; flex-wrap: wrap; align-items: flex-start; gap: 6px; min-width: 0; }
+.voice-field > input, .voice-field > textarea { flex: 1; min-width: 0; width: 0; }
+.voice-field > .error { flex-basis: 100%; }

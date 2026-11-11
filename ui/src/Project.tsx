@@ -1,3 +1,4 @@
+import { VoiceField } from './VoiceField'
 import { useCallback, useEffect, useState } from 'react'
 import { SelectMenu } from './SelectMenu'
 import { ArrowLeft, Eye, EyeOff, FileText, Link2, Trash2, X } from 'lucide-react'
@@ -57,6 +58,8 @@ export function ProjectSheet({ api, session, group, mark, pin, onChanged, onClos
   const modal = useModal(true, onClose)
   const [project, setProject] = useState<ProjectState | null>(null)
   const [text, setText] = useState('')
+  const [noteVoiceBusy, setNoteVoiceBusy] = useState(false)
+  const [instructionsVoiceBusy, setInstructionsVoiceBusy] = useState(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const [stale, setStale] = useState(false)  // another tab saved first (409)
@@ -118,14 +121,15 @@ export function ProjectSheet({ api, session, group, mark, pin, onChanged, onClos
     {project && note ? <section className="settings-group project-note" aria-label={`Note ${note.name}`}>
       <button type="button" className="link-button project-back" disabled={pending} onClick={() => { setNote(null); setConfirmDelete(false) }}><ArrowLeft size={16} />All notes</button>
       <label htmlFor="project-note-text" className="visually-hidden">Note text</label>
-      <textarea id="project-note-text" className="project-text" value={note.text} disabled={pending} rows={12} spellCheck onChange={event => setNote({ ...note, text: event.target.value })} />
+      <VoiceField multiline label="note" value={note.text} setValue={text => setNote(current => current && { ...current, text })} onBusyChange={setNoteVoiceBusy}
+        field={{ id: 'project-note-text', className: 'project-text', disabled: pending, rows: 12, spellCheck: true }} />
       {confirmDelete
         ? <div className="confirm-box" role="alertdialog" aria-labelledby="project-note-delete"><p id="project-note-delete"><strong>Delete {note.name}?</strong> Agents stop getting it. A copy stays in the notes trash folder.</p>
             <div className="sheet-buttons"><button type="button" className="secondary" autoFocus disabled={pending} onClick={() => setConfirmDelete(false)}>Cancel</button>
               <button type="button" className="danger" disabled={pending} onClick={async () => { if (await post('note-delete', { name: note.name })) setNote(null) }}>Delete note</button></div></div>
         : <div className="sheet-buttons project-row-end">
             <button type="button" className="secondary danger-text" disabled={pending} onClick={() => setConfirmDelete(true)}><Trash2 size={16} />Delete</button>
-            <button type="button" className="primary" disabled={pending || note.text === note.saved} onClick={async () => { if (await post('note', { name: note.name, text: note.text })) setNote({ ...note, saved: note.text }) }}>{pending ? 'Saving…' : 'Save note'}</button>
+            <button type="button" className="primary" disabled={pending || noteVoiceBusy || note.text === note.saved} onClick={async () => { if (await post('note', { name: note.name, text: note.text })) setNote({ ...note, saved: note.text }) }}>{pending ? 'Saving…' : 'Save note'}</button>
           </div>}
     </section>
 
@@ -141,10 +145,11 @@ export function ProjectSheet({ api, session, group, mark, pin, onChanged, onClos
 
       <section className="settings-group" aria-labelledby="project-instructions"><h3 id="project-instructions">Instructions</h3>
         <label htmlFor="project-text" className="visually-hidden">Instructions for every agent in this {group ? 'stack' : 'session'}</label>
-        <textarea id="project-text" className="project-text" value={text} rows={6} disabled={pending} placeholder="For example: Use pnpm. Run the tests before you say done." onChange={event => setText(event.target.value)} />
+        <VoiceField multiline label="project instructions" value={text} setValue={setText} onBusyChange={setInstructionsVoiceBusy}
+          field={{ id: 'project-text', className: 'project-text', rows: 6, disabled: pending, placeholder: 'For example: Use pnpm. Run the tests before you say done.' }} />
         <div className="sheet-buttons project-row-end">
           {dirty && <button type="button" className="secondary" disabled={pending} onClick={() => setText(project.instructions.replace(/\n$/, ''))}>Undo</button>}
-          <button type="button" className="primary" disabled={pending || !dirty} onClick={() => void post('instructions', { text }, false)}>{pending && dirty ? 'Saving…' : 'Save'}</button>
+          <button type="button" className="primary" disabled={pending || instructionsVoiceBusy || !dirty} onClick={() => void post('instructions', { text }, false)}>{pending && dirty ? 'Saving…' : 'Save'}</button>
         </div>
       </section>
 

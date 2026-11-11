@@ -1,4 +1,4 @@
-import { BacklogVoice } from './BacklogVoice'
+import { VoiceField } from './VoiceField'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CSSProperties, FormEvent, KeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode, RefObject } from 'react'
 import { Check, ChevronRight, ClipboardList, FileText, GripVertical, ListChecks, Pencil, Plus, Send, Trash2, X } from 'lucide-react'
@@ -126,7 +126,7 @@ function ItemRow({ item, actions, links, sending, locked, editing, setEditing, t
     <input type="checkbox" className="backlog-box" aria-label={item.text} checked={item.done} disabled={locked} onChange={event => actions.onDone(item.raw, item.line, event.target.checked)} />
     <div className="backlog-body">
       {editing
-        ? <BacklogVoice label="backlog title" value={wording} setValue={value => { setWording(value); typedRef.current = value }} onLeave={() => finish(true)} field={{ 'aria-label': `Reword ${item.text}`, className: 'backlog-input backlog-reword', autoFocus: true,
+        ? <VoiceField label="backlog title" value={wording} setValue={value => { setWording(value); typedRef.current = value }} onLeave={() => finish(true)} field={{ 'aria-label': `Reword ${item.text}`, className: 'backlog-input backlog-reword', autoFocus: true,
             onFocus: event => { ended.current = false; event.target.select() },
             onKeyDown: event => { if (event.key === 'Enter') { event.preventDefault(); finish(true) } else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); finish(false) } } }} />
         : <span className="backlog-text-line" onDoubleClick={() => { if (!locked && !item.done) { setWording(item.text); setEditing(item.id) } }}>{item.text}</span>}
@@ -489,14 +489,14 @@ export function Backlog({ api, guard: guardRef, active = true, panes = [], onOpe
       {inText
         ? <p className="backlog-mode">Editing as text. Items are Markdown lines like <code>- [ ] Item</code>.</p>
         : <form className="backlog-add" onSubmit={add}>
-            <BacklogVoice label="new backlog item" onBusyChange={setItemVoice} value={item} setValue={setItem} fieldRef={addBox} field={{ 'aria-label': 'New backlog item', className: 'backlog-input', type: 'text', disabled: locked, placeholder: 'Add an item', enterKeyHint: 'done' }} />
+            <VoiceField label="new backlog item" onBusyChange={setItemVoice} value={item} setValue={setItem} fieldRef={addBox} field={{ 'aria-label': 'New backlog item', className: 'backlog-input', type: 'text', disabled: locked, placeholder: 'Add an item', enterKeyHint: 'done' }} />
             <button type="submit" className="secondary" disabled={locked || itemVoice || !item.trim()}>Add</button>
           </form>}
       <button type="button" className="icon-button" aria-pressed={inText} disabled={!saved || itemVoice || textVoice || (!inText && changes.length > 0)} aria-label={inText ? 'Show checklist' : 'Edit as text'} title={inText ? 'Show checklist' : 'Edit as text'}
         onClick={() => { if (inText) void leaveText(); else { setUndo(null); setDraft(shown) } }}>{inText ? <ListChecks size={17} /> : <FileText size={16} />}</button>
     </div>
     {inText
-      ? <BacklogVoice label="backlog text" onBusyChange={setTextVoice} value={draft} setValue={setDraft} multiline fieldRef={textBox} field={{ 'aria-label': 'Backlog text', className: 'backlog-text', readOnly: !!conflict, disabled: !!conflict, spellCheck: true }} />
+      ? <VoiceField label="backlog text" onBusyChange={setTextVoice} value={draft} setValue={setDraft} multiline fieldRef={textBox} field={{ 'aria-label': 'Backlog text', className: 'backlog-text', readOnly: !!conflict, disabled: !!conflict, spellCheck: true }} />
       : <div className="backlog-list" ref={list}>
           {saved && !rows.length && <div className="backlog-empty"><ClipboardList size={26} aria-hidden="true" /><p><strong>Nothing here yet</strong></p><p>Add what you want to remember. Agents add follow-ups they find, and fill in items you point them to.</p></div>}
           {saved && !!rows.length && !openItems.length && <p className="backlog-clear"><Check size={16} aria-hidden="true" />All done.</p>}

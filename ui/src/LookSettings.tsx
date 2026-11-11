@@ -1,3 +1,4 @@
+import { VoiceField } from './VoiceField'
 import { useEffect, useRef, useState } from 'react'
 import { ApiError, type Api } from './api'
 import type { Prefs } from './prefs'
@@ -36,10 +37,10 @@ function SaveLook({ next, onSave, onSkip, onCancel }: { next: Layout; onSave: ()
 }
 
 /** A button that asks once ("Delete it?") and acts on a second press within 4 seconds. */
-function ConfirmButton({ label, confirm, onConfirm, className = 'secondary', title }: { label: string; confirm: string; onConfirm: () => void; className?: string; title?: string }) {
+function ConfirmButton({ label, confirm, onConfirm, className = 'secondary', title, disabled }: { label: string; confirm: string; onConfirm: () => void; className?: string; title?: string; disabled?: boolean }) {
   const [asking, setAsking] = useState(false)
   useEffect(() => { if (!asking) return; const timer = setTimeout(() => setAsking(false), 4000); return () => clearTimeout(timer) }, [asking])
-  return <button type="button" title={title} aria-label={title && !asking ? title : undefined} className={`${className}${asking ? ' look-confirm' : ''}`} onClick={() => { if (asking) { setAsking(false); onConfirm() } else setAsking(true) }}>{asking ? confirm : label}</button>
+  return <button type="button" disabled={disabled} title={title} aria-label={title && !asking ? title : undefined} className={`${className}${asking ? ' look-confirm' : ''}`} onClick={() => { if (asking) { setAsking(false); onConfirm() } else setAsking(true) }}>{asking ? confirm : label}</button>
 }
 
 function download(layout: Layout) {
@@ -59,6 +60,7 @@ function LayoutMaker({ api, draft, setDraft, focus, current, onSaved, onTry }: {
   onSaved: () => void; onTry: (layout: Layout) => void
 }) {
   const [prompt, setPrompt] = useState('')
+  const [voiceBusy, setVoiceBusy] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [conflict, setConflict] = useState<'' | 'save' | 'try'>('')
@@ -74,7 +76,7 @@ function LayoutMaker({ api, draft, setDraft, focus, current, onSaved, onTry }: {
 
   const make = async () => {
     const wish = prompt.trim()
-    if (!wish || busy) return
+    if (!wish || busy || voiceBusy) return
     setBusy(true); setError(''); setConflict('')
     const controller = new AbortController()
     job.current = controller
@@ -105,15 +107,15 @@ function LayoutMaker({ api, draft, setDraft, focus, current, onSaved, onTry }: {
     <h4 id="look-maker-title">Make a layout <kbd>{keyLabel('⌥L')}</kbd></h4>
     <p className="setting-note">Describe it in a few words. Tether adds the full instructions, builds it from Tether’s panels, and shows it on each device before anything changes.</p>
     <form className="look-maker-form" onSubmit={event => { event.preventDefault(); void make() }}>
-      <textarea ref={box} className="look-textarea" rows={2} maxLength={2000} value={prompt} disabled={busy} aria-label="Describe the layout"
-        placeholder={draft ? 'Change it, for example: darker, sessions list on the right' : 'For example: like Telegram, each session a person with an avatar'}
-        onChange={event => setPrompt(event.target.value)}
-        onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void make() } }} />
+      <VoiceField multiline label="layout description" value={prompt} setValue={setPrompt} fieldRef={box} onBusyChange={setVoiceBusy}
+        field={{ className: 'look-textarea', rows: 2, maxLength: 2000, disabled: busy, 'aria-label': 'Describe the layout',
+          placeholder: draft ? 'Change it, for example: darker, sessions list on the right' : 'For example: like Telegram, each session a person with an avatar',
+          onKeyDown: event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void make() } } }} />
       <div className="look-maker-buttons">
         {busy ? <>
           <span className="look-busy" role="status"><span className="look-spinner" aria-hidden="true" />Making the layout. This takes about a minute.</span>
           <button type="button" className="secondary" onClick={() => job.current?.abort()}>Stop</button>
-        </> : <button type="submit" className="primary" disabled={!prompt.trim()}>{draft ? 'Change the draft' : 'Make layout'}</button>}
+        </> : <button type="submit" className="primary" disabled={voiceBusy || !prompt.trim()}>{draft ? 'Change the draft' : 'Make layout'}</button>}
       </div>
     </form>
     {error && <p className="setting-note look-error" role="alert">{error}{conflict && draft && <> <button type="button" className="link-button" onClick={() => void save(conflict === 'try', true)}>Replace it</button></>}</p>}
@@ -262,6 +264,7 @@ function Photos({ api, look, prefs, set, update }: { api: Api; look: Look; prefs
   const [error, setError] = useState('')
   const [busy, setBusy] = useState<'' | 'upload' | 'make'>('')
   const [wish, setWish] = useState('')
+  const [voiceBusy, setVoiceBusy] = useState(false)
   const file = useRef<HTMLInputElement>(null)
   const live = useRef(true)
   useEffect(() => {
@@ -300,7 +303,7 @@ function Photos({ api, look, prefs, set, update }: { api: Api; look: Look; prefs
     } catch (failure) { if (live.current && !handle.controller.signal.aborted) setError(message(failure)) }
     finally { if (live.current) setBusy('') }
   }
-  const make = () => { if (wish.trim()) void follow(startBackground(api, wish.trim(), tuned)) }
+  const make = () => { if (!voiceBusy && wish.trim()) void follow(startBackground(api, wish.trim(), tuned)) }
   const remove = async (item: BackgroundItem) => {
     setError('')
     try {
@@ -323,12 +326,13 @@ function Photos({ api, look, prefs, set, update }: { api: Api; look: Look; prefs
       <input ref={file} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={event => { const picked = event.target.files?.[0]; event.target.value = ''; if (picked) void upload(picked) }} />
     </div>
     <form className="look-maker-form" onSubmit={event => event.preventDefault()}>
-      <textarea className="look-textarea" rows={2} maxLength={1000} value={wish} disabled={busy === 'make'} aria-label="Describe an image" placeholder="Make an image, for example: misty pine forest at dawn" onChange={event => setWish(event.target.value)} />
+      <VoiceField multiline label="image description" value={wish} setValue={setWish} onBusyChange={setVoiceBusy}
+        field={{ className: 'look-textarea', rows: 2, maxLength: 1000, disabled: busy === 'make', 'aria-label': 'Describe an image', placeholder: 'Make an image, for example: misty pine forest at dawn' }} />
       <div className="look-maker-buttons">
         {busy === 'make' ? <>
           <span className="look-busy" role="status"><span className="look-spinner" aria-hidden="true" />Codex is making the image. This takes up to 2 minutes. You can close Settings.</span>
           <button type="button" className="secondary" onClick={() => backgroundJob()?.controller.abort()}>Stop waiting</button>
-        </> : wish.trim() ? <ConfirmButton className="primary" label="Make image" confirm="Uses Codex usage. Make it?" onConfirm={make} /> : <button type="button" className="primary" disabled>Make image</button>}
+        </> : wish.trim() ? <ConfirmButton disabled={voiceBusy} className="primary" label="Make image" confirm="Uses Codex usage. Make it?" onConfirm={make} /> : <button type="button" className="primary" disabled>Make image</button>}
       </div>
     </form>
     <label className="look-check"><input type="checkbox" checked={tuned} onChange={event => update(() => ({ imagePromptTuned: event.target.checked }))} />Tuned prompt: ask for a calm wallpaper with soft areas behind the panels</label>

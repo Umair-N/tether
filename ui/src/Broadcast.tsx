@@ -1,3 +1,4 @@
+import { VoiceField } from './VoiceField'
 import { useEffect, useRef, useState } from 'react'
 import { Check, ChevronDown, Search, Send } from 'lucide-react'
 import { errorText } from './api'
@@ -91,6 +92,7 @@ export function Broadcast({ api, sessions, onDone }: { api: Api; sessions: Sessi
   const panes = broadcastPanes(sessions)
   const [picked, setPicked] = useState<Set<string>>(() => new Set(panes.filter(item => item.pane.state === 'Idle').map(item => item.pane.id)))
   const [text, setText] = useState('')
+  const [voiceBusy, setVoiceBusy] = useState(false)
   const [via, setVia] = useState<Via>({ kind: 'direct' })
   const [menuAt, setMenuAt] = useState<Anchor | null>(null)
   const [pending, setPending] = useState(false)
@@ -115,7 +117,7 @@ export function Broadcast({ api, sessions, onDone }: { api: Api; sessions: Sessi
   const blocked = !text.trim() ? '' : !targets.length ? 'Choose at least one pane.' : via.kind === 'claude' && !master ? 'The master pane has ended. Choose another.' : ''
   async function send(event: React.SyntheticEvent) {
     event.preventDefault()
-    if (pending || blocked || !text.trim()) return
+    if (pending || voiceBusy || blocked || !text.trim()) return
     setPending(true); setError('')
     try {
       const body = { message: text, panes: targets.map(item => ({ pane: item.pane.id, thread: item.pane.thread })), via: via.kind, ...(master && { master: master.id }) }
@@ -156,15 +158,15 @@ export function Broadcast({ api, sessions, onDone }: { api: Api; sessions: Sessi
         })}</ul>}
     <p className="hint broadcast-rules">Working agents get the text while they work. Panes that wait on an approval or a question are skipped.</p>
     <label className="visually-hidden" htmlFor="broadcast-text">Message</label>
-    <textarea id="broadcast-text" ref={field} rows={3} value={text} maxLength={20000} disabled={pending} placeholder="Message to the selected panes"
-      onChange={event => setText(event.target.value)}
-      onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) void send(event) }} />
+    <VoiceField multiline label="broadcast message" value={text} setValue={setText} fieldRef={field} onBusyChange={setVoiceBusy}
+      field={{ id: 'broadcast-text', rows: 3, maxLength: 20000, disabled: pending, placeholder: 'Message to the selected panes',
+        onKeyDown: event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) void send(event) } }} />
     {(error || blocked) && <p className="error" role="alert">{error || blocked}</p>}
     <div className="broadcast-send">
       <button type="button" className="secondary via-button" aria-haspopup="dialog" disabled={pending} onClick={event => setMenuAt(anchorOf(event))}>
         {master ? `Via ${paneTitle(master)}` : 'Direct'}<ChevronDown size={16} />
       </button>
-      <button className="primary" disabled={pending || !text.trim() || !!blocked}><Send size={16} />{pending ? 'Sending…' : `Send to ${targets.length}`}</button>
+      <button className="primary" disabled={pending || voiceBusy || !text.trim() || !!blocked}><Send size={16} />{pending ? 'Sending…' : `Send to ${targets.length}`}</button>
     </div>
     {menuAt && <ViaMenu at={menuAt} via={via} claudes={claudes} onPick={setVia} onClose={() => setMenuAt(null)} />}
   </form>
