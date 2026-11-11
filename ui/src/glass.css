@@ -65,6 +65,11 @@
 .app-shell[data-surface="glass"] :is(.sidebar-search, .composer) { background: var(--g-fill-strong); border-color: var(--g-edge); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); box-shadow: 0 1px 0 var(--g-edge) inset; }
 .app-shell[data-surface="glass"] .composer { box-shadow: 0 1px 0 var(--g-edge) inset, 0 8px 24px rgb(0 0 0 / .12); }
 .app-shell[data-surface="glass"] .user-message { background: var(--g-fill-strong); box-shadow: 0 1px 0 var(--g-edge) inset; }
+/* Home's sticky group heads and lanes painted --bg, an opaque bar over the backdrop. On glass they are see-through;
+   a blur keeps the head readable when cards scroll under it. */
+.app-shell[data-surface="glass"] .home { --home-lane: color-mix(in srgb, var(--text) 4%, transparent); }
+.app-shell[data-surface="glass"] .home-group-head { background: transparent; -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
+@container home (min-width: 640px) { .app-shell[data-surface="glass"] .home-group-head { -webkit-backdrop-filter: none; backdrop-filter: none; } }
 .app-shell[data-surface="glass"] .home-card.needs { background: color-mix(in srgb, var(--attention) 14%, var(--g-fill)); border-color: color-mix(in srgb, var(--attention) 45%, var(--g-edge)); box-shadow: 0 1px 0 var(--g-edge) inset, 0 0 18px color-mix(in srgb, var(--attention) 22%, transparent); }
 .app-shell[data-surface="glass"] :is(.session-row.selected, .l-status-row[aria-current="true"]) { background: var(--g-fill-strong); }
 @media (hover: hover) { .app-shell[data-surface="glass"] :is(.session-row:hover, .l-status-row:hover) { background: var(--g-fill-strong); } }

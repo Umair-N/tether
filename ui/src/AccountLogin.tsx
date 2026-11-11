@@ -1,3 +1,4 @@
+import { Spinner } from './Skeleton'
 import { useCallback, useEffect, useState } from 'react'
 import { SelectMenu } from './SelectMenu'
 import { errorText } from './api'
@@ -97,7 +98,7 @@ function SavedList({ agent, api, onList, onDone }: { agent: 'claude' | 'codex'; 
   }
   if (!available) return null
   return <div className="saved-accounts">
-    {!loaded && <><button type="button" className="secondary" disabled={pending} onClick={() => void refresh()}>{pending ? 'Loading…' : 'Load saved accounts'}</button>
+    {!loaded && <><button type="button" className="secondary" disabled={pending} onClick={() => void refresh()}>{pending ? <><Spinner /> Loading…</> : 'Load saved accounts'}</button>
       <p className="hint">Loading can refresh the sign-in that running jobs use.</p></>}
     {loaded && list.length < 2 && <p className="hint">No other saved {name} accounts.</p>}
     {list.length > 1 && <ul aria-label={`Saved ${name} accounts`}>{list.map(account => {

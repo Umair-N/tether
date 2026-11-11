@@ -1,3 +1,4 @@
+import { Loading } from './Skeleton'
 import { useWords, count } from './words'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { FolderInput, Eye, Archive, ArchiveRestore, ArrowDown, BookMarked, ArrowUp, Bell, Check, Columns2, GitFork, LayoutDashboard, Merge, ArrowRightLeft, Plus, PanelBottom, PanelRight, Pencil, Pin, PinOff, Shapes, Sparkles, RotateCw, Rows2, Square, Trash2, X } from 'lucide-react'
@@ -344,7 +345,7 @@ export function Tools({ api, pane, onPick, onClose }: { api: Api; pane: Pane; on
     <p className="sheet-sub">{paneTitle(pane)} in {pane.dir}</p>
     <p className="hint">In the message box, type <code>/</code> for commands and skills{pane.agent === 'codex' ? <>, <code>$</code> for skills</> : null}, or <code>@</code> for files.</p>
     {error && <p className="error" role="alert">{error}</p>}
-    {!catalog && !error && <p className="hint">Loading…</p>}
+    {!catalog && !error && <Loading className="hint" />}
     {catalog && <>
       <details className="tools-group"><summary>MCP servers <span className="group-count">{catalog.mcp.length}</span></summary>
         <ul>{catalog.mcp.map(server => <li key={server.name + server.source}><strong>{server.name}</strong><small>{server.source}</small></li>)}</ul>
@@ -420,7 +421,7 @@ export function ModelSheet({ api, pane, thread, currentLabel, currentEffort, onC
     {data && data.efforts.length > 0 && chosen?.effort !== false && <fieldset className="choice"><legend>Effort</legend><div className="segmented effort-levels">
       {data.efforts.map(level => <label key={level}><input type="radio" name="effort" value={level} checked={effort === level} disabled={busy} onChange={() => setEffort(level)} /><span>{level[0].toUpperCase() + level.slice(1)}</span></label>)}
     </div></fieldset>}
-    {loading && <p className="hint" role="status">Reading the model list from the terminal… about 5 seconds.</p>}
+    {loading && <Loading className="hint" label="Reading the model list from the terminal… about 5 seconds." />}
     {note && <p className="hint" role="status">{note}</p>}
     {!loading && <button type="button" className="link-button refresh-models" disabled={busy} onClick={() => { setLoading(true); setNote(''); fetchList() }}><RotateCw size={14} />{data ? 'Refresh model list' : 'Try again'}</button>}
     {data && <button type="button" className="primary create-button" disabled={busy || !changed} onClick={() => void apply()}>{busy ? 'Applying…' : 'Apply'}</button>}

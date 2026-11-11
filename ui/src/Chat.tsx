@@ -41,6 +41,7 @@ import type { NoticeItem, NoticeVariant } from './Notices'
 import { State } from './NewSession'
 import { Linked, Message, convertMessage, SelectionCopy } from './Messages'
 import { Composer } from './Composer'
+import { Bone, Skeleton, Spinner } from './Skeleton'
 import { expandPlaceholders } from './pasteText'
 import { autoBlock } from './noticeText'
 import { ChoiceDock, HeadsUp, taskLabel, SessionInfo, LiveSheet, SearchSheet } from './Dock'
@@ -845,10 +846,13 @@ export function Chat({ liveReplyPreview, pane, session, api, onMenu, onUpdate, d
       if (view) { hold.current = null; sticky.current = view.scrollHeight - view.scrollTop - view.clientHeight < 90; setJump(!sticky.current); scrollByPane.set(pane.id, { top: view.scrollTop, limit, bottom: sticky.current }) }
     }}><div className="messages" ref={content}>
       {error && !data && <div className="inline-error" role="alert">{error}<button onClick={() => void refresh()}>Retry</button></div>}
-      {loading && <p className="empty-note" role="status">Loading conversation…</p>}
+      {loading && <Skeleton label="Loading conversation…" className="sk-chat">
+        <Bone className="sk-ask" /><div className="sk-answer"><span><Bone w="94%" /></span><span><Bone w="88%" /></span><span><Bone w="61%" /></span></div>
+        <Bone className="sk-ask" w="32%" /><div className="sk-answer"><span><Bone w="90%" /></span><span><Bone w="47%" /></span></div>
+      </Skeleton>}
       <p ref={pullNote} className="pull-note" role="status" aria-hidden={pulled === 0}>{pulled >= 70 ? 'Release to load earlier' : 'Pull to load earlier'}</p>
       {started && !data?.earlier && activePane.agent !== 'shell' && <p className="chat-started">Chat started {started}</p>}
-      {!!data?.earlier && <button className="load-earlier" disabled={data.limit !== limit} onClick={loadEarlier}>{data.limit !== limit ? 'Loading…' : `Load earlier · ${data.earlier}`}</button>}
+      {!!data?.earlier && <button className="load-earlier" disabled={data.limit !== limit} onClick={loadEarlier}>{data.limit !== limit ? <><Spinner /> Loading…</> : `Load earlier · ${data.earlier}`}</button>}
       {data && activePane.agent !== 'shell' && !messages.length && <div className="chat-empty"><Terminal size={27} strokeWidth={1.4} /><h2>No messages yet</h2><p>{`Send a message to ${pane.label} to get started.`}</p>
         {writable && <div className="starter-actions" aria-label="Ways to start">
           <button type="button" onClick={() => startWith('Explain what this project does and how its files are laid out.')}><MessageSquare size={16} />Explain this project</button>

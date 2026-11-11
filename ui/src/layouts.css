@@ -126,9 +126,6 @@ button.look-confirm.primary, button.look-confirm.secondary { background: color-m
 .look-textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .look-maker-buttons { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
 .look-busy { display: inline-flex; align-items: center; gap: 8px; margin-right: auto; color: var(--muted); font-size: 13px; }
-.look-spinner { width: 14px; height: 14px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: look-spin .8s linear infinite; }
-@keyframes look-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .look-spinner { animation-duration: 2.4s; } }
 .look-draft { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--accent); border-radius: var(--radius-lg, 12px); background: var(--hover); }
 .look-draft-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
 .look-draft-head strong { font-size: 15px; }

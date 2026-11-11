@@ -1,3 +1,4 @@
+import { Loading } from './Skeleton'
 import { useCallback, useState } from 'react'
 import { SelectMenu } from './SelectMenu'
 import { errorText } from './api'
@@ -85,8 +86,8 @@ export function GlobalCodexLevel({ api }: { api: Api }) {
   const { data, error, pending, save } = useCodexLevel(api)
   const value = typeof pending?.level === 'number' ? pending.level : data?.global
   return <section className="settings-group" aria-labelledby="settings-codex"><h3 id="settings-codex">Codex helper</h3>
-    {error && <p className="error" role="alert">{error}</p>}
-    {!data ? <p className="setting-note">Loading…</p> : <>
+    {data && error && <p className="error" role="alert">{error}</p>}
+    {!data ? error ? <p className="setting-note" role="alert">{error}</p> : <Loading className="setting-note" /> : <>
       <Stepper name="codex-level-global" legend="Level" levels={data.levels} value={value ?? 0} disabled={!!pending} onChange={level => void save({ level })} />
       <p className="setting-note">For every Claude session. Claude gets the rules with each prompt. A project can use its own level. Below level 5, UI design and prototyping stay with Claude.</p>
       <RunOptions run={(pending?.run as CodexRun | undefined) ?? data.run} models={data.models} disabled={!!pending} onChange={run => void save({ run })} />
@@ -101,8 +102,8 @@ export function ProjectCodexLevel({ api, project, panes }: { api: Api; project: 
   const override = typeof pending?.override === 'boolean' ? pending.override : !!data?.project?.override
   const level = typeof pending?.level === 'number' ? pending.level : data?.project?.level ?? data?.global ?? 0
   return <section className="settings-group" aria-labelledby="project-codex"><h3 id="project-codex">Codex level</h3>
-    {error && <p className="error" role="alert">{error}</p>}
-    {!data ? <p className="setting-note">Loading…</p> : <>
+    {data && error && <p className="error" role="alert">{error}</p>}
+    {!data ? error ? <p className="setting-note" role="alert">{error}</p> : <Loading className="setting-note" /> : <>
       <label className="switch-row"><span><strong>Use a project level</strong><small>{override ? `Claude here uses level ${level}, not the global level ${data.global}.` : `Claude here uses the global level ${data.global}.`}</small></span>
         <input type="checkbox" role="switch" checked={override} disabled={!!pending} onChange={event => void save({ project, override: event.target.checked, level })} /></label>
       <Stepper name="codex-level-project" legend="Level" levels={data.levels} value={level} disabled={!!pending || !override} onChange={next => void save({ project, override: true, level: next })} />

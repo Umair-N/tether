@@ -97,8 +97,16 @@
 }
 
 /* First paint */
-.home-placeholder { display: grid; gap: 8px; padding: 4px 0; }
-.home-placeholder span { height: 72px; border-radius: var(--radius-lg); background: var(--hover); opacity: .6; }
+/* Loading: placeholder cards in the real card classes (Skeleton.tsx bones). They stay neutral, not tinted as Needs you,
+   and do not answer the pointer. The head bones fade in with the board, after the same 180 ms. */
+.home-card-bone, .home-card-bone.needs { background: var(--surface); border-color: color-mix(in srgb, var(--text) 8%, var(--surface)); box-shadow: var(--home-light), var(--home-rest); pointer-events: none; }
+.home-card-bone.done { background: none; border-color: transparent; box-shadow: none; }
+.home-card-bone .home-open { cursor: default; }
+.home-head-bone { height: .62em; vertical-align: .05em; border-radius: 6px; }
+.home-head-bone, .home-summary-bone { animation: skeleton-in .24s ease-out .18s both; }
+.home-summary-bone span { display: inline-flex; align-items: center; min-height: var(--control-sm); padding: 0 8px; }
+.home-board.loading .home-group.needs .state-dot { background: var(--muted); }
+@media (prefers-reduced-motion: reduce) { .home-head-bone, .home-summary-bone { animation-duration: .01s; } }
 
 /* No agents, or no server */
 .home-blank { display: flex; flex-direction: column; }

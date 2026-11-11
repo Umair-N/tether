@@ -1,3 +1,4 @@
+import { Loading } from './Skeleton'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ArrowUp } from 'lucide-react'
 import { ApiError, errorText } from './api'
@@ -104,7 +105,7 @@ export function QuickReply({ api, pane, id, focus, onOpen, onSuccess }: Props) {
 
   return <div id={id} className="side-pin-quick" aria-busy={busy}>
     <fieldset className="side-pin-quick-controls" disabled={disabled}>
-      {error ? <p role="alert">{error}</p> : !data ? <p role="status">Loading…</p>
+      {error ? <p role="alert">{error}</p> : !data ? <Loading />
         : data.plan ? <div className="side-pin-plan"><p>{agent} wants you to review a plan.</p><button type="button" className="primary" disabled={disabled} onClick={onOpen}>Open chat</button></div>
         : <>
           {(approval || attention) && <ChoiceDock key={approval?.id ?? attention?.id ?? 'choice'} approval={approval} attention={attention} plan={data.plan} agent={agent} disabled={disabled}

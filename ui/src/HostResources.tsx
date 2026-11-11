@@ -1,3 +1,4 @@
+import { Loading } from './Skeleton'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Api } from './api'
 import { errorText } from './api'
@@ -68,6 +69,6 @@ export function HostResources({ api, terminal }: { api: Api; terminal: boolean }
       </tbody></table>
       {!data.groups.length && <p className="setting-note">No cgroup v2 groups found.</p>}
       {data.glances && <div className="glances-extras"><h3>Glances detected</h3>{data.processes?.length ? <ul>{data.processes.map(process => <li key={process.pid}><span>{process.name}</span><span>{percent(process.cpu_pct)}</span></li>)}</ul> : <p className="setting-note">No process samples available.</p>}</div>}
-    </> : !error && <p className="setting-note" role="status">Loading resources…</p>}
+    </> : !error && <Loading className="setting-note" label="Loading resources…" />}
   </section>
 }

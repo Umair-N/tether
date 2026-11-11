@@ -1,3 +1,4 @@
+import { Loading } from './Skeleton'
 // PDF pages in the Share preview pane. Each page draws when it scrolls near view, at the width of the pane.
 import { useEffect, useRef, useState } from 'react'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
@@ -52,7 +53,7 @@ export function PdfView({ url, name }: { url: string; name: string }) {
   if (failed) return <div className="sh-view-none"><span>This PDF could not be shown here. Use Download, or open it in a new tab.</span></div>
   return <div ref={box} className="sh-pdf" tabIndex={0} aria-label={`Pages of ${name}`} aria-busy={!doc}>
     {doc ? Array.from({ length: doc.numPages }, (_, i) => <Page key={i} doc={doc} n={i + 1} width={width} ratio={ratio} />)
-      : <div className="sh-view-none">Loading…</div>}
+      : <Loading className="sh-view-none" as="div" />}
     {doc && <p className="sh-pdf-count">{doc.numPages === 1 ? '1 page' : `${doc.numPages} pages`}</p>}
   </div>
 }

@@ -1,3 +1,4 @@
+import { Loading } from './Skeleton'
 import { VoiceField } from './VoiceField'
 import { useCallback, useEffect, useState } from 'react'
 import { SelectMenu } from './SelectMenu'
@@ -115,7 +116,7 @@ export function ProjectSheet({ api, session, group, mark, pin, onChanged, onClos
       <button type="button" className="icon-button" aria-label="Close" disabled={pending} onClick={onClose}><X /></button>
     </div>
     <p className="sheet-sub">{group ? `${session.name} › ${group.name}` : session.name}{project && ` · ${project.chars.toLocaleString()} / ${project.budget.toLocaleString()} characters`}</p>
-    {!project && !error && <p className="hint">Loading…</p>}
+    {!project && !error && <Loading className="hint" />}
     {error && <p className="error" role="alert">{error}{stale && <> <button type="button" className="link-button" onClick={() => { setError(''); setStale(false); void load() }}>Reload</button></>}</p>}
 
     {project && note ? <section className="settings-group project-note" aria-label={`Note ${note.name}`}>

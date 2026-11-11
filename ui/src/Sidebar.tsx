@@ -1,4 +1,6 @@
 import { BacklogButton } from './Backlog'
+import { SkeletonRows, Spinner } from './Skeleton'
+import { rememberCount, rememberedCount } from './skeletonCounts'
 import { needsYou, isDone } from './paneState'
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
@@ -374,6 +376,12 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
     ...bodyGroups(rest, prefs),
     ...(archived.length || hiddenTabs.length ? [{ key: 'archived' as const, title: 'Archived', items: archived }] : []),
   ]
+  // Keep each group's size for the next first paint of the skeleton.
+  const groupSizes = groups.map(group => `${group.key}:${group.items.length}`).join(',')
+  useEffect(() => {
+    if (loading || search) return
+    groupSizes.split(',').forEach(item => { const [key, count] = item.split(':'); rememberCount(`sidebar.${key}`, Number(count)) })
+  }, [loading, search, groupSizes])
   const closedAtFirst = (key: Section) => key === 'past' || key === 'archived'
   const toggle = (key: Section) => update(current => ({ collapsed: { ...current.collapsed, [key]: !(current.collapsed[key] ?? closedAtFirst(key)) } }))
   const isOpen = (key: Section) => !!search || !(prefs.collapsed[key] ?? closedAtFirst(key))
@@ -417,7 +425,8 @@ export function Sidebar({ api, sessions, selected, prefs, update, loading, error
         </div>
         {isOpen(group.key) && group.key === 'archived' && !group.items.length ? null : isOpen(group.key) && (group.items.length
           ? <SessionList items={group.items} reorder={reorder === group.key} selected={selected} prefs={prefs} update={update} onOpen={onOpen} onActions={onActions} onPaneActions={onPaneActions} onMove={ids => moveWithin(group.items, ids)} pinned={group.key === 'pinned'} slots={slots ?? []} canDrag={!!drag} api={api} carry={carry} onCarry={startCarry} onDrop={dropOn} onHold={holdStart} touchOver={touchOver} renaming={renameRow} onRenamed={renamed} marks={marks} onAddPane={onAddPane} />
-          : <p className="group-empty">{loading ? 'Finding sessions…' : group.key === 'terminals' ? 'No plain terminals. Create one with New session.' : 'Nothing here yet.'}</p>)}
+          : loading ? <SkeletonRows count={rememberedCount(`sidebar.${group.key}`, 2, 6)} label="Finding sessions…" className="sidebar-skeleton" meta={false} />
+          : <p className="group-empty">{group.key === 'terminals' ? 'No plain terminals. Create one with New session.' : 'Nothing here yet.'}</p>)}
         {isOpen(group.key) && group.key === 'archived' && hiddenTabs.length > 0 && <ul className="archived-tabs">{hiddenTabs.map(pane => <li key={pane.id}>
           <button type="button" className="archived-tab-open" onMouseEnter={clipTitle} onClick={() => onOpen(pane)} onContextMenu={event => { event.preventDefault(); onPaneActions(pane, anchorOf(event)) }}>{dot(status([pane], prefs.seen, selected))}<span className="pane-child-name">{[paneTitle(pane), shownIndex(pane)].filter(Boolean).join(' ')} · {sessionName(pane)}</span></button>
           <button type="button" className="icon-button archived-tab-restore" aria-label={`Restore ${paneTitle(pane)}`} title="Restore" onClick={() => onRestoreTab(pane)}><ArchiveRestore size={16} /></button>
@@ -668,13 +677,13 @@ function PastChats({ api, search, showPaths, onPick, sessions, drag, onCarry, on
     {failure && <p className="error cp-error" role="alert">{failure}</p>}
     {removed.bar}
     {error ? <div className="sidebar-error" role="alert">{error}<button onClick={() => void refresh()}>Retry</button></div>
-      : loading && !chats.length ? <p className="group-empty">Loading past chats…</p>
+      : loading && !chats.length ? <SkeletonRows count={5} label="Loading past chats…" className="past-skeleton" />
       : !chats.length ? <p className="group-empty">{filtered ? 'No past chats match.' : 'No past chats found.'}{filtered && <> <button type="button" className="link-button" onClick={() => { setText(''); setAgent('all'); setDir('') }}>Clear filters</button></>}</p>
       : <ul className="session-list past-list">{chats.map(chat => <li key={chat.agent + chat.id}><div className="session-row"><button className="session-main" {...dragProps(chat)} onClick={() => onPick(chat)} onTouchStart={event => onHold(event, carryFor(chat), chat.title || 'Untitled chat', () => onPick(chat))}>
         <span className="session-icon" title={agentNames[chat.agent]}><AgentIcon agent={chat.agent} size={16} /><span className="visually-hidden">{agentNames[chat.agent]}: </span></span>
         <span className="session-text"><span className="session-title">{chat.title || 'Untitled chat'}</span><span className="past-meta"><span>{chat.live ? 'Open now · ' : ''}{ago(chat.time)}</span>{showPaths && chat.dir && <span className="session-folder"><bdi dir="ltr">{chat.dir}</bdi></span>}</span></span>
       </button>{!chat.live && <button type="button" className="row-remove" aria-label={`Remove ${chat.title || 'this chat'} from the list`} title="Remove from the list" onClick={() => removed.remove(chat)}><X size={14} aria-hidden="true" /></button>}</div></li>)}</ul>}
-    {next !== null && !error && <button type="button" className="past-more" disabled={loadingMore} onClick={() => void loadMore().catch(() => undefined)}>{loadingMore ? 'Loading…' : 'Show older chats'}</button>}
+    {next !== null && !error && <button type="button" className="past-more" disabled={loadingMore} onClick={() => void loadMore().catch(() => undefined)}>{loadingMore ? <><Spinner /> Loading…</> : 'Show older chats'}</button>}
   </>
 }
 

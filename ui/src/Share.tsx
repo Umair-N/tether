@@ -1,3 +1,4 @@
+import { Bone, Loading, Skeleton } from './Skeleton'
 // Share: your own file store in Tether. Library grid by day, a preview pane, an upload queue and a "From agents" strip.
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, Bot, Check, ChevronsRight, Download, ExternalLink, File, FileText, Film, Image as ImageIcon, MessageSquarePlus, Music, Pencil, Plus, RotateCcw, Search, Trash2, TriangleAlert, Upload, X } from 'lucide-react'
@@ -126,9 +127,9 @@ function Preview({ file, view }: { file: ShareFile; view: (file: ShareFile) => v
     <img src={rawUrl(file.id)} alt={file.name} /></button>
   if (file.kind === 'video') return <video className="sh-view-video" src={rawUrl(file.id)} poster={file.has_thumb ? thumbUrl(file) : undefined} controls playsInline preload="metadata" />
   if (file.kind === 'audio') return <div className="sh-view-none"><Music size={40} strokeWidth={1.4} aria-hidden="true" /><audio controls preload="metadata" src={rawUrl(file.id)} /></div>
-  if (file.kind === 'text') return text == null ? <div className="sh-view-none">Loading…</div>
+  if (file.kind === 'text') return text == null ? <Loading className="sh-view-none" as="div" />
     : <pre className="sh-view-text" tabIndex={0}>{text || 'This file is empty.'}</pre>
-  if (file.kind === 'pdf') return <Suspense fallback={<div className="sh-view-none">Loading…</div>}><PdfView url={rawUrl(file.id)} name={file.name} /></Suspense>
+  if (file.kind === 'pdf') return <Suspense fallback={<Loading className="sh-view-none" as="div" />}><PdfView url={rawUrl(file.id)} name={file.name} /></Suspense>
   return <div className="sh-view-none"><File size={40} strokeWidth={1.4} aria-hidden="true" />{ext(file.name) && <b>{ext(file.name)}</b>}<span>No preview. Download it to open.</span></div>
 }
 
@@ -396,7 +397,8 @@ export function Share({ wide, onAddToMessage }: { wide: boolean; onAddToMessage?
             <button type="button" className="sh-check" aria-label={`Select ${file.name}`} aria-pressed={picked.includes(file.id)} onClick={() => toggle(file.id)}><span><Check size={14} strokeWidth={3} /></span></button>
           </li>)}</ul>
         </section>)}
-        {loading && !files.length && <p className="sh-empty">Loading…</p>}
+        {loading && !files.length && <Skeleton label="Loading files…" className="sh-skeleton"><span className="sh-day"><Bone w="5em" /></span>
+          <ul className="sh-grid" aria-hidden="true">{Array.from({ length: 6 }, (_, index) => <li key={index}><Bone className="sh-tile" /></li>)}</ul></Skeleton>}
         {error && <p className="sh-empty error" role="alert">{error} <button type="button" className="link-button" onClick={refresh}>Try again</button></p>}
         {!loading && !error && !files.length && <p className="sh-empty">{empty}</p>}
         {next && <div ref={more} className="sh-more" aria-hidden="true" />}

@@ -113,7 +113,7 @@ function taskSetup(env) {
     react: s.h.hooks, './api': { errorText: error => error.message },
     './hooks': { useModal: () => ({}), usePopover: () => ({}) }, './Composer': { uploadFile() { throw new Error('Unexpected upload') } },
     './ChatPicker': { ChatPicker: () => null }, './Sidebar': { AgentIcon: () => null, agentNames: { claude: 'Claude', codex: 'Codex' } },
-    './Worktree': { WorktreeField: () => null },
+    './Worktree': { WorktreeField: () => null }, './Skeleton': { Spinner: () => null },
     './keys': { keyLabel: () => 'Alt+V' }, './useDictation': { useDictation: s.useDictation }, './NewTask.css': {},
   }, env.globals)
   const props = {

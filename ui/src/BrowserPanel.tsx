@@ -1,3 +1,4 @@
+import { Spinner } from './Skeleton'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { AppWindow, ArrowLeft, ArrowRight, Bot, Check, ChevronDown, Crosshair, FlaskConical, HatGlasses, Keyboard, KeyRound, Monitor, PenLine, PictureInPicture2, Plus, RotateCw, Send, Smartphone, Square, Tablet, Trash2, Type, UserRound, X } from 'lucide-react'
@@ -737,7 +738,7 @@ function BrowserView({ api: baseApi, pane, active, onPopOut, which, onSwitch }: 
           onChange={event => setLabel({ ...label, text: event.target.value })} onBlur={commitLabel}
           onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); commitLabel() } else if (event.key === 'Escape') { event.stopPropagation(); setLabel(null) } }} />}
       </div>
-      {!frame && tab && <p className="browser-wait">{live ? 'Loading the page…' : 'Connecting…'}</p>}
+      {!frame && tab && <p className="browser-wait"><span><Spinner /> {live ? 'Loading the page…' : 'Connecting…'}</span></p>}
       <textarea ref={keysRef} className="browser-keys" aria-label="Keys for the page. Press Escape twice to leave." defaultValue={SENTINEL} autoCapitalize="off" autoCorrect="off" spellCheck={false}
         onFocus={() => setTyping(true)} onBlur={() => { setTyping(false); const events = releases(); if (events.length) push(...events) }} onKeyDown={onKeyDown} onKeyUp={onKeyUp}
         onInput={event => { if (!(event.nativeEvent as InputEvent).isComposing) syncText() }} onCompositionEnd={syncText}

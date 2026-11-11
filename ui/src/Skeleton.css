@@ -1,0 +1,61 @@
+/* Loading placeholders (Skeleton.tsx). One quiet tone, one slow light sweep. The bone colour mixes from --text over
+   transparency, so it reads on the flat themes, dark mode and glass alike. */
+.bone {
+  --bone: color-mix(in srgb, var(--text) 8%, transparent); --bone-hi: #ffffffa6;
+  position: relative; display: inline-block; vertical-align: middle; flex: none; width: 100%; max-width: 100%; height: .75em;
+  border-radius: 4px; background: var(--bone); overflow: hidden;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .bone { --bone-hi: #ffffff12; } }
+:root[data-theme="dark"] .bone { --bone-hi: #ffffff12; }
+.bone.round { border-radius: 50%; }
+/* The sweep moves by transform only, so the compositor runs it without layout or paint. */
+.bone::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, var(--bone-hi), transparent); transform: translateX(-100%); animation: bone-sweep 1.6s cubic-bezier(.4, 0, .2, 1) infinite; }
+@keyframes bone-sweep { 60%, 100% { transform: translateX(100%); } }
+
+/* A fast load must not flash: the area holds its space at once and fades in only after 180 ms. */
+.skeleton, .loading-note { animation: skeleton-in .24s ease-out .18s both; }
+@keyframes skeleton-in { from { opacity: 0; } }
+.sk-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+.loading-note .spinner { display: inline-block; margin-right: 7px; vertical-align: -2px; color: var(--muted); }
+.spinner { flex: none; animation: spin .9s linear infinite; }
+
+/* Generic rows: the sidebar and picker rows (icon, title, one meta line). */
+.sk-rows ul { list-style: none; margin: 0; padding: 0; }
+.sk-row { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 10px; }
+.sk-icon { border-radius: 5px; }
+.sk-text { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 1px; }
+.sk-title { font-size: 14px; line-height: 1.45; }
+.sk-meta { font-size: 12px; line-height: 1.45; }
+
+/* Chat history: a question on the right, an answer as lines of text on the left. */
+.sk-chat .sk-ask { display: block; width: 46%; min-width: 140px; height: 46px; margin: 16px 0 28px auto; border-radius: 18px 18px 5px 18px; }
+.sk-chat .sk-answer { display: grid; gap: 0; margin: 24px 0 32px; font-size: var(--chat-text); line-height: 1.6; }
+
+@media (prefers-reduced-motion: reduce) {
+  .bone::after { display: none; }
+  .skeleton, .loading-note { animation-duration: .01s; }
+  .spinner { animation-duration: 2.4s; }
+}
+
+/* Sidebar: session rows are one line, 36px; past chats carry a meta line. */
+.sidebar-skeleton .sk-row { min-height: 36px; }
+.past-skeleton .sk-row { min-height: 46px; }
+button > .spinner { vertical-align: -2px; }
+
+/* Pickers and file lists: each skeleton row takes the height and inset of the real row it stands in for. */
+.cp-skeleton .sk-row { gap: 9px; min-height: 44px; padding: 5px 6px; }
+.cp-skeleton .sk-title { font-size: 13.5px; line-height: 1.3; }
+.cp-skeleton .sk-meta { font-size: 11.5px; line-height: 1.35; }
+.xp-skeleton .sk-row { gap: 14px; min-height: 60px; padding: 8px 16px; border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+.xp-skeleton .sk-title { font-size: 15px; }
+.fx-skeleton .sk-row { gap: 12px; min-height: 38px; padding: 0 12px 0 15px; border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent); }
+.files-skeleton .sk-row { gap: 6px; min-height: 28px; padding: 0 6px 0 25px; }
+.files-skeleton .sk-title { font-size: 13px; }
+@media (pointer: coarse) {
+  .fx-skeleton .sk-row { min-height: 48px; }
+  .files-skeleton .sk-row { min-height: 40px; }
+}
+/* Share library: a day heading and square tiles, the same grid as the real library. */
+.sh-skeleton .sh-day { display: block; }
+.sh-skeleton .sh-tile { display: block; height: 100%; border-radius: var(--radius-sm); }

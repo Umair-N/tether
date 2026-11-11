@@ -1,3 +1,4 @@
+import { Loading } from './Skeleton'
 import { VoiceField } from './VoiceField'
 import { PermissionsPanel } from './Permissions'
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
@@ -217,7 +218,7 @@ export function LiveSheet({ api, pane, show, taskDetails, onClose, onTerminal }:
     <div className="sheet-heading"><h2 id="live-title">{show === 'goal' ? 'Goal' : 'Background tasks'}</h2><button type="button" className="icon-button" aria-label="Close" onClick={onClose}><X /></button></div>
     {!hookTasks && error && <p className="live-empty" role="alert">Could not load: {error}</p>}
     {stopError && <p className="live-empty" role="alert">{stopError}</p>}
-    {!hookTasks && !state && !error && <p className="live-empty">Loading…</p>}
+    {!hookTasks && !state && !error && <Loading className="live-empty" />}
     {state && show === 'goal' && (goal ? <div className="live-goal">
       <p className="live-label">Condition</p>
       <p className="live-condition">{goal.condition}</p>

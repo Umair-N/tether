@@ -18,6 +18,8 @@ import { age } from './needs'
 import type { Session } from './Sidebar'
 import { AgentIcon, agentNames, chatTitle, sessionName, shownIndex } from './Sidebar'
 import { BacklogNews } from './Backlog'
+import { Bone } from './Skeleton'
+import { rememberCount, rememberedCount } from './skeletonCounts'
 import './Home.css'
 
 // Home answers one question: what do my agents need, across every session? Needs you, Working and Done.
@@ -35,6 +37,26 @@ const headline = (count: number, asks: number) => count ? `${count} agent${count
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
 const groupId = (key: GroupKey) => `home-group-${key}`
 const focusRow = (id: string) => document.querySelector<HTMLButtonElement>(`.home [data-pane="${CSS.escape(id)}"] .home-open`)?.focus()
+
+// Before the first list lands, each group shows as many placeholder cards as it had last time, so the board keeps its shape.
+const FIRST_COUNT: Record<GroupKey, number> = { needs: 1, working: 2, done: 2 }
+const BONE_WIDTHS = ['68%', '54%', '76%', '60%']
+
+/** A placeholder card with the real card's lines, in the real classes, so heights match and nothing jumps when data lands. */
+function CardBone({ group, index }: { group: GroupKey; index: number }) {
+  return <li className={`home-card ${group} home-card-bone`}><div className="home-open">
+    <span className="home-card-top"><span className="home-icon"><Bone w={14} h={14} round /></span><span className="home-source"><Bone w="40%" /></span><span className="home-time"><Bone w={26} /></span></span>
+    <span className="home-title"><Bone w={BONE_WIDTHS[index % BONE_WIDTHS.length]} /></span>
+    <span className="home-meta"><Bone w="32%" /></span>
+    {group !== 'done' && <span className="home-status"><Bone w={group === 'needs' ? '86%' : '48%'} /></span>}
+  </div></li>
+}
+
+function GroupBones({ group }: { group: GroupKey }) {
+  const count = rememberedCount(`home.${group}`, FIRST_COUNT[group])
+  if (!count) return <p className="home-empty" aria-hidden="true"><Bone w="38%" /></p>
+  return <ul aria-hidden="true">{Array.from({ length: count }, (_, index) => <CardBone key={index} group={group} index={index} />)}</ul>
+}
 
 /** The time on a card. The first value comes from the layout effect, and Home's one interval keeps it current. */
 function Timer({ kind, at }: { kind: string; at: number }) {
@@ -148,6 +170,13 @@ export function Home({ api, groups: all, asks = [], sessions = [], sort, hasAgen
     return () => clearInterval(timer)
   }, [])
 
+  // Keep each group's size for the next first paint.
+  const counts = GROUPS.map(group => groups[group.key].length).join(',')
+  useEffect(() => {
+    if (!loaded) return
+    counts.split(',').forEach((count, index) => rememberCount(`home.${GROUPS[index].key}`, Number(count)))
+  }, [loaded, counts])
+
   // A card can leave under the focus: read, answered or closed. Focus then moves to the card now in that place.
   const focused = useRef<{ element: HTMLElement; at: number } | null>(null)
   const cardKeys = cards.map(card => `${card.pane.id}:${card.kind}`).join(',')
@@ -184,10 +213,11 @@ export function Home({ api, groups: all, asks = [], sessions = [], sort, hasAgen
     <div className="home-inner">
       <header className="home-head">
         <button type="button" className="icon-button mobile-menu" aria-label="Open sessions" onClick={onMenu}><Menu /></button>
-        <h1 tabIndex={-1} aria-live="polite">{loaded ? headline(groups.needs.length, asks.length) : 'Finding your agents…'}</h1>
+        <h1 tabIndex={-1} aria-live="polite">{loaded ? headline(groups.needs.length, asks.length) : <><Bone w="9.5em" className="home-head-bone" /><span className="visually-hidden">Finding your agents…</span></>}</h1>
         {loaded && asks.length > 0 && <OldestButton items={asks} sessions={sessions} onOpen={onOpen} />}
-        {loaded && <button type="button" className="secondary home-new" onClick={onNew} aria-label="New session" title="New session"><Plus size={16} /><span>New session</span></button>}
+        <button type="button" className="secondary home-new" onClick={onNew} aria-label="New session" title="New session"><Plus size={16} /><span>New session</span></button>
         {loaded && cards.length > 0 && <p className="home-scope">{plural(cards.length, 'active agent')} across {plural(sessionCount, 'session')}</p>}
+        {!loaded && <div className="home-summary home-summary-bone" aria-hidden="true">{GROUPS.map(group => <span key={group.key}><Bone w={group.key === 'needs' ? 74 : 62} /></span>)}</div>}
         {loaded && <div className="home-summary" role="group" aria-label="Jump to a group">
           {asks.length > 0 && <button type="button" onClick={() => document.getElementById('home-group-asks')?.scrollIntoView({ block: 'start' })}><Hand size={13} aria-hidden="true" className="home-asks-mark" /><b>{asks.length}</b> Waiting on you</button>}
           {GROUPS.map(group => <button key={group.key} type="button" onClick={() => document.getElementById(groupId(group.key))?.scrollIntoView({ block: 'start' })}>
@@ -197,7 +227,7 @@ export function Home({ api, groups: all, asks = [], sessions = [], sort, hasAgen
       </header>
       {loaded && onBacklog && <BacklogNews api={api} onOpen={onBacklog} />}
       {error && loaded && <p className="home-stale" role="alert"><span>Tether cannot refresh this list. {error}</span><button type="button" className="ghost sm" onClick={onRetry}>Try again</button></p>}
-      <div className={`home-board${loaded ? '' : ' loading'}`} aria-busy={!loaded}>
+      <div className={`home-board${loaded ? '' : ' loading skeleton'}`} aria-busy={!loaded}>
         {loaded && asks.length > 0 && <AsksGroup items={asks} sessions={sessions} sort={sort} onOpen={onOpen} />}
         {GROUPS.map(group => {
           const items = groups[group.key]
@@ -207,7 +237,7 @@ export function Home({ api, groups: all, asks = [], sessions = [], sort, hasAgen
               {loaded && <span className="home-count">{items.length}</span>}
               {group.key === 'done' && items.length > 1 && <button type="button" className="ghost sm home-mark-all" onClick={() => onMarkRead(items.map(card => card.pane.id))}>Mark all read</button>}
             </div>
-            {!loaded ? <div className="home-placeholder" aria-hidden="true"><span /><span /></div>
+            {!loaded ? <GroupBones group={group.key} />
               : items.length ? <ul>{items.map(card => <Card key={`${card.pane.id}:${card.kind}${card.ask ?? ''}`} api={api} card={card} group={group.key} waiting={busy === card.pane.id} error={errors[card.pane.id]}
                 onOpen={onOpen} onAnswer={answer} onFail={fail} onKey={event => onKey(event, card)} onMarkRead={() => onMarkRead([card.pane.id])} />)}</ul>
               : <p className="home-empty">{group.empty}</p>}

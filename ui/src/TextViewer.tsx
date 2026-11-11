@@ -1,3 +1,4 @@
+import { Loading } from './Skeleton'
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { FolderOpen, Pencil, X } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
@@ -192,8 +193,8 @@ export function TextViewer({ file, close, onShow }: { file: TextFile | null; clo
     </div>}
     <div className="text-viewer-body" ref={body} tabIndex={edit ? undefined : 0} aria-label={edit ? undefined : `Contents of ${name}`}>
       {current?.error || current?.unreachable ? <p className="text-viewer-note" role="alert">{current.unreachable ? `Cannot reach ${host}.` : current.error}</p>
-        : !current ? <p className="text-viewer-note">Loading…</p>
-        : edit ? <Suspense fallback={<p className="text-viewer-note">Loading editor…</p>}>
+        : !current ? <Loading className="text-viewer-note" />
+        : edit ? <Suspense fallback={<Loading className="text-viewer-note" label="Loading editor…" />}>
           {edit.view === 'rich'
             ? <RichEditor key={`r${edit.mount}`} initial={edit.seed} path={file.path} handleRef={handle} onDirty={onDirty} onSave={onSave} />
             : <SourceEditor key={`s${edit.mount}`} initial={edit.seed} path={file.path} line={edit.mount === 0 ? target : undefined} handleRef={handle} onDirty={onDirty} onSave={onSave} />}

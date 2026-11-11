@@ -1,3 +1,4 @@
+import { SkeletonRows } from './Skeleton'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronRight, File, Folder, FolderOpen, FolderSearch } from 'lucide-react'
 import { errorText } from './api'
@@ -90,7 +91,7 @@ export function FilesPanel({ api, pane, folder, active }: PanelProps) {
     {top && <button type="button" className="files-panel-open" onClick={() => window.dispatchEvent(new CustomEvent('tether:open-files', { detail: { path: top.folder } }))}>
       <FolderSearch size={14} aria-hidden="true" />Open in Files
     </button>}
-    {!top ? (failed[''] ? <p className="repo-note" role="alert">{failed['']}</p> : <p className="repo-note" role="status">Loading files…</p>)
+    {!top ? (failed[''] ? <p className="repo-note" role="alert">{failed['']}</p> : <SkeletonRows count={8} label="Loading files" className="files-skeleton" icon={14} meta={false} />)
       : !top.entries.length ? <div className="repo-empty calm"><p><strong>This folder is empty</strong>Files the agent makes here show up on their own.</p></div>
       : <ul ref={tree} role="tree" aria-label={`Files in ${top.folder}`} className="file-tree" onKeyDown={onKeyDown}>
         {rows.map(row => {

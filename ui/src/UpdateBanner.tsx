@@ -1,5 +1,6 @@
+import { Spinner } from './Skeleton'
 import { useSyncExternalStore } from 'react'
-import { LoaderCircle, X } from 'lucide-react'
+import { X } from 'lucide-react'
 import { errorText, request } from './api'
 
 interface Run { state: 'running' | 'failed' | 'done'; target: string; error?: string }
@@ -107,7 +108,7 @@ export function UpdateBanner() {
   }
   if (active?.state === 'running') {
     return <div className="release-update-banner" role="status">
-      <LoaderCircle size={14} className="task-spin" aria-hidden="true" />
+      <Spinner size={14} />
       <span>Updating to {label(active.target)}. Chats reconnect after the restart.</span>
     </div>
   }

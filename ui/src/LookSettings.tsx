@@ -1,3 +1,4 @@
+import { Spinner } from './Skeleton'
 import { VoiceField } from './VoiceField'
 import { useEffect, useRef, useState } from 'react'
 import { ApiError, type Api } from './api'
@@ -114,7 +115,7 @@ function LayoutMaker({ api, draft, setDraft, focus, current, onSaved, onTry }: {
           onKeyDown: event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void make() } } }} />
       <div className="look-maker-buttons">
         {busy ? <>
-          <span className="look-busy" role="status"><span className="look-spinner" aria-hidden="true" />Making the layout. This takes about a minute.</span>
+          <span className="look-busy" role="status"><Spinner />Making the layout. This takes about a minute.</span>
           <button type="button" className="secondary" onClick={() => job.current?.abort()}>Stop</button>
         </> : <button type="submit" className="primary" disabled={voiceBusy || !prompt.trim()}>{draft ? 'Change the draft' : 'Make layout'}</button>}
       </div>
@@ -300,7 +301,7 @@ function Photos({ api, look, prefs, set, update }: { api: Api; look: Look; prefs
         field={{ className: 'look-textarea', rows: 2, maxLength: 1000, disabled: busy === 'make', 'aria-label': 'Describe an image', placeholder: 'Make an image, for example: misty pine forest at dawn' }} />
       <div className="look-maker-buttons">
         {busy === 'make' ? <>
-          <span className="look-busy" role="status"><span className="look-spinner" aria-hidden="true" />Codex is making the image. This takes up to 2 minutes. You can close Settings.</span>
+          <span className="look-busy" role="status"><Spinner />Codex is making the image. This takes up to 2 minutes. You can close Settings.</span>
           <button type="button" className="secondary" onClick={() => backgroundJob()?.controller.abort()}>Stop waiting</button>
         </> : wish.trim() ? <ConfirmButton disabled={voiceBusy} className="primary" label="Make image" confirm="Uses Codex usage. Make it?" onConfirm={make} /> : <button type="button" className="primary" disabled>Make image</button>}
       </div>

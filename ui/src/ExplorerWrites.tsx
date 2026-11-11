@@ -1,3 +1,4 @@
+import { Loading } from './Skeleton'
 import { useEffect, useState } from 'react'
 import { ArrowUp, Check, Copy, Download, FolderOpen, X } from 'lucide-react'
 import { errorText } from './api'
@@ -117,7 +118,7 @@ export function FolderPicker({ api, move, names, start, sources, onCancel, onPic
     </div>
     <ul className="fx-pick-list" aria-label={`Folders in ${baseName(folder)}`} aria-busy={!shown || undefined}>
       {shown?.error ? <li className="error" role="alert">{shown.error}</li>
-        : !shown ? <li className="fx-pick-note">Loading…</li>
+        : !shown ? <Loading as="li" className="fx-pick-note" />
         : !shown.folders?.length ? <li className="fx-pick-note">No folders here.</li>
         : shown.folders.map(name => <li key={name}><button type="button" onClick={() => setFolder(folder === '/' ? `/${name}` : `${folder}/${name}`)}><FolderOpen size={15} aria-hidden="true" />{name}</button></li>)}
     </ul>

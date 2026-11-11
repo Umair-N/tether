@@ -1,5 +1,6 @@
+import { Spinner, SkeletonRows } from './Skeleton'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowRightToLine, LoaderCircle, Search, TerminalSquare, X } from 'lucide-react'
+import { ArrowRightToLine, Search, TerminalSquare, X } from 'lucide-react'
 import { ApiError, errorText } from './api'
 import type { Api, ChatAgent, HistoryData, Pane, PastChat, SessionsData } from './api'
 import { usePolling } from './hooks'
@@ -204,18 +205,18 @@ export function ChatPicker({ api, exclude, here, onChat, onTab, onMove, disabled
           <span className="cp-text"><span className="cp-title">{paneTitle(pane)}</span><span className="cp-meta"><span className="cp-session"><TerminalSquare size={11} aria-hidden="true" />{pane.label}</span>{pane.dir && <bdi dir="ltr">{pane.dir}</bdi>}</span></span>
           <span className={`cp-end ${pane.state === 'Working' ? 'working' : needsYou(pane.state) ? 'needs' : ''}`}>{needsYou(pane.state) ? 'Needs you' : pane.state === 'Working' ? 'Working' : 'Open'}</span>
         </button>
-        {onMove && pane.tmux_session !== here && <button type="button" className="cp-move" disabled={!!busy} aria-label={`Move ${paneTitle(pane)} here`} title="Move this tab here" onClick={() => void run(`move-${pane.id}`, () => onMove(pane))}>{busy === `move-${pane.id}` ? <LoaderCircle size={14} className="task-spin" /> : <ArrowRightToLine size={14} />}<span>Move here</span></button>}
+        {onMove && pane.tmux_session !== here && <button type="button" className="cp-move" disabled={!!busy} aria-label={`Move ${paneTitle(pane)} here`} title="Move this tab here" onClick={() => void run(`move-${pane.id}`, () => onMove(pane))}>{busy === `move-${pane.id}` ? <Spinner /> : <ArrowRightToLine size={14} />}<span>Move here</span></button>}
       </li>)}</ul></section>}
       {groups.map(group => <section key={group.label}><h3>{group.label}</h3><ul>{group.chats.map(chat => { const key = chat.agent + chat.id; return <li key={key}>
         <button type="button" className="cp-main" disabled={!!busy} title={chat.title} onClick={() => void run(key, () => onChat(chat))}>
           <span className="cp-icon" title={agentNames[chat.agent]}><AgentIcon agent={chat.agent} size={15} /></span>
           <span className="cp-text"><span className="cp-title">{chat.title || 'Untitled chat'}</span><span className="cp-meta"><span className="cp-agent">{agentNames[chat.agent]}</span>{chat.dir && <bdi dir="ltr">{chat.dir}</bdi>}</span></span>
-          <span className="cp-end">{busy === key ? <LoaderCircle size={14} className="task-spin" aria-label="Opening" /> : ago(chat.time)}</span>
+          <span className="cp-end">{busy === key ? <Spinner label="Opening" /> : ago(chat.time)}</span>
         </button>
         <button type="button" className="row-remove" disabled={!!busy} aria-label={`Remove ${chat.title || 'this chat'} from the list`} title="Remove from the list" onClick={() => removed.remove(chat)}><X size={14} aria-hidden="true" /></button>
       </li> })}</ul></section>)}
       {history.next !== null && source !== 'tabs' && <button type="button" className="cp-more" disabled={history.loadingMore} onClick={() => void history.loadMore().catch(error => setFailure(errorText(error)))}>{history.loadingMore ? 'Loading…' : 'Show older chats'}</button>}
-      {(history.loading || tabs.loading) && !shownTabs.length && !history.chats.length && <p className="cp-empty" role="status">Loading…</p>}
+      {(history.loading || tabs.loading) && !shownTabs.length && !history.chats.length && <SkeletonRows count={6} label="Loading chats" className="cp-skeleton" />}
       {empty && <p className="cp-empty">{filtered ? 'Nothing matches.' : 'No chats or tabs yet.'}{filtered && <> <button type="button" className="link-button" onClick={() => { setText(''); setDir(''); setSource('all') }}>Clear filters</button></>}</p>}
     </div>
   </div>

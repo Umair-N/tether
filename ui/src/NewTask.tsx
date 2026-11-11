@@ -1,5 +1,6 @@
+import { Spinner } from './Skeleton'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowUp, LoaderCircle, Mic, Paperclip, Square, X } from 'lucide-react'
+import { ArrowUp, Mic, Paperclip, Square, X } from 'lucide-react'
 import { errorText } from './api'
 import type { Api, Pane } from './api'
 import { useModal, usePopover } from './hooks'
@@ -127,7 +128,7 @@ export function NewTask({ api, pane, at, onClose, onEmpty, onCreated, onOpen, on
             {file.url ? <img className="task-thumb" src={file.url} alt="" /> : <Paperclip size={13} />}<span>{file.name}</span>
             <button type="button" aria-label={`Remove ${file.name}`} disabled={pending} onClick={() => remove(file)}><X size={14} /></button>
           </li>)}
-          {uploading > 0 && <li className="chip task-uploading"><LoaderCircle size={13} className="task-spin" /><span>Uploading…</span></li>}
+          {uploading > 0 && <li className="chip task-uploading"><Spinner size={13} /><span>Uploading…</span></li>}
         </ul>}
         <div className="task-foot">
           <div className="task-agents" role="radiogroup" aria-label="Agent">
@@ -158,7 +159,7 @@ export function NewTask({ api, pane, at, onClose, onEmpty, onCreated, onOpen, on
       </div>}
       {(error || dictation.error) && <p className="error task-error" role="alert">{error || dictation.error}</p>}
       <button className="primary task-create" disabled={pending || uploading > 0}>
-        <span>{pending ? `Starting ${agentNames[agent]}…` : 'Create'}</span>{pending ? <LoaderCircle size={16} className="task-spin" /> : <ArrowUp size={16} />}
+        <span>{pending ? `Starting ${agentNames[agent]}…` : 'Create'}</span>{pending ? <Spinner size={16} /> : <ArrowUp size={16} />}
       </button>
     </form>}
   </dialog>

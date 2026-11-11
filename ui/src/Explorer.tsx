@@ -1,3 +1,4 @@
+import { Loading, SkeletonRows } from './Skeleton'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { ArrowDown, ArrowUp, AtSign, BookMarked, ChevronLeft, ChevronRight, Copy, CopyPlus, Download, File, Folder, FolderInput, FolderOpen, FolderPlus, Image as ImageIcon, LayoutGrid, List, Lock, MessageCircle, MoreHorizontal, Package, Pencil, Plus, RotateCw, Search, SquareTerminal, Trash2, Upload, X } from 'lucide-react'
@@ -592,6 +593,7 @@ export function Explorer({ api, panes, pane, target, onTarget, onAddToMessage, o
                   <span role="gridcell" className="fx-c-more"><button type="button" data-cell tabIndex={-1} className="fx-ib" aria-label={`Options for ${row.name}`} title="Options" onClick={event => openMenu(event, row)}><MoreHorizontal size={15} /></button></span>
                 </div>
               })}
+              {loadingList && !shownRows.length && <SkeletonRows count={8} label="Loading files" className="fx-skeleton" icon={18} meta={false} />}
               {!loadingList && !shownRows.length && <div className="fx-empty">{emptyText}</div>}
             </div>
           : <div className="fx-grid" role="listbox" aria-label={search ? `Search results in ${folderName}` : `Contents of ${folderName}`} aria-multiselectable="true">
@@ -607,6 +609,7 @@ export function Explorer({ api, panes, pane, target, onTarget, onAddToMessage, o
                     : <span className="fx-tile-name">{row.git && <span className="fx-git" aria-label={gitText(row.git)}>{row.git}</span>}<span>{row.name}</span></span>}
                 </div>
               })}
+              {loadingList && !shownRows.length && <SkeletonRows count={8} label="Loading files" className="fx-skeleton" icon={18} meta={false} />}
               {!loadingList && !shownRows.length && <div className="fx-empty">{emptyText}</div>}
             </div>}
         </div>
@@ -684,7 +687,7 @@ function Details({ row, detail, onOpen, onCopy, add }: { row: Row; detail: { sta
       <h2 className="fx-details-name">{row.name}</h2>
       <p className="fx-sub">{kindLabel(row)} · {size}</p>
     </div>
-    {!row.dir && (!detail || !preview ? <div className="fx-preview fx-preview-note" role="status">Loading preview…</div>
+    {!row.dir && (!detail || !preview ? detail?.error ? null : <Loading className="fx-preview fx-preview-note" label="Loading preview…" />
       : preview.kind === 'text' ? <div className="fx-preview fx-code" tabIndex={0} aria-label={`Preview of ${row.name}`}>
           {preview.lines.length ? preview.lines.map((line, at) => <div key={at} className="fx-line"><span className="fx-ln" aria-hidden="true">{at + 1}</span><span className="fx-lt">{line || ' '}</span></div>)
             : <p className="fx-preview-note">This file is empty.</p>}

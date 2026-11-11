@@ -1,3 +1,4 @@
+import { Loading } from './Skeleton'
 import { useCallback, useState } from 'react'
 import { Gauge, Terminal } from 'lucide-react'
 import { TextMessagePartProvider } from '@assistant-ui/react'
@@ -27,7 +28,7 @@ export function TasksPanel({ api, pane }: PanelBodyProps) {
     <p className="panel-for">For {paneTitle(pane)}</p>
     {!claude ? <p className="live-empty">Background tasks show for Claude chats. This pane runs {agentNames[pane.agent]}.</p>
       : error ? <p className="live-empty" role="alert">Could not load: {error}</p>
-      : !data ? <p className="live-empty" role="status">Loading…</p>
+      : !data ? <Loading className="live-empty" />
       : !tasks.length ? <p className="live-empty">No background tasks in this conversation.</p>
       : <ul className="live-tasks">{tasks.map(task => <li key={task.id}>
           <p className="live-task-title">{task.kind === 'monitor' ? <Gauge size={15} /> : <Terminal size={15} />}<strong>{task.title || task.command}</strong></p>
@@ -51,7 +52,7 @@ export function PlanPanel({ api, pane }: PanelBodyProps) {
       : null}
     {plan ? <p className="live-meta">Approve it or ask for changes in the chat.</p>
       : error ? <p className="live-empty" role="alert">Could not load: {error}</p>
-      : !data ? <p className="live-empty" role="status">Loading…</p>
+      : !data ? <Loading className="live-empty" />
       : <p className="live-empty">No plan to review in this chat right now.</p>}
   </div>
 }

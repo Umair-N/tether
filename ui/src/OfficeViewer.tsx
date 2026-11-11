@@ -1,3 +1,4 @@
+import { Loading } from './Skeleton'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Download, FolderOpen, Pencil, X } from 'lucide-react'
 import type { WorkBook } from 'xlsx'
@@ -88,7 +89,7 @@ export function OfficeViewer({ file, close, onShow }: { file: OfficeFile | null;
     {copyPath && <p className="office-copy-note" role="status">The file changed on disk while you edited it. Tether saved your edits to a copy: <bdi title={copyPath}>{copyPath.split('/').pop()}</bdi></p>}
     {editingNow ? <OfficeEditor key={file.url} file={file} onKey={value => setDocKey({ url: file.url, key: value })} />
       : current?.error || current?.unreachable ? <div className="text-viewer-body"><p className="text-viewer-note" role="alert">{current.unreachable ? `Cannot reach ${host}.` : current.error}</p></div>
-      : !current ? <div className="text-viewer-body"><p className="text-viewer-note">Loading…</p></div>
+      : !current ? <div className="text-viewer-body"><Loading className="text-viewer-note" /></div>
       : current.sheet ? <Sheets key={current.url} book={current.sheet} name={name ?? ''} />
       : current.data && kind === 'docx' ? <WordDocument key={current.url} data={current.data} name={name ?? ''} />
       : current.data ? <Slides key={current.url} data={current.data} name={name ?? ''} /> : null}
@@ -187,7 +188,7 @@ function Sheets({ book, name }: { book: WorkBook; name: string }) {
       {book.SheetNames.map((sheet, at) => <button key={at} type="button" role="tab" aria-selected={at === index} onClick={() => setChosen(at)}>{sheet}</button>)}
     </div>}
     <div className="text-viewer-body office-sheet" tabIndex={0} role={book.SheetNames.length > 1 ? 'tabpanel' : undefined} aria-label={`${book.SheetNames[index]} in ${name}`}>
-      {!shown ? <p className="text-viewer-note">Loading…</p>
+      {!shown ? <Loading className="text-viewer-note" />
         : !shown.rows.length ? <p className="text-viewer-note">This sheet is empty.</p>
         : <>
           <table>
@@ -253,7 +254,7 @@ function Slides({ data, name }: { data: ArrayBuffer; name: string }) {
     return () => { abort.abort(); viewer?.destroy(); target.replaceChildren() }
   }, [data])
   return <div ref={scroller} className="text-viewer-body office-slides" tabIndex={0} aria-label={state && !state.error ? `${state.count} slides in ${name}` : `Slides in ${name}`}>
-    {!state ? <p className="text-viewer-note">Loading…</p> : state.error ? <p className="text-viewer-note" role="alert">{state.error}</p>
+    {!state ? <Loading className="text-viewer-note" /> : state.error ? <p className="text-viewer-note" role="alert">{state.error}</p>
       : !state.count ? <p className="text-viewer-note">This deck has no slides.</p> : null}
     <div ref={stage} className="office-slides-stage" />
   </div>

@@ -1,3 +1,4 @@
+import { Bone, Loading, SkeletonRows } from './Skeleton'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { ArrowUpDown, BookMarked, Camera, ChevronLeft, ClipboardCopy, CopyPlus, Download, File, Folder, FolderInput, FolderOutput, FolderPlus, Image as ImageIcon, Lock, MessageSquarePlus, MoreHorizontal, Package, Pencil, Plus, RotateCw, Search, SlidersHorizontal, Trash2, Upload, X } from 'lucide-react'
@@ -264,7 +265,7 @@ export function ExplorerPhone({ api, target, onTarget, chatName, onAddToChat, on
         <button type="button" onClick={() => void switchSecrets(false)}>Hide</button>
       </div>}
       <div className="xp-bar">
-        <span className="xp-count" role="status">{selecting ? `${picked.length} selected` : !current ? (search ? 'Searching…' : 'Loading…')
+        <span className="xp-count" role="status">{selecting ? `${picked.length} selected` : !current ? (search ? 'Searching…' : <Bone w="4.5em" />)
           : search ? `${shown.length}${current.data?.truncated ? '+' : ''} ${shown.length === 1 ? 'match' : 'matches'}` : `${items(shown.length)}${current.data?.truncated ? ' (first 5000)' : ''}`}</span>
         {selecting ? <button type="button" className="xp-sort" onClick={() => setSelected(picked.length ? [] : shown.filter(row => !row.secret).map(row => row.full))}>{picked.length ? 'Clear' : 'Select all'}</button>
           : !search && <button type="button" className="xp-sort" aria-label={`Sort: ${sort.label}. Tap to change.`} onClick={() => setStored(old => ({ ...old, sort: (old.sort + 1) % SORTS.length }))}><ArrowUpDown size={15} aria-hidden="true" />{sort.label}</button>}
@@ -295,6 +296,7 @@ export function ExplorerPhone({ api, target, onTarget, chatName, onAddToChat, on
               </li>
             })}
           </ul>}
+        {!current && !search && <SkeletonRows count={8} label="Loading files" className="xp-skeleton" icon={24} />}
         {current && !current.error && !shown.length && <p className="xp-empty">{search ? `Nothing in ${folderName} matches “${search}”.` : secretHere ? 'This folder is empty.' : 'This folder is empty. Tap + to upload.'}</p>}
       </div>
       {!selecting && !secretHere && !upload && <button type="button" className="xp-fab" aria-label={`Add files or a folder to ${folderName}`} aria-haspopup="dialog" onClick={() => setSheet({ kind: 'add' })}><Plus size={26} /></button>}
@@ -500,7 +502,7 @@ function FolderPicker({ api, mode, paths, start, hidden, onClose, onDone }: { ap
     </nav>
     <div className="xp-list">
       {current?.error ? <p className="xp-empty" role="alert">{current.error}</p>
-        : !current ? <p className="xp-empty">Loading…</p>
+        : !current ? <SkeletonRows count={8} label="Loading files" className="xp-skeleton" icon={24} />
         : !current.rows?.length ? <p className="xp-empty">No folders in here.</p>
         : <ul aria-label={`Folders in ${baseName(folder)}`}>{current.rows.map(row => <li key={row.full} className={`xp-row${row.hidden ? ' dim' : ''}`}>
             <button type="button" className="xp-row-main" disabled={busy || paths.includes(row.full)} onClick={() => setFolder(row.full)}>
@@ -548,7 +550,7 @@ function Preview({ api, row, repo, addLabel, onBack, onMore, onAdd, onDownload }
     </header>
     <div className="xp-preview-body" ref={body} tabIndex={-1} aria-label={`Preview of ${row.name}`} aria-busy={!current || undefined}>
       {current?.error ? <p className="xp-note" role="alert">{current.error}</p>
-        : !data ? <p className="xp-note">Loading preview…</p>
+        : !data ? <Loading className="xp-note" label="Loading preview…" />
         : !locked && !row.dir && isOffice(row.name) ? <p className="xp-note"><button type="button" className="secondary" onClick={() => setOffice({ path: row.full, url: filesUrl.raw(row.full) })}>Open in viewer</button></p>
         : data.kind === 'text' ? <div className="xp-code">
             {data.lines.length ? data.lines.map((line, at) => <div key={at} className="xp-line"><span className="xp-ln" aria-hidden="true">{at + 1}</span><span className="xp-lt">{line || ' '}</span></div>)
