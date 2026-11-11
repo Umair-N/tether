@@ -26,7 +26,7 @@
 .task-foot .task-agents { margin: 0; flex: none; }
 .task-foot .composer-status { flex: 1 1 auto; min-width: 0; }
 /* Model: a quiet native select (the phone gets its own picker). Default = the agent's own model. */
-.task-model { position: relative; display: flex; align-items: center; flex: 0 1 auto; min-width: 0; color: var(--muted); }
+.task-model { position: relative; display: flex; align-items: center; flex: none; min-width: 0; color: var(--muted); }
 .task-model select { appearance: none; min-width: 0; max-width: 132px; min-height: 28px; padding: 0 22px 0 9px; border: 0; border-radius: 7px; background: transparent;
   color: inherit; font: inherit; font-size: 12.5px; text-overflow: ellipsis; cursor: pointer; transition: background .15s, color .15s; }
 .task-model svg { position: absolute; right: 6px; pointer-events: none; }
@@ -38,7 +38,8 @@
 @media (max-width: 359px) {
   .task-rec-word { display: none; }
   .task-foot .task-agents button { padding: 0 7px; }
-  .task-model select { max-width: 92px; }
+  .task-model select { max-width: 96px; }
+  .task-foot { gap: 4px; }
 }
 .task-agents { display: flex; gap: 2px; margin: 0 6px 6px; padding: 2px; justify-self: start; border-radius: 9px; background: var(--hover); }
 .task-agents button { display: flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 10px; border-radius: 7px; font-size: 12.5px; color: var(--muted); transition: background .15s, color .15s, box-shadow .15s; }
