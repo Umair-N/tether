@@ -10,6 +10,8 @@ import { TrialBar } from './TrialBar'
 import type { Anchor } from './hooks'
 import { setPlace, setPlaceHandler } from './backNav'
 import { usePrefs } from './prefs'
+import { resumeBackground } from './backgrounds'
+import { applyPhoto } from './photoLook'
 import { applyScheme } from './schemes'
 import { DEFAULT_LOOK, PHOTO_URL, type Look, type PanelName, applyLayoutTheme, gridStyle, hasPanel as layoutHas, lookKey, lookLayout, themeMode, variantAttrs } from './layouts'
 import { StatusColumn, WaitingPanel } from './LayoutPanels'
@@ -92,6 +94,10 @@ function App() {
   const fetchSessions = useCallback((signal: AbortSignal) => api<SessionsData>('sessions', undefined, signal), [api])
   const { data, error, loading, refresh } = usePolling(fetchSessions, 4000)
   const [prefs, update] = usePrefs()
+  useEffect(() => {
+    const pending = resumeBackground(api)
+    if (pending) void pending.promise.then(item => applyPhoto(item, update)).catch(() => { /* A resumed job can expire or disappear after a server restart. */ })
+  }, [api, update])
   const [drawer, setDrawer] = useState(false)
   const [newSession, setNewSession] = useState(false)
   const [actions, setActions] = useState<string | null>(null)

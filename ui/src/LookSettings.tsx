@@ -3,11 +3,12 @@ import { useEffect, useRef, useState } from 'react'
 import { ApiError, type Api } from './api'
 import type { Prefs } from './prefs'
 import { useModal } from './hooks'
-import { BUILT_INS, CUSTOM_PREFIX, DEFAULT_LOOK, MANIFEST_VERSION, PHOTO_URL, deleteLayout, generateLayout, layoutData, lookKey, lookLayout, saveLayout, themeLabel, useCustomLayouts, validateLayout } from './layouts'
+import { BUILT_INS, CUSTOM_PREFIX, DEFAULT_LOOK, MANIFEST_VERSION, deleteLayout, generateLayout, layoutData, lookKey, lookLayout, saveLayout, themeLabel, useCustomLayouts, validateLayout } from './layouts'
 import type { Backdrop, Layout, Look, Surface } from './layouts'
 import { LayoutPreviews } from './LayoutPreview'
 import { startTrial } from './lookTrial'
 import { backgroundJob, deleteBackground, listBackgrounds, startBackground, uploadBackground, type BackgroundItem } from './backgrounds'
+import { applyPhoto } from './photoLook'
 import { Choice } from './SettingsControls'
 import { keyLabel } from './keys'
 
@@ -236,29 +237,6 @@ export function LayoutPicker({ api, prefs, update, onClose, focusMaker = false }
 // Glass. A tint colours the backdrop light and the panel edges. "Colour" makes the whole backdrop from the tint.
 const TINTS: [string, string][] = [['#e8835a', 'Coral'], ['#e0a83a', 'Amber'], ['#7cb854', 'Moss'], ['#2fb5a5', 'Teal'], ['#4b9be8', 'Sky'], ['#6c6cf0', 'Indigo'], ['#a66cf0', 'Violet'], ['#e66aa0', 'Rose']]
 
-/** The photo's mean colour (weighted to its saturated parts) and whether it is light, from a 32×18 copy. */
-async function photoPalette(url: string): Promise<{ tint: string; light: boolean }> {
-  const image = new Image()
-  image.src = url
-  await image.decode()
-  const canvas = document.createElement('canvas')
-  canvas.width = 32; canvas.height = 18
-  const context = canvas.getContext('2d', { willReadFrequently: true })
-  if (!context) throw new Error('No canvas')
-  context.drawImage(image, 0, 0, 32, 18)
-  const data = context.getImageData(0, 0, 32, 18).data
-  let r = 0, g = 0, b = 0, weight = 0, light = 0
-  for (let at = 0; at < data.length; at += 4) {
-    const red = data[at], green = data[at + 1], blue = data[at + 2]
-    const w = 0.08 + (Math.max(red, green, blue) - Math.min(red, green, blue)) / 255
-    r += red * w; g += green * w; b += blue * w; weight += w
-    light += (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255
-  }
-  const hex = (value: number) => Math.round(value / weight).toString(16).padStart(2, '0')
-  return { tint: `#${hex(r)}${hex(g)}${hex(b)}`, light: light / (data.length / 4) > 0.55 }
-}
-const darkPage = () => getComputedStyle(document.documentElement).colorScheme.includes('dark') || matchMedia('(prefers-color-scheme: dark)').matches && document.documentElement.dataset.theme !== 'light'
-
 function Photos({ api, look, prefs, set, update }: { api: Api; look: Look; prefs: Prefs; set: (patch: Partial<Look>) => void; update: Update }) {
   const [items, setItems] = useState<BackgroundItem[] | null>(null)
   const [error, setError] = useState('')
@@ -279,15 +257,7 @@ function Photos({ api, look, prefs, set, update }: { api: Api; look: Look; prefs
   }, [api])
   const tuned = prefs.imagePromptTuned !== false
 
-  // A photo brings a matching tint, and a fuller panel fill when the photo and the page differ in brightness.
-  const pick = async (item: BackgroundItem) => {
-    if (!PHOTO_URL.test(item.url)) return
-    set({ backdrop: 'photo', photo: { id: item.id, url: item.url } })
-    try {
-      const { tint, light } = await photoPalette(item.url)
-      set({ tint, fill: light === darkPage() ? 0.8 : 0.6 })
-    } catch { /* The photo still shows; the tint stays as it was. */ }
-  }
+  const pick = (item: BackgroundItem) => applyPhoto(item, update)
   const upload = async (picked: File) => {
     setBusy('upload'); setError('')
     try { const item = await uploadBackground(api, picked); setItems(list => [item, ...list ?? []]); await pick(item) }
@@ -299,7 +269,7 @@ function Photos({ api, look, prefs, set, update }: { api: Api; look: Look; prefs
     try {
       const item = await handle.promise
       if (live.current) { setItems(list => list?.some(entry => entry.id === item.id) ? list : [item, ...list ?? []]); setWish('') }
-      await pick(item)
+      if (!handle.resumed) await pick(item)
     } catch (failure) { if (live.current && !handle.controller.signal.aborted) setError(message(failure)) }
     finally { if (live.current) setBusy('') }
   }
